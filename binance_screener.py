@@ -34,7 +34,11 @@ UROTAN EKSEKUSI T1 (tiap 3 menit):
             G3. AI pilih 1 pemenang (fallback: RSI terendah)
             G4. Slot deal tersedia (max 1)
             G5. LAPIS 2 — BTC filter:
-                BTC ≥ EMA20×0.98 DAN c-1 bullish DAN c-2 bullish
+                BTC ≥ EMA20×0.98
+                DAN c-3 doji HA (body <15% range)
+                DAN c-2 HA bullish (sudah tutup)
+                DAN c-1 HA bullish (sudah tutup)
+                DAN c-0 running HA bullish + elapsed ≥50%
                 → gagal = bypass, pool dipertahankan
             G6. Elapsed ≤ 75%    → gagal = bypass
             G7. DistST ≥ −7.5%  → gagal = bypass
@@ -1894,47 +1898,87 @@ def thread1_scan():
                         btc_ema20   = ta.ema(btc_close, length=20)
                         btc_ema20_v = float(btc_ema20.iloc[-1]) if btc_ema20 is not None else None
                         btc_price   = float(btc_df.iloc[-1]['close'])
-                        # c-1 dan c-2 diambil dari candle yang sudah tutup
-                        # iloc[-1] = running candle (belum tutup) → pakai sebagai harga current
-                        # iloc[-2] = candle terakhir yang sudah tutup = c-1
-                        # iloc[-3] = candle sebelumnya yang sudah tutup = c-2
-                        # Tapi bila running candle OPEN == candle sebelumnya CLOSE (candle baru mulai),
-                        # maka c-1 sebenarnya adalah iloc[-2] dan c-2 adalah iloc[-3] — sudah benar.
-                        # Fix: gunakan btc_price dari iloc[-1]['close'] (running),
-                        # dan c1/c2 dari iloc[-2]/[-3] yang sudah tutup SERTA sudah melewati >5 menit
-                        # Syarat boleh open long:
-                        # BTC >= EMA20 × 0.98 DAN c-1 bullish DAN c-2 bullish
-                        if btc_ema20_v is not None:
+                        # ── Lapis 2 BTC: Heikin Ashi pattern ──
+                        # Syarat: BTC >= EMA20×0.98
+                        #   DAN c-3 doji HA (body < 15% dari range)
+                        #   DAN c-2 HA bullish (sudah tutup)
+                        #   DAN c-1 HA bullish (sudah tutup)
+                        #   DAN c-0 running HA bullish dengan elapsed >= 50%
+                        def calc_ha(df, idx):
+                            """Hitung Heikin Ashi untuk satu candle di index idx."""
+                            if idx == 0 or idx == -len(df):
+                                ha_open  = (float(df.iloc[idx]['open']) + float(df.iloc[idx]['close'])) / 2
+                            else:
+                                prev_ha_close = (float(df.iloc[idx-1]['open']) + float(df.iloc[idx-1]['high']) + float(df.iloc[idx-1]['low']) + float(df.iloc[idx-1]['close'])) / 4
+                                prev_ha_open  = (float(df.iloc[idx-1]['open']) + float(df.iloc[idx-1]['close'])) / 2
+                                ha_open  = (prev_ha_open + prev_ha_close) / 2
+                            ha_close = (float(df.iloc[idx]['open']) + float(df.iloc[idx]['high']) + float(df.iloc[idx]['low']) + float(df.iloc[idx]['close'])) / 4
+                            ha_high  = max(float(df.iloc[idx]['high']), ha_open, ha_close)
+                            ha_low   = min(float(df.iloc[idx]['low']),  ha_open, ha_close)
+                            return ha_open, ha_close, ha_high, ha_low
+
+                        if btc_ema20_v is not None and len(btc_df) >= 5:
                             btc_threshold = btc_ema20_v * 0.98
-                            btc_c1_bull   = float(btc_df.iloc[-2]['close']) > float(btc_df.iloc[-2]['open'])  # c-1
-                            btc_c2_bull   = float(btc_df.iloc[-3]['close']) > float(btc_df.iloc[-3]['open'])  # c-2
-                            # Bila c-1 atau c-2 bearish, fetch ulang sekali setelah delay 3 detik
-                            # untuk memastikan data Binance sudah final (bukan data stale)
-                            if not btc_c1_bull or not btc_c2_bull:
+
+                            # Hitung HA untuk c-3, c-2, c-1, c-0
+                            ha3_open, ha3_close, ha3_high, ha3_low = calc_ha(btc_df, -4)  # c-3
+                            ha2_open, ha2_close, ha2_high, ha2_low = calc_ha(btc_df, -3)  # c-2
+                            ha1_open, ha1_close, ha1_high, ha1_low = calc_ha(btc_df, -2)  # c-1
+                            ha0_open, ha0_close, ha0_high, ha0_low = calc_ha(btc_df, -1)  # c-0 running
+
+                            # c-3 doji HA: body < 15% dari total range
+                            ha3_range = ha3_high - ha3_low if ha3_high != ha3_low else 0.0001
+                            ha3_body  = abs(ha3_close - ha3_open)
+                            c3_doji   = (ha3_body / ha3_range) < 0.15
+
+                            # c-2 dan c-1 HA bullish (sudah tutup)
+                            c2_ha_bull = ha2_close > ha2_open
+                            c1_ha_bull = ha1_close > ha1_open
+
+                            # c-0 running HA bullish dengan elapsed >= 50%
+                            c0_ha_bull = ha0_close > ha0_open
+                            elapsed_now = get_elapsed_pct(btc_df)
+                            c0_ok = c0_ha_bull and elapsed_now >= 50.0
+
+                            # Fetch ulang bila ada yang gagal (data stale)
+                            if not (c3_doji and c2_ha_bull and c1_ha_bull and c0_ok):
                                 import time as _time
                                 _time.sleep(3)
                                 btc_df2 = get_ohlcv('BTCUSDT', interval='4h', limit=30)
-                                if btc_df2 is not None and len(btc_df2) >= 4:
-                                    btc_c1_bull = float(btc_df2.iloc[-2]['close']) > float(btc_df2.iloc[-2]['open'])
-                                    btc_c2_bull = float(btc_df2.iloc[-3]['close']) > float(btc_df2.iloc[-3]['open'])
+                                if btc_df2 is not None and len(btc_df2) >= 5:
+                                    ha3_open, ha3_close, ha3_high, ha3_low = calc_ha(btc_df2, -4)
+                                    ha2_open, ha2_close, ha2_high, ha2_low = calc_ha(btc_df2, -3)
+                                    ha1_open, ha1_close, ha1_high, ha1_low = calc_ha(btc_df2, -2)
+                                    ha0_open, ha0_close, ha0_high, ha0_low = calc_ha(btc_df2, -1)
+                                    ha3_range  = ha3_high - ha3_low if ha3_high != ha3_low else 0.0001
+                                    ha3_body   = abs(ha3_close - ha3_open)
+                                    c3_doji    = (ha3_body / ha3_range) < 0.15
+                                    c2_ha_bull = ha2_close > ha2_open
+                                    c1_ha_bull = ha1_close > ha1_open
+                                    c0_ha_bull = ha0_close > ha0_open
+                                    elapsed_now = get_elapsed_pct(btc_df2)
+                                    c0_ok = c0_ha_bull and elapsed_now >= 50.0
                                     btc_df = btc_df2
-                            if btc_price < btc_threshold or not btc_c1_bull or not btc_c2_bull:
+
+                            pct_vs_ema = (btc_price / btc_ema20_v - 1) * 100
+                            price_ok   = btc_price >= btc_threshold
+
+                            if not price_ok or not c3_doji or not c2_ha_bull or not c1_ha_bull or not c0_ok:
                                 btc_bypass = True
-                                c1_str = "✅" if btc_c1_bull else "❌"
-                                c2_str = "✅" if btc_c2_bull else "❌"
-                                pct_vs_ema = (btc_price / btc_ema20_v - 1) * 100
-                                price_str = "✅" if btc_price >= btc_threshold else "❌"
+                                price_str = "✅" if price_ok   else "❌"
+                                c3_str    = "✅" if c3_doji    else "❌"
+                                c2_str    = "✅" if c2_ha_bull else "❌"
+                                c1_str    = "✅" if c1_ha_bull else "❌"
+                                c0_str    = "✅" if c0_ok      else f"❌(HA={'✅' if c0_ha_bull else '❌'} Elps={elapsed_now:.0f}%)"
                                 btc_bypass_reason = (
                                     f"BTC≥EMA20×0.98={price_str} {btc_price:,.0f} ({pct_vs_ema:+.1f}% vs EMA20 {btc_ema20_v:,.0f}) | "
-                                    f"c-1 bullish={c1_str} c-2 bullish={c2_str}"
+                                    f"c-3 doji={c3_str} c-2 HA bull={c2_str} c-1 HA bull={c1_str} c-0 HA bull+50%={c0_str}"
                                 )
 
-                    if not btc_bypass and btc_df is not None and len(btc_df) >= 21:
+                    if not btc_bypass and btc_df is not None and len(btc_df) >= 5:
                         btc_ema20_v2 = float(ta.ema(btc_df['close'], length=20).iloc[-1])
                         pct_vs_ema2  = (float(btc_df.iloc[-1]['close']) / btc_ema20_v2 - 1) * 100
-                        c1_ok = "✅" if float(btc_df.iloc[-2]['close']) > float(btc_df.iloc[-2]['open']) else "❌"
-                        c2_ok = "✅" if float(btc_df.iloc[-3]['close']) > float(btc_df.iloc[-3]['open']) else "❌"
-                        log(f"   [T1] BTC Lapis2 OK: {float(btc_df.iloc[-1]['close']):,.0f} ({pct_vs_ema2:+.1f}% vs EMA20) | c-1 bullish={c1_ok} c-2 bullish={c2_ok}")
+                        log(f"   [T1] BTC Lapis2 OK: {float(btc_df.iloc[-1]['close']):,.0f} ({pct_vs_ema2:+.1f}% vs EMA20) | c-3 doji=✅ c-2 HA bull=✅ c-1 HA bull=✅ c-0 HA bull+50%=✅")
 
                     if btc_bypass:
                         log(f"⛔ [T1] BYPASS open long {best_symbol}: {btc_bypass_reason}")
@@ -2331,7 +2375,7 @@ if __name__ == '__main__':
     log("  URUTAN EKSEKUSI T1:")
     log("  Lapis1 (BTC candle 4H berjalan ≤−3% dari open candle → scan batal) → Fase1 (pool 8 syarat)")
     log("  → Fase2 Window1(50-59m) / Window2(110-119m) / Window3(170-209m)")
-    log("    └─ Gerbang: Lapis2(BTC EMA20+c1c2) → Elapsed≤75%")
+    log("    └─ Gerbang: Lapis2(BTC≥EMA20×0.98+c3 doji HA+c2/c1 HA bull+c0 HA bull≥50%) → Elapsed≤75%")
     log("               → DistST≥−7.5% → EstCandle≤8 → OPEN LONG")
     log("=" * 65)
 
@@ -2358,7 +2402,7 @@ if __name__ == '__main__':
         "1️⃣ <b>Lapis 1</b> — BTC candle 4H berjalan ≤−3% dari open candle itu → scan batal\n"
         "2️⃣ <b>Fase 1</b> — Pool: 8 syarat (Chg, Vol, ST, Elapsed, RSI, Stoch, VolBuy, EMA50 zona −3%)\n"
         "3️⃣ <b>Fase 2</b> — Window 1(50-59m) / 2(110-119m) / 3(170-209m)\n"
-        "   <b>Lapis 2</b> BTC: harga≥EMA20×0.98 + c-1 &amp; c-2 bullish\n"
+        "   <b>Lapis 2</b> BTC: harga≥EMA20×0.98 + c-3 doji HA + c-2/c-1 HA bullish + c-0 HA bullish (≥50% elapsed)\n"
         "   Bypass: Elapsed&gt;75% | DistST&lt;−7.5% | EstCandle&gt;8\n"
         "   ✅ Lolos semua → <b>OPEN LONG</b> via 3Commas"
     )
