@@ -1,0 +1,12 @@
+# State bot — jangan di-commit, dibuat ulang di Volume Railway
+active_deals.json
+pool_log.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# File rahasia lokal
+.env
