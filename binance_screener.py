@@ -167,8 +167,9 @@ DIST_ST_MAX_PCT  = -7.5   # DistST lebih negatif dari ini = bypass (terlalu jauh
 EST_CANDLE_MAX   = 15     # EstCandle lebih dari ini = bypass (butuh terlalu lama)
 
 # File persistensi
-ACTIVE_DEALS_FILE = r"D:\tradingview\active_deals.json"
-POOL_LOG_FILE     = r"D:\tradingview\pool_log.json"
+DATA_DIR = os.environ.get("DATA_DIR", r"D:\tradingview")
+ACTIVE_DEALS_FILE = os.path.join(DATA_DIR, "active_deals.json")
+POOL_LOG_FILE     = os.path.join(DATA_DIR, "pool_log.json")
 # ============================================================
 
 # Shared state
