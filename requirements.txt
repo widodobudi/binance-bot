@@ -1,5 +1,5 @@
 requests
 pandas
 numpy<2
-setuptools
-pandas-ta @ git+https://github.com/twopirllc/pandas-ta.git@0.3.14b0
+setuptools<81
+pandas-ta @ https://github.com/MerlinR/Pandas-ta-fork/archive/refs/heads/main.tar.gz
