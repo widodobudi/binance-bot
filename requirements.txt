@@ -1,5 +1,5 @@
 requests
 pandas
 numpy<2
-pandas_ta==0.3.14b0
 setuptools
+pandas-ta @ git+https://github.com/twopirllc/pandas-ta.git@0.3.14b0
