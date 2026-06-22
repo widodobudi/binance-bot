@@ -654,7 +654,7 @@ def thread1_scan():
 
 # ===================== THREAD 1b: SCAN REVERSAL (8h) + OPEN LONG =====================
 def thread1b_scan_reversal():
-    """Scan strategi reversal (doji + 2 HA bull + cross EMA20) di timeframe 8h.
+    """Scan strategi reversal (5 merah+turun>=3% + doji + 1 HA bull + cross EMA20) di timeframe 8h.
     Berbagi pool deal & bot 3Commas dgn brkX2, tapi slot terpisah (MAX_DEALS_REVERSAL)."""
     if not REVERSAL_ENABLED:
         return None
@@ -859,7 +859,7 @@ if __name__ == '__main__':
     if REVERSAL_ENABLED:
         log("  " + "-"*51)
         log(f"  STRATEGI 2 REVERSAL: ON | TF {REVERSAL_TIMEFRAME}")
-        log(f"  Setup: harga<EMA20&50, doji(<{int(REVERSAL_DOJI_MAX*100)}% body), 2 HA bull, cross-up EMA20")
+        log(f"  Setup: 5 candle merah+turun>=3%, doji(<{int(REVERSAL_DOJI_MAX*100)}% body), 1 HA bull, cross-up EMA20")
         log(f"  Exit : trailing adaptif (sama brkX2) | add fund: {'ON' if REVERSAL_ADD_FUND else 'OFF'}")
         log(f"  Hold : maks {REVERSAL_MAX_HOLD_CANDLES} candle 8h")
     log("="*55)
