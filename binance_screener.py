@@ -429,7 +429,7 @@ def check_entry_reversal(df) -> bool:
             c0=df[-3], c+1=df[-2], c+2=df[-1].
     SYARAT SEBELUM DOJI:
       - 5 candle c-1..c-5 SEMUANYA merah (close<open masing-masing)
-      - penurunan total: (close c-1 / open c-5 - 1)*100 <= -3%
+      - penurunan total: (close c-1 / open c-5 - 1)*100 <= -5%
     Lalu:
       - close c0 di BAWAH EMA20 & EMA50
       - c0 DOJI (body_ratio < REVERSAL_DOJI_MAX)
@@ -447,12 +447,12 @@ def check_entry_reversal(df) -> bool:
     for idx in (im5, im4, im3, im2, im1):
         cc = df.iloc[idx]
         if not (cc['close'] < cc['open']): return False
-    # syarat 2: penurunan total open c-5 -> close c-1 <= -3%
+    # syarat 2: penurunan total open c-5 -> close c-1 <= -5%
     open_c5 = float(df.iloc[im5]['open'])
     close_c1 = float(df.iloc[im1]['close'])
     if open_c5 <= 0: return False
     drop_pct = (close_c1 / open_c5 - 1) * 100
-    if not (drop_pct <= -3.0): return False
+    if not (drop_pct <= -5.0): return False
     # kondisi awal: c0 di bawah EMA20 & EMA50
     if not (c0['close'] < c0['ema_fast'] and c0['close'] < c0['ema_slow']): return False
     # c0 doji
@@ -654,7 +654,7 @@ def thread1_scan():
 
 # ===================== THREAD 1b: SCAN REVERSAL (8h) + OPEN LONG =====================
 def thread1b_scan_reversal():
-    """Scan strategi reversal (5 merah+turun>=3% + doji + 1 HA bull + cross EMA20) di timeframe 8h.
+    """Scan strategi reversal (5 merah+turun>=5% + doji + 1 HA bull + cross EMA20) di timeframe 8h.
     Berbagi pool deal & bot 3Commas dgn brkX2, tapi slot terpisah (MAX_DEALS_REVERSAL)."""
     if not REVERSAL_ENABLED:
         return None
@@ -859,7 +859,7 @@ if __name__ == '__main__':
     if REVERSAL_ENABLED:
         log("  " + "-"*51)
         log(f"  STRATEGI 2 REVERSAL: ON | TF {REVERSAL_TIMEFRAME}")
-        log(f"  Setup: 5 candle merah+turun>=3%, doji(<{int(REVERSAL_DOJI_MAX*100)}% body), 1 HA bull, cross-up EMA20")
+        log(f"  Setup: 5 candle merah+turun>=5%, doji(<{int(REVERSAL_DOJI_MAX*100)}% body), 1 HA bull, cross-up EMA20")
         log(f"  Exit : trailing adaptif (sama brkX2) | add fund: {'ON' if REVERSAL_ADD_FUND else 'OFF'}")
         log(f"  Hold : maks {REVERSAL_MAX_HOLD_CANDLES} candle 8h")
     log("="*55)
