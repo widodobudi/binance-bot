@@ -802,9 +802,10 @@ def thread2_monitor():
 
         if do_close:
             log(f"[T2] CLOSE {sym}: {reason} | profit {prof_from_entry:.2f}%")
+            strat_label = "Reversal Doji+HA 8h" if d.get('strategy','brkX2')=='reversal' else "Momentum Harian"
             if send_close_long(sym):
                 send_telegram(
-                    f"CLOSE LONG (Momentum Harian)\n"
+                    f"CLOSE LONG ({strat_label})\n"
                     f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                     f"Pair   : {to_display_pair(sym)}\n"
                     f"Alasan : {reason}\n"
