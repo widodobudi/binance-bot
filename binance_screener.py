@@ -423,34 +423,44 @@ def _cross_up(df, idx, ema_col):
     return p['close'] < p[ema_col] and cur['close'] >= cur[ema_col]
 
 def check_entry_reversal(df) -> bool:
-    """Setup reversal pada candle TERTUTUP terakhir sbg c+3.
-    Pola: c-1=df[-5], c0=df[-4], c+1=df[-3], c+2=df[-2], c+3=df[-1].
-      - c-1 (candle sebelum doji) BEARISH (close<open, merah)  [syarat tambahan]
+    """Setup reversal pada candle TERTUTUP terakhir sbg c+2 (titik entry).
+    Pola: c-5,c-4,c-3,c-2,c-1 (sebelum doji), c0=doji, c+1 HA bull, c+2=entry.
+    Indeks: c-5=df[-8], c-4=df[-7], c-3=df[-6], c-2=df[-5], c-1=df[-4],
+            c0=df[-3], c+1=df[-2], c+2=df[-1].
+    SYARAT SEBELUM DOJI:
+      - 5 candle c-1..c-5 SEMUANYA merah (close<open masing-masing)
+      - penurunan total: (close c-1 / open c-5 - 1)*100 <= -3%
+    Lalu:
       - close c0 di BAWAH EMA20 & EMA50
       - c0 DOJI (body_ratio < REVERSAL_DOJI_MAX)
-      - c+1 & c+2 HA bullish
-      - c+2 ATAU c+3 crossing-up EMA20
-    Entry dilakukan di candle c+3 yg baru tutup (mode a).
-    Syarat c-1 merah: pastikan reversal sejati (turun dulu -> doji -> naik),
-    cegah entry saat c-1 bullish (spt WIF/PENGU yg ternyata bukan reversal)."""
-    if len(df) < 5: return False        # butuh c-1 (df[-5]) utk cek bearish
+      - c+1 HA bullish (1 candle konfirmasi)
+      - c+1 ATAU c+2 crossing-up EMA20
+    Entry di candle c+2 yg baru tutup (mode a)."""
+    if len(df) < 8: return False        # butuh c-5 (df[-8])
     n = len(df)
-    im1 = n - 5          # c-1 (candle sebelum doji)
-    i0 = n - 4           # c0
-    i1, i2, i3 = n-3, n-2, n-1
+    im5, im4, im3, im2, im1 = n-8, n-7, n-6, n-5, n-4   # c-5..c-1
+    i0 = n - 3           # c0
+    i1, i2 = n-2, n-1    # c+1, c+2(entry)
     c0 = df.iloc[i0]
-    cm1 = df.iloc[im1]
     if any(pd.isna(c0[x]) for x in ['ema_fast','ema_slow','body_ratio']): return False
-    # syarat tambahan: c-1 bearish (merah, close<open)
-    if not (cm1['close'] < cm1['open']): return False
+    # syarat 1: 5 candle sebelum doji SEMUA merah
+    for idx in (im5, im4, im3, im2, im1):
+        cc = df.iloc[idx]
+        if not (cc['close'] < cc['open']): return False
+    # syarat 2: penurunan total open c-5 -> close c-1 <= -3%
+    open_c5 = float(df.iloc[im5]['open'])
+    close_c1 = float(df.iloc[im1]['close'])
+    if open_c5 <= 0: return False
+    drop_pct = (close_c1 / open_c5 - 1) * 100
+    if not (drop_pct <= -3.0): return False
     # kondisi awal: c0 di bawah EMA20 & EMA50
     if not (c0['close'] < c0['ema_fast'] and c0['close'] < c0['ema_slow']): return False
     # c0 doji
     if not (c0['body_ratio'] < REVERSAL_DOJI_MAX): return False
-    # c+1 & c+2 HA bullish
-    if not (bool(df['ha_bull'].iloc[i1]) and bool(df['ha_bull'].iloc[i2])): return False
-    # c+2 atau c+3 crossing-up EMA20
-    if not (_cross_up(df, i2, 'ema_fast') or _cross_up(df, i3, 'ema_fast')): return False
+    # c+1 HA bullish (1 candle konfirmasi)
+    if not bool(df['ha_bull'].iloc[i1]): return False
+    # c+1 atau c+2 crossing-up EMA20
+    if not (_cross_up(df, i1, 'ema_fast') or _cross_up(df, i2, 'ema_fast')): return False
     return True
 
 def trailing_dist(atr_pct: float) -> float:
