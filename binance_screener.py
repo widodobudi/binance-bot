@@ -25,7 +25,7 @@ EXIT -- trailing adaptif (jaring pengaman, T2):
   - lacak puncak sejak entry; setelah profit >= +2% pasang trailing
   - jarak adaptif per ATR%: <1->0.5 |1-2->1.0 |2-4->1.5 |4-7->2.0 |>7->2.5
   - close saat turun dari puncak sejauh jarak trailing
-  - batas 5 hari -> tutup di harga saat itu
+  - batas 5 candle 12h (2.5 hari) -> tutup di harga saat itu
   - user bebas close manual lebih awal
 
 FILTER BTC (Lapis1&2): OFF (toggle). ADD FUND otomatis: OFF.
@@ -864,7 +864,7 @@ if __name__ == '__main__':
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
     log(f"  Entry syarat     : ST-up, >EMA20, EMA20>EMA50, breakout{BREAKOUT_LOOKBACK}, vol>={VOLUME_MULT}xMA, RSI<{RSI_MAX}" + (f", Stoch<{STOCH_MAX}" if STOCH_MAX is not None else ""))
-    log(f"  Exit             : trailing adaptif (arm +{TRAIL_ARM_PCT}%), batas {MAX_HOLD_DAYS} hari")
+    log(f"  Exit             : trailing adaptif (arm +{TRAIL_ARM_PCT}%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)")
     log(f"  Base order       : ${BASE_ORDER_VOLUME} | Max deal total: {COMMAS_MAX_ACTIVE_DEALS}")
     log(f"  Slot per strategi: brkX2={MAX_DEALS_BRKX2}, reversal={MAX_DEALS_REVERSAL}")
     log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
@@ -883,7 +883,7 @@ if __name__ == '__main__':
     send_telegram(
         "Binance Screener AKTIF (Momentum brkX2 (harian))\n"
         f"Entry: ST-up + >EMA20 + EMA20>EMA50 + breakout{BREAKOUT_LOOKBACK} + vol>={VOLUME_MULT}xMA + RSI<{RSI_MAX}" + (f" + Stoch<{STOCH_MAX}" if STOCH_MAX is not None else "") + "\n"
-        f"Exit : trailing adaptif (arm +{TRAIL_ARM_PCT}%, jarak per ATR%), batas {MAX_HOLD_DAYS} hari\n"
+        f"Exit : trailing adaptif (arm +{TRAIL_ARM_PCT}%, jarak per ATR%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)\n"
         f"Base ${BASE_ORDER_VOLUME} | Max deal {COMMAS_MAX_ACTIVE_DEALS} | "
         f"AddFund {'ON' if ADD_FUND_AUTO else 'OFF'} | BTC filter {'ON' if BTC_FILTER_ENABLED else 'OFF'}\n"
         f"Evaluasi: candle {TIMEFRAME} TERTUTUP (mode a)"
