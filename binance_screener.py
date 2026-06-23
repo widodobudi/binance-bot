@@ -118,7 +118,7 @@ trades_csv_lock = threading.Lock()
 
 # Kolom CSV log forward-test (1 baris per trade; ditulis saat OPEN, dilengkapi saat CLOSE)
 CSV_FIELDS = [
-    'open_time_wib','symbol','signal_price','entry_price','slip_pct','atr_pct',
+    'open_time_wib','symbol','strategy','signal_price','entry_price','slip_pct','atr_pct',
     'trail_dist_pct','base_usd',
     'close_time_wib','exit_price','profit_pct','exit_reason','status'
 ]
@@ -137,6 +137,7 @@ def csv_log_open(row: dict):
             _csv_ensure_header()
             full = {k: row.get(k, '') for k in CSV_FIELDS}
             full['status'] = 'OPEN'
+            if not full.get('strategy'): full['strategy'] = 'brkX2'
             with open(TRADES_CSV, 'a', newline='', encoding='utf-8') as f:
                 csv.DictWriter(f, fieldnames=CSV_FIELDS).writerow(full)
         log(f"   [CSV] OPEN dicatat: {row.get('symbol')}")
@@ -169,8 +170,10 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
     except Exception as e:
         log(f"   [CSV] gagal tulis CLOSE: {e}")
 
-def csv_progress():
+def csv_progress(strategy: str = None):
     """Baca CSV, hitung trade SELESAI (CLOSED), berapa menang/kalah, total profit%.
+    Jika strategy diberikan ('brkX2'/'reversal'), hanya hitung trade strategi itu.
+    Baris lama tanpa kolom strategy dianggap 'brkX2' (kompatibilitas).
     Return dict atau None kalau CSV belum ada / error."""
     try:
         if not os.path.exists(TRADES_CSV):
@@ -179,6 +182,8 @@ def csv_progress():
             with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
                 rows = list(csv.DictReader(f))
         closed = [r for r in rows if r.get('status') == 'CLOSED']
+        if strategy is not None:
+            closed = [r for r in closed if (r.get('strategy') or 'brkX2') == strategy]
         n = len(closed)
         if n == 0:
             return {'n': 0, 'win': 0, 'loss': 0, 'total_pct': 0.0}
@@ -518,21 +523,28 @@ def heartbeat_tick(status_line: str):
             end_str   = now_dt.strftime('%d/%m %H:%M')
             header = ("HEARTBEAT 6-jam (Momentum brkX2 (harian))\n"
                       f"Periode: {start_str} -> {end_str} WIB")
-        # progress forward-test (dari CSV) — dua tahap: cek awal 12, final 25
-        prog = csv_progress()
-        if prog is None:
+        # progress forward-test (dari CSV) — per strategi + gabungan. 2 tahap: cek awal 12, final 25.
+        def _fmt_prog(p):
+            if p is None: return "0 selesai (CSV belum ada)"
+            nn = p['n']
+            wl = f"{p['win']}W/{p['loss']}L" if nn > 0 else "-"
+            return f"{nn} selesai ({wl}, total {p['total_pct']:+.1f}%)"
+        prog_all = csv_progress()
+        prog_brk = csv_progress('brkX2')
+        prog_rev = csv_progress('reversal')
+        if prog_all is None:
             prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
         else:
-            n = prog['n']
-            wl = f"{prog['win']}W/{prog['loss']}L" if n > 0 else "-"
+            n = prog_all['n']
             if n < FWDTEST_CHECK_TRADES:
                 tahap = f"menuju cek-awal {FWDTEST_CHECK_TRADES}"
             elif n < FWDTEST_TARGET_TRADES:
                 tahap = f"cek-awal {FWDTEST_CHECK_TRADES} LEWAT, menuju final {FWDTEST_TARGET_TRADES}"
             else:
                 tahap = f"target final {FWDTEST_TARGET_TRADES} TERCAPAI - waktunya evaluasi!"
-            prog_line = (f"Progress forward-test: {n} trade selesai "
-                         f"({wl}, total {prog['total_pct']:+.1f}%) | {tahap}.")
+            prog_line = (f"Progress forward-test (gabungan): {_fmt_prog(prog_all)} | {tahap}.\n"
+                         f"  - brkX2   : {_fmt_prog(prog_brk)}\n"
+                         f"  - reversal: {_fmt_prog(prog_rev)}")
         send_telegram(
             f"{header}\n"
             f"{status_line}\n"
@@ -640,6 +652,7 @@ def thread1_scan():
                 'atr_pct': f"{atrp:.2f}",
                 'trail_dist_pct': f"{trailing_dist(atrp)}",
                 'base_usd': BASE_ORDER_VOLUME,
+                'strategy': 'brkX2',
             })
             opened_any = True
 
