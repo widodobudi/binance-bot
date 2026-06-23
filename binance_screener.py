@@ -510,13 +510,13 @@ def heartbeat_tick(status_line: str):
     if first_time or (now - heartbeat_last_sent >= HEARTBEAT_INTERVAL_SEC):
         if first_time:
             start_str = now_dt.strftime('%d/%m %H:%M')
-            header = ("HEARTBEAT (Momentum brkX2) — START\n"
+            header = ("HEARTBEAT (Momentum brkX2 (harian)) — START\n"
                       f"Mulai memantau: {start_str} WIB\n"
                       "Notif berikutnya tiap 6 jam.")
         else:
             start_str = heartbeat_window_start.strftime('%d/%m %H:%M')
             end_str   = now_dt.strftime('%d/%m %H:%M')
-            header = ("HEARTBEAT 6-jam (Momentum brkX2)\n"
+            header = ("HEARTBEAT 6-jam (Momentum brkX2 (harian))\n"
                       f"Periode: {start_str} -> {end_str} WIB")
         # progress forward-test (dari CSV) — dua tahap: cek awal 12, final 25
         prog = csv_progress()
@@ -621,7 +621,7 @@ def thread1_scan():
                 'strategy': 'brkX2'
             })
             send_telegram(
-                f"OPEN LONG (Momentum Harian)\n"
+                f"OPEN LONG (Momentum brkX2 (harian))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {entry_price:.6g}\n"
@@ -717,7 +717,7 @@ def thread1b_scan_reversal():
                 'strategy': 'reversal'
             })
             send_telegram(
-                f"OPEN LONG (Reversal Doji+HA 8h)\n"
+                f"OPEN LONG (Reversal Doji+HA (8h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {entry_price:.6g}\n"
@@ -802,7 +802,7 @@ def thread2_monitor():
 
         if do_close:
             log(f"[T2] CLOSE {sym}: {reason} | profit {prof_from_entry:.2f}%")
-            strat_label = "Reversal Doji+HA 8h" if d.get('strategy','brkX2')=='reversal' else "Momentum Harian"
+            strat_label = "Reversal Doji+HA (8h)" if d.get('strategy','brkX2')=='reversal' else "Momentum brkX2 (harian)"
             if send_close_long(sym):
                 send_telegram(
                     f"CLOSE LONG ({strat_label})\n"
@@ -868,7 +868,7 @@ if __name__ == '__main__':
     load_active_deals()
     # Tes telegram + notif startup
     send_telegram(
-        "Binance Screener AKTIF (Momentum Harian brkX2)\n"
+        "Binance Screener AKTIF (Momentum brkX2 (harian))\n"
         f"Entry: ST-up + >EMA20 + EMA20>EMA50 + breakout{BREAKOUT_LOOKBACK} + vol>={VOLUME_MULT}xMA + RSI<{RSI_MAX}" + (f" + Stoch<{STOCH_MAX}" if STOCH_MAX is not None else "") + "\n"
         f"Exit : trailing adaptif (arm +{TRAIL_ARM_PCT}%, jarak per ATR%), batas {MAX_HOLD_DAYS} hari\n"
         f"Base ${BASE_ORDER_VOLUME} | Max deal {COMMAS_MAX_ACTIVE_DEALS} | "
