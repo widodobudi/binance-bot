@@ -92,8 +92,11 @@ T2_MONITOR_INTERVAL  = 15
 T2_FAST_INTERVAL     = 2     # polling cepat saat trailing armed & harga bergerak cepat
 T2_FAST_TRIGGER_PCT  = 0.5   # ambang "harga bergerak cepat" (% sejak cek terakhir)
 HEARTBEAT_INTERVAL_SEC = 6 * 3600   # notif "tidak ada coin lolos" tiap 6 jam (4x/hari)
-FWDTEST_CHECK_TRADES   = 12         # cek awal: deteksi masalah dini (sanity check, BUKAN keputusan final)
-FWDTEST_TARGET_TRADES  = 25         # evaluasi FINAL: keputusan boleh naik modal
+FWDTEST_CHECK_TRADES   = 12         # (lama, gabungan) cek awal: deteksi masalah dini
+FWDTEST_TARGET_TRADES  = 25         # (lama, gabungan) evaluasi FINAL
+# Target per-strategi utk forward-test berhasil (tiap close update #X/N):
+FWDTEST_TARGET_BRKX2    = 15        # target close deal brkX2 utk forward-test berhasil
+FWDTEST_TARGET_REVERSAL = 8         # target close deal reversal utk forward-test berhasil
 
 BTC_CHG_1D_MAX = -3.0
 BTC_EMA20_MULT = 0.98
@@ -523,28 +526,26 @@ def heartbeat_tick(status_line: str):
             end_str   = now_dt.strftime('%d/%m %H:%M')
             header = ("HEARTBEAT 6-jam (Momentum brkX2 (harian))\n"
                       f"Periode: {start_str} -> {end_str} WIB")
-        # progress forward-test (dari CSV) — per strategi + gabungan. 2 tahap: cek awal 12, final 25.
+        # progress forward-test (dari CSV) — per strategi (target sendiri) + gabungan.
         def _fmt_prog(p):
             if p is None: return "0 selesai (CSV belum ada)"
             nn = p['n']
             wl = f"{p['win']}W/{p['loss']}L" if nn > 0 else "-"
             return f"{nn} selesai ({wl}, total {p['total_pct']:+.1f}%)"
+        def _fmt_strat(p, tgt):
+            if p is None or p['n']==0: return f"#0/{tgt} (belum ada)"
+            nn=p['n']; wl=f"{p['win']}W/{p['loss']}L"
+            tag=" TERCAPAI!" if nn>=tgt else ""
+            return f"#{nn}/{tgt} ({wl}, total {p['total_pct']:+.1f}%){tag}"
         prog_all = csv_progress()
         prog_brk = csv_progress('brkX2')
         prog_rev = csv_progress('reversal')
         if prog_all is None:
             prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
         else:
-            n = prog_all['n']
-            if n < FWDTEST_CHECK_TRADES:
-                tahap = f"menuju cek-awal {FWDTEST_CHECK_TRADES}"
-            elif n < FWDTEST_TARGET_TRADES:
-                tahap = f"cek-awal {FWDTEST_CHECK_TRADES} LEWAT, menuju final {FWDTEST_TARGET_TRADES}"
-            else:
-                tahap = f"target final {FWDTEST_TARGET_TRADES} TERCAPAI - waktunya evaluasi!"
-            prog_line = (f"Progress forward-test (gabungan): {_fmt_prog(prog_all)} | {tahap}.\n"
-                         f"  - brkX2   : {_fmt_prog(prog_brk)}\n"
-                         f"  - reversal: {_fmt_prog(prog_rev)}")
+            prog_line = (f"Progress forward-test (gabungan): {_fmt_prog(prog_all)}\n"
+                         f"  - brkX2   : {_fmt_strat(prog_brk, FWDTEST_TARGET_BRKX2)}\n"
+                         f"  - reversal: {_fmt_strat(prog_rev, FWDTEST_TARGET_REVERSAL)}")
         send_telegram(
             f"{header}\n"
             f"{status_line}\n"
@@ -815,21 +816,34 @@ def thread2_monitor():
 
         if do_close:
             log(f"[T2] CLOSE {sym}: {reason} | profit {prof_from_entry:.2f}%")
-            strat_label = "Reversal Doji+HA (8h)" if d.get('strategy','brkX2')=='reversal' else "Momentum brkX2 (harian)"
+            strat = d.get('strategy','brkX2')
+            strat_label = "Reversal Doji+HA (8h)" if strat=='reversal' else "Momentum brkX2 (harian)"
             if send_close_long(sym):
-                send_telegram(
-                    f"CLOSE LONG ({strat_label})\n"
-                    f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-                    f"Pair   : {to_display_pair(sym)}\n"
-                    f"Alasan : {reason}\n"
-                    f"Profit : {prof_from_entry:.2f}% (dari entry)"
-                )
+                # catat ke CSV DULU supaya trade ini ikut terhitung di progress
                 csv_log_close(
                     to_display_pair(sym),
                     now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                     price, prof_from_entry, reason
                 )
                 remove_from_active_deals(sym)
+                # progress forward-test PER STRATEGI (setelah trade ini tercatat)
+                tgt = FWDTEST_TARGET_REVERSAL if strat=='reversal' else FWDTEST_TARGET_BRKX2
+                pstrat = csv_progress(strat)
+                if pstrat and pstrat['n']>0:
+                    done_n = pstrat['n']; wl = f"{pstrat['win']}W/{pstrat['loss']}L"
+                    status = "TERCAPAI - waktunya evaluasi!" if done_n>=tgt else f"menuju {tgt}"
+                    prog_close = (f"\nForward-test {strat_label}: #{done_n}/{tgt} ({status})"
+                                  f"\n  {wl}, total {pstrat['total_pct']:+.1f}%")
+                else:
+                    prog_close = f"\nForward-test {strat_label}: #?/{tgt} (CSV belum terbaca)"
+                send_telegram(
+                    f"CLOSE LONG ({strat_label})\n"
+                    f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                    f"Pair   : {to_display_pair(sym)}\n"
+                    f"Alasan : {reason}\n"
+                    f"Profit : {prof_from_entry:.2f}% (dari entry)"
+                    f"{prog_close}"
+                )
     return want_fast
 
 # ===================== RUNNERS =====================
