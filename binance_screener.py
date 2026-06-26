@@ -1,7 +1,7 @@
 """
 =============================================================
   BINANCE SCREENER -> 3COMMAS + TELEGRAM
-  STRATEGI: MOMENTUM BREAKOUT HARIAN (brkX2)  -- forward-test
+  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)  -- forward-test
 =============================================================
 Lihat SPEC_strategi_momentum_harian.md untuk dasar keputusan.
 
@@ -209,6 +209,9 @@ last_processed_candle_ts = 0
 # heartbeat state: kapan periode "tidak ada lolos" dimulai & kapan terakhir lapor
 heartbeat_window_start = None   # datetime WIB awal periode berjalan
 heartbeat_last_sent    = 0.0    # epoch detik notif terakhir
+# heartbeat reversal (terpisah, label 8h)
+heartbeat_rev_window_start = None
+heartbeat_rev_last_sent    = 0.0
 
 session = requests.Session()
 session.headers.update({'User-Agent': 'Mozilla/5.0'})
@@ -518,13 +521,13 @@ def heartbeat_tick(status_line: str):
     if first_time or (now - heartbeat_last_sent >= HEARTBEAT_INTERVAL_SEC):
         if first_time:
             start_str = now_dt.strftime('%d/%m %H:%M')
-            header = ("HEARTBEAT (Momentum brkX2 (harian)) — START\n"
+            header = ("HEARTBEAT (Momentum brkX2 (12h)) — START\n"
                       f"Mulai memantau: {start_str} WIB\n"
                       "Notif berikutnya tiap 6 jam.")
         else:
             start_str = heartbeat_window_start.strftime('%d/%m %H:%M')
             end_str   = now_dt.strftime('%d/%m %H:%M')
-            header = ("HEARTBEAT 6-jam (Momentum brkX2 (harian))\n"
+            header = ("HEARTBEAT 6-jam (Momentum brkX2 (12h))\n"
                       f"Periode: {start_str} -> {end_str} WIB")
         # progress forward-test (dari CSV) — per strategi (target sendiri) + gabungan.
         def _fmt_prog(p):
@@ -557,6 +560,45 @@ def heartbeat_tick(status_line: str):
         heartbeat_last_sent = now
         heartbeat_window_start = now_dt  # mulai periode baru
 
+
+
+def heartbeat_rev_tick(status_line: str):
+    """Heartbeat KHUSUS reversal (label 8h), state sendiri, tiap 6 jam.
+    Supaya reversal punya tanda hidup sendiri di Telegram (sebelumnya tak pernah muncul)."""
+    global heartbeat_rev_window_start, heartbeat_rev_last_sent
+    now = time.time()
+    now_dt = now_wib()
+    if heartbeat_rev_window_start is None:
+        heartbeat_rev_window_start = now_dt
+    first_time = (heartbeat_rev_last_sent == 0.0)
+    if first_time or (now - heartbeat_rev_last_sent >= HEARTBEAT_INTERVAL_SEC):
+        if first_time:
+            start_str = now_dt.strftime('%d/%m %H:%M')
+            header = ("HEARTBEAT (Reversal Doji+HA (8h)) — START\n"
+                      f"Mulai memantau: {start_str} WIB\n"
+                      "Notif berikutnya tiap 6 jam.")
+        else:
+            start_str = heartbeat_rev_window_start.strftime('%d/%m %H:%M')
+            end_str   = now_dt.strftime('%d/%m %H:%M')
+            header = ("HEARTBEAT 6-jam (Reversal Doji+HA (8h))\n"
+                      f"Periode: {start_str} -> {end_str} WIB")
+        prev = csv_progress('reversal')
+        if prev is None or prev['n']==0:
+            prog = f"Progress reversal: #0/{FWDTEST_TARGET_REVERSAL} (belum ada)"
+        else:
+            nn=prev['n']; wl=f"{prev['win']}W/{prev['loss']}L"
+            tag=" TERCAPAI!" if nn>=FWDTEST_TARGET_REVERSAL else ""
+            prog = f"Progress reversal: #{nn}/{FWDTEST_TARGET_REVERSAL} ({wl}, total {prev['total_pct']:+.1f}%){tag}"
+        send_telegram(
+            f"{header}\n"
+            f"{status_line}\n"
+            f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}\n"
+            f"{prog}\n"
+            f"Bot HIDUP & terus memantau."
+        )
+        log(f"[T1b] Heartbeat reversal terkirim: {status_line}")
+        heartbeat_rev_last_sent = now
+        heartbeat_rev_window_start = now_dt
 
 
 def thread1_scan():
@@ -634,7 +676,7 @@ def thread1_scan():
                 'strategy': 'brkX2'
             })
             send_telegram(
-                f"OPEN LONG (Momentum brkX2 (harian))\n"
+                f"OPEN LONG (Momentum brkX2 (12h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {entry_price:.6g}\n"
@@ -817,7 +859,7 @@ def thread2_monitor():
         if do_close:
             log(f"[T2] CLOSE {sym}: {reason} | profit {prof_from_entry:.2f}%")
             strat = d.get('strategy','brkX2')
-            strat_label = "Reversal Doji+HA (8h)" if strat=='reversal' else "Momentum brkX2 (harian)"
+            strat_label = "Reversal Doji+HA (8h)" if strat=='reversal' else "Momentum brkX2 (12h)"
             if send_close_long(sym):
                 # catat ke CSV DULU supaya trade ini ikut terhitung di progress
                 csv_log_close(
@@ -857,7 +899,9 @@ def run_thread1():
         # scan reversal (8h) di siklus yg sama; cek candle 8h-nya sendiri di dalam fungsi
         try:
             if REVERSAL_ENABLED:
-                thread1b_scan_reversal()
+                status_rev = thread1b_scan_reversal()
+                if status_rev:  # None = ada trade (notif OPEN sudah jalan); selain itu detak heartbeat
+                    heartbeat_rev_tick(status_rev)
         except Exception as e: log(f"WARN T1b reversal error: {e}")
         time.sleep(T1_SCAN_INTERVAL_SEC)
 
@@ -874,7 +918,7 @@ def run_thread2():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  STRATEGI: MOMENTUM BREAKOUT HARIAN (brkX2)")
+    log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
     log(f"  Entry syarat     : ST-up, >EMA20, EMA20>EMA50, breakout{BREAKOUT_LOOKBACK}, vol>={VOLUME_MULT}xMA, RSI<{RSI_MAX}" + (f", Stoch<{STOCH_MAX}" if STOCH_MAX is not None else ""))
@@ -895,7 +939,7 @@ if __name__ == '__main__':
     load_active_deals()
     # Tes telegram + notif startup
     send_telegram(
-        "Binance Screener AKTIF (Momentum brkX2 (harian))\n"
+        "Binance Screener AKTIF (Momentum brkX2 (12h))\n"
         f"Entry: ST-up + >EMA20 + EMA20>EMA50 + breakout{BREAKOUT_LOOKBACK} + vol>={VOLUME_MULT}xMA + RSI<{RSI_MAX}" + (f" + Stoch<{STOCH_MAX}" if STOCH_MAX is not None else "") + "\n"
         f"Exit : trailing adaptif (arm +{TRAIL_ARM_PCT}%, jarak per ATR%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)\n"
         f"Base ${BASE_ORDER_VOLUME} | Max deal {COMMAS_MAX_ACTIVE_DEALS} | "
