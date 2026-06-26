@@ -206,6 +206,7 @@ def csv_progress(strategy: str = None):
 active_deals_lock = threading.Lock()
 active_deals      = {}
 last_processed_candle_ts = 0
+last_rev_candle_ts = 0   # gating candle baru utk reversal (cegah entry dari candle 8h basi)
 # heartbeat state: kapan periode "tidak ada lolos" dimulai & kapan terakhir lapor
 heartbeat_window_start = None   # datetime WIB awal periode berjalan
 heartbeat_last_sent    = 0.0    # epoch detik notif terakhir
@@ -668,6 +669,13 @@ def thread1_scan():
     candidates.sort(key=lambda x: x[2])
     log(f"[T1] {len(candidates)} kandidat lolos. Slot terpakai {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}")
 
+    # GATING CANDLE BARU: hanya buka deal kalau candle terbaru BELUM pernah diproses.
+    # Cegah entry dari candle lama yg sdh tutup berjam2 lalu (sinyal basi -> slippage besar,
+    # mis. HEI entry 5 jam stlh candle tutup, slippage -11%). Buka hanya saat candle baru tutup.
+    if newest_ts <= last_processed_candle_ts:
+        log(f"[T1] Candle terbaru sudah diproses (ts={newest_ts}), tidak buka deal dari candle basi.")
+        return f"{len(candidates)} kandidat lolos tapi candle sudah diproses (tunggu candle 12h baru)."
+
     opened_any = False
     for sym, signal_price, atrp in candidates:
         # berhenti kalau slot brkX2 ATAU total sudah penuh
@@ -726,6 +734,7 @@ def thread1_scan():
 def thread1b_scan_reversal():
     """Scan strategi reversal (5 merah+turun>=5% + doji + 1 HA bull + cross EMA20) di timeframe 8h.
     Berbagi pool deal & bot 3Commas dgn brkX2, tapi slot terpisah (MAX_DEALS_REVERSAL)."""
+    global last_rev_candle_ts
     if not REVERSAL_ENABLED:
         return None
     log("[T1b] Scan REVERSAL candle 8h (TF tutup)...")
@@ -768,6 +777,13 @@ def thread1b_scan_reversal():
     candidates.sort(key=lambda x: x[2])
     log(f"[T1b] {len(candidates)} kandidat reversal lolos. Slot reversal {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL}")
 
+    # GATING CANDLE BARU (reversal): hanya buka kalau candle 8h terbaru BELUM diproses.
+    # Cegah entry dari candle basi (sinyal lama -> slippage besar), sama spt brkX2.
+    newest_rev = max(c[3] for c in candidates)
+    if newest_rev <= last_rev_candle_ts:
+        log(f"[T1b] Candle reversal terbaru sudah diproses (ts={newest_rev}), tidak buka dari candle basi.")
+        return f"REVERSAL: {len(candidates)} kandidat lolos tapi candle sudah diproses (tunggu candle 8h baru)."
+
     opened_any = False
     for sym, signal_price, atrp, cts in candidates:
         if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
@@ -809,6 +825,7 @@ def thread1b_scan_reversal():
                 'strategy': 'reversal',
             })
             opened_any = True
+    last_rev_candle_ts = newest_rev
     return None if opened_any else f"{len(candidates)} kandidat reversal lolos tapi tak ada yg dibuka."
 def thread2_monitor():
     want_fast = False  # jadi True jika ada deal armed yg harganya bergerak cepat
@@ -951,6 +968,21 @@ if __name__ == '__main__':
     log("="*55)
 
     load_active_deals()
+    # Init gating candle: anggap candle tertutup TERAKHIR saat startup "sudah diproses",
+    # supaya restart di tengah TF tidak memicu entry dari candle yg sdh tutup berjam2 lalu
+    # (cegah ulang kasus HEI: deal dibuka dari candle basi stlh restart). Hanya buka di candle BERIKUTNYA.
+    try:
+        import math as _math
+        now_ms = int(time.time()*1000)
+        tf_sec = {'8h':8*3600,'12h':12*3600,'1d':86400,'4h':4*3600,'6h':6*3600}
+        sec12 = tf_sec.get(TIMEFRAME, 12*3600)
+        sec8  = tf_sec.get(REVERSAL_TIMEFRAME, 8*3600)
+        # candle close terakhir = pembulatan ke bawah ke kelipatan TF
+        last_processed_candle_ts = (now_ms // (sec12*1000)) * (sec12*1000)
+        last_rev_candle_ts       = (now_ms // (sec8*1000))  * (sec8*1000)
+        log(f"   Init gating candle: brkX2 ts={last_processed_candle_ts}, reversal ts={last_rev_candle_ts} (buka deal hanya di candle TF berikutnya).")
+    except Exception as e:
+        log(f"   WARN init gating candle gagal: {e}")
     # Tes telegram + notif startup
     send_telegram(
         "Binance Screener AKTIF (Momentum brkX2 (12h))\n"
