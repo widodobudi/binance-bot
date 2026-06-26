@@ -40,6 +40,16 @@ TELEGRAM_TOKEN    = os.environ.get("TELEGRAM_TOKEN",    "")
 TELEGRAM_CHAT_ID  = os.environ.get("TELEGRAM_CHAT_ID",  "")
 COMMAS_BOT_ID      = int(os.environ.get("COMMAS_BOT_ID", "0"))
 COMMAS_EMAIL_TOKEN = os.environ.get("COMMAS_EMAIL_TOKEN", "")
+# Bot 3Commas TERPISAH untuk reversal (split). Disimpan di env var Railway (sama spt brkX2).
+# Set di Railway > Variables: COMMAS_BOT_ID_REVERSAL, COMMAS_EMAIL_TOKEN_REVERSAL
+COMMAS_BOT_ID_REVERSAL      = int(os.environ.get("COMMAS_BOT_ID_REVERSAL", "0"))
+COMMAS_EMAIL_TOKEN_REVERSAL = os.environ.get("COMMAS_EMAIL_TOKEN_REVERSAL", "")
+
+def commas_creds(strategy: str):
+    """Pilih (bot_id, email_token) sesuai strategi. reversal -> bot baru; lainnya -> bot existing (brkX2)."""
+    if strategy == 'reversal':
+        return COMMAS_BOT_ID_REVERSAL, COMMAS_EMAIL_TOKEN_REVERSAL
+    return COMMAS_BOT_ID, COMMAS_EMAIL_TOKEN
 COMMAS_DELAY_SEC   = 0
 # Kredensial WAJIB lewat environment variable (jangan hardcode di kode—repo publik!).
 # Set di Railway > Variables: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, COMMAS_BOT_ID, COMMAS_EMAIL_TOKEN
@@ -70,14 +80,20 @@ _TF_SECONDS = {"1d":86400, "12h":43200, "8h":28800, "6h":21600, "4h":14400, "1h"
 SECONDS_PER_CANDLE = _TF_SECONDS.get(TIMEFRAME, 86400)
 
 BASE_ORDER_VOLUME       = 6
-COMMAS_MAX_ACTIVE_DEALS = 4      # total pool deal (brkX2 + reversal). Ubah jg di 3Commas ke 4.
-MAX_DEALS_BRKX2         = 2      # slot maksimal strategi brkX2
-MAX_DEALS_REVERSAL      = 2      # slot maksimal strategi reversal
+COMMAS_MAX_ACTIVE_DEALS = 4      # total kedua bot (brkX2 2 + reversal 2). Tiap bot 3Commas di-set max 2.
+MAX_DEALS_BRKX2         = 2      # slot brkX2 (bot existing) — set Max active trades=2 di 3Commas
+MAX_DEALS_REVERSAL      = 2      # slot reversal (bot 16921019) — set Max active trades=2 di 3Commas
 ADD_FUND_AUTO           = False
 BTC_FILTER_ENABLED      = False
 
 # ---- STRATEGI 2: REVERSAL DOJI + HEIKIN ASHI (8h) ----
 REVERSAL_ENABLED      = True
+# Reversal pakai bot 3Commas terpisah (split). Kalau env var-nya belum diset, matikan reversal
+# supaya tidak salah kirim sinyal reversal ke bot brkX2.
+if REVERSAL_ENABLED and (COMMAS_BOT_ID_REVERSAL == 0 or not COMMAS_EMAIL_TOKEN_REVERSAL):
+    print("WARN: REVERSAL aktif tapi COMMAS_BOT_ID_REVERSAL/COMMAS_EMAIL_TOKEN_REVERSAL "
+          "belum diset di Railway > Variables. REVERSAL DIMATIKAN sampai env var diisi.")
+    REVERSAL_ENABLED = False
 REVERSAL_TIMEFRAME    = "8h"
 REVERSAL_EMA_FAST     = 20
 REVERSAL_EMA_SLOW     = 50
@@ -322,27 +338,31 @@ def send_3commas(payload: dict, label: str) -> bool:
     except Exception as e:
         log(f"WARN [3C] gagal {label}: {e}"); return False
 
-def send_open_long(symbol: str) -> bool:
-    return send_3commas({"message_type":"bot","bot_id":COMMAS_BOT_ID,
-        "email_token":COMMAS_EMAIL_TOKEN,"delay_seconds":COMMAS_DELAY_SEC,
+def send_open_long(symbol: str, strategy: str = 'brkX2') -> bool:
+    bid, tok = commas_creds(strategy)
+    return send_3commas({"message_type":"bot","bot_id":bid,
+        "email_token":tok,"delay_seconds":COMMAS_DELAY_SEC,
         "pair":to_commas_pair(symbol)}, "open_long")
 
-def send_close_long(symbol: str) -> bool:
+def send_close_long(symbol: str, strategy: str = 'brkX2') -> bool:
+    bid, tok = commas_creds(strategy)
     return send_3commas({"action":"close_at_market_price","message_type":"bot",
-        "bot_id":COMMAS_BOT_ID,"email_token":COMMAS_EMAIL_TOKEN,
+        "bot_id":bid,"email_token":tok,
         "delay_seconds":COMMAS_DELAY_SEC,"pair":to_commas_pair(symbol)}, "close_long")
 
-def send_add_funds(symbol: str, volume) -> bool:
+def send_add_funds(symbol: str, volume, strategy: str = 'brkX2') -> bool:
     """Add fund manual (tidak dipanggil otomatis; disediakan utk keperluan manual)."""
+    bid, tok = commas_creds(strategy)
     return send_3commas({"action":"add_funds_in_quote","message_type":"bot",
-        "bot_id":COMMAS_BOT_ID,"email_token":COMMAS_EMAIL_TOKEN,
+        "bot_id":bid,"email_token":tok,
         "delay_seconds":COMMAS_DELAY_SEC,"pair":to_commas_pair(symbol),
         "volume":volume}, "add_funds")
 
-def send_start_trailing(symbol: str) -> bool:
+def send_start_trailing(symbol: str, strategy: str = 'brkX2') -> bool:
     """Aktifkan trailing 3Commas (action start_trailing)."""
+    bid, tok = commas_creds(strategy)
     return send_3commas({"action":"start_trailing","message_type":"bot",
-        "bot_id":COMMAS_BOT_ID,"email_token":COMMAS_EMAIL_TOKEN,
+        "bot_id":bid,"email_token":tok,
         "delay_seconds":COMMAS_DELAY_SEC,"pair":to_commas_pair(symbol)}, "start_trailing")
 
 # ===================== DATA =====================
@@ -792,7 +812,7 @@ def thread1b_scan_reversal():
         with active_deals_lock:
             if sym in active_deals: continue
         log(f"[T1b] SINYAL REVERSAL: {sym} close_candle={signal_price:.6g} atr%={atrp:.2f}")
-        if send_open_long(sym):
+        if send_open_long(sym, 'reversal'):
             entry_price = get_price_now(sym)
             if entry_price <= 0: entry_price = signal_price
             slip_pct = (entry_price/signal_price - 1) * 100 if signal_price > 0 else 0.0
@@ -891,7 +911,7 @@ def thread2_monitor():
             log(f"[T2] CLOSE {sym}: {reason} | profit {prof_from_entry:.2f}%")
             strat = d.get('strategy','brkX2')
             strat_label = "Reversal Doji+HA (8h)" if strat=='reversal' else "Momentum brkX2 (12h)"
-            if send_close_long(sym):
+            if send_close_long(sym, strat):
                 # catat ke CSV DULU supaya trade ini ikut terhitung di progress
                 csv_log_close(
                     to_display_pair(sym),
@@ -956,6 +976,7 @@ if __name__ == '__main__':
     log(f"  Exit             : trailing adaptif (arm +{TRAIL_ARM_PCT}%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)")
     log(f"  Base order       : ${BASE_ORDER_VOLUME} | Max deal total: {COMMAS_MAX_ACTIVE_DEALS}")
     log(f"  Slot per strategi: brkX2={MAX_DEALS_BRKX2}, reversal={MAX_DEALS_REVERSAL}")
+    log(f"  Bot 3Commas      : brkX2 #{COMMAS_BOT_ID} | reversal #{COMMAS_BOT_ID_REVERSAL} (SPLIT)")
     log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
     log(f"  Filter BTC L1&L2 : {'ON' if BTC_FILTER_ENABLED else 'OFF'}")
     log(f"  Min vol 24h      : ${MIN_VOLUME_USD:,}")
