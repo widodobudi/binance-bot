@@ -266,6 +266,20 @@ def load_active_deals():
         log("   active_deals.json tidak ada, mulai kosong."); return
     try:
         with open(ACTIVE_DEALS_FILE,'r') as f: data=json.load(f)
+        # RESET_DEAL_SYMBOL=ATMUSDT -> hapus HANYA symbol itu saat startup (deal lain aman).
+        # Berguna saat 1 deal nyangkut/basi tp deal lain masih aktif. Hapus env var setelah dipakai.
+        # Bisa lebih dari satu, pisah koma: RESET_DEAL_SYMBOL=ATMUSDT,XUSDT
+        reset_syms = os.environ.get("RESET_DEAL_SYMBOL", "").strip()
+        if reset_syms:
+            for s in [x.strip().upper() for x in reset_syms.split(",") if x.strip()]:
+                if data.pop(s, None) is not None:
+                    log(f"   RESET_DEAL_SYMBOL: {s} dihapus dari active_deals saat startup.")
+                else:
+                    log(f"   RESET_DEAL_SYMBOL: {s} tidak ditemukan (sudah bersih).")
+            try:
+                with open(ACTIVE_DEALS_FILE,'w') as f: json.dump(data,f,indent=2,default=_convert)
+            except Exception as e:
+                log(f"WARN gagal tulis file saat RESET_DEAL_SYMBOL: {e}")
         with active_deals_lock: active_deals=data
         log(f"   Loaded active_deals: {list(active_deals.keys())}")
     except Exception as e:
