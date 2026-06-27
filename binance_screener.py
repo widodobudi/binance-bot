@@ -423,8 +423,37 @@ def compute_indicators(df):
         df['stoch_k']=stoch[kcol]
     return df
 
+# ===================== FILTER CHOPPY/WHIPPY =====================
+# Exclude pair yg wick-nya dominan (body kecil dibanding range) secara konsisten -> rawan
+# breakout palsu & sinyal reversal lemah. Ukur rata-rata body/range pada N candle terakhir.
+CHOPPY_FILTER_ENABLED   = True
+CHOPPY_BODY_RANGE_MIN   = 0.40   # rata-rata |close-open|/(high-low) di bawah ini = choppy -> exclude
+CHOPPY_LOOKBACK_CANDLES = 10     # jumlah candle tertutup yg dinilai
+
+def is_choppy(df) -> bool:
+    """True kalau pair choppy (rata-rata body/range < CHOPPY_BODY_RANGE_MIN selama N candle TERTUTUP).
+    Pakai candle yg sudah tutup saja (buang candle berjalan terakhir bila ada). Aman bila data kurang."""
+    if not CHOPPY_FILTER_ENABLED:
+        return False
+    try:
+        # ambil N candle terakhir; df di sini sudah berisi candle tertutup utk evaluasi
+        sub = df.tail(CHOPPY_LOOKBACK_CANDLES)
+        if len(sub) < CHOPPY_LOOKBACK_CANDLES:
+            return False  # data kurang -> jangan exclude (hindari false positive)
+        rng = (sub['high'] - sub['low']).abs()
+        body = (sub['close'] - sub['open']).abs()
+        # hindari bagi nol: candle dgn range 0 dianggap body_ratio 0 (choppy ekstrem/flat)
+        ratio = body / rng.replace(0, float('nan'))
+        avg_ratio = ratio.mean(skipna=True)
+        if avg_ratio != avg_ratio:  # semua NaN (range 0 semua) -> anggap choppy
+            return True
+        return bool(avg_ratio < CHOPPY_BODY_RANGE_MIN)
+    except Exception:
+        return False  # error -> jangan exclude
+
 def check_entry(df) -> bool:
     """Evaluasi pada candle TERTUTUP terakhir (mode a)."""
+    if is_choppy(df): return False
     row = df.iloc[-1]
     if pd.isna(row['ema_fast']) or pd.isna(row['ema_slow']) or pd.isna(row['hh']) or pd.isna(row['vol_ma']):
         return False
@@ -483,6 +512,7 @@ def check_entry_reversal(df) -> bool:
       - c+1 ATAU c+2 crossing-up EMA20
     Entry di candle c+2 yg baru tutup (mode a)."""
     if len(df) < 8: return False        # butuh c-5 (df[-8])
+    if is_choppy(df): return False
     n = len(df)
     im5, im4, im3, im2, im1 = n-8, n-7, n-6, n-5, n-4   # c-5..c-1
     i0 = n - 3           # c0
@@ -977,6 +1007,7 @@ if __name__ == '__main__':
     log(f"  Base order       : ${BASE_ORDER_VOLUME} | Max deal total: {COMMAS_MAX_ACTIVE_DEALS}")
     log(f"  Slot per strategi: brkX2={MAX_DEALS_BRKX2}, reversal={MAX_DEALS_REVERSAL}")
     log(f"  Bot 3Commas      : brkX2 #{COMMAS_BOT_ID} | reversal #{COMMAS_BOT_ID_REVERSAL} (SPLIT)")
+    log(f"  Filter choppy    : {'ON' if CHOPPY_FILTER_ENABLED else 'OFF'} (body/range < {CHOPPY_BODY_RANGE_MIN} avg {CHOPPY_LOOKBACK_CANDLES} candle -> exclude)")
     log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
     log(f"  Filter BTC L1&L2 : {'ON' if BTC_FILTER_ENABLED else 'OFF'}")
     log(f"  Min vol 24h      : ${MIN_VOLUME_USD:,}")
