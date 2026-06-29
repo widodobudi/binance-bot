@@ -797,7 +797,9 @@ def thread1_scan():
     # mis. HEI entry 5 jam stlh candle tutup, slippage -11%). Buka hanya saat candle baru tutup.
     if newest_ts <= last_processed_candle_ts:
         log(f"[T1] Candle terbaru sudah diproses (ts={newest_ts}), tidak buka deal dari candle basi.")
-        return f"{len(candidates)} kandidat lolos tapi candle sudah diproses (tunggu candle 12h baru)."
+        lolos_syms = ", ".join(to_display_pair(c[0]) for c in candidates)
+        return (f"{len(candidates)} kandidat LOLOS 7/7 tapi candle sudah diproses "
+                f"(tunggu candle 12h baru): {lolos_syms}")
 
     opened_any = False
     for sym, signal_price, atrp in candidates:
@@ -912,7 +914,9 @@ def thread1b_scan_reversal():
     newest_rev = max(c[3] for c in candidates)
     if newest_rev <= last_rev_candle_ts:
         log(f"[T1b] Candle reversal terbaru sudah diproses (ts={newest_rev}), tidak buka dari candle basi.")
-        return f"REVERSAL: {len(candidates)} kandidat lolos tapi candle sudah diproses (tunggu candle 8h baru)."
+        lolos_syms = ", ".join(to_display_pair(c[0]) for c in candidates)
+        return (f"REVERSAL: {len(candidates)} kandidat LOLOS tapi candle sudah diproses "
+                f"(tunggu candle 8h baru): {lolos_syms}")
 
     opened_any = False
     for sym, signal_price, atrp, cts in candidates:
