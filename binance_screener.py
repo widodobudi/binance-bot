@@ -463,10 +463,31 @@ def check_entry(df) -> bool:
     if not (row['close'] > row['hh']): return False
     if row['vol'] < VOLUME_MULT * row['vol_ma']: return False
     if pd.isna(row['rsi']) or row['rsi'] > RSI_MAX: return False
-    if STOCH_MAX is not None:
-        if 'stoch_k' not in row or pd.isna(row['stoch_k']) or row['stoch_k'] >= STOCH_MAX:
-            return False
     return True
+
+def entry_detail(df):
+    """Untuk heartbeat: kembalikan (n_lolos, total, list_gagal) tanpa mempengaruhi keputusan entry.
+    list_gagal = daftar string syarat yg belum terpenuhi + nilai aktualnya. Return None kalau choppy/data kurang."""
+    if is_choppy(df): return None
+    row = df.iloc[-1]
+    if pd.isna(row['ema_fast']) or pd.isna(row['ema_slow']) or pd.isna(row['hh']) or pd.isna(row['vol_ma']):
+        return None
+    checks = []  # (lolos?, label_gagal)
+    checks.append((row['st_dir']==1, "Supertrend (belum up)"))
+    checks.append((row['close']>row['ema_fast'], f"close>EMA20 (close {row['close']:.4g} vs EMA20 {row['ema_fast']:.4g})"))
+    checks.append((row['ema_fast']>row['ema_slow'], f"EMA20>EMA50 ({row['ema_fast']:.4g} vs {row['ema_slow']:.4g})"))
+    checks.append((row['close']>row['hh'], f"breakout10 (close {row['close']:.4g} vs HH {row['hh']:.4g})"))
+    vx = (row['vol']/row['vol_ma']) if row['vol_ma'] else 0
+    checks.append((row['vol']>=VOLUME_MULT*row['vol_ma'], f"vol>={VOLUME_MULT}xMA (skrg {vx:.2f}x)"))
+    rsi_ok = (not pd.isna(row['rsi'])) and row['rsi']<=RSI_MAX
+    checks.append((rsi_ok, f"RSI<{RSI_MAX} (skrg {row['rsi']:.1f})" if not pd.isna(row['rsi']) else "RSI (n/a)"))
+    if STOCH_MAX is not None:
+        sk = row['stoch_k'] if ('stoch_k' in row and not pd.isna(row['stoch_k'])) else None
+        stoch_ok = sk is not None and sk < STOCH_MAX
+        checks.append((stoch_ok, f"Stoch%K<{STOCH_MAX} (skrg {sk:.1f})" if sk is not None else "Stoch%K (n/a)"))
+    n_pass = sum(1 for ok,_ in checks if ok)
+    fails = [lab for ok,lab in checks if not ok]
+    return (n_pass, len(checks), fails)
 
 # ===================== STRATEGI 2: REVERSAL DOJI + HEIKIN ASHI (8h) =====================
 def heikin_ashi_bullish(df):
@@ -538,6 +559,36 @@ def check_entry_reversal(df) -> bool:
     # c+1 atau c+2 crossing-up EMA20
     if not (_cross_up(df, i1, 'ema_fast') or _cross_up(df, i2, 'ema_fast')): return False
     return True
+
+def entry_detail_reversal(df):
+    """Untuk heartbeat: (n_lolos, 4, list_gagal) tanpa mempengaruhi keputusan. None kalau choppy/data kurang."""
+    if len(df) < 8: return None
+    if is_choppy(df): return None
+    n = len(df)
+    im5, im4, im3, im2, im1 = n-8, n-7, n-6, n-5, n-4
+    i0 = n-3; i1, i2 = n-2, n-1
+    c0 = df.iloc[i0]
+    if any(pd.isna(c0[x]) for x in ['ema_fast','ema_slow','body_ratio']): return None
+    checks = []
+    # syarat 1: 5 merah + turun >= -5%
+    all_red = all(df.iloc[idx]['close'] < df.iloc[idx]['open'] for idx in (im5,im4,im3,im2,im1))
+    open_c5 = float(df.iloc[im5]['open']); close_c1 = float(df.iloc[im1]['close'])
+    drop = (close_c1/open_c5-1)*100 if open_c5>0 else 0
+    n_red = sum(1 for idx in (im5,im4,im3,im2,im1) if df.iloc[idx]['close']<df.iloc[idx]['open'])
+    s1 = all_red and drop <= -5.0
+    checks.append((s1, f"5 merah+turun>=5% ({n_red}/5 merah, turun {drop:.1f}%)"))
+    # syarat 2: c0 doji + di bawah EMA20&50
+    s2 = (c0['close']<c0['ema_fast'] and c0['close']<c0['ema_slow']) and (c0['body_ratio']<REVERSAL_DOJI_MAX)
+    checks.append((s2, f"doji<{REVERSAL_DOJI_MAX}body & <EMA20/50 (body {c0['body_ratio']:.2f})"))
+    # syarat 3: c+1 HA bull
+    s3 = bool(df['ha_bull'].iloc[i1])
+    checks.append((s3, "c+1 HA bullish (belum)"))
+    # syarat 4: cross-up EMA20
+    s4 = _cross_up(df, i1, 'ema_fast') or _cross_up(df, i2, 'ema_fast')
+    checks.append((s4, "cross-up EMA20 (belum)"))
+    n_pass = sum(1 for ok,_ in checks if ok)
+    fails = [lab for ok,lab in checks if not ok]
+    return (n_pass, 4, fails)
 
 def trailing_dist(atr_pct: float) -> float:
     if atr_pct < 1.0: return 0.5
@@ -666,6 +717,21 @@ def heartbeat_rev_tick(status_line: str):
         heartbeat_rev_window_start = now_dt
 
 
+def format_near_miss(near_miss, total, max_show=5):
+    """Format daftar kandidat terdekat utk heartbeat: urut n_pass turun, tampilkan max 5, sisanya diringkas.
+    Tiap baris: • PAIR: lolos N/total — belum: syarat1, syarat2"""
+    if not near_miss:
+        return "Kandidat terdekat: tidak ada (semua pair masih jauh dari lolos)."
+    near_miss.sort(key=lambda x: x[0], reverse=True)  # n_pass terbanyak dulu
+    lines = ["Kandidat terdekat:"]
+    for n_pass, sym, fails in near_miss[:max_show]:
+        belum = "; ".join(fails) if fails else "-"
+        lines.append(f"• {to_display_pair(sym)}: lolos {n_pass}/{total} — belum: {belum}")
+    sisa = len(near_miss) - max_show
+    if sisa > 0:
+        lines.append(f"(+ {sisa} pair lain lolos >={near_miss[max_show-1][0] if max_show<=len(near_miss) else 5}/{total})")
+    return "\n".join(lines)
+
 def thread1_scan():
     global last_processed_candle_ts, heartbeat_window_start, heartbeat_last_sent
     log("[T1] Scan candle (TF tutup)...")
@@ -694,6 +760,7 @@ def thread1_scan():
         return "Filter BTC aktif & tidak lolos — scan dibatalkan periode ini."
 
     candidates = []
+    near_miss = []   # (n_pass, sym, fails) untuk heartbeat kandidat terdekat
     newest_ts = 0
     for sym in universe:
         with active_deals_lock:
@@ -709,11 +776,17 @@ def thread1_scan():
         newest_ts = max(newest_ts, int(df['ct'].iloc[-1]))
         if check_entry(df):
             candidates.append((sym, float(df['close'].iloc[-1]), float(df['atr_pct'].iloc[-1])))
+        else:
+            det = entry_detail(df)
+            if det is not None:
+                n_pass, total, fails = det
+                if n_pass >= 5:   # tampilkan hanya yg lolos >=5/7
+                    near_miss.append((n_pass, sym, fails))
 
     if not candidates:
         log(f"[T1] {len(universe)} coin discan, tidak ada yg lolos syarat entry.")
         last_processed_candle_ts = newest_ts
-        return f"TIDAK ADA coin lolos 7 syarat entry. ({len(universe)} coin discan)"
+        return f"TIDAK ADA coin lolos 7 syarat entry. ({len(universe)} coin discan)\n" + format_near_miss(near_miss, 7)
 
     # urutkan kandidat: ATR% terkecil (paling stabil) dulu
     candidates.sort(key=lambda x: x[2])
@@ -805,6 +878,7 @@ def thread1b_scan_reversal():
         return f"Slot reversal/total penuh. Tidak cari entry reversal."
 
     candidates = []
+    near_miss = []
     for sym in universe:
         with active_deals_lock:
             if sym in active_deals: continue   # satu coin, satu deal (lintas strategi)
@@ -818,10 +892,16 @@ def thread1b_scan_reversal():
         if check_entry_reversal(df):
             atrp = float(df['atr_pct'].iloc[-1]) if not pd.isna(df['atr_pct'].iloc[-1]) else 3.0
             candidates.append((sym, float(df['close'].iloc[-1]), atrp, int(df['ct'].iloc[-1])))
+        else:
+            det = entry_detail_reversal(df)
+            if det is not None:
+                n_pass, total, fails = det
+                if n_pass >= 2:   # tampilkan hanya yg lolos >=2/4
+                    near_miss.append((n_pass, sym, fails))
 
     if not candidates:
         log(f"[T1b] {len(universe)} coin discan (reversal), tidak ada yg lolos setup.")
-        return f"REVERSAL: tidak ada coin lolos setup. ({len(universe)} discan)"
+        return f"REVERSAL: tidak ada coin lolos setup. ({len(universe)} discan)\n" + format_near_miss(near_miss, 4)
 
     # urutkan: ATR% terkecil dulu (paling stabil)
     candidates.sort(key=lambda x: x[2])
