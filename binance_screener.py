@@ -73,6 +73,8 @@ STOCH_MAX         = 70      # syarat ke-7: Stoch %K < 70 (hindari entry terlalu 
 MIN_VOLUME_USD    = 1_000_000
 
 TRAIL_ARM_PCT     = 2.0
+# FAKTOR pengali jarak trailing. 1.0 = jarak tabel ATR% apa adanya; 1.10 = 10% lebih longgar.
+TRAILING_FAKTOR   = 1.10
 MAX_HOLD_DAYS     = 5
 # detik per candle sesuai timeframe (utk batas hold yg benar di TF apa pun).
 # 1d=86400, 12h=43200, 6h=21600, 4h=14400. Batas hold = MAX_HOLD_DAYS candle.
@@ -591,11 +593,12 @@ def entry_detail_reversal(df):
     return (n_pass, 4, fails)
 
 def trailing_dist(atr_pct: float) -> float:
-    if atr_pct < 1.0: return 0.5
-    if atr_pct < 2.0: return 1.0
-    if atr_pct < 4.0: return 1.5
-    if atr_pct < 7.0: return 2.0
-    return 2.5
+    if atr_pct < 1.0: base = 0.5
+    elif atr_pct < 2.0: base = 1.0
+    elif atr_pct < 4.0: base = 1.5
+    elif atr_pct < 7.0: base = 2.0
+    else: base = 2.5
+    return round(base * TRAILING_FAKTOR, 4)
 
 def btc_filter_ok() -> bool:
     """Lapis 1 & 2 BTC. Hanya dipakai kalau BTC_FILTER_ENABLED True."""
@@ -1088,6 +1091,7 @@ if __name__ == '__main__':
     log(f"  Timeframe        : {TIMEFRAME}")
     log(f"  Entry syarat     : ST-up, >EMA20, EMA20>EMA50, breakout{BREAKOUT_LOOKBACK}, vol>={VOLUME_MULT}xMA, RSI<{RSI_MAX}" + (f", Stoch<{STOCH_MAX}" if STOCH_MAX is not None else ""))
     log(f"  Exit             : trailing adaptif (arm +{TRAIL_ARM_PCT}%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)")
+    log(f"  Trailing FAKTOR  : {TRAILING_FAKTOR*100:.0f}% (jarak trailing = tabel ATR% x {TRAILING_FAKTOR})")
     log(f"  Base order       : ${BASE_ORDER_VOLUME} | Max deal total: {COMMAS_MAX_ACTIVE_DEALS}")
     log(f"  Slot per strategi: brkX2={MAX_DEALS_BRKX2}, reversal={MAX_DEALS_REVERSAL}")
     log(f"  Bot 3Commas      : brkX2 #{COMMAS_BOT_ID} | reversal #{COMMAS_BOT_ID_REVERSAL} (SPLIT)")
