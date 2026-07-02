@@ -32,7 +32,7 @@ FILTER BTC (Lapis1&2): OFF (toggle). ADD FUND otomatis: OFF.
 =============================================================
 """
 import requests, pandas as pd, pandas_ta as ta, numpy as np
-import time, sys, json, threading, os, csv
+import time, sys, json, threading, os, csv, hmac, hashlib
 from datetime import datetime, timedelta, timezone
 
 # ===================== KONFIGURASI =====================
@@ -51,6 +51,13 @@ def commas_creds(strategy: str):
         return COMMAS_BOT_ID_REVERSAL, COMMAS_EMAIL_TOKEN_REVERSAL
     return COMMAS_BOT_ID, COMMAS_EMAIL_TOKEN
 COMMAS_DELAY_SEC   = 0
+# API key 3Commas (READ-ONLY, permission bots-read) untuk SINKRONISASI deal:
+# deteksi deal yg ditutup/dibuka manual di 3Commas. Set di Railway > Variables:
+#   COMMAS_API_KEY, COMMAS_API_SECRET
+# Kalau kosong, sinkronisasi otomatis nonaktif (bot jalan normal tanpa deteksi).
+COMMAS_API_KEY    = os.environ.get("COMMAS_API_KEY", "")
+COMMAS_API_SECRET = os.environ.get("COMMAS_API_SECRET", "")
+COMMAS_SYNC_ENABLED = bool(COMMAS_API_KEY and COMMAS_API_SECRET)
 # Kredensial WAJIB lewat environment variable (jangan hardcode di kode—repo publik!).
 # Set di Railway > Variables: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, COMMAS_BOT_ID, COMMAS_EMAIL_TOKEN
 if not all([TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, COMMAS_EMAIL_TOKEN]) or COMMAS_BOT_ID == 0:
@@ -322,6 +329,67 @@ def remove_from_active_deals(symbol: str):
         active_deals.pop(symbol, None)
     save_active_deals()
 
+# ===================== SINKRONISASI DEAL (API 3Commas read-only) =====================
+COMMAS_API_BASE = "https://api.3commas.io"
+
+def _commas_api_get(path_with_query: str):
+    """GET signed ke API 3Commas (HMAC SHA256). path_with_query mis:
+    '/public/api/ver1/deals?scope=active&limit=100'. Return list/dict atau None."""
+    if not COMMAS_SYNC_ENABLED: return None
+    try:
+        sig = hmac.new(COMMAS_API_SECRET.encode(), path_with_query.encode(), hashlib.sha256).hexdigest()
+        headers = {"Apikey": COMMAS_API_KEY, "Signature": sig}
+        r = session.get(COMMAS_API_BASE + path_with_query, headers=headers, timeout=15)
+        if r.status_code != 200:
+            log(f"WARN [SYNC] API 3Commas HTTP {r.status_code}: {r.text[:200]}")
+            return None
+        return r.json()
+    except Exception as e:
+        log(f"WARN [SYNC] gagal query API 3Commas: {e}")
+        return None
+
+def commas_pair_to_symbol(pair: str) -> str:
+    """'USDT_AVAX' -> 'AVAXUSDT'. Balikan dari to_commas_pair."""
+    if pair.startswith("USDT_"):
+        return pair[5:] + "USDT"
+    return pair.replace("_","")
+
+def fetch_active_deals_3commas():
+    """Ambil set symbol deal AKTIF dari 3Commas (kedua bot brkX2 & reversal). Return set atau None kalau gagal."""
+    data = _commas_api_get("/public/api/ver1/deals?scope=active&limit=1000")
+    if data is None or not isinstance(data, list):
+        return None
+    syms = set()
+    for d in data:
+        try:
+            pair = d.get('pair','')
+            if pair: syms.add(commas_pair_to_symbol(pair))
+        except Exception: pass
+    return syms
+
+def sync_deals_with_3commas():
+    """Bandingkan active_deals bot vs deal aktif 3Commas.
+    - Di bot TAPI tidak di 3Commas -> ditutup manual -> hapus + notif.
+    - Di 3Commas TAPI tidak di bot -> dibuka manual -> notif saja (tidak ambil alih)."""
+    if not COMMAS_SYNC_ENABLED: return
+    remote = fetch_active_deals_3commas()
+    if remote is None: return  # gagal query -> jangan ubah apa2 (aman)
+    with active_deals_lock:
+        local = set(active_deals.keys())
+    # (1) ditutup manual: di bot tapi hilang di 3Commas
+    closed_manual = local - remote
+    for sym in closed_manual:
+        remove_from_active_deals(sym)
+        log(f"[SYNC] {sym} tidak ada di 3Commas (ditutup manual) -> dihapus dari pantauan bot.")
+        send_telegram(f"🔄 SINKRONISASI: {to_display_pair(sym)} sudah tidak aktif di 3Commas "
+                      f"(kemungkinan ditutup manual). Dihapus dari pantauan bot.")
+    # (2) dibuka manual: di 3Commas tapi tidak di bot -> notif saja
+    opened_manual = remote - local
+    for sym in opened_manual:
+        log(f"[SYNC] {sym} aktif di 3Commas tapi tidak di pantauan bot (kemungkinan dibuka manual).")
+        send_telegram(f"🔄 SINKRONISASI: {to_display_pair(sym)} aktif di 3Commas tapi TIDAK dipantau bot "
+                      f"(kemungkinan dibuka manual). Bot TIDAK mengambil alih deal ini — kelola manual.")
+
 # ===================== 3COMMAS =====================
 def send_3commas(payload: dict, label: str) -> bool:
     try:
@@ -352,13 +420,48 @@ def send_close_long(symbol: str, strategy: str = 'brkX2') -> bool:
         "bot_id":bid,"email_token":tok,
         "delay_seconds":COMMAS_DELAY_SEC,"pair":to_commas_pair(symbol)}, "close_long")
 
-def send_add_funds(symbol: str, volume, strategy: str = 'brkX2') -> bool:
-    """Add fund manual (tidak dipanggil otomatis; disediakan utk keperluan manual)."""
+def send_add_funds(symbol: str, volume, strategy: str = 'brkX2', delay: int = 15) -> bool:
+    """Add fund senilai `volume` USDT (quote) dengan delay detik. Dipakai utk sizing brkX2."""
     bid, tok = commas_creds(strategy)
     return send_3commas({"action":"add_funds_in_quote","message_type":"bot",
         "bot_id":bid,"email_token":tok,
-        "delay_seconds":COMMAS_DELAY_SEC,"pair":to_commas_pair(symbol),
+        "delay_seconds":delay,"pair":to_commas_pair(symbol),
         "volume":volume}, "add_funds")
+
+# ===================== SIZING BERBASIS SKOR SINYAL (brkX2) =====================
+# Ambang TETAP tiap dimensi (dari backtest signal_strength, tersil-tinggi).
+SCORE_THRESHOLDS = {'brk':3.82, 'vol':2.69, 'rsi':66.98, 'ema':11.49, 'atr':6.16}
+
+def signal_score(row) -> int:
+    """Skor 0-5 dari 5 dimensi kekuatan sinyal pada candle entry (row = df.iloc[-1])."""
+    sc = 0
+    try:
+        if row['hh']>0 and (row['close']/row['hh']-1)*100 > SCORE_THRESHOLDS['brk']: sc+=1
+        if row['vol_ma']>0 and (row['vol']/row['vol_ma']) > SCORE_THRESHOLDS['vol']: sc+=1
+        if not pd.isna(row['rsi']) and row['rsi'] > SCORE_THRESHOLDS['rsi']: sc+=1
+        if row['ema_fast']>0 and (row['close']/row['ema_fast']-1)*100 > SCORE_THRESHOLDS['ema']: sc+=1
+        if not pd.isna(row['atr_pct']) and row['atr_pct'] > SCORE_THRESHOLDS['atr']: sc+=1
+    except Exception:
+        return 0
+    return sc
+
+def score_to_target_usd(score: int) -> int:
+    """Skema B (3 tingkat, lantai $6): skor<3 -> $6, 3<=skor<5 -> $9, skor>=5 -> $12."""
+    if score >= 5: return 12
+    if score >= 3: return 9
+    return 6
+
+def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
+    """Buka deal + (kalau skor>=3) add fund selisih dgn delay 15 detik. Return (ok, target_usd, add_usd)."""
+    target = score_to_target_usd(score)
+    add_usd = target - BASE_ORDER_VOLUME   # selisih di atas base $6
+    ok = send_open_long(symbol, strategy)
+    if not ok:
+        return False, target, 0
+    if add_usd > 0:
+        # message ke-2 TERPISAH (array multi-instruksi tdk didukung): add fund delay 15 detik
+        send_add_funds(symbol, add_usd, strategy, delay=15)
+    return True, target, add_usd
 
 def send_start_trailing(symbol: str, strategy: str = 'brkX2') -> bool:
     """Aktifkan trailing 3Commas (action start_trailing)."""
@@ -778,7 +881,8 @@ def thread1_scan():
         df = compute_indicators(df)
         newest_ts = max(newest_ts, int(df['ct'].iloc[-1]))
         if check_entry(df):
-            candidates.append((sym, float(df['close'].iloc[-1]), float(df['atr_pct'].iloc[-1])))
+            sc = signal_score(df.iloc[-1])
+            candidates.append((sym, float(df['close'].iloc[-1]), float(df['atr_pct'].iloc[-1]), sc))
         else:
             det = entry_detail(df)
             if det is not None:
@@ -805,7 +909,7 @@ def thread1_scan():
                 f"(tunggu candle 12h baru): {lolos_syms}")
 
     opened_any = False
-    for sym, signal_price, atrp in candidates:
+    for sym, signal_price, atrp, score in candidates:
         # berhenti kalau slot brkX2 ATAU total sudah penuh
         if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2 or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
             log(f"[T1] Slot brkX2/total penuh, sisa kandidat tidak dibuka.")
@@ -813,8 +917,9 @@ def thread1_scan():
         with active_deals_lock:
             if sym in active_deals:
                 continue  # sudah punya deal di pair ini
-        log(f"[T1] SINYAL: {sym} close_candle={signal_price:.6g} atr%={atrp:.2f}")
-        if send_open_long(sym):
+        log(f"[T1] SINYAL: {sym} close_candle={signal_price:.6g} atr%={atrp:.2f} skor={score}")
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2')
+        if ok:
             entry_price = get_price_now(sym)
             if entry_price <= 0:
                 entry_price = signal_price
@@ -823,8 +928,9 @@ def thread1_scan():
                 'entry_price': entry_price, 'peak': entry_price,
                 'signal_price': signal_price, 'atr_pct': atrp,
                 'opened_candle_ts': int(newest_ts), 'trailing_armed': False,
-                'strategy': 'brkX2'
+                'strategy': 'brkX2', 'score': score, 'target_usd': target_usd
             })
+            addfund_txt = f" (+add ${add_usd} delay 15s)" if add_usd>0 else ""
             send_telegram(
                 f"OPEN LONG (Momentum brkX2 (12h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
@@ -833,7 +939,7 @@ def thread1_scan():
                 f"Harga sinyal (candle close): {signal_price:.6g}\n"
                 f"Selisih (lonjakan/slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
-                f"Base  : ${BASE_ORDER_VOLUME}\n"
+                f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
             )
             csv_log_open({
@@ -965,6 +1071,11 @@ def thread1b_scan_reversal():
     last_rev_candle_ts = newest_rev
     return None if opened_any else f"{len(candidates)} kandidat reversal lolos tapi tak ada yg dibuka."
 def thread2_monitor():
+    # SINKRONISASI dgn 3Commas dulu (deteksi close/open manual) sebelum monitor trailing
+    try:
+        sync_deals_with_3commas()
+    except Exception as e:
+        log(f"WARN [SYNC] error sinkronisasi (diabaikan): {e}")
     want_fast = False  # jadi True jika ada deal armed yg harganya bergerak cepat
     with active_deals_lock:
         syms = list(active_deals.keys())
@@ -1096,6 +1207,7 @@ if __name__ == '__main__':
     log(f"  Slot per strategi: brkX2={MAX_DEALS_BRKX2}, reversal={MAX_DEALS_REVERSAL}")
     log(f"  Bot 3Commas      : brkX2 #{COMMAS_BOT_ID} | reversal #{COMMAS_BOT_ID_REVERSAL} (SPLIT)")
     log(f"  Filter choppy    : {'ON' if CHOPPY_FILTER_ENABLED else 'OFF'} (body/range < {CHOPPY_BODY_RANGE_MIN} avg {CHOPPY_LOOKBACK_CANDLES} candle -> exclude)")
+    log(f"  Sinkron 3Commas  : {'ON (deteksi close/open manual)' if COMMAS_SYNC_ENABLED else 'OFF (set COMMAS_API_KEY & SECRET)'}")
     log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
     log(f"  Filter BTC L1&L2 : {'ON' if BTC_FILTER_ENABLED else 'OFF'}")
     log(f"  Min vol 24h      : ${MIN_VOLUME_USD:,}")
