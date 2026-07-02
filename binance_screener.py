@@ -32,7 +32,7 @@ FILTER BTC (Lapis1&2): OFF (toggle). ADD FUND otomatis: OFF.
 =============================================================
 """
 import requests, pandas as pd, pandas_ta as ta, numpy as np
-import time, sys, json, threading, os, csv, hmac, hashlib
+import time, sys, json, threading, os, csv
 from datetime import datetime, timedelta, timezone
 
 # ===================== KONFIGURASI =====================
@@ -51,13 +51,6 @@ def commas_creds(strategy: str):
         return COMMAS_BOT_ID_REVERSAL, COMMAS_EMAIL_TOKEN_REVERSAL
     return COMMAS_BOT_ID, COMMAS_EMAIL_TOKEN
 COMMAS_DELAY_SEC   = 0
-# API key 3Commas (READ-ONLY, permission bots-read) untuk SINKRONISASI deal:
-# deteksi deal yg ditutup/dibuka manual di 3Commas. Set di Railway > Variables:
-#   COMMAS_API_KEY, COMMAS_API_SECRET
-# Kalau kosong, sinkronisasi otomatis nonaktif (bot jalan normal tanpa deteksi).
-COMMAS_API_KEY    = os.environ.get("COMMAS_API_KEY", "")
-COMMAS_API_SECRET = os.environ.get("COMMAS_API_SECRET", "")
-COMMAS_SYNC_ENABLED = bool(COMMAS_API_KEY and COMMAS_API_SECRET)
 # Kredensial WAJIB lewat environment variable (jangan hardcode di kode—repo publik!).
 # Set di Railway > Variables: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, COMMAS_BOT_ID, COMMAS_EMAIL_TOKEN
 if not all([TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, COMMAS_EMAIL_TOKEN]) or COMMAS_BOT_ID == 0:
@@ -328,67 +321,6 @@ def remove_from_active_deals(symbol: str):
     with active_deals_lock:
         active_deals.pop(symbol, None)
     save_active_deals()
-
-# ===================== SINKRONISASI DEAL (API 3Commas read-only) =====================
-COMMAS_API_BASE = "https://api.3commas.io"
-
-def _commas_api_get(path_with_query: str):
-    """GET signed ke API 3Commas (HMAC SHA256). path_with_query mis:
-    '/public/api/ver1/deals?scope=active&limit=100'. Return list/dict atau None."""
-    if not COMMAS_SYNC_ENABLED: return None
-    try:
-        sig = hmac.new(COMMAS_API_SECRET.encode(), path_with_query.encode(), hashlib.sha256).hexdigest()
-        headers = {"Apikey": COMMAS_API_KEY, "Signature": sig}
-        r = session.get(COMMAS_API_BASE + path_with_query, headers=headers, timeout=15)
-        if r.status_code != 200:
-            log(f"WARN [SYNC] API 3Commas HTTP {r.status_code}: {r.text[:200]}")
-            return None
-        return r.json()
-    except Exception as e:
-        log(f"WARN [SYNC] gagal query API 3Commas: {e}")
-        return None
-
-def commas_pair_to_symbol(pair: str) -> str:
-    """'USDT_AVAX' -> 'AVAXUSDT'. Balikan dari to_commas_pair."""
-    if pair.startswith("USDT_"):
-        return pair[5:] + "USDT"
-    return pair.replace("_","")
-
-def fetch_active_deals_3commas():
-    """Ambil set symbol deal AKTIF dari 3Commas (kedua bot brkX2 & reversal). Return set atau None kalau gagal."""
-    data = _commas_api_get("/public/api/ver1/deals?scope=active&limit=1000")
-    if data is None or not isinstance(data, list):
-        return None
-    syms = set()
-    for d in data:
-        try:
-            pair = d.get('pair','')
-            if pair: syms.add(commas_pair_to_symbol(pair))
-        except Exception: pass
-    return syms
-
-def sync_deals_with_3commas():
-    """Bandingkan active_deals bot vs deal aktif 3Commas.
-    - Di bot TAPI tidak di 3Commas -> ditutup manual -> hapus + notif.
-    - Di 3Commas TAPI tidak di bot -> dibuka manual -> notif saja (tidak ambil alih)."""
-    if not COMMAS_SYNC_ENABLED: return
-    remote = fetch_active_deals_3commas()
-    if remote is None: return  # gagal query -> jangan ubah apa2 (aman)
-    with active_deals_lock:
-        local = set(active_deals.keys())
-    # (1) ditutup manual: di bot tapi hilang di 3Commas
-    closed_manual = local - remote
-    for sym in closed_manual:
-        remove_from_active_deals(sym)
-        log(f"[SYNC] {sym} tidak ada di 3Commas (ditutup manual) -> dihapus dari pantauan bot.")
-        send_telegram(f"🔄 SINKRONISASI: {to_display_pair(sym)} sudah tidak aktif di 3Commas "
-                      f"(kemungkinan ditutup manual). Dihapus dari pantauan bot.")
-    # (2) dibuka manual: di 3Commas tapi tidak di bot -> notif saja
-    opened_manual = remote - local
-    for sym in opened_manual:
-        log(f"[SYNC] {sym} aktif di 3Commas tapi tidak di pantauan bot (kemungkinan dibuka manual).")
-        send_telegram(f"🔄 SINKRONISASI: {to_display_pair(sym)} aktif di 3Commas tapi TIDAK dipantau bot "
-                      f"(kemungkinan dibuka manual). Bot TIDAK mengambil alih deal ini — kelola manual.")
 
 # ===================== 3COMMAS =====================
 def send_3commas(payload: dict, label: str) -> bool:
@@ -1071,11 +1003,6 @@ def thread1b_scan_reversal():
     last_rev_candle_ts = newest_rev
     return None if opened_any else f"{len(candidates)} kandidat reversal lolos tapi tak ada yg dibuka."
 def thread2_monitor():
-    # SINKRONISASI dgn 3Commas dulu (deteksi close/open manual) sebelum monitor trailing
-    try:
-        sync_deals_with_3commas()
-    except Exception as e:
-        log(f"WARN [SYNC] error sinkronisasi (diabaikan): {e}")
     want_fast = False  # jadi True jika ada deal armed yg harganya bergerak cepat
     with active_deals_lock:
         syms = list(active_deals.keys())
@@ -1207,7 +1134,6 @@ if __name__ == '__main__':
     log(f"  Slot per strategi: brkX2={MAX_DEALS_BRKX2}, reversal={MAX_DEALS_REVERSAL}")
     log(f"  Bot 3Commas      : brkX2 #{COMMAS_BOT_ID} | reversal #{COMMAS_BOT_ID_REVERSAL} (SPLIT)")
     log(f"  Filter choppy    : {'ON' if CHOPPY_FILTER_ENABLED else 'OFF'} (body/range < {CHOPPY_BODY_RANGE_MIN} avg {CHOPPY_LOOKBACK_CANDLES} candle -> exclude)")
-    log(f"  Sinkron 3Commas  : {'ON (deteksi close/open manual)' if COMMAS_SYNC_ENABLED else 'OFF (set COMMAS_API_KEY & SECRET)'}")
     log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
     log(f"  Filter BTC L1&L2 : {'ON' if BTC_FILTER_ENABLED else 'OFF'}")
     log(f"  Min vol 24h      : ${MIN_VOLUME_USD:,}")
