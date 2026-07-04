@@ -138,6 +138,59 @@ BASE = "https://data-api.binance.vision"
 DATA_DIR = os.environ.get("DATA_DIR", r"D:\tradingview")
 ACTIVE_DEALS_FILE = os.path.join(DATA_DIR, "active_deals.json")
 TRADES_CSV = os.path.join(DATA_DIR, "trades_forwardtest.csv")
+
+# ===================== COOLDOWN INTERNAL (cegah DEAL HANTU, brkX2) =====================
+# Masalah: kalau bot kirim open long tapi 3Commas TOLAK krn cooldown bot (default 28800s/8jam),
+# tanpa fitur sinkronisasi bot TETAP catat deal di active_deals (deal hantu, hrs dibersihkan
+# manual via RESET_DEAL_SYMBOL). Contoh nyata: EPIC/USDT 04/07 close 14:53, sinyal 7/7 baru
+# 19:04 (~4 jam) DITOLAK 3Commas krn cooldown, bot terlanjur catat.
+# SOLUSI: mirror cooldown 3Commas di sisi Python SEBELUM kirim sinyal, supaya bot tidak pernah
+# mengirim webhook yg pasti ditolak. Statis 28800s (BUKAN unblokir-bersyarat) -- keputusan
+# 04/07 setelah backtest_reentry.py: re-entry cepat (sinyal 7/7 <12jam setelah close pair yg
+# sama) TIDAK PERNAH terjadi di 150 symbol x ~333 hari data historis (n=0 di semua ambang
+# 2/4/6/8 jam) -- kejadian spt EPIC sangat langka, tidak cukup bukti utk logika unblokir yg
+# lebih rumit. Kasus langka ditangani MANUAL (RESET_DEAL_SYMBOL) apa adanya.
+COOLDOWN_SECONDS = 28800   # 8 jam, samakan dgn setting "Cooldown between trades" bot 3Commas
+LAST_CLOSED_FILE = os.path.join(DATA_DIR, "last_closed.json")
+last_closed_ts = {}          # symbol -> epoch detik saat close terakhir
+last_closed_lock = threading.Lock()
+
+def load_last_closed():
+    """Muat riwayat close terakhir per symbol dari file (persisten lintas restart/deploy)."""
+    global last_closed_ts
+    if not os.path.exists(LAST_CLOSED_FILE):
+        log("   last_closed.json tidak ada, mulai kosong (cooldown internal)."); return
+    try:
+        with open(LAST_CLOSED_FILE, 'r') as f: data = json.load(f)
+        with last_closed_lock:
+            last_closed_ts = {k: float(v) for k, v in data.items()}
+        log(f"   Loaded last_closed_ts: {len(last_closed_ts)} symbol.")
+    except Exception as e:
+        log(f"WARN gagal baca last_closed.json: {e}")
+
+def save_last_closed():
+    try:
+        with last_closed_lock: data = dict(last_closed_ts)
+        with open(LAST_CLOSED_FILE, 'w') as f: json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan last_closed.json: {e}")
+
+def record_closed(symbol: str):
+    """Catat waktu close SEKARANG utk symbol ini (dipanggil tiap deal brkX2 ditutup)."""
+    with last_closed_lock:
+        last_closed_ts[symbol] = time.time()
+    save_last_closed()
+
+def cooldown_remaining(symbol: str) -> float:
+    """Sisa detik cooldown utk symbol ini. 0 kalau tidak dalam cooldown (atau belum pernah close)."""
+    with last_closed_lock:
+        ts = last_closed_ts.get(symbol)
+    if ts is None: return 0.0
+    sisa = COOLDOWN_SECONDS - (time.time() - ts)
+    return max(0.0, sisa)
+
+def is_in_cooldown(symbol: str) -> bool:
+    return cooldown_remaining(symbol) > 0
 trades_csv_lock = threading.Lock()
 
 # Kolom CSV log forward-test (1 baris per trade; ditulis saat OPEN, dilengkapi saat CLOSE)
@@ -848,6 +901,7 @@ def thread1_scan():
                 f"(tunggu candle 12h baru): {lolos_syms}")
 
     opened_any = False
+    cooldown_held = []   # (sym, sisa_detik) -- kandidat 7/7 valid tapi masih cooldown internal
     for sym, signal_price, atrp, score in candidates:
         # berhenti kalau slot brkX2 ATAU total sudah penuh
         if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2 or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
@@ -856,6 +910,11 @@ def thread1_scan():
         with active_deals_lock:
             if sym in active_deals:
                 continue  # sudah punya deal di pair ini
+        sisa = cooldown_remaining(sym)
+        if sisa > 0:
+            log(f"[T1] {sym} LOLOS 7/7 tapi masih cooldown internal (sisa {sisa/3600:.1f} jam) -> skip, tidak kirim sinyal.")
+            cooldown_held.append((sym, sisa))
+            continue  # jangan kirim webhook yg pasti ditolak 3Commas (cegah deal hantu)
         log(f"[T1] SINYAL: {sym} close_candle={signal_price:.6g} atr%={atrp:.2f} skor={score}")
         ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2')
         if ok:
@@ -899,7 +958,13 @@ def thread1_scan():
         heartbeat_window_start = now_wib()
         heartbeat_last_sent = time.time()
     last_processed_candle_ts = newest_ts
-    return None if opened_any else f"{len(candidates)} kandidat lolos tapi tak ada yg jadi dibuka."
+    cooldown_txt = ""
+    if cooldown_held:
+        detail = ", ".join(f"{to_display_pair(s)} (sisa {sisa/3600:.1f}j)" for s, sisa in cooldown_held)
+        cooldown_txt = f"\n{len(cooldown_held)} kandidat LOLOS 7/7 tapi masih cooldown internal (cegah re-entry/deal hantu): {detail}"
+    if opened_any:
+        return cooldown_txt.strip() or None
+    return f"{len(candidates)} kandidat lolos tapi tak ada yg jadi dibuka.{cooldown_txt}"
 
 # ===================== THREAD 2: MONITOR + CLOSE (trailing) =====================
 
@@ -1081,6 +1146,8 @@ def thread2_monitor():
                     price, prof_from_entry, reason
                 )
                 remove_from_active_deals(sym)
+                if strat == 'brkX2':
+                    record_closed(sym)   # cooldown internal: cegah re-entry & deal hantu (lihat COOLDOWN_SECONDS)
                 # progress forward-test PER STRATEGI (setelah trade ini tercatat)
                 tgt = FWDTEST_TARGET_REVERSAL if strat=='reversal' else FWDTEST_TARGET_BRKX2
                 pstrat = csv_progress(strat)
@@ -1141,6 +1208,7 @@ if __name__ == '__main__':
     log(f"  Slot per strategi: brkX2={MAX_DEALS_BRKX2}, reversal={MAX_DEALS_REVERSAL}")
     log(f"  Bot 3Commas      : brkX2 #{COMMAS_BOT_ID} | reversal #{COMMAS_BOT_ID_REVERSAL} (SPLIT)")
     log(f"  Filter choppy    : {'ON' if CHOPPY_FILTER_ENABLED else 'OFF'} (body/range < {CHOPPY_BODY_RANGE_MIN} avg {CHOPPY_LOOKBACK_CANDLES} candle -> exclude)")
+    log(f"  Cooldown internal: {COOLDOWN_SECONDS}s ({COOLDOWN_SECONDS/3600:.0f}j, brkX2) -- cegah kirim sinyal yg pasti ditolak 3Commas (deal hantu)")
     log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
     log(f"  Filter BTC L1&L2 : {'ON' if BTC_FILTER_ENABLED else 'OFF'}")
     log(f"  Min vol 24h      : ${MIN_VOLUME_USD:,}")
@@ -1153,6 +1221,7 @@ if __name__ == '__main__':
     log("="*55)
 
     load_active_deals()
+    load_last_closed()
     # Init gating candle: anggap candle tertutup TERAKHIR saat startup "sudah diproses",
     # supaya restart di tengah TF tidak memicu entry dari candle yg sdh tutup berjam2 lalu
     # (cegah ulang kasus HEI: deal dibuka dari candle basi stlh restart). Hanya buka di candle BERIKUTNYA.
