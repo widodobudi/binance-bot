@@ -74,7 +74,10 @@ MIN_VOLUME_USD    = 1_000_000
 
 TRAIL_ARM_PCT     = 2.0
 # FAKTOR pengali jarak trailing. 1.0 = jarak tabel ATR% apa adanya; 1.10 = 10% lebih longgar.
-TRAILING_FAKTOR   = 1.10
+# Diturunkan dari 1.10 -> 1.0 (Opsi B, 04/07): backtest_faktor.py simpulkan 1.0 menang telak;
+# kasus HOLO/USDT & SOL/USDT (04/07, dev 2.2% dari 1.10) rugi tipis -0.27%/-0.30%, dgn 1.0
+# (dev 2.0%, stop lebih dekat puncak) kemungkinan impas/rugi jauh lebih kecil.
+TRAILING_FAKTOR   = 1.0
 MAX_HOLD_DAYS     = 5
 # detik per candle sesuai timeframe (utk batas hold yg benar di TF apa pun).
 # 1d=86400, 12h=43200, 6h=21600, 4h=14400. Batas hold = MAX_HOLD_DAYS candle.
@@ -378,9 +381,13 @@ def signal_score(row) -> int:
     return sc
 
 def score_to_target_usd(score: int) -> int:
-    """Skema B (3 tingkat, lantai $6): skor<3 -> $6, 3<=skor<5 -> $9, skor>=5 -> $12."""
-    if score >= 5: return 12
-    if score >= 3: return 9
+    """tangga_aggr cap $18, 3 tingkat kelipatan $6 (add fund 3Commas minimum $6).
+    Skor 0-1 -> $6 (tanpa add fund), 2-3 -> $12 (add $6), 4-5 -> $18 (add $12).
+    Basis: backtest_sizing_v2 (155 trade) — aggr$18 ROI 1.44% vs flat 0.66%, walk-forward kalah flat 1/6.
+    Add fund minimum $6 (batas terkecil 3Commas/Binance) -> target melompat $6/$12/$18, bukan gradasi halus.
+    (Sebelumnya skema B: <3->$6, 3-4->$9, >=5->$12.)"""
+    if score >= 4: return 18
+    if score >= 2: return 12
     return 6
 
 def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
