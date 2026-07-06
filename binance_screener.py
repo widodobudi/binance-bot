@@ -34,6 +34,7 @@ FILTER BTC (Lapis1&2): OFF (toggle). ADD FUND otomatis: OFF.
 import requests, pandas as pd, pandas_ta as ta, numpy as np
 import time, sys, json, threading, os, csv
 from datetime import datetime, timedelta, timezone
+import requests as _requests_mod
 
 # ===================== KONFIGURASI =====================
 TELEGRAM_TOKEN    = os.environ.get("TELEGRAM_TOKEN",    "")
@@ -136,6 +137,46 @@ EXCLUDED_BASE_ASSETS = {
 
 BASE = "https://data-api.binance.vision"
 DATA_DIR = os.environ.get("DATA_DIR", r"D:\tradingview")
+
+# ===================== RETRY / ERROR HANDLING =====================
+# Konstanta retry untuk request ke Binance (klines, ticker, price).
+# Tidak dipakai untuk 3Commas webhook (kirim sekali, hasil langsung dipakai).
+_RETRY_COUNT   = 3          # maksimal percobaan ulang per request
+_RETRY_DELAY   = 2.0        # detik jeda antar retry (× backoff)
+_RETRY_BACKOFF = 2.0        # kelipatan jeda: percobaan ke-2 = 4s, ke-3 = 8s
+_RATE_LIMIT_SLEEP = 10.0    # detik tunggu extra saat terima HTTP 429 (rate limited)
+
+def _binance_get(endpoint: str, params: dict = None, timeout: int = 15):
+    """GET ke Binance data API dgn retry otomatis.
+    Menangani: timeout, connection error, HTTP 5xx, HTTP 429 (rate limit).
+    Return: response object (caller wajib panggil .json()), ATAU None kalau semua retry gagal."""
+    url = f"{BASE}{endpoint}"
+    delay = _RETRY_DELAY
+    for attempt in range(1, _RETRY_COUNT + 1):
+        try:
+            r = session.get(url, params=params, timeout=timeout)
+            if r.status_code == 429:
+                # Rate limited: tunggu extra sebelum retry
+                log(f"WARN [Binance] HTTP 429 rate limit di {endpoint} (attempt {attempt})"
+                    f" — tunggu {_RATE_LIMIT_SLEEP}s")
+                time.sleep(_RATE_LIMIT_SLEEP)
+                continue
+            if r.status_code >= 500:
+                log(f"WARN [Binance] HTTP {r.status_code} server error di {endpoint} (attempt {attempt})")
+                if attempt < _RETRY_COUNT:
+                    time.sleep(delay); delay *= _RETRY_BACKOFF
+                continue
+            return r   # status 200 (atau 4xx non-429: kembalikan ke caller utk ditangani lebih lanjut)
+        except (_requests_mod.exceptions.ConnectionError,
+                _requests_mod.exceptions.Timeout) as e:
+            log(f"WARN [Binance] koneksi gagal di {endpoint} (attempt {attempt}): {type(e).__name__}")
+            if attempt < _RETRY_COUNT:
+                time.sleep(delay); delay *= _RETRY_BACKOFF
+        except Exception as e:
+            log(f"WARN [Binance] error tak terduga di {endpoint}: {e}")
+            break   # error lain (mis. programming error) — jangan retry
+    log(f"WARN [Binance] {endpoint} gagal setelah {_RETRY_COUNT} percobaan — data dilewati.")
+    return None
 ACTIVE_DEALS_FILE = os.path.join(DATA_DIR, "active_deals.json")
 TRADES_CSV = os.path.join(DATA_DIR, "trades_forwardtest.csv")
 
@@ -380,21 +421,40 @@ def remove_from_active_deals(symbol: str):
 
 # ===================== 3COMMAS =====================
 def send_3commas(payload: dict, label: str) -> bool:
-    try:
-        resp = session.post("https://3commas.io/trade_signal/trading_view", json=payload, timeout=10)
-        pair = payload.get('pair','')
-        if resp.status_code != 200:
-            log(f"WARN [3C] {label} HTTP {resp.status_code}: {resp.text}"); return False
+    """Kirim webhook ke 3Commas dgn retry utk koneksi/timeout (maks 3x).
+    HTTP 4xx dari 3Commas (mis. 401 cooldown) TIDAK diretry — itu penolakan logis, bukan error jaringan."""
+    pair = payload.get('pair','')
+    url  = "https://3commas.io/trade_signal/trading_view"
+    delay = _RETRY_DELAY
+    for attempt in range(1, _RETRY_COUNT + 1):
         try:
-            body=resp.json()
-            if isinstance(body,dict):
-                if 'error' in body or 'errors' in body:
-                    log(f"WARN [3C] {label} ditolak: {body.get('error') or body.get('errors')}"); return False
-            log(f"OK [3C] {label} terkirim: {pair}"); return True
-        except Exception:
-            log(f"OK [3C] {label} terkirim (200): {pair}"); return True
-    except Exception as e:
-        log(f"WARN [3C] gagal {label}: {e}"); return False
+            resp = session.post(url, json=payload, timeout=10)
+            if resp.status_code == 200:
+                try:
+                    body = resp.json()
+                    if isinstance(body, dict) and ('error' in body or 'errors' in body):
+                        log(f"WARN [3C] {label} ditolak: {body.get('error') or body.get('errors')}")
+                        return False
+                except Exception:
+                    pass
+                log(f"OK [3C] {label} terkirim: {pair}"); return True
+            elif resp.status_code >= 500:
+                # Server error 3Commas — retry
+                log(f"WARN [3C] {label} HTTP {resp.status_code} (attempt {attempt}): {resp.text[:120]}")
+                if attempt < _RETRY_COUNT:
+                    time.sleep(delay); delay *= _RETRY_BACKOFF
+            else:
+                # 4xx (401 cooldown, 400 bad request, dll) — jangan retry, ini penolakan logis
+                log(f"WARN [3C] {label} HTTP {resp.status_code}: {resp.text[:120]}"); return False
+        except (_requests_mod.exceptions.ConnectionError,
+                _requests_mod.exceptions.Timeout) as e:
+            log(f"WARN [3C] {label} koneksi gagal (attempt {attempt}): {type(e).__name__}")
+            if attempt < _RETRY_COUNT:
+                time.sleep(delay); delay *= _RETRY_BACKOFF
+        except Exception as e:
+            log(f"WARN [3C] {label} error tak terduga: {e}"); return False
+    log(f"WARN [3C] {label} gagal setelah {_RETRY_COUNT} percobaan — sinyal tidak terkirim.")
+    return False
 
 def send_open_long(symbol: str, strategy: str = 'brkX2') -> bool:
     bid, tok = commas_creds(strategy)
@@ -464,8 +524,10 @@ def send_start_trailing(symbol: str, strategy: str = 'brkX2') -> bool:
 
 # ===================== DATA =====================
 def get_usdt_spot_pairs():
+    r = _binance_get("/api/v3/exchangeInfo", timeout=30)
+    if r is None: return []
     try:
-        info = session.get(f"{BASE}/api/v3/exchangeInfo", timeout=30).json()
+        info = r.json()
         out=[]
         for s in info.get('symbols',[]):
             if s.get('quoteAsset')!='USDT': continue
@@ -474,18 +536,21 @@ def get_usdt_spot_pairs():
             out.append(s['symbol'])
         return out
     except Exception as e:
-        log(f"WARN gagal exchangeInfo: {e}"); return []
+        log(f"WARN gagal parse exchangeInfo: {e}"); return []
 
 def get_ticker_24h():
+    r = _binance_get("/api/v3/ticker/24hr", timeout=30)
+    if r is None: return []
     try:
-        return session.get(f"{BASE}/api/v3/ticker/24hr", timeout=30).json()
+        return r.json()
     except Exception as e:
-        log(f"WARN gagal ticker24h: {e}"); return []
+        log(f"WARN gagal parse ticker24h: {e}"); return []
 
 def get_ohlcv(symbol: str, interval=TIMEFRAME, limit=120):
+    r = _binance_get("/api/v3/klines",
+                     params={'symbol':symbol,'interval':interval,'limit':limit}, timeout=15)
+    if r is None: return None
     try:
-        r = session.get(f"{BASE}/api/v3/klines",
-                        params={'symbol':symbol,'interval':interval,'limit':limit}, timeout=15)
         d = r.json()
         if not isinstance(d,list) or len(d)<60: return None
         df = pd.DataFrame(d, columns=['ot','open','high','low','close','vol','ct','qav','nt','tbbav','tbqav','ig'])
@@ -497,9 +562,10 @@ def get_ohlcv(symbol: str, interval=TIMEFRAME, limit=120):
 
 def get_price_now(symbol: str) -> float:
     """Harga pasar Binance terkini — dipakai sbg entry_price (opsi a) & monitor."""
+    r = _binance_get("/api/v3/ticker/price", params={'symbol':symbol}, timeout=10)
+    if r is None: return 0.0
     try:
-        r = session.get(f"{BASE}/api/v3/ticker/price", params={'symbol':symbol}, timeout=10).json()
-        return float(r['price'])
+        return float(r.json()['price'])
     except Exception:
         return 0.0
 
