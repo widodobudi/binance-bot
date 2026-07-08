@@ -34,325 +34,6 @@ FILTER BTC (Lapis1&2): OFF (toggle). ADD FUND otomatis: OFF.
 import requests, pandas as pd, pandas_ta as ta, numpy as np
 
 # ── Google Drive Log (append event open/close ke update_hari_ini.txt) ────────
-_gdrive_token_cache = {"token": None, "expires_at": 0}
-_gdrive_token_lock  = threading.Lock()
-
-def _gdrive_get_token() -> str:
-    """Ambil access token Google Drive via JWT Service Account (cached 55 menit)."""
-    import time as _t, base64 as _b64
-
-    with _gdrive_token_lock:
-        now = _t.time()
-        if _gdrive_token_cache["token"] and now < _gdrive_token_cache["expires_at"]:
-            return _gdrive_token_cache["token"]
-
-        raw = os.environ.get("GDRIVE_SERVICE_ACCOUNT", "")
-        if not raw:
-            log("WARN [Drive] GDRIVE_SERVICE_ACCOUNT belum diset di Railway.")
-            return ""
-        try:
-            import json as _js
-            creds = _js.loads(raw)
-        except Exception:
-            log("WARN [Drive] GDRIVE_SERVICE_ACCOUNT bukan JSON valid.")
-            return ""
-
-        def _b64url(data: bytes) -> str:
-            return _b64.urlsafe_b64encode(data).rstrip(b"=").decode()
-
-        import json as _js2
-        iat = int(now); exp = iat + 3600
-        header  = _b64url(_js2.dumps({"alg":"RS256","typ":"JWT"}).encode())
-        payload = _b64url(_js2.dumps({
-            "iss": creds["client_email"],
-            "scope": "https://www.googleapis.com/auth/drive",
-            "aud": "https://oauth2.googleapis.com/token",
-            "exp": exp, "iat": iat
-        }).encode())
-        msg = f"{header}.{payload}".encode()
-
-        try:
-            from cryptography.hazmat.primitives import hashes, serialization
-            from cryptography.hazmat.primitives.asymmetric import padding as _pad
-            pk  = serialization.load_pem_private_key(creds["private_key"].encode(), password=None)
-            sig = pk.sign(msg, _pad.PKCS1v15(), hashes.SHA256())
-            jwt_token = f"{header}.{payload}.{_b64url(sig)}"
-        except Exception as e:
-            log(f"WARN [Drive] Gagal sign JWT: {e}")
-            return ""
-
-        try:
-            resp  = requests.post(
-                "https://oauth2.googleapis.com/token",
-                data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-                      "assertion": jwt_token},
-                timeout=15)
-            token = resp.json().get("access_token", "")
-            if not token:
-                log(f"WARN [Drive] Gagal dapat token: {resp.text[:200]}")
-                return ""
-            _gdrive_token_cache["token"] = token
-            _gdrive_token_cache["expires_at"] = now + 55 * 60
-            return token
-        except Exception as e:
-            log(f"WARN [Drive] Error ambil token: {e}")
-            return ""
-
-
-def append_to_drive_log(event_type: str, sym: str, strategy: str,
-                         extra: str = "") -> None:
-    """Append 1 baris event ke update_hari_ini.txt di Google Drive (non-blocking).
-    Format:
-      [OPEN]  DD/MM/YYYY HH:MM WIB | brkX2    | CAKE/USDT     | skor=3 | $12 | ATR=4.73%
-      [CLOSE] DD/MM/YYYY HH:MM WIB | brkX2    | CAKE/USDT     | +2.14% | trailing | armed=True
-    """
-    file_id = os.environ.get("GDRIVE_LOG_FILE_ID", "1gTq1vDwlBcKg2qLKfX4pJd87eXo423oC")
-
-    def _do():
-        try:
-            token = _gdrive_get_token()
-            if not token:
-                return
-            waktu = now_wib().strftime("%d/%m/%Y %H:%M WIB")
-            pair  = to_display_pair(sym)
-            line  = f"[{event_type}] {waktu} | {strategy:<9} | {pair:<15} | {extra}\n"
-            hdrs  = {"Authorization": f"Bearer {token}"}
-
-            # Baca isi lama
-            r = requests.get(
-                f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media",
-                headers=hdrs, timeout=15)
-            old = r.text if r.status_code == 200 else ""
-
-            # Append di bawah (tambah di akhir)
-            new = old + line
-            requests.patch(
-                f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media",
-                headers={**hdrs, "Content-Type": "text/plain; charset=utf-8"},
-                data=new.encode("utf-8"), timeout=20)
-            log(f"   [Drive] Log: {line.strip()}")
-        except Exception as e:
-            log(f"WARN [Drive] Gagal append: {e}")
-
-    threading.Thread(target=_do, daemon=True).start()
-# ── End Google Drive Log ──────────────────────────────────────────────────────
-
-import time, sys, json, threading, os, csv
-from datetime import datetime, timedelta, timezone
-import requests as _requests_mod
-
-# ===================== KONFIGURASI =====================
-TELEGRAM_TOKEN    = os.environ.get("TELEGRAM_TOKEN",    "")
-TELEGRAM_CHAT_ID  = os.environ.get("TELEGRAM_CHAT_ID",  "")
-COMMAS_BOT_ID      = int(os.environ.get("COMMAS_BOT_ID", "0"))
-COMMAS_EMAIL_TOKEN = os.environ.get("COMMAS_EMAIL_TOKEN", "")
-# Bot 3Commas TERPISAH untuk reversal (split). Disimpan di env var Railway (sama spt brkX2).
-# Set di Railway > Variables: COMMAS_BOT_ID_REVERSAL, COMMAS_EMAIL_TOKEN_REVERSAL
-COMMAS_BOT_ID_REVERSAL      = int(os.environ.get("COMMAS_BOT_ID_REVERSAL", "0"))
-COMMAS_EMAIL_TOKEN_REVERSAL = os.environ.get("COMMAS_EMAIL_TOKEN_REVERSAL", "")
-
-def commas_creds(strategy: str):
-    """Pilih (bot_id, email_token) sesuai strategi. reversal -> bot baru; lainnya -> bot existing (brkX2)."""
-    if strategy == 'reversal':
-        return COMMAS_BOT_ID_REVERSAL, COMMAS_EMAIL_TOKEN_REVERSAL
-    return COMMAS_BOT_ID, COMMAS_EMAIL_TOKEN
-COMMAS_DELAY_SEC   = 0
-# Kredensial WAJIB lewat environment variable (jangan hardcode di kode—repo publik!).
-# Set di Railway > Variables: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, COMMAS_BOT_ID, COMMAS_EMAIL_TOKEN
-if not all([TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, COMMAS_EMAIL_TOKEN]) or COMMAS_BOT_ID == 0:
-    print("FATAL: env var kredensial belum lengkap "
-          "(TELEGRAM_TOKEN/TELEGRAM_CHAT_ID/COMMAS_BOT_ID/COMMAS_EMAIL_TOKEN). "
-          "Set di Railway > Variables. Bot berhenti.")
-    sys.exit(1)
-
-TIMEFRAME         = "12h"
-SUPERTREND_LENGTH = 10
-SUPERTREND_MULT   = 3.0
-EMA_FAST          = 20
-EMA_SLOW          = 50
-BREAKOUT_LOOKBACK = 10
-VOLUME_MULT       = 1.2
-VOLUME_MA_PERIOD  = 20
-RSI_LENGTH        = 14
-RSI_MAX           = 75
-STOCH_MAX         = 70      # syarat ke-7: Stoch %K < 70 (hindari entry terlalu overbought). None = matikan.
-MIN_VOLUME_USD    = 1_000_000
-
-TRAIL_ARM_PCT     = 2.0
-# FAKTOR pengali jarak trailing. 1.0 = jarak tabel ATR% apa adanya; 1.10 = 10% lebih longgar.
-# Diturunkan dari 1.10 -> 1.0 (Opsi B, 04/07): backtest_faktor.py simpulkan 1.0 menang telak;
-# kasus HOLO/USDT & SOL/USDT (04/07, dev 2.2% dari 1.10) rugi tipis -0.27%/-0.30%, dgn 1.0
-# (dev 2.0%, stop lebih dekat puncak) kemungkinan impas/rugi jauh lebih kecil.
-TRAILING_FAKTOR   = 1.0
-MAX_HOLD_DAYS     = 5
-# detik per candle sesuai timeframe (utk batas hold yg benar di TF apa pun).
-# 1d=86400, 12h=43200, 6h=21600, 4h=14400. Batas hold = MAX_HOLD_DAYS candle.
-_TF_SECONDS = {"1d":86400, "12h":43200, "8h":28800, "6h":21600, "4h":14400, "1h":3600}
-SECONDS_PER_CANDLE = _TF_SECONDS.get(TIMEFRAME, 86400)
-
-BASE_ORDER_VOLUME       = 6
-COMMAS_MAX_ACTIVE_DEALS = 4      # total kedua bot (brkX2 2 + reversal 2). Tiap bot 3Commas di-set max 2.
-MAX_DEALS_BRKX2         = 2      # slot brkX2 (bot existing) — set Max active trades=2 di 3Commas
-MAX_DEALS_REVERSAL      = 2      # slot reversal (bot 16921019) — set Max active trades=2 di 3Commas
-ADD_FUND_AUTO           = False
-BTC_FILTER_ENABLED      = False
-
-# ---- STRATEGI 2: REVERSAL DOJI + HEIKIN ASHI (8h) ----
-REVERSAL_ENABLED      = True
-# Reversal pakai bot 3Commas terpisah (split). Kalau env var-nya belum diset, matikan reversal
-# supaya tidak salah kirim sinyal reversal ke bot brkX2.
-if REVERSAL_ENABLED and (COMMAS_BOT_ID_REVERSAL == 0 or not COMMAS_EMAIL_TOKEN_REVERSAL):
-    print("WARN: REVERSAL aktif tapi COMMAS_BOT_ID_REVERSAL/COMMAS_EMAIL_TOKEN_REVERSAL "
-          "belum diset di Railway > Variables. REVERSAL DIMATIKAN sampai env var diisi.")
-    REVERSAL_ENABLED = False
-REVERSAL_TIMEFRAME    = "8h"
-REVERSAL_EMA_FAST     = 20
-REVERSAL_EMA_SLOW     = 50
-REVERSAL_DOJI_MAX     = 0.20     # badan doji < 20% range
-REVERSAL_SECONDS_PER_CANDLE = _TF_SECONDS.get(REVERSAL_TIMEFRAME, 28800)
-REVERSAL_MAX_HOLD_CANDLES   = 30 # batas aman hold (8h*30=10 hari) supaya tdk gantung
-# add fund reversal OFF dulu (forward-test slippage; sesuai keputusan)
-REVERSAL_ADD_FUND     = False
-
-T1_SCAN_INTERVAL_SEC = 600
-T2_MONITOR_INTERVAL  = 15
-T2_FAST_INTERVAL     = 2     # polling cepat saat trailing armed & harga bergerak cepat
-T2_FAST_TRIGGER_PCT  = 0.5   # ambang "harga bergerak cepat" (% sejak cek terakhir)
-HEARTBEAT_INTERVAL_SEC = 6 * 3600   # notif "tidak ada coin lolos" tiap 6 jam (4x/hari)
-FWDTEST_CHECK_TRADES   = 12         # (lama, gabungan) cek awal: deteksi masalah dini
-FWDTEST_TARGET_TRADES  = 25         # (lama, gabungan) evaluasi FINAL
-# Target per-strategi utk forward-test berhasil (tiap close update #X/N):
-FWDTEST_TARGET_BRKX2    = 15        # target close deal brkX2 utk forward-test berhasil
-FWDTEST_TARGET_REVERSAL = 8         # target close deal reversal utk forward-test berhasil
-
-BTC_CHG_1D_MAX = -3.0
-BTC_EMA20_MULT = 0.98
-BTC_RSI_MIN    = 45
-
-EXCLUDED_BASE_ASSETS = {
-    'USDC','USDE','FDUSD','TUSD','DAI','USDP','BUSD','UST','USTC','USD1','U',
-    'USDD','PYUSD','FRAX','GUSD','LUSD','USDJ','USDN','USD0','USDY',
-    'USDS','SUSD','CRVUSD','GHO','USDX','USDL','RLUSD','XUSD',
-    'EUR','EURI','EURS','AEUR','EURT','CEUR','EURC','EURQ',
-    'GBP','GBPT','CHF','TRY','TRYB','BRL','BRZ','ARS','ZAR',
-    'IDRT','JPY','JPYC','AUD','MXN','NGN','COP','UAH',
-    # Komoditas (emas/perak) — bergerak ikut harga komoditas, bukan kripto:
-    'PAXG','XAUT','XAU','XAUM','KAU','TGOLD','XAGT','XAG','KAG',
-}
-
-BASE = "https://data-api.binance.vision"
-DATA_DIR = os.environ.get("DATA_DIR", r"D:\tradingview")
-
-# ===================== RETRY / ERROR HANDLING =====================
-# Konstanta retry untuk request ke Binance (klines, ticker, price).
-# Tidak dipakai untuk 3Commas webhook (kirim sekali, hasil langsung dipakai).
-_RETRY_COUNT   = 3          # maksimal percobaan ulang per request
-_RETRY_DELAY   = 2.0        # detik jeda antar retry (× backoff)
-_RETRY_BACKOFF = 2.0        # kelipatan jeda: percobaan ke-2 = 4s, ke-3 = 8s
-_RATE_LIMIT_SLEEP = 10.0    # detik tunggu extra saat terima HTTP 429 (rate limited)
-
-def _binance_get(endpoint: str, params: dict = None, timeout: int = 15):
-    """GET ke Binance data API dgn retry otomatis.
-    Menangani: timeout, connection error, HTTP 5xx, HTTP 429 (rate limit).
-    Return: response object (caller wajib panggil .json()), ATAU None kalau semua retry gagal."""
-    url = f"{BASE}{endpoint}"
-    delay = _RETRY_DELAY
-    for attempt in range(1, _RETRY_COUNT + 1):
-        try:
-            r = session.get(url, params=params, timeout=timeout)
-            if r.status_code == 429:
-                # Rate limited: tunggu extra sebelum retry
-                log(f"WARN [Binance] HTTP 429 rate limit di {endpoint} (attempt {attempt})"
-                    f" — tunggu {_RATE_LIMIT_SLEEP}s")
-                time.sleep(_RATE_LIMIT_SLEEP)
-                continue
-            if r.status_code >= 500:
-                log(f"WARN [Binance] HTTP {r.status_code} server error di {endpoint} (attempt {attempt})")
-                if attempt < _RETRY_COUNT:
-                    time.sleep(delay); delay *= _RETRY_BACKOFF
-                continue
-            return r   # status 200 (atau 4xx non-429: kembalikan ke caller utk ditangani lebih lanjut)
-        except (_requests_mod.exceptions.ConnectionError,
-                _requests_mod.exceptions.Timeout) as e:
-            log(f"WARN [Binance] koneksi gagal di {endpoint} (attempt {attempt}): {type(e).__name__}")
-            if attempt < _RETRY_COUNT:
-                time.sleep(delay); delay *= _RETRY_BACKOFF
-        except Exception as e:
-            log(f"WARN [Binance] error tak terduga di {endpoint}: {e}")
-            break   # error lain (mis. programming error) — jangan retry
-    log(f"WARN [Binance] {endpoint} gagal setelah {_RETRY_COUNT} percobaan — data dilewati.")
-    return None
-ACTIVE_DEALS_FILE = os.path.join(DATA_DIR, "active_deals.json")
-TRADES_CSV = os.path.join(DATA_DIR, "trades_forwardtest.csv")
-
-# ===================== COOLDOWN INTERNAL (cegah DEAL HANTU, brkX2) =====================
-# Masalah: kalau bot kirim open long tapi 3Commas TOLAK krn cooldown bot (default 28800s/8jam),
-# tanpa fitur sinkronisasi bot TETAP catat deal di active_deals (deal hantu, hrs dibersihkan
-# manual via RESET_DEAL_SYMBOL). Contoh nyata: EPIC/USDT 04/07 close 14:53, sinyal 7/7 baru
-# 19:04 (~4 jam) DITOLAK 3Commas krn cooldown, bot terlanjur catat.
-# SOLUSI: mirror cooldown 3Commas di sisi Python SEBELUM kirim sinyal, supaya bot tidak pernah
-# mengirim webhook yg pasti ditolak. Statis 28800s (BUKAN unblokir-bersyarat) -- keputusan
-# 04/07 setelah backtest_reentry.py: re-entry cepat (sinyal 7/7 <12jam setelah close pair yg
-# sama) TIDAK PERNAH terjadi di 150 symbol x ~333 hari data historis (n=0 di semua ambang
-# 2/4/6/8 jam) -- kejadian spt EPIC sangat langka, tidak cukup bukti utk logika unblokir yg
-# lebih rumit. Kasus langka ditangani MANUAL (RESET_DEAL_SYMBOL) apa adanya.
-COOLDOWN_SECONDS = 28800   # 8 jam, samakan dgn setting "Cooldown between trades" bot 3Commas
-LAST_CLOSED_FILE = os.path.join(DATA_DIR, "last_closed.json")
-last_closed_ts = {}          # symbol -> epoch detik saat close terakhir
-last_closed_lock = threading.Lock()
-
-def load_last_closed():
-    """Muat riwayat close terakhir per symbol dari file (persisten lintas restart/deploy)."""
-    global last_closed_ts
-    if not os.path.exists(LAST_CLOSED_FILE):
-        log("   last_closed.json tidak ada, mulai kosong (cooldown internal)."); return
-    try:
-        with open(LAST_CLOSED_FILE, 'r') as f: data = json.load(f)
-        with last_closed_lock:
-            last_closed_ts = {k: float(v) for k, v in data.items()}
-        log(f"   Loaded last_closed_ts: {len(last_closed_ts)} symbol.")
-    except Exception as e:
-        log(f"WARN gagal baca last_closed.json: {e}")
-
-def save_last_closed():
-    try:
-        with last_closed_lock: data = dict(last_closed_ts)
-        with open(LAST_CLOSED_FILE, 'w') as f: json.dump(data, f, indent=2)
-    except Exception as e:
-        log(f"WARN gagal simpan last_closed.json: {e}")
-
-def record_closed(symbol: str):
-    """Catat waktu close SEKARANG utk symbol ini (dipanggil tiap deal brkX2 ditutup)."""
-    with last_closed_lock:
-        last_closed_ts[symbol] = time.time()
-    save_last_closed()
-
-def cooldown_remaining(symbol: str) -> float:
-    """Sisa detik cooldown utk symbol ini. 0 kalau tidak dalam cooldown (atau belum pernah close)."""
-    with last_closed_lock:
-        ts = last_closed_ts.get(symbol)
-    if ts is None: return 0.0
-    sisa = COOLDOWN_SECONDS - (time.time() - ts)
-    return max(0.0, sisa)
-
-def is_in_cooldown(symbol: str) -> bool:
-    return cooldown_remaining(symbol) > 0
-trades_csv_lock = threading.Lock()
-
-# Kolom CSV log forward-test (1 baris per trade; ditulis saat OPEN, dilengkapi saat CLOSE)
-CSV_FIELDS = [
-    'open_time_wib','symbol','strategy','signal_price','entry_price','slip_pct','atr_pct',
-    'trail_dist_pct','base_usd',
-    'close_time_wib','exit_price','profit_pct','exit_reason','status'
-]
-
-def _csv_ensure_header():
-    """Buat file + header kalau belum ada."""
-    if not os.path.exists(TRADES_CSV):
-        os.makedirs(os.path.dirname(TRADES_CSV) or '.', exist_ok=True)
-        with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
-            csv.DictWriter(f, fieldnames=CSV_FIELDS).writeheader()
-
 def csv_log_open(row: dict):
     """Tulis 1 baris saat OPEN (status=OPEN, kolom exit kosong)."""
     try:
@@ -1120,13 +801,10 @@ def thread1_scan():
                 'atr_pct': f"{atrp:.2f}",
                 'trail_dist_pct': f"{trailing_dist(atrp)}",
                 'base_usd': BASE_ORDER_VOLUME,
+                'score': score,
                 'strategy': 'brkX2',
             })
 
-            append_to_drive_log(
-                "OPEN", sym, "brkX2",
-                f"skor={score} | ${target_usd} | ATR={atrp:.2f}% | slip={slip_pct:+.2f}%"
-            )
             opened_any = True
 
     if opened_any:
@@ -1245,14 +923,11 @@ def thread1b_scan_reversal():
                 'atr_pct': f"{atrp:.2f}",
                 'trail_dist_pct': f"{trailing_dist(atrp)}",
                 'base_usd': BASE_ORDER_VOLUME,
+                'score': 0,
                 'strategy': 'reversal',
             })
             opened_any = True
 
-            append_to_drive_log(
-                "OPEN", sym, "reversal",
-                f"${BASE_ORDER_VOLUME} | ATR={atrp:.2f}% | slip={slip_pct:+.2f}%"
-            )
     last_rev_candle_ts = newest_rev
     return None if opened_any else f"{len(candidates)} kandidat reversal lolos tapi tak ada yg dibuka."
 def thread2_monitor():
@@ -1327,10 +1002,6 @@ def thread2_monitor():
                     price, prof_from_entry, reason
                 )
 
-                    append_to_drive_log(
-                        "CLOSE", sym, strat,
-                        f"{prof_from_entry:+.2f}% | {reason[:40]} | armed={armed}"
-                    )
                 remove_from_active_deals(sym)
                 if strat == 'brkX2':
                     record_closed(sym)   # cooldown internal: cegah re-entry & deal hantu (lihat COOLDOWN_SECONDS)
