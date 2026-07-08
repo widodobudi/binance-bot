@@ -32,6 +32,111 @@ FILTER BTC (Lapis1&2): OFF (toggle). ADD FUND otomatis: OFF.
 =============================================================
 """
 import requests, pandas as pd, pandas_ta as ta, numpy as np
+
+# ── Google Drive Log (append event open/close ke update_hari_ini.txt) ────────
+_gdrive_token_cache = {"token": None, "expires_at": 0}
+_gdrive_token_lock  = threading.Lock()
+
+def _gdrive_get_token() -> str:
+    """Ambil access token Google Drive via JWT Service Account (cached 55 menit)."""
+    import time as _t, base64 as _b64
+
+    with _gdrive_token_lock:
+        now = _t.time()
+        if _gdrive_token_cache["token"] and now < _gdrive_token_cache["expires_at"]:
+            return _gdrive_token_cache["token"]
+
+        raw = os.environ.get("GDRIVE_SERVICE_ACCOUNT", "")
+        if not raw:
+            log("WARN [Drive] GDRIVE_SERVICE_ACCOUNT belum diset di Railway.")
+            return ""
+        try:
+            import json as _js
+            creds = _js.loads(raw)
+        except Exception:
+            log("WARN [Drive] GDRIVE_SERVICE_ACCOUNT bukan JSON valid.")
+            return ""
+
+        def _b64url(data: bytes) -> str:
+            return _b64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+        import json as _js2
+        iat = int(now); exp = iat + 3600
+        header  = _b64url(_js2.dumps({"alg":"RS256","typ":"JWT"}).encode())
+        payload = _b64url(_js2.dumps({
+            "iss": creds["client_email"],
+            "scope": "https://www.googleapis.com/auth/drive",
+            "aud": "https://oauth2.googleapis.com/token",
+            "exp": exp, "iat": iat
+        }).encode())
+        msg = f"{header}.{payload}".encode()
+
+        try:
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import padding as _pad
+            pk  = serialization.load_pem_private_key(creds["private_key"].encode(), password=None)
+            sig = pk.sign(msg, _pad.PKCS1v15(), hashes.SHA256())
+            jwt_token = f"{header}.{payload}.{_b64url(sig)}"
+        except Exception as e:
+            log(f"WARN [Drive] Gagal sign JWT: {e}")
+            return ""
+
+        try:
+            resp  = requests.post(
+                "https://oauth2.googleapis.com/token",
+                data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                      "assertion": jwt_token},
+                timeout=15)
+            token = resp.json().get("access_token", "")
+            if not token:
+                log(f"WARN [Drive] Gagal dapat token: {resp.text[:200]}")
+                return ""
+            _gdrive_token_cache["token"] = token
+            _gdrive_token_cache["expires_at"] = now + 55 * 60
+            return token
+        except Exception as e:
+            log(f"WARN [Drive] Error ambil token: {e}")
+            return ""
+
+
+def append_to_drive_log(event_type: str, sym: str, strategy: str,
+                         extra: str = "") -> None:
+    """Append 1 baris event ke update_hari_ini.txt di Google Drive (non-blocking).
+    Format:
+      [OPEN]  DD/MM/YYYY HH:MM WIB | brkX2    | CAKE/USDT     | skor=3 | $12 | ATR=4.73%
+      [CLOSE] DD/MM/YYYY HH:MM WIB | brkX2    | CAKE/USDT     | +2.14% | trailing | armed=True
+    """
+    file_id = os.environ.get("GDRIVE_LOG_FILE_ID", "1gTq1vDwlBcKg2qLKfX4pJd87eXo423oC")
+
+    def _do():
+        try:
+            token = _gdrive_get_token()
+            if not token:
+                return
+            waktu = now_wib().strftime("%d/%m/%Y %H:%M WIB")
+            pair  = to_display_pair(sym)
+            line  = f"[{event_type}] {waktu} | {strategy:<9} | {pair:<15} | {extra}\n"
+            hdrs  = {"Authorization": f"Bearer {token}"}
+
+            # Baca isi lama
+            r = requests.get(
+                f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media",
+                headers=hdrs, timeout=15)
+            old = r.text if r.status_code == 200 else ""
+
+            # Append di bawah (tambah di akhir)
+            new = old + line
+            requests.patch(
+                f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media",
+                headers={**hdrs, "Content-Type": "text/plain; charset=utf-8"},
+                data=new.encode("utf-8"), timeout=20)
+            log(f"   [Drive] Log: {line.strip()}")
+        except Exception as e:
+            log(f"WARN [Drive] Gagal append: {e}")
+
+    threading.Thread(target=_do, daemon=True).start()
+# ── End Google Drive Log ──────────────────────────────────────────────────────
+
 import time, sys, json, threading, os, csv
 from datetime import datetime, timedelta, timezone
 import requests as _requests_mod
@@ -1017,6 +1122,11 @@ def thread1_scan():
                 'base_usd': BASE_ORDER_VOLUME,
                 'strategy': 'brkX2',
             })
+
+            append_to_drive_log(
+                "OPEN", sym, "brkX2",
+                f"skor={score} | ${target_usd} | ATR={atrp:.2f}% | slip={slip_pct:+.2f}%"
+            )
             opened_any = True
 
     if opened_any:
@@ -1138,6 +1248,11 @@ def thread1b_scan_reversal():
                 'strategy': 'reversal',
             })
             opened_any = True
+
+            append_to_drive_log(
+                "OPEN", sym, "reversal",
+                f"${BASE_ORDER_VOLUME} | ATR={atrp:.2f}% | slip={slip_pct:+.2f}%"
+            )
     last_rev_candle_ts = newest_rev
     return None if opened_any else f"{len(candidates)} kandidat reversal lolos tapi tak ada yg dibuka."
 def thread2_monitor():
@@ -1211,6 +1326,11 @@ def thread2_monitor():
                     now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                     price, prof_from_entry, reason
                 )
+
+                    append_to_drive_log(
+                        "CLOSE", sym, strat,
+                        f"{prof_from_entry:+.2f}% | {reason[:40]} | armed={armed}"
+                    )
                 remove_from_active_deals(sym)
                 if strat == 'brkX2':
                     record_closed(sym)   # cooldown internal: cegah re-entry & deal hantu (lihat COOLDOWN_SECONDS)
