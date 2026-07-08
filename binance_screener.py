@@ -32,6 +32,9 @@ FILTER BTC (Lapis1&2): OFF (toggle). ADD FUND otomatis: OFF.
 =============================================================
 """
 import requests, pandas as pd, pandas_ta as ta, numpy as np
+import time, sys, json, threading, os, csv
+from datetime import datetime, timedelta, timezone
+import requests as _requests_mod
 
 # ── Google Drive Log (append event open/close ke update_hari_ini.txt) ────────
 def csv_log_open(row: dict):
