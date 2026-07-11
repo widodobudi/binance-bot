@@ -66,7 +66,9 @@ SUPERTREND_MULT   = 3.0
 EMA_FAST          = 20
 EMA_SLOW          = 50
 BREAKOUT_LOOKBACK = 10
-VOLUME_MULT       = 1.5
+VOLUME_MULT       = 1.2
+MACD_FILTER_ENABLED = True    # True=wajib MACD histogram > 0 saat entry
+
 VOLUME_MA_PERIOD  = 20
 RSI_LENGTH        = 14
 RSI_MAX           = 75
@@ -594,6 +596,8 @@ def compute_indicators(df):
     df['atr_pct']=ta.atr(high,low,close,length=14)/close*100
     df['hh']=high.rolling(BREAKOUT_LOOKBACK).max().shift(1)
     df['vol_ma']=df['vol'].rolling(VOLUME_MA_PERIOD).mean()
+    _macd_df=ta.macd(close,fast=12,slow=26,signal=9)
+    df['macd_hist']=_macd_df[[c for c in _macd_df.columns if 'MACDh' in c][0]]
     df['rsi']=ta.rsi(close,length=RSI_LENGTH)
     if STOCH_MAX is not None:
         stoch=ta.stoch(high,low,close,k=14,d=3,smooth_k=3)
@@ -641,6 +645,9 @@ def check_entry(df) -> bool:
     if not (row['close'] > row['hh']): return False
     if row['vol'] < VOLUME_MULT * row['vol_ma']: return False
     if pd.isna(row['rsi']) or row['rsi'] > RSI_MAX: return False
+    if MACD_FILTER_ENABLED:
+        _mh = row.get('macd_hist')
+        if _mh is None or pd.isna(_mh) or _mh <= 0: return False
     return True
 
 def entry_detail(df):
@@ -659,6 +666,11 @@ def entry_detail(df):
     checks.append((row['vol']>=VOLUME_MULT*row['vol_ma'], f"vol>={VOLUME_MULT}xMA (skrg {vx:.2f}x)"))
     rsi_ok = (not pd.isna(row['rsi'])) and row['rsi']<=RSI_MAX
     checks.append((rsi_ok, f"RSI<{RSI_MAX} (skrg {row['rsi']:.1f})" if not pd.isna(row['rsi']) else "RSI (n/a)"))
+    if MACD_FILTER_ENABLED:
+        _mh2 = row.get('macd_hist')
+        _macd_ok = _mh2 is not None and not pd.isna(_mh2) and _mh2 > 0
+        _mh2_str = f"{_mh2:.5f}" if (_mh2 is not None and not pd.isna(_mh2)) else "n/a"
+        checks.append((_macd_ok, f"MACD hist>0 (skrg {_mh2_str})"))
     if STOCH_MAX is not None:
         sk = row['stoch_k'] if ('stoch_k' in row and not pd.isna(row['stoch_k'])) else None
         stoch_ok = sk is not None and sk < STOCH_MAX
@@ -1430,6 +1442,7 @@ if __name__ == '__main__':
     log(f"  Slot per strategi: brkX2={MAX_DEALS_BRKX2}, reversal={MAX_DEALS_REVERSAL}")
     log(f"  Bot 3Commas      : brkX2 #{COMMAS_BOT_ID} | reversal #{COMMAS_BOT_ID_REVERSAL} (SPLIT)")
     log(f"  Filter choppy    : {'ON' if CHOPPY_FILTER_ENABLED else 'OFF'} (body/range < {CHOPPY_BODY_RANGE_MIN} avg {CHOPPY_LOOKBACK_CANDLES} candle -> exclude)")
+    log(f"  MACD filter      : {'ON' if MACD_FILTER_ENABLED else 'OFF'} (MACD histogram > 0)")
     log(f"  Intrabar scan    : {'ON' if INTRABAR_ENABLED else 'OFF'} (entry {int(INTRABAR_ENTRY_PCT*100)}%-{int(INTRABAR_WINDOW_END*100)}% elapsed, scan tiap {INTRABAR_SCAN_INTERVAL}s)")
     log(f"  Progressive trail: {'ON' if PROG_TRAIL_ENABLED else 'OFF'} (thr={PROG_TRAIL_THRESHOLD}% stp={PROG_TRAIL_STEP}% red={PROG_TRAIL_REDUCE}% min={PROG_TRAIL_MIN}%)")
     log(f"  Cooldown internal: {COOLDOWN_SECONDS}s ({COOLDOWN_SECONDS/3600:.0f}j, brkX2) -- cegah kirim sinyal yg pasti ditolak 3Commas (deal hantu)")
