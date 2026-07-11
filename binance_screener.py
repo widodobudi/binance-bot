@@ -722,20 +722,20 @@ def check_entry_reversal(df) -> bool:
       - c+1 HA bullish (1 candle konfirmasi)
       - c+1 ATAU c+2 crossing-up EMA20
     Entry di candle c+2 yg baru tutup (mode a)."""
-    if len(df) < 8: return False        # butuh c-5 (df[-8])
+    if len(df) < 6: return False        # butuh c-3 (df[-6])
     if is_choppy(df): return False
     n = len(df)
-    im5, im4, im3, im2, im1 = n-8, n-7, n-6, n-5, n-4   # c-5..c-1
+    im3, im2, im1 = n-6, n-5, n-4   # c-3..c-1 (3 candle merah)
     i0 = n - 3           # c0
     i1, i2 = n-2, n-1    # c+1, c+2(entry)
     c0 = df.iloc[i0]
     if any(pd.isna(c0[x]) for x in ['ema_fast','ema_slow','body_ratio']): return False
-    # syarat 1: 5 candle sebelum doji SEMUA merah
-    for idx in (im5, im4, im3, im2, im1):
+    # syarat 1: 3 candle sebelum doji SEMUA merah
+    for idx in (im3, im2, im1):
         cc = df.iloc[idx]
         if not (cc['close'] < cc['open']): return False
     # syarat 2: penurunan total open c-5 -> close c-1 <= -5%
-    open_c5 = float(df.iloc[im5]['open'])
+    open_c5 = float(df.iloc[im3]['open'])  # open candle pertama dari 3 merah
     close_c1 = float(df.iloc[im1]['close'])
     if open_c5 <= 0: return False
     drop_pct = (close_c1 / open_c5 - 1) * 100
@@ -752,21 +752,21 @@ def check_entry_reversal(df) -> bool:
 
 def entry_detail_reversal(df):
     """Untuk heartbeat: (n_lolos, 4, list_gagal) tanpa mempengaruhi keputusan. None kalau choppy/data kurang."""
-    if len(df) < 8: return None
+    if len(df) < 6: return None
     if is_choppy(df): return None
     n = len(df)
-    im5, im4, im3, im2, im1 = n-8, n-7, n-6, n-5, n-4
+    im3, im2, im1 = n-6, n-5, n-4
     i0 = n-3; i1, i2 = n-2, n-1
     c0 = df.iloc[i0]
     if any(pd.isna(c0[x]) for x in ['ema_fast','ema_slow','body_ratio']): return None
     checks = []
-    # syarat 1: 5 merah + turun >= -5%
-    all_red = all(df.iloc[idx]['close'] < df.iloc[idx]['open'] for idx in (im5,im4,im3,im2,im1))
-    open_c5 = float(df.iloc[im5]['open']); close_c1 = float(df.iloc[im1]['close'])
-    drop = (close_c1/open_c5-1)*100 if open_c5>0 else 0
-    n_red = sum(1 for idx in (im5,im4,im3,im2,im1) if df.iloc[idx]['close']<df.iloc[idx]['open'])
+    # syarat 1: 3 merah + turun >= -5%
+    all_red = all(df.iloc[idx]['close'] < df.iloc[idx]['open'] for idx in (im3,im2,im1))
+    open_c3 = float(df.iloc[im3]['open']); close_c1 = float(df.iloc[im1]['close'])
+    drop = (close_c1/open_c3-1)*100 if open_c3>0 else 0
+    n_red = sum(1 for idx in (im3,im2,im1) if df.iloc[idx]['close']<df.iloc[idx]['open'])
     s1 = all_red and drop <= -5.0
-    checks.append((s1, f"5 merah+turun>=5% ({n_red}/5 merah, turun {drop:.1f}%)"))
+    checks.append((s1, f"3 merah+turun>=5% ({n_red}/3 merah, turun {drop:.1f}%)"))
     # syarat 2: c0 doji + di bawah EMA20&50
     s2 = (c0['close']<c0['ema_fast'] and c0['close']<c0['ema_slow']) and (c0['body_ratio']<REVERSAL_DOJI_MAX)
     checks.append((s2, f"doji<{REVERSAL_DOJI_MAX}body & <EMA20/50 (body {c0['body_ratio']:.2f})"))
@@ -1452,7 +1452,7 @@ if __name__ == '__main__':
     if REVERSAL_ENABLED:
         log("  " + "-"*51)
         log(f"  STRATEGI 2 REVERSAL: ON | TF {REVERSAL_TIMEFRAME}")
-        log(f"  Setup: 5 candle merah+turun>=5%, doji(<{int(REVERSAL_DOJI_MAX*100)}% body), 1 HA bull, cross-up EMA20")
+        log(f"  Setup: 3 candle merah+turun>=5%, doji(<{int(REVERSAL_DOJI_MAX*100)}% body), 1 HA bull, cross-up EMA20")
         log(f"  Exit : trailing adaptif (sama brkX2) | add fund: {'ON' if REVERSAL_ADD_FUND else 'OFF'}")
         log(f"  Hold : maks {REVERSAL_MAX_HOLD_CANDLES} candle 8h")
     log("="*55)
