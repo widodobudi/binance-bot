@@ -785,8 +785,15 @@ def trailing_dist(atr_pct: float) -> float:
     elif atr_pct < 2.0: base = 1.0
     elif atr_pct < 4.0: base = 1.5
     elif atr_pct < 7.0: base = 2.0
-    else: base = 2.5
+    else: base = 1.5   # ATR>=7%: turun dari 2.5% ke 1.5% (backtest_arm_sweep)
     return round(base * TRAILING_FAKTOR, 4)
+
+def get_arm_pct(atr_pct: float) -> float:
+    """Arm threshold: ATR>=7% pakai 3.5%, lainnya 2.0% (backtest_arm_sweep optimal)."""
+    if atr_pct >= 7.0:
+        return 3.5
+    return TRAIL_ARM_PCT  # 2.0% untuk tier lain
+
 
 def trailing_dist_progressive(atr_pct: float, current_profit_pct: float) -> float:
     """Trailing dist progresif: semakin tinggi profit, semakin ketat.
@@ -1203,7 +1210,7 @@ def thread2_monitor():
         armed = d.get('trailing_armed', False)
 
         # arm trailing setelah profit >= +2% (pakai puncak)
-        if (not armed) and prof_peak >= TRAIL_ARM_PCT:
+        if (not armed) and prof_peak >= get_arm_pct(atrp):
             armed = True
             log(f"[T2] {sym} trailing ARMED (peak profit {prof_peak:.2f}%)")
 
@@ -1443,6 +1450,9 @@ if __name__ == '__main__':
     log(f"  Bot 3Commas      : brkX2 #{COMMAS_BOT_ID} | reversal #{COMMAS_BOT_ID_REVERSAL} (SPLIT)")
     log(f"  Filter choppy    : {'ON' if CHOPPY_FILTER_ENABLED else 'OFF'} (body/range < {CHOPPY_BODY_RANGE_MIN} avg {CHOPPY_LOOKBACK_CANDLES} candle -> exclude)")
     log(f"  MACD filter      : {'ON' if MACD_FILTER_ENABLED else 'OFF'} (MACD histogram > 0)")
+    log(f"  Arm threshold    : 2.0% (ATR<7%) / 3.5% (ATR>=7%)")
+    log(f"  Trail ATR>=7%    : 1.5% (dari 2.5% baseline, backtest_arm_sweep)")
+
     log(f"  Intrabar scan    : {'ON' if INTRABAR_ENABLED else 'OFF'} (entry {int(INTRABAR_ENTRY_PCT*100)}%-{int(INTRABAR_WINDOW_END*100)}% elapsed, scan tiap {INTRABAR_SCAN_INTERVAL}s)")
     log(f"  Progressive trail: {'ON' if PROG_TRAIL_ENABLED else 'OFF'} (thr={PROG_TRAIL_THRESHOLD}% stp={PROG_TRAIL_STEP}% red={PROG_TRAIL_REDUCE}% min={PROG_TRAIL_MIN}%)")
     log(f"  Cooldown internal: {COOLDOWN_SECONDS}s ({COOLDOWN_SECONDS/3600:.0f}j, brkX2) -- cegah kirim sinyal yg pasti ditolak 3Commas (deal hantu)")
