@@ -73,7 +73,7 @@ VOLUME_MA_PERIOD  = 20
 RSI_LENGTH        = 14
 RSI_MAX           = 75
 STOCH_MAX         = 70      # syarat ke-7: Stoch %K < 70 (hindari entry terlalu overbought). None = matikan.
-MIN_VOLUME_USD    = 1_000_000
+MIN_VOLUME_USD    = 3_000_000   # dinaikkan dari 1jt ke 3jt (backtest_entry_filter2)
 
 TRAIL_ARM_PCT     = 2.0
 # FAKTOR pengali jarak trailing. 1.0 = jarak tabel ATR% apa adanya; 1.10 = 10% lebih longgar.
