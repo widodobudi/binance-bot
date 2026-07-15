@@ -45,11 +45,16 @@ COMMAS_EMAIL_TOKEN = os.environ.get("COMMAS_EMAIL_TOKEN", "")
 # Set di Railway > Variables: COMMAS_BOT_ID_REVERSAL, COMMAS_EMAIL_TOKEN_REVERSAL
 COMMAS_BOT_ID_REVERSAL      = int(os.environ.get("COMMAS_BOT_ID_REVERSAL", "0"))
 COMMAS_EMAIL_TOKEN_REVERSAL = os.environ.get("COMMAS_EMAIL_TOKEN_REVERSAL", "")
+# Bot 3Commas untuk strategi 4h (brkX2-4h, forward-test 7 deal, 5 slot)
+COMMAS_BOT_ID_4H      = int(os.environ.get("COMMAS_BOT_ID_4H", "16935970"))
+COMMAS_EMAIL_TOKEN_4H = os.environ.get("COMMAS_EMAIL_TOKEN_4H", "f97400b9-e9a4-4058-913e-35eb8372f920")
 
 def commas_creds(strategy: str):
-    """Pilih (bot_id, email_token) sesuai strategi. reversal -> bot baru; lainnya -> bot existing (brkX2)."""
+    """Pilih (bot_id, email_token) sesuai strategi. reversal -> bot baru; 4h -> bot brkX2-4h; lainnya -> bot existing (brkX2)."""
     if strategy == 'reversal':
         return COMMAS_BOT_ID_REVERSAL, COMMAS_EMAIL_TOKEN_REVERSAL
+    if strategy == 'brkX2_4h':
+        return COMMAS_BOT_ID_4H, COMMAS_EMAIL_TOKEN_4H
     return COMMAS_BOT_ID, COMMAS_EMAIL_TOKEN
 COMMAS_DELAY_SEC   = 0
 # Kredensial WAJIB lewat environment variable (jangan hardcode di kode—repo publik!).
@@ -91,6 +96,35 @@ BASE_ORDER_VOLUME       = 6
 COMMAS_MAX_ACTIVE_DEALS = 4      # total kedua bot (brkX2 2 + reversal 2). Tiap bot 3Commas di-set max 2.
 MAX_DEALS_BRKX2         = 2      # slot brkX2 (bot existing) — set Max active trades=2 di 3Commas
 MAX_DEALS_REVERSAL      = 2      # slot reversal (bot 16921019) — set Max active trades=2 di 3Commas
+
+# ---- STRATEGI 3: brkX2-4h (intrabar 4h, menit ke 5-10) ----
+# Hasil backtest: MACD+SUPERTREND+ATR_MIN+VOLUME + HTF 3D PRICE_EMA50+MACD+RSI50
+# avg=+3.330% WR=58.4% wf6=OK (backtest_4h_htf.py, 15/07/2026)
+STRAT4H_ENABLED         = True
+STRAT4H_TIMEFRAME       = "4h"
+STRAT4H_SECONDS         = 14400   # 4h dalam detik
+STRAT4H_MAX_DEALS       = 5       # slot brkX2-4h — set Max active trades=5 di 3Commas
+STRAT4H_MAX_HOLD_CANDLES= 15      # timeout 15 candle 4h = 2.5 hari
+STRAT4H_SCAN_INTERVAL   = 180     # scan tiap 3 menit (180 detik)
+STRAT4H_ENTRY_MIN_PCT   = 5/240   # menit ke-5 dari 240 menit candle 4h = 2.08%
+STRAT4H_ENTRY_MAX_PCT   = 10/240  # menit ke-10 dari 240 menit candle 4h = 4.17%
+STRAT4H_FWDTEST_TARGET  = 7       # target forward-test: 7 deal
+# Entry conditions 4h
+STRAT4H_EMA_FAST        = 9
+STRAT4H_EMA_SLOW        = 21
+STRAT4H_ST_LENGTH       = 10
+STRAT4H_ST_MULT         = 3.0
+STRAT4H_MACD_FAST       = 12; STRAT4H_MACD_SLOW = 26; STRAT4H_MACD_SIGNAL = 9
+STRAT4H_ATR_MIN_PCT     = 2.0
+STRAT4H_VOLUME_MULT     = 1.5
+STRAT4H_VOLUME_MA       = 20
+STRAT4H_MIN_VOL_USD     = 3_000_000
+# HTF 3D filter untuk 4h: PRICE_EMA50 + MACD + RSI50
+STRAT4H_HTF_TF          = "3d"
+STRAT4H_HTF_EMA_SLOW    = 50
+STRAT4H_HTF_MACD_FAST   = 12; STRAT4H_HTF_MACD_SLOW = 26; STRAT4H_HTF_MACD_SIGNAL = 9
+STRAT4H_HTF_RSI_LEN     = 14
+STRAT4H_HTF_LIMIT       = 120
 ADD_FUND_AUTO           = False
 BTC_FILTER_ENABLED      = False
 
@@ -145,6 +179,7 @@ FWDTEST_TARGET_TRADES  = 25         # (lama, gabungan) evaluasi FINAL
 # Target per-strategi utk forward-test berhasil (tiap close update #X/N):
 FWDTEST_TARGET_BRKX2    = 15        # target close deal brkX2 utk forward-test berhasil
 FWDTEST_TARGET_REVERSAL = 8         # target close deal reversal utk forward-test berhasil
+FWDTEST_TARGET_4H       = 7         # target close deal brkX2-4h utk forward-test berhasil
 
 BTC_CHG_1D_MAX = -3.0
 BTC_EMA20_MULT = 0.98
@@ -1011,6 +1046,97 @@ def htf_filter_ok(symbol: str) -> bool:
         log(f"  [HTF] error cek {symbol}: {e} → skip filter")
         return True  # error → fail-open
 
+# ══════════════════════════════════════════════════════════════════════════════
+# STRATEGI 3: brkX2-4h — OHLCV, INDIKATOR, ENTRY, HTF FILTER
+# ══════════════════════════════════════════════════════════════════════════════
+def get_ohlcv_4h(symbol: str, limit: int = 300):
+    """Ambil OHLCV 4h dari Binance."""
+    params = {"symbol": symbol, "interval": STRAT4H_TIMEFRAME, "limit": limit}
+    raw = _binance_get("/api/v3/klines", params)
+    if not raw: return None
+    df = pd.DataFrame(raw, columns=[
+        "ts","open","high","low","close","vol",
+        "ct","qvol","ntrades","tbbv","tbqv","ig"
+    ])
+    for col in ["open","high","low","close","vol"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["qvol"] = pd.to_numeric(df["qvol"], errors="coerce")
+    df["ts"]   = df["ts"].astype("int64")
+    return df.reset_index(drop=True)
+
+def compute_indicators_4h(df):
+    """Hitung indikator entry 4h: Supertrend, MACD, ATR%, Vol MA, Vol24h."""
+    import pandas_ta as _pta
+    df = df.copy()
+    c, h, l = df["close"], df["high"], df["low"]
+    st = _pta.supertrend(h, l, c, length=STRAT4H_ST_LENGTH, multiplier=STRAT4H_ST_MULT)
+    df["st_dir"]     = st[[col for col in st.columns if "SUPERTd" in col][0]]
+    macd = _pta.macd(c, fast=STRAT4H_MACD_FAST, slow=STRAT4H_MACD_SLOW,
+                     signal=STRAT4H_MACD_SIGNAL)
+    df["macd_hist"]  = macd[[col for col in macd.columns if "MACDh" in col][0]]
+    df["atr_pct"]    = _pta.atr(h, l, c, length=14) / c * 100
+    df["vol_ma"]     = df["vol"].rolling(STRAT4H_VOLUME_MA).mean()
+    df["vol24h_usd"] = df["qvol"] * 6   # 6 candle 4h = 24h
+    return df
+
+def htf_filter_4h_ok(symbol: str) -> bool:
+    """
+    HTF 3D filter untuk strategi 4h:
+      PRICE_EMA50: close 3D > EMA50 3D
+      MACD       : MACD hist 3D > 0
+      RSI50      : RSI 3D > 50
+    Fail-open kalau data tidak cukup.
+    """
+    try:
+        import pandas_ta as _pta
+        df = get_ohlcv_htf(symbol, interval=STRAT4H_HTF_TF, limit=STRAT4H_HTF_LIMIT)
+        if df is None or len(df) < STRAT4H_HTF_MACD_SLOW + STRAT4H_HTF_MACD_SIGNAL + 5:
+            return True  # fail-open
+        df = df.copy()
+        c = df["close"]
+        df["ema50"]  = _pta.ema(c, length=STRAT4H_HTF_EMA_SLOW)
+        _macd = _pta.macd(c, fast=STRAT4H_HTF_MACD_FAST,
+                          slow=STRAT4H_HTF_MACD_SLOW, signal=STRAT4H_HTF_MACD_SIGNAL)
+        df["macd_h"] = _macd[[col for col in _macd.columns if "MACDh" in col][0]]
+        df["rsi"]    = _pta.rsi(c, length=STRAT4H_HTF_RSI_LEN)
+        row   = df.iloc[-1]
+        ema50 = row.get("ema50"); macd_h = row.get("macd_h")
+        rsi   = row.get("rsi");   close  = row.get("close")
+        if any(pd.isna(v) for v in [ema50, macd_h, rsi, close]): return True
+        return (close > ema50) and (macd_h > 0) and (rsi > 50)
+    except Exception as e:
+        log(f"  [HTF4h] error cek {symbol}: {e} → skip filter")
+        return True  # fail-open
+
+def check_entry_4h(df) -> bool:
+    """
+    Entry 4h:
+      - Supertrend dir = +1 (uptrend)
+      - MACD hist > 0
+      - ATR% >= 2.0%
+      - Volume >= 1.5x MA20
+      - Vol24h >= $3jt
+    """
+    if len(df) < STRAT4H_MACD_SLOW + STRAT4H_MACD_SIGNAL + 5: return False
+    r = df.iloc[-1]
+    sd = r.get("st_dir")
+    if pd.isna(sd) or sd != 1: return False
+    mh = r.get("macd_hist")
+    if pd.isna(mh) or mh <= 0: return False
+    atr = r.get("atr_pct")
+    if pd.isna(atr) or atr < STRAT4H_ATR_MIN_PCT: return False
+    vol_ma = r.get("vol_ma")
+    if pd.isna(vol_ma) or vol_ma <= 0: return False
+    if r["vol"] < STRAT4H_VOLUME_MULT * vol_ma: return False
+    v24 = r.get("vol24h_usd")
+    if not pd.isna(v24) and v24 < STRAT4H_MIN_VOL_USD: return False
+    return True
+
+def active_deal_count_4h() -> int:
+    """Jumlah deal aktif strategi brkX2_4h."""
+    with active_deals_lock:
+        return sum(1 for d in active_deals.values() if d.get("strategy") == "brkX2_4h")
+
 # ===================== THREAD 1: SCREENER + OPEN LONG =====================
 def active_deal_count() -> int:
     with active_deals_lock:
@@ -1453,6 +1579,9 @@ def thread2_monitor():
         if d.get('strategy','brkX2') == 'reversal':
             hold_limit_sec = REVERSAL_MAX_HOLD_CANDLES * REVERSAL_SECONDS_PER_CANDLE
             hold_label = f"batas {REVERSAL_MAX_HOLD_CANDLES} candle 8h"
+        elif d.get('strategy','brkX2') == 'brkX2_4h':
+            hold_limit_sec = STRAT4H_MAX_HOLD_CANDLES * STRAT4H_SECONDS
+            hold_label = f"batas {STRAT4H_MAX_HOLD_CANDLES} candle 4h"
         else:
             hold_limit_sec = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
             hold_label = f"batas {MAX_HOLD_DAYS} candle"
@@ -1470,7 +1599,12 @@ def thread2_monitor():
         if do_close:
             log(f"[T2] CLOSE {sym}: {reason} | profit {prof_from_entry:.2f}%")
             strat = d.get('strategy','brkX2')
-            strat_label = "Reversal Doji+HA (8h)" if strat=='reversal' else "Momentum brkX2 (12h)"
+            if strat == 'reversal':
+                strat_label = "Reversal Doji+HA (8h)"
+            elif strat == 'brkX2_4h':
+                strat_label = "Momentum brkX2-4h (4h)"
+            else:
+                strat_label = "Momentum brkX2 (12h)"
             if send_close_long(sym, strat):
                 # catat ke CSV DULU supaya trade ini ikut terhitung di progress
                 csv_log_close(
@@ -1498,10 +1632,14 @@ def thread2_monitor():
                     'total_usd':     d.get('target_usd', ''),
                 })
                 remove_from_active_deals(sym)
-                if strat == 'brkX2':
-                    record_closed(sym)   # cooldown internal: cegah re-entry & deal hantu (lihat COOLDOWN_SECONDS)
-                # progress forward-test PER STRATEGI (setelah trade ini tercatat)
-                tgt = FWDTEST_TARGET_REVERSAL if strat=='reversal' else FWDTEST_TARGET_BRKX2
+                if strat == 'brkX2': record_closed(sym)
+                # progress forward-test PER STRATEGI
+                if strat == 'reversal':
+                    tgt = FWDTEST_TARGET_REVERSAL
+                elif strat == 'brkX2_4h':
+                    tgt = FWDTEST_TARGET_4H
+                else:
+                    tgt = FWDTEST_TARGET_BRKX2
                 pstrat = csv_progress(strat)
                 if pstrat and pstrat['n']>0:
                     done_n = pstrat['n']; wl = f"{pstrat['win']}W/{pstrat['loss']}L"
@@ -1699,8 +1837,246 @@ def run_thread3_intrabar():
             log(f"WARN T3 intrabar error: {e}")
         time.sleep(INTRABAR_SCAN_INTERVAL)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# THREAD T1d: SCAN INTRABAR 4h (menit ke 5-10 setelah candle 4h baru open)
+# ══════════════════════════════════════════════════════════════════════════════
+last_4h_candle_ts = {}  # sym -> ts candle 4h yang sudah dientry, cegah double entry
+
+def thread1d_scan_4h():
+    """
+    Scan sinyal strategi ke-3 (brkX2-4h) setiap 3 menit.
+    Entry saat elapsed candle 4h berada di menit ke 5-10 (2.08%-4.17%).
+    Syarat: Supertrend+1 + MACD>0 + ATR>=2% + Vol>=1.5xMA + HTF3D filter.
+    """
+    global last_4h_candle_ts
+    if not STRAT4H_ENABLED:
+        return
+
+    now_ms   = int(time.time() * 1000)
+    sec4h    = STRAT4H_SECONDS
+    # Open candle 4h saat ini
+    candle_open_ms = (now_ms // (sec4h * 1000)) * (sec4h * 1000)
+    elapsed_pct    = (now_ms - candle_open_ms) / (sec4h * 1000)
+
+    # Hanya entry di window menit ke-5 sampai ke-10
+    if not (STRAT4H_ENTRY_MIN_PCT <= elapsed_pct <= STRAT4H_ENTRY_MAX_PCT):
+        return
+
+    # Cek slot tersedia
+    n4h = active_deal_count_4h()
+    total = active_deal_count()
+    if n4h >= STRAT4H_MAX_DEALS:
+        return
+    if total >= COMMAS_MAX_ACTIVE_DEALS + STRAT4H_MAX_DEALS:
+        return
+
+    log(f"[T1d] Scan 4h intrabar ({elapsed_pct*100:.1f}% elapsed)...")
+    ticker = get_ticker_24h()
+    vol_map = {t["symbol"]: float(t.get("quoteVolume", 0)) for t in ticker} if ticker else {}
+
+    candidates = []
+    with active_deals_lock:
+        existing = set(active_deals.keys())
+
+    for sym_info in ticker or []:
+        sym = sym_info.get("symbol", "")
+        if not sym.endswith("USDT"): continue
+        if sym in existing: continue
+        # Cek cooldown
+        if sym in last_4h_candle_ts and last_4h_candle_ts[sym] == candle_open_ms:
+            continue
+        # Cek vol24h minimum
+        if vol_map.get(sym, 0) < STRAT4H_MIN_VOL_USD:
+            continue
+
+        try:
+            df = get_ohlcv_4h(sym, limit=100)
+            if df is None or len(df) < 50: continue
+            df = compute_indicators_4h(df)
+            if not check_entry_4h(df): continue
+
+            # HTF 3D filter
+            if not htf_filter_4h_ok(sym):
+                log(f"  [T1d] {sym} lolos 4h tapi DITOLAK HTF 3D filter")
+                continue
+
+            r    = df.iloc[-1]
+            atrp = float(r["atr_pct"]) if not pd.isna(r["atr_pct"]) else 3.0
+            sc   = 1  # skor default 4h = 1 (bisa dikembangkan)
+            candidates.append((sym, float(r["close"]), atrp, sc))
+        except Exception as e:
+            log(f"  [T1d] error {sym}: {e}")
+
+    if not candidates:
+        log(f"[T1d] Tidak ada kandidat 4h.")
+        return
+
+    log(f"[T1d] {len(candidates)} kandidat 4h. Buka deal terbaik...")
+    candidates.sort(key=lambda x: x[3], reverse=True)
+
+    opened_any = False
+    for sym, signal_price, atrp, score in candidates:
+        n4h = active_deal_count_4h()
+        if n4h >= STRAT4H_MAX_DEALS: break
+        if sym in (set(active_deals.keys())): continue
+
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, strategy="brkX2_4h")
+        if not ok: continue
+
+        try:
+            ticker_now = _binance_get("/api/v3/ticker/price", {"symbol": sym})
+            entry_price = float(ticker_now["price"]) if ticker_now else signal_price
+        except: entry_price = signal_price
+
+        slip_pct = (entry_price / signal_price - 1) * 100 if signal_price > 0 else 0
+
+        add_to_active_deals(sym, {
+            "strategy":      "brkX2_4h",
+            "entry_price":   entry_price,
+            "signal_price":  signal_price,
+            "atr_pct":       atrp,
+            "score":         score,
+            "target_usd":    target_usd,
+            "add_usd":       add_usd,
+            "opened_ts":     time.time(),
+            "opened_candle_ts": candle_open_ms / 1000,
+            "tf":            STRAT4H_TIMEFRAME,
+        })
+        last_4h_candle_ts[sym] = candle_open_ms
+
+        trail_arm = get_arm_pct(atrp)
+        trail_d   = trailing_dist(atrp)
+        msg = (
+            f"OPEN LONG (brkX2-4h)\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Pair  : {to_display_pair(sym)}\n"
+            f"Harga entry (pasar): {entry_price:.4g}\n"
+            f"Harga sinyal (4h live): {signal_price:.4g}\n"
+            f"Selisih (slippage): {slip_pct:+.2f}%\n"
+            f"ATR%  : {atrp:.2f}  (trailing {trail_d}% stlh +{trail_arm}%)\n"
+            f"Skor sinyal: {score}/5 -> modal ${target_usd:.0f}"
+            + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else "") + "\n"
+            f"Slot terpakai: {active_deal_count_4h()}/{STRAT4H_MAX_DEALS} (4h)"
+        )
+        send_telegram(msg)
+
+        # Deal log
+        _htf = _get_htf_values(sym)
+        deal_log_write({
+            "timestamp_wib":  now_wib().strftime("%Y-%m-%d %H:%M:%S"),
+            "event_type":     "OPEN",
+            "strategy":       "brkX2_4h",
+            "symbol":         to_display_pair(sym),
+            "thread":         "T1d",
+            "signal_price":   f"{signal_price:.6g}",
+            "entry_price":    f"{entry_price:.6g}",
+            "slip_pct":       f"{slip_pct:+.2f}",
+            "score":          score,
+            "base_usd":       BASE_ORDER_VOLUME,
+            "add_usd":        add_usd,
+            "total_usd":      target_usd,
+            "atr_pct":        f"{atrp:.2f}",
+            "intrabar_elapsed_pct": f"{elapsed_pct*100:.1f}",
+            **_htf,
+        })
+
+        prog = csv_progress("brkX2_4h")
+        send_telegram(
+            f"Forward-test brkX2-4h: #{prog['n_closed']}/{STRAT4H_FWDTEST_TARGET} "
+            f"({prog['n_win']}W/{prog['n_closed']-prog['n_win']}L, "
+            f"total {prog['total_pct']:+.1f}%)"
+        )
+        opened_any = True
+        log(f"  [T1d] OPEN {sym} @ {entry_price:.4g} (4h intrabar)")
+
+def run_thread1d_4h():
+    """Thread T1d: scan 4h intrabar tiap STRAT4H_SCAN_INTERVAL detik."""
+    while True:
+        try:
+            if STRAT4H_ENABLED:
+                thread1d_scan_4h()
+        except Exception as e:
+            log(f"WARN T1d 4h error: {e}")
+        time.sleep(STRAT4H_SCAN_INTERVAL)
 
 if __name__ == '__main__':
+    log("="*55)
+    log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
+    log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
+    log("="*55)
+    log(f"  Timeframe        : {TIMEFRAME}")
+    log(f"  Entry syarat     : ST-up, >EMA20, EMA20>EMA50, breakout{BREAKOUT_LOOKBACK}, vol>={VOLUME_MULT}xMA, RSI<{RSI_MAX}" + (f", Stoch<{STOCH_MAX}" if STOCH_MAX is not None else ""))
+    log(f"  Exit             : trailing adaptif (arm +{TRAIL_ARM_PCT}%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)")
+    log(f"  Trailing FAKTOR  : {TRAILING_FAKTOR*100:.0f}% (jarak trailing = tabel ATR% x {TRAILING_FAKTOR})")
+    log(f"  Base order       : ${BASE_ORDER_VOLUME} | Max deal total: {COMMAS_MAX_ACTIVE_DEALS}")
+    log(f"  Slot per strategi: brkX2={MAX_DEALS_BRKX2}, reversal={MAX_DEALS_REVERSAL}, 4h={STRAT4H_MAX_DEALS}")
+    log(f"  Bot 3Commas      : brkX2 #{COMMAS_BOT_ID} | reversal #{COMMAS_BOT_ID_REVERSAL} | 4h #{COMMAS_BOT_ID_4H}")
+    log(f"  Filter choppy    : {'ON' if CHOPPY_FILTER_ENABLED else 'OFF'} (body/range < {CHOPPY_BODY_RANGE_MIN} avg {CHOPPY_LOOKBACK_CANDLES} candle -> exclude)")
+    log(f"  MACD filter      : {'ON' if MACD_FILTER_ENABLED else 'OFF'} (MACD histogram > 0)")
+    log(f"  Arm threshold    : 2.0% (ATR<7%) / 3.5% (ATR>=7%)")
+    log(f"  Trail ATR>=7%    : 1.5% (dari 2.5% baseline, backtest_arm_sweep)")
+    log(f"  Intrabar scan    : {'ON' if INTRABAR_ENABLED else 'OFF'} (entry {int(INTRABAR_ENTRY_PCT*100)}%-{int(INTRABAR_WINDOW_END*100)}% elapsed, scan tiap {INTRABAR_SCAN_INTERVAL}s)")
+    log(f"  Progressive trail: {'ON' if PROG_TRAIL_ENABLED else 'OFF'} (thr={PROG_TRAIL_THRESHOLD}% stp={PROG_TRAIL_STEP}% red={PROG_TRAIL_REDUCE}% min={PROG_TRAIL_MIN}%)")
+    log(f"  Cooldown internal: {COOLDOWN_SECONDS}s ({COOLDOWN_SECONDS/3600:.0f}j, brkX2) -- cegah kirim sinyal yg pasti ditolak 3Commas (deal hantu)")
+    log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
+    log(f"  Filter BTC L1&L2 : {'ON' if BTC_FILTER_ENABLED else 'OFF'}")
+    log(f"  Filter HTF 3D    : {'ON' if HTF_FILTER_ENABLED else 'OFF'}"
+        + (f" (price>EMA{HTF_EMA_SLOW} AND MACD>0 di {HTF_TIMEFRAME})" if HTF_FILTER_ENABLED else ""))
+    log(f"  Min vol 24h      : ${MIN_VOLUME_USD:,}")
+    if REVERSAL_ENABLED:
+        log("  " + "-"*51)
+        log(f"  STRATEGI 2 REVERSAL: ON | TF {REVERSAL_TIMEFRAME}")
+        log(f"  Setup: 3 candle merah+turun>=5%, doji(<{int(REVERSAL_DOJI_MAX*100)}% body), 1 HA bull, cross-up EMA20")
+        log(f"  Exit : trailing adaptif (sama brkX2) | add fund: {'ON' if REVERSAL_ADD_FUND else 'OFF'}")
+        log(f"  Hold : maks {REVERSAL_MAX_HOLD_CANDLES} candle 8h")
+    if STRAT4H_ENABLED:
+        log("  " + "-"*51)
+        log(f"  STRATEGI 3 brkX2-4h: ON | TF {STRAT4H_TIMEFRAME}")
+        log(f"  Entry: ST+1 + MACD>0 + ATR>={STRAT4H_ATR_MIN_PCT}% + Vol>={STRAT4H_VOLUME_MULT}xMA + HTF {STRAT4H_HTF_TF} (PRICE_EMA50+MACD+RSI50)")
+        log(f"  Intrabar: menit ke 5-10, scan tiap {STRAT4H_SCAN_INTERVAL}s")
+        log(f"  Slot: {STRAT4H_MAX_DEALS} | Target forward-test: {STRAT4H_FWDTEST_TARGET} deal")
+        log(f"  Bot : #{COMMAS_BOT_ID_4H}")
+    log("="*55)
+
+    load_active_deals()
+    load_last_closed()
+    try:
+        import math as _math
+        now_ms = int(time.time()*1000)
+        tf_sec = {'8h':8*3600,'12h':12*3600,'1d':86400,'4h':4*3600,'6h':6*3600}
+        sec12 = tf_sec.get(TIMEFRAME, 12*3600)
+        sec8  = tf_sec.get(REVERSAL_TIMEFRAME, 8*3600)
+        last_processed_candle_ts = (now_ms // (sec12*1000)) * (sec12*1000)
+        last_rev_candle_ts       = (now_ms // (sec8*1000))  * (sec8*1000)
+        log(f"   Init gating candle: brkX2 ts={last_processed_candle_ts}, reversal ts={last_rev_candle_ts} (buka deal hanya di candle TF berikutnya).")
+    except Exception as e:
+        log(f"   WARN init gating candle gagal: {e}")
+
+    send_telegram(
+        "Binance Screener AKTIF (Momentum brkX2 (12h))\n"
+        f"Entry: ST-up + >EMA20 + EMA20>EMA50 + breakout{BREAKOUT_LOOKBACK} + vol>={VOLUME_MULT}xMA + RSI<{RSI_MAX}" + (f" + Stoch<{STOCH_MAX}" if STOCH_MAX is not None else "") + "\n"
+        f"Exit : trailing adaptif (arm +{TRAIL_ARM_PCT}%, jarak per ATR%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)\n"
+        f"Base ${BASE_ORDER_VOLUME} | Max deal {COMMAS_MAX_ACTIVE_DEALS} | "
+        f"AddFund {'ON' if ADD_FUND_AUTO else 'OFF'} | BTC filter {'ON' if BTC_FILTER_ENABLED else 'OFF'}\n"
+        f"Evaluasi: candle {TIMEFRAME} TERTUTUP (mode a)"
+    )
+
+    n_threads = 3
+    t1 = threading.Thread(target=run_thread1, daemon=True, name="T1-Screener")
+    t2 = threading.Thread(target=run_thread2, daemon=True, name="T2-Monitor")
+    t3 = threading.Thread(target=run_thread3_intrabar, daemon=True, name="T3-Intrabar")
+    threads = [t1, t2, t3]
+    if STRAT4H_ENABLED:
+        t4 = threading.Thread(target=run_thread1d_4h, daemon=True, name="T1d-4h")
+        threads.append(t4)
+        n_threads = 4
+    for t in threads: t.start()
+    log(f"{n_threads} thread aktif (T1=screener, T2=monitor, T3=intrabar 12h" + (", T1d=intrabar 4h" if STRAT4H_ENABLED else "") + "). Ctrl+C untuk berhenti.")
+    try:
+        while True: time.sleep(60)
+    except KeyboardInterrupt:
+        log("Dihentikan.")
+        sys.exit(0)
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
