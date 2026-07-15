@@ -94,6 +94,17 @@ MAX_DEALS_REVERSAL      = 2      # slot reversal (bot 16921019) — set Max acti
 ADD_FUND_AUTO           = False
 BTC_FILTER_ENABLED      = False
 
+# ---- HTF 3D FILTER (backtest_combined.py, 15/07/2026) ----
+# Entry 12h hanya boleh kalau di TF 3D: harga > EMA50 DAN MACD hist > 0
+# Hasil backtest: avg +2.600% vs baseline +0.770% (+1.830%), WR 61.3%, tona turun 52%
+HTF_FILTER_ENABLED  = True
+HTF_TIMEFRAME       = "3d"
+HTF_EMA_SLOW        = 50       # price > EMA50 3D
+HTF_MACD_FAST       = 12
+HTF_MACD_SLOW       = 26
+HTF_MACD_SIGNAL     = 9
+HTF_CANDLE_LIMIT    = 120      # candle 3D yang diambil (~1 tahun)
+
 # ---- STRATEGI 2: REVERSAL DOJI + HEIKIN ASHI (8h) ----
 REVERSAL_ENABLED      = True
 # Reversal pakai bot 3Commas terpisah (split). Kalau env var-nya belum diset, matikan reversal
@@ -302,6 +313,118 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
         log(f"   [CSV] CLOSE dicatat: {symbol}")
     except Exception as e:
         log(f"   [CSV] gagal tulis CLOSE: {e}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEAL LOG — dokumentasi lengkap semua event (open/addfund/close) + nilai indikator
+# Append-only, akumulatif, tidak pernah dihapus.
+# ══════════════════════════════════════════════════════════════════════════════
+DEAL_LOG_CSV = os.path.join(DATA_DIR, "deal_log.csv")
+DEAL_LOG_LOCK = threading.Lock()
+
+DEAL_LOG_FIELDS = [
+    # ── Identitas event ──────────────────────────────────────────────────────
+    'timestamp_wib',    # waktu event (open/addfund/close)
+    'event_type',       # OPEN / ADD_FUND / CLOSE
+    'strategy',         # brkX2 / reversal
+    'symbol',           # e.g. ALLO/USDT
+    'thread',           # T1 / T1b / T1c / T2 (dari mana event berasal)
+    # ── Harga & profit ───────────────────────────────────────────────────────
+    'signal_price',     # harga candle close saat sinyal
+    'entry_price',      # harga eksekusi pasar
+    'slip_pct',         # slippage % (entry vs sinyal)
+    'exit_price',       # harga close (hanya CLOSE)
+    'profit_pct',       # profit % dari entry (hanya CLOSE)
+    'exit_reason',      # trail / timeout / batas N candle (hanya CLOSE)
+    'trailing_armed',   # True/False saat CLOSE
+    'hold_candles',     # berapa candle hold (hanya CLOSE)
+    # ── Sizing ───────────────────────────────────────────────────────────────
+    'score',            # skor sinyal 0-5
+    'base_usd',         # modal base order ($)
+    'add_usd',          # add fund amount ($), 0 kalau tidak ada
+    'total_usd',        # base + add
+    # ── Indikator 12h saat entry ─────────────────────────────────────────────
+    'atr_pct',          # ATR% candle sinyal
+    'trail_dist_pct',   # jarak trailing berdasar ATR tier
+    'ema_fast',         # EMA20 close
+    'ema_slow',         # EMA50 close
+    'st_dir',           # Supertrend direction (1=up, -1=down)
+    'rsi',              # RSI14
+    'macd_hist',        # MACD histogram
+    'stoch_k',          # Stochastic %K
+    'vol_ratio',        # volume / vol_MA20 (berapa x rata-rata)
+    'hh10',             # High tertinggi 10 candle terakhir (level breakout)
+    'close_price_12h',  # close candle 12h saat sinyal
+    # ── HTF 3D saat entry ────────────────────────────────────────────────────
+    'htf_tf',           # timeframe HTF (3d)
+    'htf_close',        # harga close 3D candle terakhir
+    'htf_ema50',        # EMA50 3D
+    'htf_macd_hist',    # MACD hist 3D
+    'htf_filter_pass',  # True/False: apakah lolos HTF filter
+    # ── Intrabar (hanya T1c) ─────────────────────────────────────────────────
+    'intrabar_elapsed_pct',  # % elapsed candle 12h saat entry intrabar
+    'intrabar_price_live',   # harga live saat entry intrabar
+]
+
+def _deal_log_ensure_header():
+    """Buat file + header kalau belum ada. Tidak hapus data lama."""
+    if not os.path.exists(DEAL_LOG_CSV):
+        os.makedirs(os.path.dirname(DEAL_LOG_CSV) or '.', exist_ok=True)
+        with open(DEAL_LOG_CSV, 'w', newline='', encoding='utf-8') as f:
+            csv.DictWriter(f, fieldnames=DEAL_LOG_FIELDS).writeheader()
+
+def deal_log_write(row: dict):
+    """Append 1 baris ke deal_log.csv. Kolom yang tidak diisi → string kosong."""
+    try:
+        with DEAL_LOG_LOCK:
+            _deal_log_ensure_header()
+            full = {k: row.get(k, '') for k in DEAL_LOG_FIELDS}
+            with open(DEAL_LOG_CSV, 'a', newline='', encoding='utf-8') as f:
+                csv.DictWriter(f, fieldnames=DEAL_LOG_FIELDS).writerow(full)
+        log(f"   [DEALLOG] {row.get('event_type','?')} dicatat: {row.get('symbol','?')}")
+    except Exception as e:
+        log(f"   [DEALLOG] gagal tulis: {e}")
+
+def _get_htf_values(symbol: str) -> dict:
+    """Ambil nilai HTF 3D untuk dokumentasi. Return dict kosong kalau gagal."""
+    try:
+        df = get_ohlcv_htf(symbol, interval=HTF_TIMEFRAME, limit=HTF_CANDLE_LIMIT)
+        if df is None or len(df) < HTF_MACD_SLOW + HTF_MACD_SIGNAL + 5:
+            return {}
+        df = compute_indicators_htf(df)
+        row = df.iloc[-1]
+        ema50 = row.get('htf_ema_slow')
+        macdh = row.get('htf_macd_hist')
+        close = row.get('close')
+        passed = (not pd.isna(ema50) and not pd.isna(macdh) and
+                  not pd.isna(close) and close > ema50 and macdh > 0)
+        return {
+            'htf_tf':          HTF_TIMEFRAME,
+            'htf_close':       f"{close:.6g}"    if not pd.isna(close)  else '',
+            'htf_ema50':       f"{ema50:.6g}"    if not pd.isna(ema50)  else '',
+            'htf_macd_hist':   f"{macdh:.6f}"    if not pd.isna(macdh)  else '',
+            'htf_filter_pass': str(passed),
+        }
+    except Exception:
+        return {}
+
+def _row_indicators(df_row, vol_ma=None) -> dict:
+    """Ekstrak nilai indikator dari 1 baris DataFrame indikator 12h."""
+    def _f(v, fmt='.6g'):
+        return format(v, fmt) if (v is not None and not pd.isna(v)) else ''
+    vol = df_row.get('vol')
+    vol_ratio = (float(vol) / float(vol_ma)) if (vol_ma and vol_ma > 0 and vol is not None) else None
+    return {
+        'ema_fast':       _f(df_row.get('ema_fast')),
+        'ema_slow':       _f(df_row.get('ema_slow')),
+        'st_dir':         str(int(df_row.get('st_dir', 0))) if not pd.isna(df_row.get('st_dir', float('nan'))) else '',
+        'rsi':            _f(df_row.get('rsi'), '.2f'),
+        'macd_hist':      _f(df_row.get('macd_hist'), '.6f'),
+        'stoch_k':        _f(df_row.get('stoch_k'), '.2f'),
+        'vol_ratio':      f"{vol_ratio:.3f}" if vol_ratio is not None else '',
+        'hh10':           _f(df_row.get('hh')),
+        'close_price_12h':_f(df_row.get('close')),
+        'atr_pct':        _f(df_row.get('atr_pct'), '.2f'),
+    }
 
 def csv_progress(strategy: str = None):
     """Baca CSV, hitung trade SELESAI (CLOSED), berapa menang/kalah, total profit%.
@@ -530,6 +653,18 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
     if add_usd > 0:
         # message ke-2 TERPISAH (array multi-instruksi tdk didukung): add fund delay 15 detik
         send_add_funds(symbol, add_usd, strategy, delay=15)
+        # ── DEAL LOG ADD_FUND ─────────────────────────────────────────────
+        deal_log_write({
+            'timestamp_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+            'event_type':    'ADD_FUND',
+            'strategy':      strategy,
+            'symbol':        to_display_pair(symbol),
+            'thread':        'sizing',
+            'score':         score,
+            'base_usd':      BASE_ORDER_VOLUME,
+            'add_usd':       add_usd,
+            'total_usd':     target,
+        })
     return True, target, add_usd
 
 def send_start_trailing(symbol: str, strategy: str = 'brkX2') -> bool:
@@ -820,6 +955,62 @@ def btc_filter_ok() -> bool:
     if pd.isna(row['rsi']) or row['rsi'] < BTC_RSI_MIN: return False       # Lapis 2 RSI
     return True
 
+def get_ohlcv_htf(symbol: str, interval: str = "3d", limit: int = 120):
+    """Ambil OHLCV untuk HTF (3D). Pakai endpoint yang sama dengan get_ohlcv."""
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    raw = _binance_get("/api/v3/klines", params)
+    if not raw: return None
+    df = pd.DataFrame(raw, columns=[
+        "ts","open","high","low","close","vol",
+        "ct","qvol","ntrades","tbbv","tbqv","ig"
+    ])
+    for col in ["open","high","low","close","vol"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["ts"] = df["ts"].astype("int64")
+    return df.reset_index(drop=True)
+
+def compute_indicators_htf(df):
+    """Hitung EMA50 dan MACD hist untuk HTF dataframe."""
+    import pandas_ta as _pta
+    df = df.copy()
+    df["htf_ema_slow"] = _pta.ema(df["close"], length=HTF_EMA_SLOW)
+    _macd = _pta.macd(df["close"], fast=HTF_MACD_FAST,
+                      slow=HTF_MACD_SLOW, signal=HTF_MACD_SIGNAL)
+    if _macd is not None:
+        _hist_col = [c for c in _macd.columns if "MACDh" in c]
+        df["htf_macd_hist"] = _macd[_hist_col[0]] if _hist_col else float("nan")
+    else:
+        df["htf_macd_hist"] = float("nan")
+    return df
+
+def htf_filter_ok(symbol: str) -> bool:
+    """
+    HTF 3D filter: entry 12h hanya boleh kalau di candle 3D terakhir:
+      1. close > EMA50 3D  (PRICE_EMA50)
+      2. MACD hist 3D > 0  (MACD)
+    Kalau gagal ambil data → jangan blokir (fail-open).
+    """
+    if not HTF_FILTER_ENABLED:
+        return True
+    try:
+        df = get_ohlcv_htf(symbol, interval=HTF_TIMEFRAME, limit=HTF_CANDLE_LIMIT)
+        if df is None or len(df) < HTF_MACD_SLOW + HTF_MACD_SIGNAL + 5:
+            return True  # data kurang → fail-open
+        df = compute_indicators_htf(df)
+        row = df.iloc[-1]
+        # Kondisi 1: price > EMA50 3D
+        ema_slow = row.get("htf_ema_slow")
+        if pd.isna(ema_slow) or row["close"] <= ema_slow:
+            return False
+        # Kondisi 2: MACD hist 3D > 0
+        macd_h = row.get("htf_macd_hist")
+        if pd.isna(macd_h) or macd_h <= 0:
+            return False
+        return True
+    except Exception as e:
+        log(f"  [HTF] error cek {symbol}: {e} → skip filter")
+        return True  # error → fail-open
+
 # ===================== THREAD 1: SCREENER + OPEN LONG =====================
 def active_deal_count() -> int:
     with active_deals_lock:
@@ -985,8 +1176,16 @@ def thread1_scan():
         df = compute_indicators(df)
         newest_ts = max(newest_ts, int(df['ct'].iloc[-1]))
         if check_entry(df):
-            sc = signal_score(df.iloc[-1])
-            candidates.append((sym, float(df['close'].iloc[-1]), float(df['atr_pct'].iloc[-1]), sc))
+            # HTF 3D filter: cek kondisi trend 3D sebelum entry
+            if HTF_FILTER_ENABLED and not htf_filter_ok(sym):
+                log(f"  [T1] {sym} lolos 12h tapi DITOLAK HTF 3D filter (price<EMA50 atau MACD<0)")
+                det = entry_detail(df)
+                if det is not None:
+                    n_pass, total, fails = det
+                    near_miss.append((n_pass, sym, fails + ["HTF 3D: bearish"]))
+            else:
+                sc = signal_score(df.iloc[-1])
+                candidates.append((sym, float(df['close'].iloc[-1]), float(df['atr_pct'].iloc[-1]), sc))
         else:
             det = entry_detail(df)
             if det is not None:
@@ -1063,6 +1262,26 @@ def thread1_scan():
                 'base_usd': BASE_ORDER_VOLUME,
                 'score': score,
                 'strategy': 'brkX2',
+            })
+            # ── DEAL LOG lengkap ──────────────────────────────────────────
+            _ind = _row_indicators(df.iloc[-1], vol_ma=float(df['vol_ma'].iloc[-1]) if 'vol_ma' in df.columns else None)
+            _htf = _get_htf_values(sym)
+            deal_log_write({
+                'timestamp_wib':    now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                'event_type':       'OPEN',
+                'strategy':         'brkX2',
+                'symbol':           to_display_pair(sym),
+                'thread':           'T1',
+                'signal_price':     f"{signal_price:.6g}",
+                'entry_price':      f"{entry_price:.6g}",
+                'slip_pct':         f"{slip_pct:+.2f}",
+                'score':            score,
+                'base_usd':         BASE_ORDER_VOLUME,
+                'add_usd':          add_usd if add_usd > 0 else 0,
+                'total_usd':        target_usd,
+                'trail_dist_pct':   f"{trailing_dist(atrp)}",
+                **_ind,
+                **_htf,
             })
             opened_any = True
 
@@ -1259,6 +1478,25 @@ def thread2_monitor():
                     now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                     price, prof_from_entry, reason
                 )
+                # ── DEAL LOG lengkap CLOSE ────────────────────────────────
+                _opened_ts = d.get('opened_candle_ts', 0)
+                _hold_c = round((time.time() - _opened_ts) / SECONDS_PER_CANDLE) if _opened_ts > 0 else ''
+                deal_log_write({
+                    'timestamp_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                    'event_type':    'CLOSE',
+                    'strategy':      strat,
+                    'symbol':        to_display_pair(sym),
+                    'thread':        'T2',
+                    'entry_price':   f"{d.get('entry_price', ''):.6g}" if d.get('entry_price') else '',
+                    'exit_price':    f"{price:.6g}",
+                    'profit_pct':    f"{prof_from_entry:.2f}",
+                    'exit_reason':   reason,
+                    'trailing_armed':str(armed),
+                    'hold_candles':  str(_hold_c),
+                    'atr_pct':       f"{d.get('atr_pct', ''):.2f}" if d.get('atr_pct') else '',
+                    'score':         d.get('score', ''),
+                    'total_usd':     d.get('target_usd', ''),
+                })
                 remove_from_active_deals(sym)
                 if strat == 'brkX2':
                     record_closed(sym)   # cooldown internal: cegah re-entry & deal hantu (lihat COOLDOWN_SECONDS)
@@ -1380,6 +1618,10 @@ def thread1c_scan_intrabar():
         if vol_ma12 > 0 and vol_projected < VOLUME_MULT * vol_ma12: continue
         if rsi_now >= RSI_MAX: continue
         if STOCH_MAX is not None and stoch_now >= STOCH_MAX: continue
+        # HTF 3D filter
+        if HTF_FILTER_ENABLED and not htf_filter_ok(sym):
+            log(f"  [T1c] {sym} lolos intrabar tapi DITOLAK HTF 3D filter (price<EMA50 atau MACD<0)")
+            continue
         # LOLOS → ENTRY
         atrp         = float(r12['atr_pct']) if not pd.isna(r12.get('atr_pct')) else 3.0
         score        = signal_score(r12)
@@ -1422,6 +1664,28 @@ def thread1c_scan_intrabar():
                 'score':          score,
                 'strategy':       'brkX2',
             })
+            # ── DEAL LOG lengkap T1c ──────────────────────────────────────
+            _ind = _row_indicators(r12, vol_ma=float(r12.get('vol_ma', 0)) if not pd.isna(r12.get('vol_ma', 0)) else None)
+            _htf = _get_htf_values(sym)
+            deal_log_write({
+                'timestamp_wib':        now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                'event_type':           'OPEN',
+                'strategy':             'brkX2',
+                'symbol':               to_display_pair(sym),
+                'thread':               'T1c',
+                'signal_price':         f"{signal_price:.6g}",
+                'entry_price':          f"{entry_price:.6g}",
+                'slip_pct':             f"{slip_pct:+.2f}",
+                'score':                score,
+                'base_usd':             BASE_ORDER_VOLUME,
+                'add_usd':              add_usd if add_usd > 0 else 0,
+                'total_usd':            target_usd,
+                'trail_dist_pct':       f"{trailing_dist(atrp)}",
+                'intrabar_elapsed_pct': f"{elapsed_pct*100:.1f}",
+                'intrabar_price_live':  f"{price_now:.6g}",
+                **_ind,
+                **_htf,
+            })
             last_intrabar_candle_ts = candle_open_ms
     return None
 
@@ -1458,6 +1722,8 @@ if __name__ == '__main__':
     log(f"  Cooldown internal: {COOLDOWN_SECONDS}s ({COOLDOWN_SECONDS/3600:.0f}j, brkX2) -- cegah kirim sinyal yg pasti ditolak 3Commas (deal hantu)")
     log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
     log(f"  Filter BTC L1&L2 : {'ON' if BTC_FILTER_ENABLED else 'OFF'}")
+    log(f"  Filter HTF 3D    : {'ON' if HTF_FILTER_ENABLED else 'OFF'}"
+        + (f" (price>EMA{HTF_EMA_SLOW} AND MACD>0 di {HTF_TIMEFRAME})" if HTF_FILTER_ENABLED else ""))
     log(f"  Min vol 24h      : ${MIN_VOLUME_USD:,}")
     if REVERSAL_ENABLED:
         log("  " + "-"*51)
