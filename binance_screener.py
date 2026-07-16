@@ -991,18 +991,25 @@ def btc_filter_ok() -> bool:
     return True
 
 def get_ohlcv_htf(symbol: str, interval: str = "3d", limit: int = 120):
-    """Ambil OHLCV untuk HTF (3D). Pakai endpoint yang sama dengan get_ohlcv."""
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
-    raw = _binance_get("/api/v3/klines", params)
-    if not raw: return None
-    df = pd.DataFrame(raw, columns=[
-        "ts","open","high","low","close","vol",
-        "ct","qvol","ntrades","tbbv","tbqv","ig"
-    ])
-    for col in ["open","high","low","close","vol"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["ts"] = df["ts"].astype("int64")
-    return df.reset_index(drop=True)
+    """Ambil OHLCV untuk HTF (3D). Fix: parse response object dengan .json() dulu."""
+    r = _binance_get("/api/v3/klines",
+                     params={"symbol": symbol, "interval": interval, "limit": limit},
+                     timeout=20)
+    if r is None: return None
+    try:
+        raw = r.json()
+        if not isinstance(raw, list) or len(raw) < 10: return None
+        df = pd.DataFrame(raw, columns=[
+            "ts","open","high","low","close","vol",
+            "ct","qvol","ntrades","tbbv","tbqv","ig"
+        ])
+        for col in ["open","high","low","close","vol"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["ts"] = df["ts"].astype("int64")
+        return df.reset_index(drop=True)
+    except Exception as e:
+        log(f"  [HTF] parse error {symbol} {interval}: {e}")
+        return None
 
 def compute_indicators_htf(df):
     """Hitung EMA50 dan MACD hist untuk HTF dataframe."""
@@ -1051,18 +1058,25 @@ def htf_filter_ok(symbol: str) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 def get_ohlcv_4h(symbol: str, limit: int = 300):
     """Ambil OHLCV 4h dari Binance."""
-    params = {"symbol": symbol, "interval": STRAT4H_TIMEFRAME, "limit": limit}
-    raw = _binance_get("/api/v3/klines", params)
-    if not raw: return None
-    df = pd.DataFrame(raw, columns=[
-        "ts","open","high","low","close","vol",
-        "ct","qvol","ntrades","tbbv","tbqv","ig"
-    ])
-    for col in ["open","high","low","close","vol"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["qvol"] = pd.to_numeric(df["qvol"], errors="coerce")
-    df["ts"]   = df["ts"].astype("int64")
-    return df.reset_index(drop=True)
+    r = _binance_get("/api/v3/klines",
+                     params={"symbol": symbol, "interval": STRAT4H_TIMEFRAME, "limit": limit},
+                     timeout=20)
+    if r is None: return None
+    try:
+        raw = r.json()
+        if not isinstance(raw, list) or len(raw) < 10: return None
+        df = pd.DataFrame(raw, columns=[
+            "ts","open","high","low","close","vol",
+            "ct","qvol","ntrades","tbbv","tbqv","ig"
+        ])
+        for col in ["open","high","low","close","vol"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["qvol"] = pd.to_numeric(df["qvol"], errors="coerce")
+        df["ts"]   = df["ts"].astype("int64")
+        return df.reset_index(drop=True)
+    except Exception as e:
+        log(f"  [4h] parse error {symbol}: {e}")
+        return None
 
 def compute_indicators_4h(df):
     """Hitung indikator entry 4h: Supertrend, MACD, ATR%, Vol MA, Vol24h."""
