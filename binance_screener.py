@@ -583,6 +583,9 @@ heartbeat_last_sent    = 0.0    # epoch detik notif terakhir
 # heartbeat reversal (terpisah, label 8h)
 heartbeat_rev_window_start = None
 heartbeat_rev_last_sent    = 0.0
+# heartbeat 4h (terpisah, label 4h)
+heartbeat_4h_window_start  = None
+heartbeat_4h_last_sent     = 0.0
 
 session = requests.Session()
 session.headers.update({'User-Agent': 'Mozilla/5.0'})
@@ -1280,12 +1283,14 @@ def heartbeat_tick(status_line: str):
         prog_all = csv_progress()
         prog_brk = csv_progress('brkX2')
         prog_rev = csv_progress('reversal')
+        prog_4h  = csv_progress('brkX2_4h')
         if prog_all is None:
             prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
         else:
             prog_line = (f"Progress forward-test (gabungan): {_fmt_prog(prog_all)}\n"
                          f"  - brkX2   : {_fmt_strat(prog_brk, FWDTEST_TARGET_BRKX2)}\n"
-                         f"  - reversal: {_fmt_strat(prog_rev, FWDTEST_TARGET_REVERSAL)}")
+                         f"  - reversal: {_fmt_strat(prog_rev, FWDTEST_TARGET_REVERSAL)}\n"
+                         f"  - 4h      : {_fmt_strat(prog_4h,  STRAT4H_FWDTEST_TARGET)}")
         send_telegram(
             f"{header}\n"
             f"{status_line}\n"
@@ -1337,6 +1342,59 @@ def heartbeat_rev_tick(status_line: str):
         heartbeat_rev_last_sent = now
         heartbeat_rev_window_start = now_dt
 
+
+def heartbeat_4h_tick(status_line: str, near_miss_4h: list = None):
+    """Heartbeat KHUSUS strategi 4h, tiap 6 jam."""
+    global heartbeat_4h_window_start, heartbeat_4h_last_sent
+    if not STRAT4H_ENABLED: return
+    now    = time.time()
+    now_dt = now_wib()
+    if heartbeat_4h_window_start is None:
+        heartbeat_4h_window_start = now_dt
+    first_time = (heartbeat_4h_last_sent == 0.0)
+    if not (first_time or (now - heartbeat_4h_last_sent >= HEARTBEAT_INTERVAL_SEC)):
+        return
+
+    if first_time:
+        start_str = now_dt.strftime('%d/%m %H:%M')
+        header = (f"HEARTBEAT (brkX2-4h) — START\n"
+                  f"Mulai memantau: {start_str} WIB\n"
+                  f"Notif berikutnya tiap 6 jam.")
+    else:
+        start_str = heartbeat_4h_window_start.strftime('%d/%m %H:%M')
+        end_str   = now_dt.strftime('%d/%m %H:%M')
+        header = (f"HEARTBEAT 6-jam (brkX2-4h)\n"
+                  f"Periode: {start_str} -> {end_str} WIB")
+
+    prev = csv_progress('brkX2_4h')
+    if prev is None or prev['n'] == 0:
+        prog = f"Progress brkX2-4h: #0/{STRAT4H_FWDTEST_TARGET} (belum ada deal)"
+    else:
+        nn  = prev['n']; wl = f"{prev['win']}W/{prev['loss']}L"
+        tag = " TERCAPAI!" if nn >= STRAT4H_FWDTEST_TARGET else ""
+        prog = f"Progress brkX2-4h: #{nn}/{STRAT4H_FWDTEST_TARGET} ({wl}, total {prev['total_pct']:+.1f}%){tag}"
+
+    # Kandidat terdekat 4h
+    near_str = ""
+    if near_miss_4h:
+        lines = []
+        for sym, fails in near_miss_4h[:3]:
+            fail_str = "; ".join(fails) if fails else "semua lolos"
+            lines.append(f"• {to_display_pair(sym)}: belum: {fail_str}")
+        near_str = "\nKandidat terdekat 4h:\n" + "\n".join(lines)
+
+    send_telegram(
+        f"{header}\n"
+        f"{status_line}\n"
+        f"Slot 4h: {active_deal_count_4h()}/{STRAT4H_MAX_DEALS} | "
+        f"total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS + STRAT4H_MAX_DEALS}\n"
+        f"{prog}"
+        f"{near_str}\n"
+        f"Bot HIDUP & terus memantau."
+    )
+    log(f"[T1d] Heartbeat 4h terkirim: {status_line}")
+    heartbeat_4h_last_sent    = now
+    heartbeat_4h_window_start = now_dt
 
 def format_near_miss(near_miss, total, max_show=5):
     """Format daftar kandidat terdekat utk heartbeat: urut n_pass turun, tampilkan max 5, sisanya diringkas.
@@ -1832,6 +1890,17 @@ def run_thread1():
                 if status_rev:  # None = ada trade (notif OPEN sudah jalan); selain itu detak heartbeat
                     heartbeat_rev_tick(status_rev)
         except Exception as e: log(f"WARN T1b reversal error: {e}")
+        # heartbeat 4h — panggil tiap siklus T1, heartbeat_4h_tick sendiri yg cek interval 6 jam
+        try:
+            if STRAT4H_ENABLED:
+                n4h = active_deal_count_4h()
+                if n4h >= STRAT4H_MAX_DEALS:
+                    status_4h = f"4h: slot penuh ({n4h}/{STRAT4H_MAX_DEALS}) — deal aktif: " + \
+                        ", ".join(to_display_pair(s) for s,d in active_deals.items() if d.get("strategy")=="brkX2_4h")
+                else:
+                    status_4h = f"4h: memantau sinyal. Slot {n4h}/{STRAT4H_MAX_DEALS}"
+                heartbeat_4h_tick(status_4h)
+        except Exception as e: log(f"WARN T1 heartbeat 4h error: {e}")
         time.sleep(T1_SCAN_INTERVAL_SEC)
 
 def run_thread2():
@@ -2033,7 +2102,8 @@ def thread1d_scan_4h():
     ticker = get_ticker_24h()
     vol_map = {t["symbol"]: float(t.get("quoteVolume", 0)) for t in ticker} if ticker else {}
 
-    candidates = []
+    candidates  = []
+    near_miss_4h = []   # [(sym, [fails])] — kandidat yang hampir lolos
     with active_deals_lock:
         existing = set(active_deals.keys())
 
@@ -2041,10 +2111,8 @@ def thread1d_scan_4h():
         sym = sym_info.get("symbol", "")
         if not sym.endswith("USDT"): continue
         if sym in existing: continue
-        # Cek cooldown
         if sym in last_4h_candle_ts and last_4h_candle_ts[sym] == candle_open_ms:
             continue
-        # Cek vol24h minimum
         if vol_map.get(sym, 0) < STRAT4H_MIN_VOL_USD:
             continue
 
@@ -2052,23 +2120,48 @@ def thread1d_scan_4h():
             df = get_ohlcv_4h(sym, limit=100)
             if df is None or len(df) < 50: continue
             df = compute_indicators_4h(df)
-            if not check_entry_4h(df): continue
+
+            if not check_entry_4h(df):
+                # Cek berapa syarat yang lolos untuk near_miss
+                r = df.iloc[-1]
+                fails = []
+                sd = r.get("st_dir")
+                if pd.isna(sd) or sd != 1: fails.append("Supertrend belum up")
+                mh = r.get("macd_hist")
+                if pd.isna(mh) or mh <= 0: fails.append(f"MACD({mh:.4f if mh==mh else 'n/a'}<=0)")
+                atr = r.get("atr_pct")
+                if pd.isna(atr) or atr < STRAT4H_ATR_MIN_PCT: fails.append(f"ATR({atr:.2f if atr==atr else 'n/a'}<{STRAT4H_ATR_MIN_PCT}%)")
+                vol_ma = r.get("vol_ma")
+                if pd.isna(vol_ma) or vol_ma <= 0 or r["vol"] < STRAT4H_VOLUME_MULT * vol_ma:
+                    fails.append(f"Vol<{STRAT4H_VOLUME_MULT}xMA")
+                if len(fails) <= 1:  # hampir lolos (max 1 syarat gagal)
+                    near_miss_4h.append((sym, fails))
+                continue
 
             # HTF 3D filter
             if not htf_filter_4h_ok(sym):
                 log(f"  [T1d] {sym} lolos 4h tapi DITOLAK HTF 3D filter")
+                near_miss_4h.append((sym, ["HTF 3D: bearish"]))
                 continue
 
             r    = df.iloc[-1]
             atrp = float(r["atr_pct"]) if not pd.isna(r["atr_pct"]) else 3.0
-            sc   = 1  # skor default 4h = 1 (bisa dikembangkan)
+            sc   = 1
             candidates.append((sym, float(r["close"]), atrp, sc))
         except Exception as e:
             log(f"  [T1d] error {sym}: {e}")
 
+    # Status line untuk heartbeat
+    n4h_active = active_deal_count_4h()
     if not candidates:
+        status_4h = (f"4h: tidak ada sinyal. ({len(ticker or [])} discan, "
+                     f"slot {n4h_active}/{STRAT4H_MAX_DEALS})")
+        heartbeat_4h_tick(status_4h, near_miss_4h)
         log(f"[T1d] Tidak ada kandidat 4h.")
         return
+
+    status_4h = f"4h: {len(candidates)} kandidat lolos. Slot {n4h_active}/{STRAT4H_MAX_DEALS}"
+    heartbeat_4h_tick(status_4h, near_miss_4h)
 
     log(f"[T1d] {len(candidates)} kandidat 4h. Buka deal terbaik...")
     candidates.sort(key=lambda x: x[3], reverse=True)
