@@ -166,6 +166,20 @@ INTRABAR_ENTRY_PCT     = 0.60
 INTRABAR_WINDOW_END    = 0.75
 INTRABAR_SCAN_INTERVAL = 300
 
+# T3-EARLY: window intrabar tambahan di awal candle (5-10% elapsed = menit ke 36-72)
+# Hasil backtest_intrabar_early (17/07/2026): avg +9.519%, WR 75.7%, tona 12, wf6 OK
+INTRABAR_EARLY_ENABLED   = True
+INTRABAR_EARLY_ENTRY_PCT = 0.05    # 5% elapsed = menit ke 36
+INTRABAR_EARLY_END_PCT   = 0.10    # 10% elapsed = menit ke 72
+
+# T3-EARLY: window intrabar tambahan di awal candle (5-10% elapsed = menit ke 36-72)
+# Hasil backtest_intrabar_early (17/07/2026): avg +9.519%, WR 75.7%, tona 12, wf6 OK
+# vs T3-baseline 60-75%: avg +3.332%, WR 61.7%
+# vs close candle: avg +0.770%, WR 50.4%
+INTRABAR_EARLY_ENABLED   = True
+INTRABAR_EARLY_ENTRY_PCT = 0.05    # 5% elapsed = menit ke 36
+INTRABAR_EARLY_END_PCT   = 0.10    # 10% elapsed = menit ke 72
+
 # ---- PROGRESSIVE TRAILING ----
 PROG_TRAIL_ENABLED   = True
 PROG_TRAIL_THRESHOLD = 3.0
@@ -574,7 +588,9 @@ def get_open_indicators(sym: str) -> dict:
         return last_open_indicators.get(sym, {})
 
 
-last_intrabar_candle_ts  = 0
+last_intrabar_candle_ts       = 0
+last_intrabar_early_candle_ts = 0   # anti-double-entry untuk T3-early
+last_intrabar_early_candle_ts = 0   # anti-double-entry untuk T3-early
 
 last_rev_candle_ts = 0   # gating candle baru utk reversal (cegah entry dari candle 8h basi)
 # heartbeat state: kapan periode "tidak ada lolos" dimulai & kapan terakhir lapor
@@ -1291,11 +1307,27 @@ def heartbeat_tick(status_line: str):
                          f"  - brkX2   : {_fmt_strat(prog_brk, FWDTEST_TARGET_BRKX2)}\n"
                          f"  - reversal: {_fmt_strat(prog_rev, FWDTEST_TARGET_REVERSAL)}\n"
                          f"  - 4h      : {_fmt_strat(prog_4h,  STRAT4H_FWDTEST_TARGET)}")
+        # Tambah status T3 (intrabar early + baseline)
+        t3_status_str = ""
+        try:
+            with t3_status_lock:
+                es = t3_early_last_status
+                bs = t3_base_last_status
+                en = t3_early_near_miss[:]
+                bn = t3_base_near_miss[:]
+            t3_status_str = f"\nIntrabar EARLY (5-10%): {es}"
+            if en:
+                t3_status_str += " | Kandidat: " + ", ".join(to_display_pair(s) for s,_ in en[:2])
+            t3_status_str += f"\nIntrabar BASE (60-75%): {bs}"
+            if bn:
+                t3_status_str += " | Kandidat: " + ", ".join(to_display_pair(s) for s,_ in bn[:2])
+        except: pass
         send_telegram(
             f"{header}\n"
             f"{status_line}\n"
             f"Slot deal: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}\n"
-            f"{prog_line}\n"
+            f"{prog_line}"
+            f"{t3_status_str}\n"
             f"Bot HIDUP & terus memantau."
         )
         log(f"[T1] Heartbeat terkirim ({'START' if first_time else start_str+' -> '+end_str}): {status_line}")
@@ -2056,13 +2088,179 @@ def thread1c_scan_intrabar():
     return None
 
 
+# Status tracking T3 untuk heartbeat gabungan
+t3_early_last_status = "belum ada scan"
+t3_base_last_status  = "belum ada scan"
+t3_early_near_miss   = []
+t3_base_near_miss    = []
+t3_status_lock       = threading.Lock()
+
+def thread1c_scan_intrabar_early():
+    """
+    T3-EARLY: Scan sinyal brkX2 di awal candle 12h (5-10% elapsed = menit ke 36-72).
+    Syarat entry IDENTIK dengan T3-baseline dan T1 (close candle).
+    Backtest 17/07/2026: avg +9.519%, WR 75.7%, tona 12, wf6 OK (203 symbol).
+    Anti-double-entry per candle via last_intrabar_early_candle_ts.
+    """
+    global last_intrabar_early_candle_ts
+    if not INTRABAR_EARLY_ENABLED:
+        return None
+    now_ms         = int(time.time() * 1000)
+    sec12_ms       = SECONDS_PER_CANDLE * 1000
+    candle_open_ms = (now_ms // sec12_ms) * sec12_ms
+    elapsed_pct    = (now_ms - candle_open_ms) / sec12_ms
+
+    # Hanya entry di window 5-10% elapsed
+    if elapsed_pct < INTRABAR_EARLY_ENTRY_PCT or elapsed_pct > INTRABAR_EARLY_END_PCT:
+        return None
+    # Anti-double-entry: satu entry per candle per window
+    if candle_open_ms <= last_intrabar_early_candle_ts:
+        return None
+    if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2 or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
+        return None
+
+    log(f"[T1c-E] Intrabar EARLY scan ({elapsed_pct*100:.1f}% elapsed)...")
+    pairs = get_usdt_spot_pairs()
+    if not pairs: return None
+    ticker = get_ticker_24h()
+    volmap = {}
+    for t in ticker:
+        try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+        except: pass
+    universe = [p for p in pairs if volmap.get(p, 0) >= MIN_VOLUME_USD]
+
+    if BTC_FILTER_ENABLED and not btc_filter_ok():
+        return None
+
+    for sym in universe:
+        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2 or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
+            break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        if cooldown_remaining(sym) > 0: continue
+
+        # LAPIS 1: indikator dari candle 12h yang sudah tutup (n-1)
+        df12 = get_ohlcv(sym, interval=TIMEFRAME, limit=120)
+        if df12 is None: continue
+        # Buang candle yang sedang berjalan (belum tutup)
+        if df12['ct'].iloc[-1] >= now_ms:
+            df12 = df12.iloc[:-1]
+        if len(df12) < 60: continue
+        df12 = compute_indicators(df12)
+        r12  = df12.iloc[-1]
+
+        # Cek semua syarat dari candle n-1 (7 syarat + filter)
+        if is_choppy(df12): continue
+        if pd.isna(r12.get('st_dir')) or r12.get('st_dir') != 1: continue
+        if pd.isna(r12.get('ema_fast')) or pd.isna(r12.get('ema_slow')): continue
+        if r12['ema_fast'] <= r12['ema_slow']: continue
+        if pd.isna(r12.get('hh')): continue
+        if MACD_FILTER_ENABLED:
+            mh = r12.get('macd_hist')
+            if mh is None or pd.isna(mh) or mh <= 0: continue
+
+        # LAPIS 2: konfirmasi harga live dari data 15m
+        df15 = get_ohlcv(sym, interval='15m', limit=50)
+        if df15 is None: continue
+        intra = df15[df15['ts'] >= candle_open_ms]
+        if len(intra) == 0: continue
+        price_now  = float(intra['close'].iloc[-1])
+        vol_so_far = float(intra['vol'].sum())
+        vol_ma12   = float(r12.get('vol_ma', 0)) if not pd.isna(r12.get('vol_ma', 0)) else 0
+        # Volume diproyeksikan ke akhir candle
+        vol_projected = vol_so_far / elapsed_pct if elapsed_pct > 0 else vol_so_far
+
+        # Cek syarat live
+        if price_now <= float(r12['hh']): continue         # breakout HH10
+        if price_now <= float(r12['ema_fast']): continue   # price > EMA20
+        if vol_ma12 > 0 and vol_projected < VOLUME_MULT * vol_ma12: continue  # volume
+        try:
+            rsi15 = ta.rsi(intra['close'], length=14)
+            stoch15 = ta.stoch(intra['high'], intra['low'], intra['close'], k=14, d=3, smooth_k=3)
+            rsi_now   = float(rsi15.iloc[-1]) if rsi15 is not None and len(rsi15) > 0 and not pd.isna(rsi15.iloc[-1]) else 50.0
+            sk_cols   = [c for c in stoch15.columns if 'STOCHk' in c]
+            stoch_now = float(stoch15[sk_cols[0]].iloc[-1]) if sk_cols and not pd.isna(stoch15[sk_cols[0]].iloc[-1]) else 50.0
+        except Exception:
+            rsi_now = 50.0; stoch_now = 50.0
+        if rsi_now >= RSI_MAX: continue
+        if STOCH_MAX is not None and stoch_now >= STOCH_MAX: continue
+
+        # HTF 3D filter
+        if HTF_FILTER_ENABLED and not htf_filter_ok(sym):
+            log(f"  [T1c-E] {sym} lolos early tapi DITOLAK HTF 3D filter")
+            continue
+
+        # LOLOS → ENTRY
+        atrp         = float(r12['atr_pct']) if not pd.isna(r12.get('atr_pct')) else 3.0
+        score        = signal_score(r12)
+        signal_price = float(r12['close'])
+        log(f"[T1c-E] SINYAL EARLY: {sym} elapsed={elapsed_pct*100:.1f}% price={price_now:.6g} skor={score}")
+
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2')
+        if ok:
+            entry_price = get_price_now(sym)
+            if entry_price <= 0: entry_price = price_now
+            slip_pct = (entry_price / signal_price - 1) * 100 if signal_price > 0 else 0.0
+            add_to_active_deals(sym, {
+                'entry_price': entry_price, 'peak': entry_price,
+                'signal_price': signal_price, 'atr_pct': atrp,
+                'opened_candle_ts': int(candle_open_ms),
+                'trailing_armed': False,
+                'strategy': 'brkX2', 'score': score, 'target_usd': target_usd,
+            })
+            addfund_txt = f" (+add ${add_usd} delay 15s)" if add_usd > 0 else ""
+            send_telegram(
+                f"OPEN LONG INTRABAR EARLY (Momentum brkX2 (12h))\n"
+                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                f"Pair  : {to_display_pair(sym)}\n"
+                f"Harga entry (pasar): {entry_price:.6g}\n"
+                f"Harga sinyal (candle n-1 close): {signal_price:.6g}\n"
+                f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
+                f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
+                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+            )
+            # Deal log
+            _ind = _row_indicators(r12, vol_ma=float(r12.get('vol_ma', 0)) if not pd.isna(r12.get('vol_ma', 0)) else None)
+            _htf = _get_htf_values(sym)
+            deal_log_write({
+                'timestamp_wib':        now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                'event_type':           'OPEN',
+                'strategy':             'brkX2',
+                'symbol':               to_display_pair(sym),
+                'thread':               'T1c-E',
+                'signal_price':         f"{signal_price:.6g}",
+                'entry_price':          f"{entry_price:.6g}",
+                'slip_pct':             f"{slip_pct:+.2f}",
+                'score':                score,
+                'base_usd':             BASE_ORDER_VOLUME,
+                'add_usd':              add_usd if add_usd > 0 else 0,
+                'total_usd':            target_usd,
+                'trail_dist_pct':       f"{trailing_dist(atrp)}",
+                'intrabar_elapsed_pct': f"{elapsed_pct*100:.1f}",
+                'intrabar_price_live':  f"{price_now:.6g}",
+                **_ind,
+                **_htf,
+            })
+            last_intrabar_early_candle_ts = candle_open_ms
+    with t3_status_lock:
+        t3_early_last_status = "scan selesai"
+    return None
+
 def run_thread3_intrabar():
-    """Thread T3: intrabar scan tiap INTRABAR_SCAN_INTERVAL detik."""
+    """Thread T3: intrabar scan tiap INTRABAR_SCAN_INTERVAL detik.
+    Menjalankan 2 window: T3-early (5-10%) DAN T3-baseline (60-75%).
+    """
     while True:
         try:
-            thread1c_scan_intrabar()
+            thread1c_scan_intrabar()          # T3-baseline: 60-75%
         except Exception as e:
             log(f"WARN T3 intrabar error: {e}")
+        try:
+            thread1c_scan_intrabar_early()    # T3-early: 5-10%
+        except Exception as e:
+            log(f"WARN T3-early intrabar error: {e}")
         time.sleep(INTRABAR_SCAN_INTERVAL)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2346,6 +2544,7 @@ if __name__ == '__main__':
     log(f"  Trail ATR>=7%    : 1.5% (dari 2.5% baseline, backtest_arm_sweep)")
 
     log(f"  Intrabar scan    : {'ON' if INTRABAR_ENABLED else 'OFF'} (entry {int(INTRABAR_ENTRY_PCT*100)}%-{int(INTRABAR_WINDOW_END*100)}% elapsed, scan tiap {INTRABAR_SCAN_INTERVAL}s)")
+    log(f"  Intrabar EARLY   : {'ON' if INTRABAR_EARLY_ENABLED else 'OFF'} (entry {int(INTRABAR_EARLY_ENTRY_PCT*100)}%-{int(INTRABAR_EARLY_END_PCT*100)}% elapsed = menit ke {int(INTRABAR_EARLY_ENTRY_PCT*720)}-{int(INTRABAR_EARLY_END_PCT*720)})")
     log(f"  Progressive trail: {'ON' if PROG_TRAIL_ENABLED else 'OFF'} (thr={PROG_TRAIL_THRESHOLD}% stp={PROG_TRAIL_STEP}% red={PROG_TRAIL_REDUCE}% min={PROG_TRAIL_MIN}%)")
     log(f"  Cooldown internal: {COOLDOWN_SECONDS}s ({COOLDOWN_SECONDS/3600:.0f}j, brkX2) -- cegah kirim sinyal yg pasti ditolak 3Commas (deal hantu)")
     log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
