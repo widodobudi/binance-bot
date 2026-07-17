@@ -493,7 +493,87 @@ def csv_progress(strategy: str = None):
 
 active_deals_lock = threading.Lock()
 active_deals      = {}
-last_processed_candle_ts = 0
+def _indicator_better_or_equal(current: dict, prev: dict) -> tuple:
+    """
+    Bandingkan nilai indikator current vs prev (saat open deal sebelumnya).
+    Tiap indikator punya arah 'lebih baik' yang berbeda:
+      MACD hist   : lebih besar = lebih baik (momentum makin positif)
+      RSI         : lebih kecil = lebih baik (makin jauh dari overbought)
+      Stoch %K    : lebih kecil = lebih baik (makin jauh dari overbought)
+      Vol ratio   : lebih besar = lebih baik (volume makin kuat)
+      ATR%        : lebih besar = lebih baik (volatilitas makin potensial)
+      EMA gap     : lebih besar = lebih baik (trend makin kuat)
+    Return: (is_better_or_equal: bool, detail: str)
+    """
+    checks = []
+    better = []
+    worse  = []
+
+    def safe(v):
+        try: return float(v)
+        except: return None
+
+    # MACD hist: lebih besar = lebih baik
+    cm = safe(current.get('macd_hist')); pm = safe(prev.get('macd_hist'))
+    if cm is not None and pm is not None:
+        checks.append(cm >= pm)
+        (better if cm >= pm else worse).append(f"MACD({cm:.5f}>={pm:.5f})")
+
+    # RSI: lebih kecil = lebih baik (arah overbought berlawanan)
+    cr = safe(current.get('rsi')); pr = safe(prev.get('rsi'))
+    if cr is not None and pr is not None:
+        checks.append(cr <= pr)
+        (better if cr <= pr else worse).append(f"RSI({cr:.1f}<={pr:.1f})")
+
+    # Stoch %K: lebih kecil = lebih baik
+    cs = safe(current.get('stoch_k')); ps = safe(prev.get('stoch_k'))
+    if cs is not None and ps is not None:
+        checks.append(cs <= ps)
+        (better if cs <= ps else worse).append(f"Stoch({cs:.1f}<={ps:.1f})")
+
+    # Vol ratio: lebih besar = lebih baik
+    cvr = safe(current.get('vol_ratio')); pvr = safe(prev.get('vol_ratio'))
+    if cvr is not None and pvr is not None:
+        checks.append(cvr >= pvr)
+        (better if cvr >= pvr else worse).append(f"VolRatio({cvr:.2f}>={pvr:.2f})")
+
+    # ATR%: lebih besar = lebih baik
+    ca = safe(current.get('atr_pct')); pa = safe(prev.get('atr_pct'))
+    if ca is not None and pa is not None:
+        checks.append(ca >= pa)
+        (better if ca >= pa else worse).append(f"ATR({ca:.2f}>={pa:.2f})")
+
+    # EMA gap (close/ema_fast - 1)*100: lebih besar = trend makin kuat
+    cef = safe(current.get('ema_fast')); pef = safe(prev.get('ema_fast'))
+    ccp = safe(current.get('close_price_12h')); pcp = safe(prev.get('close_price_12h'))
+    if all(v is not None and v > 0 for v in [cef, pef, ccp, pcp]):
+        cgap = (ccp/cef - 1)*100; pgap = (pcp/pef - 1)*100
+        checks.append(cgap >= pgap)
+        (better if cgap >= pgap else worse).append(f"EMAGap({cgap:.2f}>={pgap:.2f})")
+
+    if not checks:
+        return True, "tidak ada data indikator sebelumnya → diizinkan"
+
+    # Semua indikator harus sama atau lebih baik
+    all_ok = all(checks)
+    detail = "OK: " + " | ".join(better) if all_ok else (
+        "LEBIH BAIK: " + " | ".join(better) + " | LEBIH JELEK: " + " | ".join(worse)
+    )
+    return all_ok, detail
+
+# Simpan indikator terakhir per symbol (saat open deal) untuk perbandingan re-entry
+last_open_indicators = {}   # sym -> dict indikator saat open deal terakhir
+last_open_ind_lock   = threading.Lock()
+
+def save_open_indicators(sym: str, ind: dict):
+    with last_open_ind_lock:
+        last_open_indicators[sym] = ind
+
+def get_open_indicators(sym: str) -> dict:
+    with last_open_ind_lock:
+        return last_open_indicators.get(sym, {})
+
+
 last_intrabar_candle_ts  = 0
 
 last_rev_candle_ts = 0   # gating candle baru utk reversal (cegah entry dari candle 8h basi)
@@ -1303,6 +1383,7 @@ def thread1_scan():
     candidates = []
     near_miss = []   # (n_pass, sym, fails) untuk heartbeat kandidat terdekat
     newest_ts = 0
+    all_dfs   = {}   # sym -> df terakhir (untuk re-entry indicator comparison)
     for sym in universe:
         with active_deals_lock:
             if sym in active_deals: continue
@@ -1315,6 +1396,7 @@ def thread1_scan():
             if len(df) < 60: continue
         df = compute_indicators(df)
         newest_ts = max(newest_ts, int(df['ct'].iloc[-1]))
+        all_dfs[sym] = df   # simpan untuk perbandingan indikator re-entry
         if check_entry(df):
             # HTF 3D filter: cek kondisi trend 3D sebelum entry
             if HTF_FILTER_ENABLED and not htf_filter_ok(sym):
@@ -1346,10 +1428,55 @@ def thread1_scan():
     # Cegah entry dari candle lama yg sdh tutup berjam2 lalu (sinyal basi -> slippage besar,
     # mis. HEI entry 5 jam stlh candle tutup, slippage -11%). Buka hanya saat candle baru tutup.
     if newest_ts <= last_processed_candle_ts:
-        log(f"[T1] Candle terbaru sudah diproses (ts={newest_ts}), tidak buka deal dari candle basi.")
+        # Candle sudah diproses — cek apakah ada kandidat dengan indikator
+        # sama atau lebih baik dari saat open deal sebelumnya di pair yang sama.
+        # Kalau lebih baik → izinkan re-entry meski candle sama.
+        # Kalau lebih jelek → tolak seperti biasa.
         lolos_syms = ", ".join(to_display_pair(c[0]) for c in candidates)
-        return (f"{len(candidates)} kandidat LOLOS 7/7 tapi candle sudah diproses "
-                f"(tunggu candle 12h baru): {lolos_syms}")
+        reentry_ok = []
+        reentry_skip = []
+        for sym, signal_price, atrp, score in candidates:
+            prev_ind = get_open_indicators(sym)
+            if not prev_ind:
+                # Tidak ada data indikator sebelumnya → tolak (safe default)
+                reentry_skip.append(sym)
+                log(f"[T1] {sym} candle basi, tidak ada data indikator sebelumnya → skip")
+                continue
+            # Ambil indikator current dari df
+            try:
+                df_cur = all_dfs.get(sym)
+                if df_cur is None:
+                    reentry_skip.append(sym); continue
+                r = df_cur.iloc[-1]
+                vol_ma = float(r['vol_ma']) if not pd.isna(r.get('vol_ma',float('nan'))) else None
+                vol_r  = (float(r['vol'])/vol_ma) if vol_ma and vol_ma > 0 else None
+                cur_ind = {
+                    'macd_hist':       r.get('macd_hist'),
+                    'rsi':             r.get('rsi'),
+                    'stoch_k':         r.get('stoch_k'),
+                    'vol_ratio':       vol_r,
+                    'atr_pct':         r.get('atr_pct'),
+                    'ema_fast':        r.get('ema_fast'),
+                    'close_price_12h': r.get('close'),
+                }
+                ok, detail = _indicator_better_or_equal(cur_ind, prev_ind)
+                log(f"[T1] {sym} candle basi RE-ENTRY check: {'IZIN' if ok else 'TOLAK'} | {detail}")
+                if ok:
+                    reentry_ok.append((sym, signal_price, atrp, score, detail))
+                else:
+                    reentry_skip.append(sym)
+            except Exception as e:
+                log(f"[T1] {sym} error re-entry check: {e} → skip")
+                reentry_skip.append(sym)
+
+        if not reentry_ok:
+            log(f"[T1] Candle terbaru sudah diproses (ts={newest_ts}), tidak ada kandidat re-entry yang layak.")
+            return (f"{len(candidates)} kandidat LOLOS 7/7 tapi candle sudah diproses "
+                    f"(tunggu candle 12h baru): {lolos_syms}")
+
+        # Ada kandidat yang indikatornya lebih baik → proses sebagai re-entry
+        log(f"[T1] {len(reentry_ok)} kandidat diizinkan re-entry (indikator sama/lebih baik).")
+        candidates = [(sym, sp, atr, sc) for sym, sp, atr, sc, _ in reentry_ok]
 
     opened_any = False
     cooldown_held = []   # (sym, sisa_detik) -- kandidat 7/7 valid tapi masih cooldown internal
@@ -1379,6 +1506,24 @@ def thread1_scan():
                 'opened_candle_ts': int(newest_ts), 'trailing_armed': False,
                 'strategy': 'brkX2', 'score': score, 'target_usd': target_usd
             })
+            # Simpan indikator saat open untuk perbandingan re-entry berikutnya
+            try:
+                df_saved = all_dfs.get(sym)
+                if df_saved is not None:
+                    r = df_saved.iloc[-1]
+                    vol_ma = float(r['vol_ma']) if not pd.isna(r.get('vol_ma', float('nan'))) else None
+                    vol_r  = (float(r['vol'])/vol_ma) if vol_ma and vol_ma > 0 else None
+                    save_open_indicators(sym, {
+                        'macd_hist':       float(r['macd_hist']) if not pd.isna(r.get('macd_hist', float('nan'))) else None,
+                        'rsi':             float(r['rsi'])       if not pd.isna(r.get('rsi', float('nan')))       else None,
+                        'stoch_k':         float(r['stoch_k'])   if not pd.isna(r.get('stoch_k', float('nan')))   else None,
+                        'vol_ratio':       vol_r,
+                        'atr_pct':         float(r['atr_pct'])   if not pd.isna(r.get('atr_pct', float('nan')))   else None,
+                        'ema_fast':        float(r['ema_fast'])   if not pd.isna(r.get('ema_fast', float('nan')))  else None,
+                        'close_price_12h': float(r['close']),
+                    })
+            except Exception as e:
+                log(f"  [T1] WARN gagal simpan indikator {sym}: {e}")
             addfund_txt = f" (+add ${add_usd} delay 15s)" if add_usd>0 else ""
             send_telegram(
                 f"OPEN LONG (Momentum brkX2 (12h))\n"
