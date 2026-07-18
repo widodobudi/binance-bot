@@ -79,6 +79,7 @@ RSI_LENGTH        = 14
 RSI_MAX           = 75
 STOCH_MAX         = 70      # syarat ke-7: Stoch %K < 70 (hindari entry terlalu overbought). None = matikan.
 MIN_VOLUME_USD    = 3_000_000   # dinaikkan dari 1jt ke 3jt (backtest_entry_filter2)
+REVERSAL_MIN_VOL_USD = 1_500_000  # min vol24h khusus reversal (lebih rendah untuk perluas universe)
 
 TRAIL_ARM_PCT     = 2.0
 # FAKTOR pengali jarak trailing. 1.0 = jarak tabel ATR% apa adanya; 1.10 = 10% lebih longgar.
@@ -1691,9 +1692,7 @@ def thread1b_scan_reversal():
     for t in ticker:
         try: volmap[t['symbol']] = float(t.get('quoteVolume',0))
         except: pass
-    universe = [p for p in pairs if volmap.get(p,0) >= MIN_VOLUME_USD]
-
-    # slot reversal penuh ATAU total pool penuh?
+    universe = [p for p in pairs if volmap.get(p,0) >= REVERSAL_MIN_VOL_USD]
     if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
         log(f"[T1b] Slot reversal penuh ({deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL}) "
             f"atau total ({active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}).")
@@ -2479,6 +2478,7 @@ if __name__ == '__main__':
         log(f"  Setup: 3 candle merah+turun>=5%, doji(<{int(REVERSAL_DOJI_MAX*100)}% body), 1 HA bull, cross-up EMA20")
         log(f"  Exit : trailing adaptif (sama brkX2) | add fund: {'ON' if REVERSAL_ADD_FUND else 'OFF'}")
         log(f"  Hold : maks {REVERSAL_MAX_HOLD_CANDLES} candle 8h")
+        log(f"  Min vol reversal : ${REVERSAL_MIN_VOL_USD:,} (lebih luas dari brkX2 ${MIN_VOLUME_USD:,})")
     if STRAT4H_ENABLED:
         log("  " + "-"*51)
         log(f"  STRATEGI 3 brkX2-4h: ON | TF {STRAT4H_TIMEFRAME}")
@@ -2558,6 +2558,7 @@ if __name__ == '__main__':
         log(f"  Setup: 3 candle merah+turun>=5%, doji(<{int(REVERSAL_DOJI_MAX*100)}% body), 1 HA bull, cross-up EMA20")
         log(f"  Exit : trailing adaptif (sama brkX2) | add fund: {'ON' if REVERSAL_ADD_FUND else 'OFF'}")
         log(f"  Hold : maks {REVERSAL_MAX_HOLD_CANDLES} candle 8h")
+        log(f"  Min vol reversal : ${REVERSAL_MIN_VOL_USD:,} (lebih luas dari brkX2 ${MIN_VOLUME_USD:,})")
     log("="*55)
 
     load_active_deals()
