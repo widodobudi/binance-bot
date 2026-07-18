@@ -2326,9 +2326,9 @@ def thread1d_scan_4h():
                 sd = r.get("st_dir")
                 if pd.isna(sd) or sd != 1: fails.append("Supertrend belum up")
                 mh = r.get("macd_hist")
-                if pd.isna(mh) or mh <= 0: fails.append(f"MACD({mh:.4f if mh==mh else 'n/a'}<=0)")
+                if pd.isna(mh) or mh <= 0: fails.append(f"MACD({(f'{mh:.4f}' if mh==mh else 'n/a')}<=0)")
                 atr = r.get("atr_pct")
-                if pd.isna(atr) or atr < STRAT4H_ATR_MIN_PCT: fails.append(f"ATR({atr:.2f if atr==atr else 'n/a'}<{STRAT4H_ATR_MIN_PCT}%)")
+                if pd.isna(atr) or atr < STRAT4H_ATR_MIN_PCT: fails.append(f"ATR({(f'{atr:.2f}' if atr==atr else 'n/a')}<{STRAT4H_ATR_MIN_PCT}%)")
                 vol_ma = r.get("vol_ma")
                 if pd.isna(vol_ma) or vol_ma <= 0 or r["vol"] < STRAT4H_VOLUME_MULT * vol_ma:
                     fails.append(f"Vol<{STRAT4H_VOLUME_MULT}xMA")
