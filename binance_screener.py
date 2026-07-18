@@ -1407,14 +1407,20 @@ def heartbeat_4h_tick(status_line: str, near_miss_4h: list = None):
         tag = " TERCAPAI!" if nn >= STRAT4H_FWDTEST_TARGET else ""
         prog = f"Progress brkX2-4h: #{nn}/{STRAT4H_FWDTEST_TARGET} ({wl}, total {prev['total_pct']:+.1f}%){tag}"
 
-    # Kandidat terdekat 4h
+    # Kandidat terdekat 4h — dari parameter atau global t1d_near_miss
     near_str = ""
-    if near_miss_4h:
-        lines = []
-        for sym, fails in near_miss_4h[:3]:
-            fail_str = "; ".join(fails) if fails else "semua lolos"
-            lines.append(f"• {to_display_pair(sym)}: belum: {fail_str}")
-        near_str = "\nKandidat terdekat 4h:\n" + "\n".join(lines)
+    try:
+        with t1d_near_miss_lock:
+            near_list = t1d_near_miss[:]
+        if near_miss_4h:  # override kalau ada fresh data
+            near_list = near_miss_4h
+        if near_list:
+            lines = []
+            for sym, fails in near_list[:3]:
+                fail_str = "; ".join(fails) if fails else "semua lolos"
+                lines.append(f"• {to_display_pair(sym)}: belum: {fail_str}")
+            near_str = "\nKandidat terdekat 4h:\n" + "\n".join(lines)
+    except: pass
 
     send_telegram(
         f"{header}\n"
@@ -1930,7 +1936,9 @@ def run_thread1():
                         ", ".join(to_display_pair(s) for s,d in active_deals.items() if d.get("strategy")=="brkX2_4h")
                 else:
                     status_4h = f"4h: memantau sinyal. Slot {n4h}/{STRAT4H_MAX_DEALS}"
-                heartbeat_4h_tick(status_4h)
+                with t1d_near_miss_lock:
+                    near_4h = t1d_near_miss[:]
+                heartbeat_4h_tick(status_4h, near_4h)
         except Exception as e: log(f"WARN T1 heartbeat 4h error: {e}")
         time.sleep(T1_SCAN_INTERVAL_SEC)
 
@@ -2093,6 +2101,10 @@ t3_base_last_status  = "belum ada scan"
 t3_early_near_miss   = []
 t3_base_near_miss    = []
 t3_status_lock       = threading.Lock()
+
+# Near miss tracking untuk T1d (4h)
+t1d_near_miss        = []
+t1d_near_miss_lock   = threading.Lock()
 
 def thread1c_scan_intrabar_early():
     """
@@ -2350,6 +2362,10 @@ def thread1d_scan_4h():
 
     # Status line untuk heartbeat
     n4h_active = active_deal_count_4h()
+    # Simpan near miss ke global untuk heartbeat T1
+    with t1d_near_miss_lock:
+        t1d_near_miss.clear()
+        t1d_near_miss.extend(near_miss_4h[:5])
     if not candidates:
         status_4h = (f"4h: tidak ada sinyal. ({len(ticker or [])} discan, "
                      f"slot {n4h_active}/{STRAT4H_MAX_DEALS})")
