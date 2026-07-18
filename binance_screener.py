@@ -2481,6 +2481,7 @@ if __name__ == '__main__':
     log(f"  Arm threshold    : 2.0% (ATR<7%) / 3.5% (ATR>=7%)")
     log(f"  Trail ATR>=7%    : 1.5% (dari 2.5% baseline, backtest_arm_sweep)")
     log(f"  Intrabar scan    : {'ON' if INTRABAR_ENABLED else 'OFF'} (entry {int(INTRABAR_ENTRY_PCT*100)}%-{int(INTRABAR_WINDOW_END*100)}% elapsed, scan tiap {INTRABAR_SCAN_INTERVAL}s)")
+    log(f"  Intrabar EARLY   : {'ON' if INTRABAR_EARLY_ENABLED else 'OFF'} (entry {int(INTRABAR_EARLY_ENTRY_PCT*100)}%-{int(INTRABAR_EARLY_END_PCT*100)}% elapsed = menit ke {int(INTRABAR_EARLY_ENTRY_PCT*720)}-{int(INTRABAR_EARLY_END_PCT*720)})")
     log(f"  Progressive trail: {'ON' if PROG_TRAIL_ENABLED else 'OFF'} (thr={PROG_TRAIL_THRESHOLD}% stp={PROG_TRAIL_STEP}% red={PROG_TRAIL_REDUCE}% min={PROG_TRAIL_MIN}%)")
     log(f"  Cooldown internal: {COOLDOWN_SECONDS}s ({COOLDOWN_SECONDS/3600:.0f}j, brkX2) -- cegah kirim sinyal yg pasti ditolak 3Commas (deal hantu)")
     log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
@@ -2538,77 +2539,6 @@ if __name__ == '__main__':
         n_threads = 4
     for t in threads: t.start()
     log(f"{n_threads} thread aktif (T1=screener, T2=monitor, T3=intrabar 12h" + (", T1d=intrabar 4h" if STRAT4H_ENABLED else "") + "). Ctrl+C untuk berhenti.")
-    try:
-        while True: time.sleep(60)
-    except KeyboardInterrupt:
-        log("Dihentikan.")
-        sys.exit(0)
-    log("="*55)
-    log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
-    log("="*55)
-    log(f"  Timeframe        : {TIMEFRAME}")
-    log(f"  Entry syarat     : ST-up, >EMA20, EMA20>EMA50, breakout{BREAKOUT_LOOKBACK}, vol>={VOLUME_MULT}xMA, RSI<{RSI_MAX}" + (f", Stoch<{STOCH_MAX}" if STOCH_MAX is not None else ""))
-    log(f"  Exit             : trailing adaptif (arm +{TRAIL_ARM_PCT}%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)")
-    log(f"  Trailing FAKTOR  : {TRAILING_FAKTOR*100:.0f}% (jarak trailing = tabel ATR% x {TRAILING_FAKTOR})")
-    log(f"  Base order       : ${BASE_ORDER_VOLUME} | Max deal total: {COMMAS_MAX_ACTIVE_DEALS}")
-    log(f"  Slot per strategi: brkX2={MAX_DEALS_BRKX2}, reversal={MAX_DEALS_REVERSAL}")
-    log(f"  Bot 3Commas      : brkX2 #{COMMAS_BOT_ID} | reversal #{COMMAS_BOT_ID_REVERSAL} (SPLIT)")
-    log(f"  Filter choppy    : {'ON' if CHOPPY_FILTER_ENABLED else 'OFF'} (body/range < {CHOPPY_BODY_RANGE_MIN} avg {CHOPPY_LOOKBACK_CANDLES} candle -> exclude)")
-    log(f"  MACD filter      : {'ON' if MACD_FILTER_ENABLED else 'OFF'} (MACD histogram > 0)")
-    log(f"  Arm threshold    : 2.0% (ATR<7%) / 3.5% (ATR>=7%)")
-    log(f"  Trail ATR>=7%    : 1.5% (dari 2.5% baseline, backtest_arm_sweep)")
-
-    log(f"  Intrabar scan    : {'ON' if INTRABAR_ENABLED else 'OFF'} (entry {int(INTRABAR_ENTRY_PCT*100)}%-{int(INTRABAR_WINDOW_END*100)}% elapsed, scan tiap {INTRABAR_SCAN_INTERVAL}s)")
-    log(f"  Intrabar EARLY   : {'ON' if INTRABAR_EARLY_ENABLED else 'OFF'} (entry {int(INTRABAR_EARLY_ENTRY_PCT*100)}%-{int(INTRABAR_EARLY_END_PCT*100)}% elapsed = menit ke {int(INTRABAR_EARLY_ENTRY_PCT*720)}-{int(INTRABAR_EARLY_END_PCT*720)})")
-    log(f"  Progressive trail: {'ON' if PROG_TRAIL_ENABLED else 'OFF'} (thr={PROG_TRAIL_THRESHOLD}% stp={PROG_TRAIL_STEP}% red={PROG_TRAIL_REDUCE}% min={PROG_TRAIL_MIN}%)")
-    log(f"  Cooldown internal: {COOLDOWN_SECONDS}s ({COOLDOWN_SECONDS/3600:.0f}j, brkX2) -- cegah kirim sinyal yg pasti ditolak 3Commas (deal hantu)")
-    log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
-    log(f"  Filter BTC L1&L2 : {'ON' if BTC_FILTER_ENABLED else 'OFF'}")
-    log(f"  Filter HTF 3D    : {'ON' if HTF_FILTER_ENABLED else 'OFF'}"
-        + (f" (price>EMA{HTF_EMA_SLOW} AND MACD>0 di {HTF_TIMEFRAME})" if HTF_FILTER_ENABLED else ""))
-    log(f"  Min vol 24h      : ${MIN_VOLUME_USD:,}")
-    if REVERSAL_ENABLED:
-        log("  " + "-"*51)
-        log(f"  STRATEGI 2 REVERSAL: ON | TF {REVERSAL_TIMEFRAME}")
-        log(f"  Setup: 3 candle merah+turun>=5%, doji(<{int(REVERSAL_DOJI_MAX*100)}% body), 1 HA bull, cross-up EMA20")
-        log(f"  Exit : trailing adaptif (sama brkX2) | add fund: {'ON' if REVERSAL_ADD_FUND else 'OFF'}")
-        log(f"  Hold : maks {REVERSAL_MAX_HOLD_CANDLES} candle 8h")
-        log(f"  Min vol reversal : ${REVERSAL_MIN_VOL_USD:,} (lebih luas dari brkX2 ${MIN_VOLUME_USD:,})")
-    log("="*55)
-
-    load_active_deals()
-    load_last_closed()
-    # Init gating candle: anggap candle tertutup TERAKHIR saat startup "sudah diproses",
-    # supaya restart di tengah TF tidak memicu entry dari candle yg sdh tutup berjam2 lalu
-    # (cegah ulang kasus HEI: deal dibuka dari candle basi stlh restart). Hanya buka di candle BERIKUTNYA.
-    try:
-        import math as _math
-        now_ms = int(time.time()*1000)
-        tf_sec = {'8h':8*3600,'12h':12*3600,'1d':86400,'4h':4*3600,'6h':6*3600}
-        sec12 = tf_sec.get(TIMEFRAME, 12*3600)
-        sec8  = tf_sec.get(REVERSAL_TIMEFRAME, 8*3600)
-        # candle close terakhir = pembulatan ke bawah ke kelipatan TF
-        last_processed_candle_ts = (now_ms // (sec12*1000)) * (sec12*1000)
-        last_rev_candle_ts       = (now_ms // (sec8*1000))  * (sec8*1000)
-        log(f"   Init gating candle: brkX2 ts={last_processed_candle_ts}, reversal ts={last_rev_candle_ts} (buka deal hanya di candle TF berikutnya).")
-    except Exception as e:
-        log(f"   WARN init gating candle gagal: {e}")
-    # Tes telegram + notif startup
-    send_telegram(
-        "Binance Screener AKTIF (Momentum brkX2 (12h))\n"
-        f"Entry: ST-up + >EMA20 + EMA20>EMA50 + breakout{BREAKOUT_LOOKBACK} + vol>={VOLUME_MULT}xMA + RSI<{RSI_MAX}" + (f" + Stoch<{STOCH_MAX}" if STOCH_MAX is not None else "") + "\n"
-        f"Exit : trailing adaptif (arm +{TRAIL_ARM_PCT}%, jarak per ATR%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)\n"
-        f"Base ${BASE_ORDER_VOLUME} | Max deal {COMMAS_MAX_ACTIVE_DEALS} | "
-        f"AddFund {'ON' if ADD_FUND_AUTO else 'OFF'} | BTC filter {'ON' if BTC_FILTER_ENABLED else 'OFF'}\n"
-        f"Evaluasi: candle {TIMEFRAME} TERTUTUP (mode a)"
-    )
-
-    t1 = threading.Thread(target=run_thread1, daemon=True, name="T1-Screener")
-    t2 = threading.Thread(target=run_thread2, daemon=True, name="T2-Monitor")
-    t3 = threading.Thread(target=run_thread3_intrabar, daemon=True, name="T3-Intrabar")
-    t1.start(); t2.start(); t3.start()
-    log("3 thread aktif (T1=screener, T2=monitor, T3=intrabar). Ctrl+C untuk berhenti.")
     try:
         while True: time.sleep(60)
     except KeyboardInterrupt:
