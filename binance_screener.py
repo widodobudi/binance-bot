@@ -931,7 +931,7 @@ def entry_detail(df):
     checks.append((row['st_dir']==1, "Supertrend (belum up)"))
     checks.append((row['close']>row['ema_fast'], f"close>EMA20 (close {row['close']:.4g} vs EMA20 {row['ema_fast']:.4g})"))
     checks.append((row['ema_fast']>row['ema_slow'], f"EMA20>EMA50 ({row['ema_fast']:.4g} vs {row['ema_slow']:.4g})"))
-    checks.append((row['close']>row['hh'], f"breakout10 (close {row['close']:.4g} vs HH {row['hh']:.4g})"))
+    checks.append((row['close']>row['hh'], f"breakout{BREAKOUT_LOOKBACK} (close {row['close']:.4g} vs HH {row['hh']:.4g})"))
     vx = (row['vol']/row['vol_ma']) if row['vol_ma'] else 0
     checks.append((row['vol']>=VOLUME_MULT*row['vol_ma'], f"vol>={VOLUME_MULT}xMA (skrg {vx:.2f}x)"))
     rsi_ok = (not pd.isna(row['rsi'])) and row['rsi']<=RSI_MAX
