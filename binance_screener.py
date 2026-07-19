@@ -195,6 +195,10 @@ FWDTEST_TARGET_TRADES  = 25         # (lama, gabungan) evaluasi FINAL
 FWDTEST_TARGET_BRKX2    = 15        # target close deal brkX2 utk forward-test berhasil
 FWDTEST_TARGET_REVERSAL = 8         # target close deal reversal utk forward-test berhasil
 FWDTEST_TARGET_4H       = 7         # target close deal brkX2-4h utk forward-test berhasil
+# Offset untuk multi-tahap forward-test brkX2:
+# Set ke total deal yang sudah selesai di AKHIR tahap sebelumnya.
+# Tahap 1: 0, Tahap 2: dimulai dari 0 (reset manual), Tahap 3: dimulai dari 15
+FWDTEST_BRKX2_PHASE_OFFSET = 15    # Tahap 2 sudah selesai 15 deal → Tahap 3 mulai dari 0
 
 BTC_CHG_1D_MAX = -3.0
 BTC_EMA20_MULT = 0.98
@@ -476,10 +480,11 @@ def _row_indicators(df_row, vol_ma=None) -> dict:
         'atr_pct':        _f(df_row.get('atr_pct'), '.2f'),
     }
 
-def csv_progress(strategy: str = None):
+def csv_progress(strategy: str = None, offset: int = 0):
     """Baca CSV, hitung trade SELESAI (CLOSED), berapa menang/kalah, total profit%.
     Jika strategy diberikan ('brkX2'/'reversal'), hanya hitung trade strategi itu.
     Baris lama tanpa kolom strategy dianggap 'brkX2' (kompatibilitas).
+    offset: skip N deal pertama (untuk multi-tahap forward-test).
     Return dict atau None kalau CSV belum ada / error."""
     try:
         if not os.path.exists(TRADES_CSV):
@@ -490,6 +495,9 @@ def csv_progress(strategy: str = None):
         closed = [r for r in rows if r.get('status') == 'CLOSED']
         if strategy is not None:
             closed = [r for r in closed if (r.get('strategy') or 'brkX2') == strategy]
+        # Skip deal dari tahap sebelumnya
+        if offset > 0:
+            closed = closed[offset:]
         n = len(closed)
         if n == 0:
             return {'n': 0, 'win': 0, 'loss': 0, 'total_pct': 0.0}
@@ -779,27 +787,15 @@ def score_to_target_usd(score: int) -> int:
     return 6
 
 def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
-    """Buka deal + (kalau skor>=3) add fund selisih dgn delay 15 detik. Return (ok, target_usd, add_usd)."""
-    target = score_to_target_usd(score)
-    add_usd = target - BASE_ORDER_VOLUME   # selisih di atas base $6
+    """Buka deal + simpan add_usd di active_deals untuk dikirim T2 setelah deal confirmed.
+    Return (ok, target_usd, add_usd)."""
+    target  = score_to_target_usd(score)
+    add_usd = target - BASE_ORDER_VOLUME
     ok = send_open_long(symbol, strategy)
     if not ok:
         return False, target, 0
-    if add_usd > 0:
-        # message ke-2 TERPISAH (array multi-instruksi tdk didukung): add fund delay 15 detik
-        send_add_funds(symbol, add_usd, strategy, delay=15)
-        # ── DEAL LOG ADD_FUND ─────────────────────────────────────────────
-        deal_log_write({
-            'timestamp_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
-            'event_type':    'ADD_FUND',
-            'strategy':      strategy,
-            'symbol':        to_display_pair(symbol),
-            'thread':        'sizing',
-            'score':         score,
-            'base_usd':      BASE_ORDER_VOLUME,
-            'add_usd':       add_usd,
-            'total_usd':     target,
-        })
+    # add_usd disimpan ke active_deals, T2 yang akan kirim setelah deal confirmed aktif
+    # (menghindari race condition: add fund ke deal yang cancelled)
     return True, target, add_usd
 
 def send_start_trailing(symbol: str, strategy: str = 'brkX2') -> bool:
@@ -1298,7 +1294,7 @@ def heartbeat_tick(status_line: str):
             tag=" TERCAPAI!" if nn>=tgt else ""
             return f"#{nn}/{tgt} ({wl}, total {p['total_pct']:+.1f}%){tag}"
         prog_all = csv_progress()
-        prog_brk = csv_progress('brkX2')
+        prog_brk = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)
         prog_rev = csv_progress('reversal')
         prog_4h  = csv_progress('brkX2_4h')
         if prog_all is None:
@@ -1601,7 +1597,8 @@ def thread1_scan():
                 'entry_price': entry_price, 'peak': entry_price,
                 'signal_price': signal_price, 'atr_pct': atrp,
                 'opened_candle_ts': int(newest_ts), 'trailing_armed': False,
-                'strategy': 'brkX2', 'score': score, 'target_usd': target_usd
+                'strategy': 'brkX2', 'score': score, 'target_usd': target_usd,
+                'add_usd': add_usd, 'add_fund_sent': False,
             })
             # Simpan indikator saat open untuk perbandingan re-entry berikutnya
             try:
@@ -1795,10 +1792,31 @@ def thread2_monitor():
         with active_deals_lock:
             d = dict(active_deals.get(sym, {}))
         if not d: continue
-        entry = d.get('entry_price',0); 
+        entry = d.get('entry_price',0)
         if entry<=0: continue
         price = get_price_now(sym)
         if price<=0: continue
+
+        # ── KIRIM ADD FUND (sekali, setelah deal confirmed aktif) ─────────
+        add_usd      = d.get('add_usd', 0)
+        add_fund_sent = d.get('add_fund_sent', False)
+        if add_usd > 0 and not add_fund_sent:
+            strat = d.get('strategy', 'brkX2')
+            log(f"[T2] {sym} kirim add fund ${add_usd} (deal confirmed aktif)")
+            send_add_funds(sym, add_usd, strat, delay=0)
+            deal_log_write({
+                'timestamp_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                'event_type':    'ADD_FUND',
+                'strategy':      strat,
+                'symbol':        to_display_pair(sym),
+                'thread':        'T2',
+                'add_usd':       add_usd,
+                'total_usd':     BASE_ORDER_VOLUME + add_usd,
+            })
+            with active_deals_lock:
+                if sym in active_deals:
+                    active_deals[sym]['add_fund_sent'] = True
+            save_active_deals()
 
         # update peak
         peak = max(d.get('peak',entry), price)
@@ -1894,7 +1912,7 @@ def thread2_monitor():
                     tgt = FWDTEST_TARGET_4H
                 else:
                     tgt = FWDTEST_TARGET_BRKX2
-                pstrat = csv_progress(strat)
+                pstrat = csv_progress(strat, offset=FWDTEST_BRKX2_PHASE_OFFSET if strat=='brkX2' else 0)
                 if pstrat and pstrat['n']>0:
                     done_n = pstrat['n']; wl = f"{pstrat['win']}W/{pstrat['loss']}L"
                     status = "TERCAPAI - waktunya evaluasi!" if done_n>=tgt else f"menuju {tgt}"
@@ -2043,6 +2061,7 @@ def thread1c_scan_intrabar():
                 'opened_candle_ts': int(candle_open_ms),
                 'trailing_armed': False,
                 'strategy': 'brkX2', 'score': score, 'target_usd': target_usd,
+                'add_usd': add_usd, 'add_fund_sent': False,
             })
             addfund_txt = f" (+add ${add_usd} delay 15s)" if add_usd > 0 else ""
             send_telegram(
@@ -2218,6 +2237,7 @@ def thread1c_scan_intrabar_early():
                 'opened_candle_ts': int(candle_open_ms),
                 'trailing_armed': False,
                 'strategy': 'brkX2', 'score': score, 'target_usd': target_usd,
+                'add_usd': add_usd, 'add_fund_sent': False,
             })
             addfund_txt = f" (+add ${add_usd} delay 15s)" if add_usd > 0 else ""
             send_telegram(
