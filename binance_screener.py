@@ -70,8 +70,8 @@ SUPERTREND_LENGTH = 10
 SUPERTREND_MULT   = 3.0
 EMA_FAST          = 20
 EMA_SLOW          = 50
-BREAKOUT_LOOKBACK = 10
-VOLUME_MULT       = 1.2
+BREAKOUT_LOOKBACK = 7
+VOLUME_MULT       = 0.8
 MACD_FILTER_ENABLED = True    # True=wajib MACD histogram > 0 saat entry
 
 VOLUME_MA_PERIOD  = 20
@@ -117,7 +117,7 @@ STRAT4H_ST_LENGTH       = 10
 STRAT4H_ST_MULT         = 3.0
 STRAT4H_MACD_FAST       = 12; STRAT4H_MACD_SLOW = 26; STRAT4H_MACD_SIGNAL = 9
 STRAT4H_ATR_MIN_PCT     = 2.0
-STRAT4H_VOLUME_MULT     = 1.5
+STRAT4H_VOLUME_MULT     = 0.4
 STRAT4H_VOLUME_MA       = 20
 STRAT4H_MIN_VOL_USD     = 3_000_000
 # HTF 3D filter untuk 4h: PRICE_EMA50 + MACD + RSI50
@@ -2342,7 +2342,8 @@ def thread1d_scan_4h():
                 if pd.isna(atr) or atr < STRAT4H_ATR_MIN_PCT: fails.append(f"ATR({(f'{atr:.2f}' if atr==atr else 'n/a')}<{STRAT4H_ATR_MIN_PCT}%)")
                 vol_ma = r.get("vol_ma")
                 if pd.isna(vol_ma) or vol_ma <= 0 or r["vol"] < STRAT4H_VOLUME_MULT * vol_ma:
-                    fails.append(f"Vol<{STRAT4H_VOLUME_MULT}xMA")
+                    vol_ratio_now = (r["vol"] / vol_ma) if (vol_ma and vol_ma > 0) else 0
+                    fails.append(f"Vol<{STRAT4H_VOLUME_MULT}xMA (skrg {vol_ratio_now:.2f}x)")
                 if len(fails) <= 1:  # hampir lolos (max 1 syarat gagal)
                     near_miss_4h.append((sym, fails))
                 continue
