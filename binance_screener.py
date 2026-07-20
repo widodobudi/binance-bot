@@ -180,6 +180,12 @@ INTRABAR_EARLY_END_PCT   = 0.10    # 10% elapsed = menit ke 72
 INTRABAR_EARLY_ENABLED   = True
 INTRABAR_EARLY_ENTRY_PCT = 0.05    # 5% elapsed = menit ke 36
 INTRABAR_EARLY_END_PCT   = 0.10    # 10% elapsed = menit ke 72
+# Breakout lookback KHUSUS T3-EARLY: HH7 (bukan HH10)
+# Basis: backtest_early_hh_sweep.py (20/07/2026)
+#   HH7 avg=+9.790% WR=87.9% vs baseline HH10 avg=+9.304% WR=88.0% (delta +0.486%, wf6 OK)
+#   HH5/HH8 juga lebih baik tapi HH7 tertinggi; NO_HH bencana (avg +1.213%, WR 60.3%)
+# Hanya berlaku Lapis 2 T3-EARLY; T1 close candle & T3-baseline tetap HH10
+INTRABAR_EARLY_BREAKOUT_LOOKBACK = 7
 
 # ---- PROGRESSIVE TRAILING ----
 PROG_TRAIL_ENABLED   = True
@@ -861,6 +867,7 @@ def compute_indicators(df):
     df['st_dir']=st[[c for c in st.columns if 'SUPERTd' in c][0]]
     df['atr_pct']=ta.atr(high,low,close,length=14)/close*100
     df['hh']=high.rolling(BREAKOUT_LOOKBACK).max().shift(1)
+    df['hh_early']=high.rolling(INTRABAR_EARLY_BREAKOUT_LOOKBACK).max().shift(1)
     df['vol_ma']=df['vol'].rolling(VOLUME_MA_PERIOD).mean()
     _macd_df=ta.macd(close,fast=12,slow=26,signal=9)
     df['macd_hist']=_macd_df[[c for c in _macd_df.columns if 'MACDh' in c][0]]
@@ -2184,7 +2191,7 @@ def thread1c_scan_intrabar_early():
         if pd.isna(r12.get('st_dir')) or r12.get('st_dir') != 1: continue
         if pd.isna(r12.get('ema_fast')) or pd.isna(r12.get('ema_slow')): continue
         if r12['ema_fast'] <= r12['ema_slow']: continue
-        if pd.isna(r12.get('hh')): continue
+        if pd.isna(r12.get('hh_early')): continue
         if MACD_FILTER_ENABLED:
             mh = r12.get('macd_hist')
             if mh is None or pd.isna(mh) or mh <= 0: continue
@@ -2201,7 +2208,7 @@ def thread1c_scan_intrabar_early():
         vol_projected = vol_so_far / elapsed_pct if elapsed_pct > 0 else vol_so_far
 
         # Cek syarat live
-        if price_now <= float(r12['hh']): continue         # breakout HH10
+        if price_now <= float(r12['hh_early']): continue   # breakout HH7 (T3-EARLY, backtest 20/07)
         if price_now <= float(r12['ema_fast']): continue   # price > EMA20
         if vol_ma12 > 0 and vol_projected < VOLUME_MULT * vol_ma12: continue  # volume
         try:
@@ -2502,7 +2509,7 @@ if __name__ == '__main__':
     log(f"  Arm threshold    : 2.0% (ATR<7%) / 3.5% (ATR>=7%)")
     log(f"  Trail ATR>=7%    : 1.5% (dari 2.5% baseline, backtest_arm_sweep)")
     log(f"  Intrabar scan    : {'ON' if INTRABAR_ENABLED else 'OFF'} (entry {int(INTRABAR_ENTRY_PCT*100)}%-{int(INTRABAR_WINDOW_END*100)}% elapsed, scan tiap {INTRABAR_SCAN_INTERVAL}s)")
-    log(f"  Intrabar EARLY   : {'ON' if INTRABAR_EARLY_ENABLED else 'OFF'} (entry {int(INTRABAR_EARLY_ENTRY_PCT*100)}%-{int(INTRABAR_EARLY_END_PCT*100)}% elapsed = menit ke {int(INTRABAR_EARLY_ENTRY_PCT*720)}-{int(INTRABAR_EARLY_END_PCT*720)})")
+    log(f"  Intrabar EARLY   : {'ON' if INTRABAR_EARLY_ENABLED else 'OFF'} (entry {int(INTRABAR_EARLY_ENTRY_PCT*100)}%-{int(INTRABAR_EARLY_END_PCT*100)}% elapsed = menit ke {int(INTRABAR_EARLY_ENTRY_PCT*720)}-{int(INTRABAR_EARLY_END_PCT*720)}, breakout HH{INTRABAR_EARLY_BREAKOUT_LOOKBACK})")
     log(f"  Progressive trail: {'ON' if PROG_TRAIL_ENABLED else 'OFF'} (thr={PROG_TRAIL_THRESHOLD}% stp={PROG_TRAIL_STEP}% red={PROG_TRAIL_REDUCE}% min={PROG_TRAIL_MIN}%)")
     log(f"  Cooldown internal: {COOLDOWN_SECONDS}s ({COOLDOWN_SECONDS/3600:.0f}j, brkX2) -- cegah kirim sinyal yg pasti ditolak 3Commas (deal hantu)")
     log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
