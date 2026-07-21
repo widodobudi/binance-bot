@@ -2432,7 +2432,7 @@ def thread1d_scan_4h():
             "target_usd":    target_usd,
             "add_usd":       add_usd,
             "opened_ts":     time.time(),
-            "opened_candle_ts": candle_open_ms / 1000,
+            "opened_candle_ts": int(candle_open_ms),   # ms, konsisten dengan brkX2-12h
             "tf":            STRAT4H_TIMEFRAME,
         })
         last_4h_candle_ts[sym] = candle_open_ms
@@ -2455,6 +2455,19 @@ def thread1d_scan_4h():
 
         # Deal log
         _htf = _get_htf_values(sym)
+        # Catat ke trades_forwardtest.csv (wajib agar csv_progress bisa hitung #/7)
+        csv_log_open({
+            'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+            'symbol':         to_display_pair(sym),
+            'signal_price':   f"{signal_price:.6g}",
+            'entry_price':    f"{entry_price:.6g}",
+            'slip_pct':       f"{slip_pct:+.2f}",
+            'atr_pct':        f"{atrp:.2f}",
+            'trail_dist_pct': f"{trailing_dist(atrp)}",
+            'base_usd':       BASE_ORDER_VOLUME,
+            'score':          score,
+            'strategy':       'brkX2_4h',
+        })
         deal_log_write({
             "timestamp_wib":  now_wib().strftime("%Y-%m-%d %H:%M:%S"),
             "event_type":     "OPEN",
