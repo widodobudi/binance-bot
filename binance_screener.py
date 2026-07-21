@@ -169,23 +169,24 @@ INTRABAR_SCAN_INTERVAL = 300
 
 # T3-EARLY: window intrabar tambahan di awal candle (5-10% elapsed = menit ke 36-72)
 # Hasil backtest_intrabar_early (17/07/2026): avg +9.519%, WR 75.7%, tona 12, wf6 OK
-INTRABAR_EARLY_ENABLED   = True
-INTRABAR_EARLY_ENTRY_PCT = 0.05    # 5% elapsed = menit ke 36
-INTRABAR_EARLY_END_PCT   = 0.10    # 10% elapsed = menit ke 72
-
-# T3-EARLY: window intrabar tambahan di awal candle (5-10% elapsed = menit ke 36-72)
-# Hasil backtest_intrabar_early (17/07/2026): avg +9.519%, WR 75.7%, tona 12, wf6 OK
 # vs T3-baseline 60-75%: avg +3.332%, WR 61.7%
 # vs close candle: avg +0.770%, WR 50.4%
 INTRABAR_EARLY_ENABLED   = True
 INTRABAR_EARLY_ENTRY_PCT = 0.05    # 5% elapsed = menit ke 36
 INTRABAR_EARLY_END_PCT   = 0.10    # 10% elapsed = menit ke 72
+INTRABAR_EARLY_SCAN_INTERVAL = 240  # 4 menit → 9x scan dalam window 36 menit
 # Breakout lookback KHUSUS T3-EARLY: HH7 (bukan HH10)
 # Basis: backtest_early_hh_sweep.py (20/07/2026)
 #   HH7 avg=+9.790% WR=87.9% vs baseline HH10 avg=+9.304% WR=88.0% (delta +0.486%, wf6 OK)
 #   HH5/HH8 juga lebih baik tapi HH7 tertinggi; NO_HH bencana (avg +1.213%, WR 60.3%)
 # Hanya berlaku Lapis 2 T3-EARLY; T1 close candle & T3-baseline tetap HH10
 INTRABAR_EARLY_BREAKOUT_LOOKBACK = 7
+
+# T3-REV: intrabar reversal (full candle 8h = 480 menit)
+# Scan syarat reversal dari candle-candle tertutup (c-3..c+1),
+# konfirmasi live: price_now > EMA20 (cross-up intrabar c+2)
+REVERSAL_INTRABAR_ENABLED       = True
+REVERSAL_INTRABAR_SCAN_INTERVAL = 480   # 8 menit → 60x scan per candle 8h
 
 # ---- PROGRESSIVE TRAILING ----
 PROG_TRAIL_ENABLED   = True
@@ -2287,23 +2288,188 @@ def thread1c_scan_intrabar_early():
     return None
 
 def run_thread3_intrabar():
-    """Thread T3: intrabar scan tiap INTRABAR_SCAN_INTERVAL detik.
-    Menjalankan 2 window: T3-early (5-10%) DAN T3-baseline (60-75%).
+    """Thread T3: intrabar scan 12h.
+    - T3-baseline (60-75%): tiap INTRABAR_SCAN_INTERVAL (300s = 5 menit)
+    - T3-early (5-10%)    : tiap INTRABAR_EARLY_SCAN_INTERVAL (240s = 4 menit)
+    Keduanya jalan di thread yang sama dengan timer masing-masing.
     """
+    last_early_scan = 0.0
+    last_base_scan  = 0.0
     while True:
+        now = time.time()
         try:
-            thread1c_scan_intrabar()          # T3-baseline: 60-75%
+            if now - last_base_scan >= INTRABAR_SCAN_INTERVAL:
+                thread1c_scan_intrabar()
+                last_base_scan = time.time()
         except Exception as e:
             log(f"WARN T3 intrabar error: {e}")
         try:
-            thread1c_scan_intrabar_early()    # T3-early: 5-10%
+            if now - last_early_scan >= INTRABAR_EARLY_SCAN_INTERVAL:
+                thread1c_scan_intrabar_early()
+                last_early_scan = time.time()
         except Exception as e:
             log(f"WARN T3-early intrabar error: {e}")
-        time.sleep(INTRABAR_SCAN_INTERVAL)
+        time.sleep(60)   # cek tiap menit, eksekusi per timer masing-masing
 
 # ══════════════════════════════════════════════════════════════════════════════
-# THREAD T1d: SCAN INTRABAR 4h (menit ke 5-10 setelah candle 4h baru open)
+# THREAD T3-REV: SCAN INTRABAR REVERSAL (full candle 8h, tiap 8 menit)
 # ══════════════════════════════════════════════════════════════════════════════
+# Lapis 1: cek syarat reversal dari candle-candle TERTUTUP (c-3..c+1 sudah ada)
+# Lapis 2: konfirmasi live price_now > EMA20 (cross-up intrabar c+2 berjalan)
+
+last_rev_intrabar_candle_ts: dict = {}  # sym -> candle_open_ms yg sudah di-entry intrabar
+
+def thread_rev_intrabar_scan():
+    """Scan reversal intrabar: cek setup dari candle tertutup, konfirmasi harga live."""
+    global last_rev_intrabar_candle_ts
+
+    if not REVERSAL_INTRABAR_ENABLED:
+        return
+    if not REVERSAL_ENABLED:
+        return
+    if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL:
+        return
+    if active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
+        return
+
+    now_ms = int(time.time() * 1000)
+    sec8   = 8 * 3600
+    candle_open_ms = (now_ms // (sec8 * 1000)) * (sec8 * 1000)
+
+    pairs  = get_usdt_pairs()
+    ticker = get_ticker_24h()
+    volmap = {}
+    for t in ticker:
+        try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+        except: pass
+    universe = [p for p in pairs if volmap.get(p, 0) >= REVERSAL_MIN_VOL_USD]
+
+    for sym in universe:
+        with active_deals_lock:
+            if sym in active_deals:
+                continue
+        # Gating: jangan entry 2x di candle 8h yang sama untuk symbol ini
+        if last_rev_intrabar_candle_ts.get(sym) == candle_open_ms:
+            continue
+
+        df = get_ohlcv(sym, interval=REVERSAL_TIMEFRAME, limit=120)
+        if df is None or len(df) < 10:
+            continue
+
+        # Pisahkan candle running vs tertutup; ambil harga live dari candle running
+        running_mask = df['ct'] >= now_ms
+        if running_mask.any():
+            price_now = float(df[running_mask].iloc[-1]['close'])
+            df_closed = df[~running_mask].copy()
+        else:
+            price_now = get_price_now(sym)
+            df_closed = df.copy()
+
+        if len(df_closed) < 8:
+            continue
+
+        try:
+            df_closed = compute_indicators_reversal(df_closed)
+        except Exception:
+            continue
+
+        # ── Lapis 1: setup dari candle tertutup ──────────────────────────────
+        # c+1 = df_closed[-1], c0 = df_closed[-2], c-1..c-3 = df_closed[-3..-5]
+        n = len(df_closed)
+        im3, im2, im1 = n-5, n-4, n-3
+        i0  = n - 2
+        i1  = n - 1
+
+        c0 = df_closed.iloc[i0]
+        if any(pd.isna(c0.get(x, float('nan'))) for x in ['ema_fast', 'ema_slow', 'body_ratio']):
+            continue
+        if is_choppy(df_closed):
+            continue
+
+        # Syarat 1: 3 candle merah + turun >= 5%
+        if not all(df_closed.iloc[idx]['close'] < df_closed.iloc[idx]['open']
+                   for idx in (im3, im2, im1)):
+            continue
+        open_c3  = float(df_closed.iloc[im3]['open'])
+        close_c1 = float(df_closed.iloc[im1]['close'])
+        if open_c3 <= 0 or (close_c1 / open_c3 - 1) * 100 > -5.0:
+            continue
+
+        # Syarat 2: c0 doji + di bawah EMA20 & EMA50
+        if not (c0['close'] < c0['ema_fast'] and c0['close'] < c0['ema_slow']):
+            continue
+        if not (c0['body_ratio'] < REVERSAL_DOJI_MAX):
+            continue
+
+        # Syarat 3: c+1 HA bullish
+        if not bool(df_closed['ha_bull'].iloc[i1]):
+            continue
+
+        # ── Lapis 2: konfirmasi harga live (c+2 sedang berjalan) ─────────────
+        ema20_now = float(df_closed['ema_fast'].iloc[i1])
+        if price_now <= 0 or price_now <= ema20_now:
+            continue   # belum cross-up EMA20
+
+        # ── LOLOS → OPEN DEAL ─────────────────────────────────────────────────
+        signal_price = float(df_closed['close'].iloc[i1])
+        atrp = float(df_closed['atr_pct'].iloc[i1]) if not pd.isna(df_closed['atr_pct'].iloc[i1]) else 3.0
+
+        log(f"[T3-REV] SINYAL REVERSAL INTRABAR: {sym} price_now={price_now:.6g} "
+            f"EMA20={ema20_now:.6g} atr%={atrp:.2f}")
+
+        if send_open_long(sym, 'reversal'):
+            entry_price = get_price_now(sym)
+            if entry_price <= 0:
+                entry_price = price_now
+            slip_pct = (entry_price / signal_price - 1) * 100 if signal_price > 0 else 0.0
+
+            add_to_active_deals(sym, {
+                'entry_price':      entry_price,
+                'peak':             entry_price,
+                'signal_price':     signal_price,
+                'atr_pct':          atrp,
+                'opened_candle_ts': int(candle_open_ms),
+                'trailing_armed':   False,
+                'strategy':         'reversal',
+            })
+            send_telegram(
+                f"OPEN LONG INTRABAR (Reversal Doji+HA (8h))\n"
+                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                f"Pair  : {to_display_pair(sym)}\n"
+                f"Harga entry (pasar): {entry_price:.6g}\n"
+                f"Harga sinyal (c+1 close): {signal_price:.6g}\n"
+                f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"Base  : ${BASE_ORDER_VOLUME}\n"
+                f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} "
+                f"| total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+            )
+            csv_log_open({
+                'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                'symbol':         to_display_pair(sym),
+                'signal_price':   f"{signal_price:.6g}",
+                'entry_price':    f"{entry_price:.6g}",
+                'slip_pct':       f"{slip_pct:+.2f}",
+                'atr_pct':        f"{atrp:.2f}",
+                'trail_dist_pct': f"{trailing_dist(atrp)}",
+                'base_usd':       BASE_ORDER_VOLUME,
+                'score':          0,
+                'strategy':       'reversal',
+            })
+            last_rev_intrabar_candle_ts[sym] = candle_open_ms
+
+            if (deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL
+                    or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS):
+                break
+
+def run_thread_rev_intrabar():
+    """Thread T3-REV: scan reversal intrabar tiap 8 menit (REVERSAL_INTRABAR_SCAN_INTERVAL)."""
+    while True:
+        try:
+            thread_rev_intrabar_scan()
+        except Exception as e:
+            log(f"WARN T3-REV reversal intrabar error: {e}")
+        time.sleep(REVERSAL_INTRABAR_SCAN_INTERVAL)
 last_4h_candle_ts = {}  # sym -> ts candle 4h yang sudah dientry, cegah double entry
 
 def thread1d_scan_4h():
@@ -2522,7 +2688,8 @@ if __name__ == '__main__':
     log(f"  Arm threshold    : 2.0% (ATR<7%) / 3.5% (ATR>=7%)")
     log(f"  Trail ATR>=7%    : 1.5% (dari 2.5% baseline, backtest_arm_sweep)")
     log(f"  Intrabar scan    : {'ON' if INTRABAR_ENABLED else 'OFF'} (entry {int(INTRABAR_ENTRY_PCT*100)}%-{int(INTRABAR_WINDOW_END*100)}% elapsed, scan tiap {INTRABAR_SCAN_INTERVAL}s)")
-    log(f"  Intrabar EARLY   : {'ON' if INTRABAR_EARLY_ENABLED else 'OFF'} (entry {int(INTRABAR_EARLY_ENTRY_PCT*100)}%-{int(INTRABAR_EARLY_END_PCT*100)}% elapsed = menit ke {int(INTRABAR_EARLY_ENTRY_PCT*720)}-{int(INTRABAR_EARLY_END_PCT*720)}, breakout HH{INTRABAR_EARLY_BREAKOUT_LOOKBACK})")
+    log(f"  Intrabar EARLY   : {'ON' if INTRABAR_EARLY_ENABLED else 'OFF'} (entry {int(INTRABAR_EARLY_ENTRY_PCT*100)}%-{int(INTRABAR_EARLY_END_PCT*100)}% elapsed = menit ke {int(INTRABAR_EARLY_ENTRY_PCT*720)}-{int(INTRABAR_EARLY_END_PCT*720)}, breakout HH{INTRABAR_EARLY_BREAKOUT_LOOKBACK}, scan tiap {INTRABAR_EARLY_SCAN_INTERVAL//60}m)")
+    log(f"  Reversal intrabar: {'ON' if REVERSAL_INTRABAR_ENABLED else 'OFF'} (full candle 8h, scan tiap {REVERSAL_INTRABAR_SCAN_INTERVAL//60}m)")
     log(f"  Progressive trail: {'ON' if PROG_TRAIL_ENABLED else 'OFF'} (thr={PROG_TRAIL_THRESHOLD}% stp={PROG_TRAIL_STEP}% red={PROG_TRAIL_REDUCE}% min={PROG_TRAIL_MIN}%)")
     log(f"  Cooldown internal: {COOLDOWN_SECONDS}s ({COOLDOWN_SECONDS/3600:.0f}j, brkX2) -- cegah kirim sinyal yg pasti ditolak 3Commas (deal hantu)")
     log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
@@ -2569,17 +2736,18 @@ if __name__ == '__main__':
         f"Evaluasi: candle {TIMEFRAME} TERTUTUP (mode a)"
     )
 
-    n_threads = 3
+    n_threads = 4
     t1 = threading.Thread(target=run_thread1, daemon=True, name="T1-Screener")
     t2 = threading.Thread(target=run_thread2, daemon=True, name="T2-Monitor")
     t3 = threading.Thread(target=run_thread3_intrabar, daemon=True, name="T3-Intrabar")
-    threads = [t1, t2, t3]
+    t3r = threading.Thread(target=run_thread_rev_intrabar, daemon=True, name="T3-REV")
+    threads = [t1, t2, t3, t3r]
     if STRAT4H_ENABLED:
         t4 = threading.Thread(target=run_thread1d_4h, daemon=True, name="T1d-4h")
         threads.append(t4)
-        n_threads = 4
+        n_threads = 5
     for t in threads: t.start()
-    log(f"{n_threads} thread aktif (T1=screener, T2=monitor, T3=intrabar 12h" + (", T1d=intrabar 4h" if STRAT4H_ENABLED else "") + "). Ctrl+C untuk berhenti.")
+    log(f"{n_threads} thread aktif (T1=screener, T2=monitor, T3=intrabar 12h, T3-REV=reversal intrabar" + (", T1d=intrabar 4h" if STRAT4H_ENABLED else "") + "). Ctrl+C untuk berhenti.")
     try:
         while True: time.sleep(60)
     except KeyboardInterrupt:
