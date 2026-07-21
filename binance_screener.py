@@ -2336,7 +2336,7 @@ def thread_rev_intrabar_scan():
     sec8   = 8 * 3600
     candle_open_ms = (now_ms // (sec8 * 1000)) * (sec8 * 1000)
 
-    pairs  = get_usdt_pairs()
+    pairs  = get_usdt_spot_pairs()
     ticker = get_ticker_24h()
     volmap = {}
     for t in ticker:
