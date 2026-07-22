@@ -71,7 +71,7 @@ SUPERTREND_MULT   = 3.0
 EMA_FAST          = 20
 EMA_SLOW          = 50
 BREAKOUT_LOOKBACK = 7
-VOLUME_MULT       = 0.8
+VOLUME_MULT       = 0.6   # turun dari 0.8 → backtest_vol_lower_sweep (22/07/2026): delta avg -0.042% (dalam noise), wf6 OK
 MACD_FILTER_ENABLED = True    # True=wajib MACD histogram > 0 saat entry
 
 VOLUME_MA_PERIOD  = 20
