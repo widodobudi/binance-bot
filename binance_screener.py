@@ -93,7 +93,7 @@ MAX_HOLD_DAYS     = 5
 _TF_SECONDS = {"1d":86400, "12h":43200, "8h":28800, "6h":21600, "4h":14400, "1h":3600}
 SECONDS_PER_CANDLE = _TF_SECONDS.get(TIMEFRAME, 86400)
 
-BASE_ORDER_VOLUME       = 6
+BASE_ORDER_VOLUME       = 50   # diubah dari $6 → $50 (22/07/2026, saldo $131.92, konservatif 1 deal)
 COMMAS_MAX_ACTIVE_DEALS = 4      # total kedua bot (brkX2 2 + reversal 2). Tiap bot 3Commas di-set max 2.
 MAX_DEALS_BRKX2         = 2      # slot brkX2 (bot existing) — set Max active trades=2 di 3Commas
 MAX_DEALS_REVERSAL      = 2      # slot reversal (bot 16921019) — set Max active trades=2 di 3Commas
