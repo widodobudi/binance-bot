@@ -784,14 +784,15 @@ def signal_score(row) -> int:
     return sc
 
 def score_to_target_usd(score: int) -> int:
-    """tangga_aggr cap $18, 3 tingkat kelipatan $6 (add fund 3Commas minimum $6).
-    Skor 0-1 -> $6 (tanpa add fund), 2-3 -> $12 (add $6), 4-5 -> $18 (add $12).
-    Basis: backtest_sizing_v2 (155 trade) — aggr$18 ROI 1.44% vs flat 0.66%, walk-forward kalah flat 1/6.
-    Add fund minimum $6 (batas terkecil 3Commas/Binance) -> target melompat $6/$12/$18, bukan gradasi halus.
-    (Sebelumnya skema B: <3->$6, 3-4->$9, >=5->$12.)"""
-    if score >= 4: return 18
-    if score >= 2: return 12
-    return 6
+    """Sizing berdasarkan skor sinyal, disesuaikan dengan saldo $131.92 (22/07/2026).
+    Base order $50 (BASE_ORDER_VOLUME).
+    Skor 0-1 -> $50  (tanpa add fund, sisa saldo $81.92)
+    Skor 2-3 -> $100 (add $50, sisa saldo $31.92)
+    Skor 4-5 -> $120 (add $70, sisa saldo $11.92)
+    Basis: backtest_sizing_v2 (155 trade) — aggr lebih tinggi ROI lebih baik."""
+    if score >= 4: return 120
+    if score >= 2: return 100
+    return 50
 
 def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
     """Buka deal + simpan add_usd di active_deals untuk dikirim T2 setelah deal confirmed.
