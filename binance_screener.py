@@ -32,7 +32,7 @@ FILTER BTC (Lapis1&2): OFF (toggle). ADD FUND otomatis: OFF.
 =============================================================
 """
 import requests, pandas as pd, pandas_ta as ta, numpy as np
-import time, sys, json, threading, os, csv
+import time, sys, json, threading, os, csv, pickle
 from datetime import datetime, timedelta, timezone
 import requests as _requests_mod
 
