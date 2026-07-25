@@ -129,7 +129,19 @@ STRAT4H_HTF_LIMIT       = 120
 ADD_FUND_AUTO           = False
 BTC_FILTER_ENABLED      = False
 
-# ---- HTF 3D FILTER (backtest_combined.py, 15/07/2026) ----
+# ---- PERFORMANCE FILTER (backtest_age_perf_filter.py, 25/07/2026) ----
+# PERF_ONLY lebih baik dari baseline: avg +2.711% vs +2.538%, worst -21.15% vs -25.79%, wf6 OK
+# Filter usia saja lebih buruk; usia+perf wf6 HATI-HATI → deploy PERF_ONLY saja
+PERF_FILTER_ENABLED = True
+PERF_SCORE_MIN      = 1.0    # Grade >= B
+PERF_TF_CONFIG      = [      # (label, hari_ke_belakang, weight) — identik Pine Script
+    ("1D",   1,   0.15),
+    ("1W",   7,   0.15),
+    ("1M",   30,  0.30),
+    ("3M",   90,  0.30),
+    ("6M",   180, 0.30),
+    ("1Y",   365, 0.45),
+]
 # Entry 12h hanya boleh kalau di TF 3D: harga > EMA50 DAN MACD hist > 0
 # Hasil backtest: avg +2.600% vs baseline +0.770% (+1.830%), WR 61.3%, tona turun 52%
 HTF_FILTER_ENABLED  = True
@@ -908,7 +920,60 @@ def is_choppy(df) -> bool:
     except Exception:
         return False  # error -> jangan exclude
 
-def check_entry(df) -> bool:
+# ── Performance filter (Grade >= B, score >= 1.0) ────────────────────────────
+_perf_cache_1d: dict = {}   # sym -> (ts_arr, close_arr) — di-load lazy per symbol
+
+def _get_perf_data_1d(sym: str):
+    """Load data 1D untuk symbol dari _cache_htf_1D. Return (ts_arr, close_arr) atau None."""
+    if sym in _perf_cache_1d:
+        return _perf_cache_1d[sym]
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    cache_dir  = os.path.join(script_dir, "_cache_htf_1D")
+    if not os.path.isdir(cache_dir):
+        _perf_cache_1d[sym] = None; return None
+    # Cari file dengan candle terbanyak
+    best = None; best_len = 0
+    for fname in os.listdir(cache_dir):
+        if not fname.startswith(sym) or not fname.endswith(".pkl"): continue
+        try:
+            df = pickle.load(open(os.path.join(cache_dir, fname), "rb"))
+            if df is not None and len(df) > best_len and "ts" in df.columns:
+                best = df; best_len = len(df)
+        except: pass
+    if best is None or best_len < 30:
+        _perf_cache_1d[sym] = None; return None
+    ts_arr    = best["ts"].values.astype(np.int64)
+    close_arr = best["close"].values.astype(float)
+    result    = (ts_arr, close_arr)
+    _perf_cache_1d[sym] = result
+    return result
+
+def calc_perf_score(sym: str, query_ts_ms: int) -> float:
+    """
+    Hitung performance score untuk symbol pada timestamp query_ts_ms.
+    Return float score, atau nan kalau data tidak ada.
+    Score >= 1.0 = Grade B (lolos filter).
+    """
+    if not PERF_FILTER_ENABLED:
+        return 999.0   # filter off → selalu lolos
+    data = _get_perf_data_1d(sym)
+    if data is None:
+        return float('nan')
+    ts_arr, close_arr = data
+    # Ambil close terdekat sebelum query_ts_ms
+    idx_now = int(np.searchsorted(ts_arr, query_ts_ms, side='right')) - 1
+    if idx_now < 0: return float('nan')
+    current = float(close_arr[idx_now])
+    if current <= 0: return float('nan')
+    score = 0.0
+    for _label, days_back, weight in PERF_TF_CONFIG:
+        past_ts  = query_ts_ms - days_back * 86400 * 1000
+        idx_past = int(np.searchsorted(ts_arr, past_ts, side='right')) - 1
+        if idx_past < 0: continue
+        past = float(close_arr[idx_past])
+        if past <= 0: continue
+        score += weight if current >= past else -weight
+    return score
     """Evaluasi pada candle TERTUTUP terakhir (mode a)."""
     if is_choppy(df): return False
     row = df.iloc[-1]
@@ -1500,7 +1565,7 @@ def thread1_scan():
         newest_ts = max(newest_ts, int(df['ct'].iloc[-1]))
         all_dfs[sym] = df   # simpan untuk perbandingan indikator re-entry
         if check_entry(df):
-            # HTF 3D filter: cek kondisi trend 3D sebelum entry
+            # HTF 3D filter
             if HTF_FILTER_ENABLED and not htf_filter_ok(sym):
                 log(f"  [T1] {sym} lolos 12h tapi DITOLAK HTF 3D filter (price<EMA50 atau MACD<0)")
                 det = entry_detail(df)
@@ -1508,6 +1573,16 @@ def thread1_scan():
                     n_pass, total, fails = det
                     near_miss.append((n_pass, sym, fails + ["HTF 3D: bearish"]))
             else:
+                # Performance filter
+                if PERF_FILTER_ENABLED:
+                    candle_ts = int(df['ct'].iloc[-1])
+                    pscore = calc_perf_score(sym, candle_ts)
+                    if pd.isna(pscore) or pscore < PERF_SCORE_MIN:
+                        det = entry_detail(df)
+                        if det is not None:
+                            n_pass, total, fails = det
+                            near_miss.append((n_pass, sym, fails + [f"Perf Grade<B (score {pscore:.2f})"]))
+                        continue
                 sc = signal_score(df.iloc[-1])
                 candidates.append((sym, float(df['close'].iloc[-1]), float(df['atr_pct'].iloc[-1]), sc))
         else:
@@ -1723,6 +1798,16 @@ def thread1b_scan_reversal():
             if len(df) < 60: continue
         df = compute_indicators_reversal(df)
         if check_entry_reversal(df):
+            # Performance filter
+            if PERF_FILTER_ENABLED:
+                candle_ts = int(df['ct'].iloc[-1])
+                pscore = calc_perf_score(sym, candle_ts)
+                if pd.isna(pscore) or pscore < PERF_SCORE_MIN:
+                    det = entry_detail_reversal(df)
+                    if det is not None:
+                        n_pass, total, fails = det
+                        near_miss.append((n_pass, sym, fails + [f"Perf Grade<B (score {pscore:.2f})"]))
+                    continue
             atrp = float(df['atr_pct'].iloc[-1]) if not pd.isna(df['atr_pct'].iloc[-1]) else 3.0
             candidates.append((sym, float(df['close'].iloc[-1]), atrp, int(df['ct'].iloc[-1])))
         else:
@@ -2548,6 +2633,14 @@ def thread1d_scan_4h():
                 near_miss_4h.append((sym, ["HTF 3D: bearish"]))
                 continue
 
+            # Performance filter
+            if PERF_FILTER_ENABLED:
+                candle_ts = int(df['ct'].iloc[-1])
+                pscore = calc_perf_score(sym, candle_ts)
+                if pd.isna(pscore) or pscore < PERF_SCORE_MIN:
+                    near_miss_4h.append((sym, [f"Perf Grade<B (score {pscore:.2f})"]))
+                    continue
+
             r    = df.iloc[-1]
             atrp = float(r["atr_pct"]) if not pd.isna(r["atr_pct"]) else 3.0
             sc   = 1
@@ -2691,6 +2784,7 @@ if __name__ == '__main__':
     log(f"  Intrabar scan    : {'ON' if INTRABAR_ENABLED else 'OFF'} (entry {int(INTRABAR_ENTRY_PCT*100)}%-{int(INTRABAR_WINDOW_END*100)}% elapsed, scan tiap {INTRABAR_SCAN_INTERVAL}s)")
     log(f"  Intrabar EARLY   : {'ON' if INTRABAR_EARLY_ENABLED else 'OFF'} (entry {int(INTRABAR_EARLY_ENTRY_PCT*100)}%-{int(INTRABAR_EARLY_END_PCT*100)}% elapsed = menit ke {int(INTRABAR_EARLY_ENTRY_PCT*720)}-{int(INTRABAR_EARLY_END_PCT*720)}, breakout HH{INTRABAR_EARLY_BREAKOUT_LOOKBACK}, scan tiap {INTRABAR_EARLY_SCAN_INTERVAL//60}m)")
     log(f"  Reversal intrabar: {'ON' if REVERSAL_INTRABAR_ENABLED else 'OFF'} (full candle 8h, scan tiap {REVERSAL_INTRABAR_SCAN_INTERVAL//60}m)")
+    log(f"  Perf filter      : {'ON' if PERF_FILTER_ENABLED else 'OFF'} (Grade>=B, score>={PERF_SCORE_MIN}, TF 1D/1W/1M/3M/6M/1Y)")
     log(f"  Progressive trail: {'ON' if PROG_TRAIL_ENABLED else 'OFF'} (thr={PROG_TRAIL_THRESHOLD}% stp={PROG_TRAIL_STEP}% red={PROG_TRAIL_REDUCE}% min={PROG_TRAIL_MIN}%)")
     log(f"  Cooldown internal: {COOLDOWN_SECONDS}s ({COOLDOWN_SECONDS/3600:.0f}j, brkX2) -- cegah kirim sinyal yg pasti ditolak 3Commas (deal hantu)")
     log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
