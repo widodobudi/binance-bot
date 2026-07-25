@@ -147,15 +147,18 @@ STRAT_CROSSEMA_VOLUME_MA    = 20
 STRAT_CROSSEMA_MIN_VOL_USD  = 3_000_000
 # PERF_ONLY lebih baik dari baseline: avg +2.711% vs +2.538%, worst -21.15% vs -25.79%, wf6 OK
 # Filter usia saja lebih buruk; usia+perf wf6 HATI-HATI → deploy PERF_ONLY saja
+# Update 25/07/2026: backtest_perf_weight_sweep → EQUAL_thr0.5 terbaik
+#   avg +3.052% WR 77.7% n=1316 vs PINE_thr1.0 avg +2.711% WR 75.5% n=955
+#   Semua TF bobot sama (1/6), threshold 0.5 = cukup 3 dari 6 TF positif
 PERF_FILTER_ENABLED = True
-PERF_SCORE_MIN      = 1.0    # Grade >= B
-PERF_TF_CONFIG      = [      # (label, hari_ke_belakang, weight) — identik Pine Script
-    ("1D",   1,   0.15),
-    ("1W",   7,   0.15),
-    ("1M",   30,  0.30),
-    ("3M",   90,  0.30),
-    ("6M",   180, 0.30),
-    ("1Y",   365, 0.45),
+PERF_SCORE_MIN      = 0.5    # EQUAL_thr0.5: cukup 3 dari 6 TF positif
+PERF_TF_CONFIG      = [      # (label, hari_ke_belakang, weight) — equal weight
+    ("1D",   1,   1/6),
+    ("1W",   7,   1/6),
+    ("1M",   30,  1/6),
+    ("3M",   90,  1/6),
+    ("6M",   180, 1/6),
+    ("1Y",   365, 1/6),
 ]
 # Entry 12h hanya boleh kalau di TF 3D: harga > EMA50 DAN MACD hist > 0
 # Hasil backtest: avg +2.600% vs baseline +0.770% (+1.830%), WR 61.3%, tona turun 52%
