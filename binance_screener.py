@@ -2362,9 +2362,11 @@ def run_thread1():
             # Cek apakah sudah waktunya kirim heartbeat brkX2-12h
             if status is not None:
                 heartbeat_tick(status)
-            # Reversal heartbeat
+            # Reversal heartbeat — skip jika baru saja dikirim dari startup (dalam 60 detik)
             if status_rev is not None:
-                try: heartbeat_rev_tick(status_rev)
+                try:
+                    if time.time() - heartbeat_rev_last_sent > 60:
+                        heartbeat_rev_tick(status_rev)
                 except Exception as e: log(f"WARN T1b heartbeat error: {e}")
         except Exception as e: log(f"WARN T1 error: {e}")
         time.sleep(T1_SCAN_INTERVAL_SEC)
