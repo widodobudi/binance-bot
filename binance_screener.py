@@ -2975,15 +2975,11 @@ def thread1d_scan_4h():
         status_4h = (f"4h: tidak ada sinyal. ({len(ticker or [])} discan, "
                      f"slot {n4h_active}/{STRAT4H_MAX_DEALS})")
         heartbeat_4h_tick(status_4h, near_miss_4h)
-        heartbeat_crossema_tick()
-        heartbeat_general_tick()
         log(f"[T1d] Tidak ada kandidat 4h.")
         return
 
     status_4h = f"4h: {len(candidates)} kandidat lolos. Slot {n4h_active}/{STRAT4H_MAX_DEALS}"
     heartbeat_4h_tick(status_4h, near_miss_4h)
-    heartbeat_crossema_tick()
-    heartbeat_general_tick()
 
     log(f"[T1d] {len(candidates)} kandidat 4h. Buka deal terbaik...")
     candidates.sort(key=lambda x: x[3], reverse=True)
