@@ -1505,7 +1505,7 @@ def heartbeat_rev_tick(status_line: str):
 
 
 def heartbeat_4h_tick(status_line: str, near_miss_4h: list = None):
-    """Heartbeat KHUSUS strategi 4h, tiap 6 jam."""
+    """Heartbeat KHUSUS brkX2-4h, dikirim saat START dan tiap jam ganjil WIB."""
     global heartbeat_4h_window_start, heartbeat_4h_last_sent
     if not STRAT4H_ENABLED: return
     now    = time.time()
@@ -1518,13 +1518,13 @@ def heartbeat_4h_tick(status_line: str, near_miss_4h: list = None):
 
     if first_time:
         start_str = now_dt.strftime('%d/%m %H:%M')
-        header = (f"HEARTBEAT — brkX2-4h & CrossEMA\n"
+        header = (f"HEARTBEAT — START — brkX2-4h\n"
                   f"Mulai memantau: {start_str} WIB\n"
-                  f"Notif berikutnya tiap 3 jam.")
+                  f"Notif berikutnya: {next_scheduled_heartbeat_wib().strftime('%d/%m %H:%M')} WIB")
     else:
         start_str = heartbeat_4h_window_start.strftime('%d/%m %H:%M')
         end_str   = now_dt.strftime('%d/%m %H:%M')
-        header = (f"HEARTBEAT 3-jam — brkX2-4h & CrossEMA\n"
+        header = (f"HEARTBEAT — brkX2-4h\n"
                   f"Periode: {start_str} -> {end_str} WIB")
 
     prev = csv_progress('brkX2_4h')
@@ -1576,7 +1576,7 @@ heartbeat_cx_last_sent:    float = 0.0
 heartbeat_cx_window_start         = None
 
 def heartbeat_crossema_tick():
-    """Heartbeat KHUSUS strategi CrossEMA, tiap 3 jam."""
+    """Heartbeat KHUSUS CrossEMA-4h, dikirim saat START dan tiap jam ganjil WIB."""
     global heartbeat_cx_last_sent, heartbeat_cx_window_start
     if not STRAT_CROSSEMA_ENABLED: return
     now    = time.time()
@@ -1584,18 +1584,18 @@ def heartbeat_crossema_tick():
     if heartbeat_cx_window_start is None:
         heartbeat_cx_window_start = now_dt
     first_time = (heartbeat_cx_last_sent == 0.0)
-    if not (first_time or (now - heartbeat_cx_last_sent >= HEARTBEAT_INTERVAL_SEC)):
+    if not (first_time or should_send_heartbeat(heartbeat_cx_last_sent)):
         return
 
     if first_time:
         start_str = now_dt.strftime('%d/%m %H:%M')
-        header = (f"HEARTBEAT — CrossEMA (4h)\n"
+        header = (f"HEARTBEAT — START — CrossEMA-4h\n"
                   f"Mulai memantau: {start_str} WIB\n"
-                  f"Notif berikutnya tiap 3 jam.")
+                  f"Notif berikutnya: {next_scheduled_heartbeat_wib().strftime('%d/%m %H:%M')} WIB")
     else:
         start_str = heartbeat_cx_window_start.strftime('%d/%m %H:%M')
         end_str   = now_dt.strftime('%d/%m %H:%M')
-        header = (f"HEARTBEAT 3-jam — CrossEMA (4h)\n"
+        header = (f"HEARTBEAT — CrossEMA-4h\n"
                   f"Periode: {start_str} -> {end_str} WIB")
 
     prev_cx = csv_progress('brkX2_crossema')
@@ -2250,7 +2250,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
     # Header
     if first_time:
         start_str = now_dt.strftime('%d/%m %H:%M')
-        header = f"HEARTBEAT — START\nMulai memantau: {start_str} WIB\nNotif berikutnya tiap 6 jam."
+        header = f"HEARTBEAT — START\nMulai memantau: {start_str} WIB\nNotif berikutnya: {next_scheduled_heartbeat_wib().strftime('%d/%m %H:%M')} WIB"
     else:
         start_str = heartbeat_window_start.strftime('%d/%m %H:%M')
         end_str   = now_dt.strftime('%d/%m %H:%M')
@@ -2359,17 +2359,13 @@ def run_thread1():
                         near_4h = t1d_near_miss[:]
             except Exception as e: log(f"WARN T1 heartbeat 4h error: {e}")
 
-            # Cek apakah sudah waktunya kirim heartbeat (berdasarkan timer brkX2)
-            now = time.time()
-            should_send = (status is not None) and \
-                (heartbeat_last_sent == 0.0 or
-                 now - heartbeat_last_sent >= HEARTBEAT_INTERVAL_SEC)
-
-            if should_send:
-                # Kirim SATU heartbeat gabungan
-                _send_unified_heartbeat(status, status_rev, status_4h, near_4h)
-            # Jika tidak waktunya heartbeat tapi ada deal open (status=None),
-            # rev/4h juga tidak perlu kirim
+            # Cek apakah sudah waktunya kirim heartbeat brkX2-12h
+            if status is not None:
+                heartbeat_tick(status)
+            # Reversal heartbeat
+            if status_rev is not None:
+                try: heartbeat_rev_tick(status_rev)
+                except Exception as e: log(f"WARN T1b heartbeat error: {e}")
         except Exception as e: log(f"WARN T1 error: {e}")
         time.sleep(T1_SCAN_INTERVAL_SEC)
 
