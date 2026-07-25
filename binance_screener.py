@@ -3082,6 +3082,20 @@ def run_thread1d_4h():
         try:
             if STRAT4H_ENABLED:
                 thread1d_scan_4h()
+            # Heartbeat 4h/CrossEMA/General dipanggil di sini agar tetap terkirim
+            # bahkan saat di luar window intrabar (thread1d_scan_4h return awal).
+            # Fungsi heartbeat_*_tick sudah punya guard internal (cek interval),
+            # jadi aman dipanggil tiap loop — hanya kirim saat waktunya tiba.
+            try:
+                n4h_active = active_deal_count_4h()
+                status_4h = (f"4h: memantau sinyal. Slot {n4h_active}/{STRAT4H_MAX_DEALS}")
+                with t1d_near_miss_lock:
+                    near_4h = t1d_near_miss[:]
+                heartbeat_4h_tick(status_4h, near_4h)
+                heartbeat_crossema_tick()
+                heartbeat_general_tick()
+            except Exception as e:
+                log(f"WARN T1d heartbeat periodik: {e}")
         except Exception as e:
             log(f"WARN T1d 4h error: {e}")
         time.sleep(STRAT4H_SCAN_INTERVAL)
