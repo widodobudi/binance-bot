@@ -1701,6 +1701,20 @@ def heartbeat_general_tick():
     log(f"[HB-GEN] Heartbeat General terkirim")
     heartbeat_gen_last_sent    = now
     heartbeat_gen_window_start = now_dt
+
+def format_near_miss(near_miss, total, max_show=5):
+    """Format daftar kandidat terdekat utk heartbeat."""
+    if not near_miss:
+        return "Kandidat terdekat: tidak ada (semua pair masih jauh dari lolos)."
+    near_miss.sort(key=lambda x: x[0], reverse=True)
+    lines = ["Kandidat terdekat:"]
+    for n_pass, sym, fails in near_miss[:max_show]:
+        belum = "; ".join(fails) if fails else "-"
+        lines.append(f"• {to_display_pair(sym)}: lolos {n_pass}/{total} — belum: {belum}")
+    sisa = len(near_miss) - max_show
+    if sisa > 0:
+        lines.append(f"(+ {sisa} pair lain lolos >={near_miss[max_show-1][0] if max_show<=len(near_miss) else 5}/{total})")
+    return "\n".join(lines)
     """Format daftar kandidat terdekat utk heartbeat: urut n_pass turun, tampilkan max 5, sisanya diringkas.
     Tiap baris: • PAIR: lolos N/total — belum: syarat1, syarat2"""
     if not near_miss:
@@ -3306,6 +3320,20 @@ if __name__ == '__main__':
         + (", T1d=intrabar 4h" if STRAT4H_ENABLED else "")
         + (", T-CrossEMA=strategi#4" if STRAT_CROSSEMA_ENABLED else "")
         + "). Ctrl+C untuk berhenti.")
+    # Kirim semua heartbeat START langsung saat deploy/restart
+    # (tidak tunggu jam ganjil berikutnya)
+    time.sleep(3)  # beri waktu thread inisialisasi
+    try: heartbeat_rev_tick("REVERSAL: memulai scan...")
+    except Exception as e: log(f"WARN heartbeat rev START: {e}")
+    time.sleep(1)
+    try: heartbeat_4h_tick("4h: memulai scan...", [])
+    except Exception as e: log(f"WARN heartbeat 4h START: {e}")
+    time.sleep(1)
+    try: heartbeat_crossema_tick()
+    except Exception as e: log(f"WARN heartbeat cx START: {e}")
+    time.sleep(1)
+    try: heartbeat_general_tick()
+    except Exception as e: log(f"WARN heartbeat gen START: {e}")
     try:
         while True: time.sleep(60)
     except KeyboardInterrupt:
