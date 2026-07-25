@@ -2951,6 +2951,8 @@ def run_thread_crossema():
         except Exception as e:
             log(f"WARN T_CROSSEMA error: {e}")
         time.sleep(STRAT_CROSSEMA_SCAN_INTERVAL)
+
+if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
