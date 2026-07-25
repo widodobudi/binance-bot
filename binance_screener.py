@@ -3317,17 +3317,17 @@ if __name__ == '__main__':
         + (", T-CrossEMA=strategi#4" if STRAT_CROSSEMA_ENABLED else "")
         + "). Ctrl+C untuk berhenti.")
     # Kirim semua heartbeat START langsung saat deploy/restart
-    # (tidak tunggu jam ganjil berikutnya)
-    time.sleep(3)  # beri waktu thread inisialisasi
+    # Delay 15 detik agar T1 belum selesai scan pertama saat heartbeat startup dikirim
+    time.sleep(15)
     try: heartbeat_rev_tick("REVERSAL: memulai scan...")
     except Exception as e: log(f"WARN heartbeat rev START: {e}")
-    time.sleep(1)
+    time.sleep(2)
     try: heartbeat_4h_tick("4h: memulai scan...", [])
     except Exception as e: log(f"WARN heartbeat 4h START: {e}")
-    time.sleep(1)
+    time.sleep(2)
     try: heartbeat_crossema_tick()
     except Exception as e: log(f"WARN heartbeat cx START: {e}")
-    time.sleep(1)
+    time.sleep(2)
     try: heartbeat_general_tick()
     except Exception as e: log(f"WARN heartbeat gen START: {e}")
     try:
