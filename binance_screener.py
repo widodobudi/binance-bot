@@ -851,6 +851,12 @@ def get_usdt_spot_pairs():
             if s.get('quoteAsset')!='USDT': continue
             if s.get('status')!='TRADING': continue
             if s.get('baseAsset') in EXCLUDED_BASE_ASSETS: continue
+            # Exclude tokenized stocks: hanya ambil symbol yang punya permission SPOT murni
+            # Crypto murni: permissionSets mengandung "SPOT"
+            # Tokenized stocks (bStocks): hanya punya TRD_GRP_* tanpa SPOT
+            psets = s.get('permissionSets', [])
+            has_spot = any('SPOT' in pset for pset in psets)
+            if not has_spot: continue
             out.append(s['symbol'])
         return out
     except Exception as e:
