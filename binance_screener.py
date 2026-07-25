@@ -1492,9 +1492,8 @@ def heartbeat_rev_tick(status_line: str):
         send_telegram(
             f"{header}\n"
             f"{status_line}\n"
-            f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}\n"
-            f"{prog}\n"
-            f"Bot HIDUP & terus memantau."
+            f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL}\n"
+            f"{prog}"
         )
         log(f"[T1b] Heartbeat reversal terkirim: {status_line}")
         heartbeat_rev_last_sent = now
@@ -1550,11 +1549,9 @@ def heartbeat_4h_tick(status_line: str, near_miss_4h: list = None):
     send_telegram(
         f"{header}\n"
         f"{status_line}\n"
-        f"Slot 4h: {active_deal_count_4h()}/{STRAT4H_MAX_DEALS} | "
-        f"total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS + STRAT4H_MAX_DEALS}\n"
+        f"Slot 4h: {active_deal_count_4h()}/{STRAT4H_MAX_DEALS}\n"
         f"{prog}"
-        f"{near_str}\n"
-        f"Bot HIDUP & terus memantau."
+        f"{near_str}"
     )
     log(f"[T1d] Heartbeat 4h terkirim: {status_line}")
     heartbeat_4h_last_sent    = now
@@ -2080,33 +2077,143 @@ def thread2_monitor():
     return want_fast
 
 # ===================== RUNNERS =====================
+def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
+    """Kirim SATU heartbeat gabungan untuk semua strategi."""
+    global heartbeat_last_sent, heartbeat_window_start
+    global heartbeat_rev_last_sent, heartbeat_rev_window_start
+    global heartbeat_4h_last_sent, heartbeat_4h_window_start
+
+    now    = time.time()
+    now_dt = now_wib()
+    first_time = (heartbeat_last_sent == 0.0)
+
+    if heartbeat_window_start is None:
+        heartbeat_window_start = now_dt
+
+    # Header
+    if first_time:
+        start_str = now_dt.strftime('%d/%m %H:%M')
+        header = f"HEARTBEAT — START\nMulai memantau: {start_str} WIB\nNotif berikutnya tiap 6 jam."
+    else:
+        start_str = heartbeat_window_start.strftime('%d/%m %H:%M')
+        end_str   = now_dt.strftime('%d/%m %H:%M')
+        header = f"HEARTBEAT 6-jam\nPeriode: {start_str} -> {end_str} WIB"
+
+    # Progress forward-test
+    def _fmt_strat(p, tgt):
+        if p is None or p['n']==0: return f"#0/{tgt} (belum ada)"
+        nn=p['n']; wl=f"{p['win']}W/{p['loss']}L"
+        tag=" TERCAPAI!" if nn>=tgt else ""
+        return f"#{nn}/{tgt} ({wl}, total {p['total_pct']:+.1f}%){tag}"
+
+    prog_all = csv_progress()
+    prog_brk = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)
+    prog_rev = csv_progress('reversal')
+    prog_4h  = csv_progress('brkX2_4h')
+    prog_cx  = csv_progress('brkX2_crossema')
+
+    if prog_all is None:
+        prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
+    else:
+        nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
+        prog_line = (f"Progress forward-test (gabungan): {nn} selesai ({wl}, total {prog_all['total_pct']:+.1f}%)\n"
+                     f"  - brkX2    : {_fmt_strat(prog_brk, FWDTEST_TARGET_BRKX2)}\n"
+                     f"  - reversal : {_fmt_strat(prog_rev, FWDTEST_TARGET_REVERSAL)}\n"
+                     f"  - 4h       : {_fmt_strat(prog_4h,  STRAT4H_FWDTEST_TARGET)}\n"
+                     f"  - crossema : {_fmt_strat(prog_cx,  STRAT_CROSSEMA_FWDTEST)}")
+
+    # Status T3 intrabar
+    t3_str = ""
+    try:
+        with t3_status_lock:
+            es = t3_early_last_status; bs = t3_base_last_status
+            en = t3_early_near_miss[:]; bn = t3_base_near_miss[:]
+        t3_str = f"\nIntrabar EARLY (5-10%): {es}"
+        if en: t3_str += " | " + ", ".join(to_display_pair(s) for s,_ in en[:2])
+        t3_str += f"\nIntrabar BASE (60-75%): {bs}"
+        if bn: t3_str += " | " + ", ".join(to_display_pair(s) for s,_ in bn[:2])
+    except: pass
+
+    # Kandidat 4h
+    near_4h_str = ""
+    try:
+        if near_4h:
+            lines = []
+            for sym, fails in near_4h[:3]:
+                fs = "; ".join(fails) if fails else "semua lolos"
+                lines.append(f"• {to_display_pair(sym)}: belum: {fs}")
+            near_4h_str = "\nKandidat terdekat 4h:\n" + "\n".join(lines)
+    except: pass
+
+    # Slot info
+    slot_12h = f"Slot brkX2-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2}"
+    slot_rev  = f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL}"
+    slot_4h   = f"Slot 4h: {active_deal_count_4h()}/{STRAT4H_MAX_DEALS}"
+    slot_cx   = f"Slot crossema: {sum(1 for d in active_deals.values() if d.get('strategy')=='brkX2_crossema')}/{STRAT_CROSSEMA_MAX_DEALS}"
+    slot_total= f"Total: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+
+    msg = (
+        f"{header}\n"
+        f"---\n"
+        f"brkX2-12h: {status_12h}\n"
+        f"Reversal : {status_rev or '—'}\n"
+        f"4h       : {status_4h or '—'}"
+        f"{near_4h_str}\n"
+        f"---\n"
+        f"{slot_12h} | {slot_rev}\n"
+        f"{slot_4h} | {slot_cx} | {slot_total}\n"
+        f"---\n"
+        f"{prog_line}"
+        f"{t3_str}\n"
+        f"Bot HIDUP & terus memantau."
+    )
+    send_telegram(msg)
+    log(f"[HB] Heartbeat gabungan terkirim ({'START' if first_time else 'periodik'})")
+
+    # Update semua timer heartbeat sekaligus
+    heartbeat_last_sent = now;         heartbeat_window_start = now_dt
+    heartbeat_rev_last_sent = now;     heartbeat_rev_window_start = now_dt
+    heartbeat_4h_last_sent = now;      heartbeat_4h_window_start = now_dt
+
 def run_thread1():
     while True:
         try:
             status = thread1_scan()
-            if status:  # None = ada trade (notif OPEN sudah jalan); selain itu detak heartbeat
-                heartbeat_tick(status)
+            status_rev = None
+            status_4h  = None
+            near_4h    = []
+
+            # Scan reversal
+            try:
+                if REVERSAL_ENABLED:
+                    status_rev = thread1b_scan_reversal()
+            except Exception as e: log(f"WARN T1b reversal error: {e}")
+
+            # Siapkan status 4h
+            try:
+                if STRAT4H_ENABLED:
+                    n4h = active_deal_count_4h()
+                    if n4h >= STRAT4H_MAX_DEALS:
+                        status_4h = f"4h: slot penuh ({n4h}/{STRAT4H_MAX_DEALS}) — deal aktif: " + \
+                            ", ".join(to_display_pair(s) for s,d in active_deals.items() if d.get("strategy")=="brkX2_4h")
+                    else:
+                        status_4h = f"4h: memantau sinyal. Slot {n4h}/{STRAT4H_MAX_DEALS}"
+                    with t1d_near_miss_lock:
+                        near_4h = t1d_near_miss[:]
+            except Exception as e: log(f"WARN T1 heartbeat 4h error: {e}")
+
+            # Cek apakah sudah waktunya kirim heartbeat (berdasarkan timer brkX2)
+            now = time.time()
+            should_send = (status is not None) and \
+                (heartbeat_last_sent == 0.0 or
+                 now - heartbeat_last_sent >= HEARTBEAT_INTERVAL_SEC)
+
+            if should_send:
+                # Kirim SATU heartbeat gabungan
+                _send_unified_heartbeat(status, status_rev, status_4h, near_4h)
+            # Jika tidak waktunya heartbeat tapi ada deal open (status=None),
+            # rev/4h juga tidak perlu kirim
         except Exception as e: log(f"WARN T1 error: {e}")
-        # scan reversal (8h) di siklus yg sama; cek candle 8h-nya sendiri di dalam fungsi
-        try:
-            if REVERSAL_ENABLED:
-                status_rev = thread1b_scan_reversal()
-                if status_rev:  # None = ada trade (notif OPEN sudah jalan); selain itu detak heartbeat
-                    heartbeat_rev_tick(status_rev)
-        except Exception as e: log(f"WARN T1b reversal error: {e}")
-        # heartbeat 4h — panggil tiap siklus T1, heartbeat_4h_tick sendiri yg cek interval 6 jam
-        try:
-            if STRAT4H_ENABLED:
-                n4h = active_deal_count_4h()
-                if n4h >= STRAT4H_MAX_DEALS:
-                    status_4h = f"4h: slot penuh ({n4h}/{STRAT4H_MAX_DEALS}) — deal aktif: " + \
-                        ", ".join(to_display_pair(s) for s,d in active_deals.items() if d.get("strategy")=="brkX2_4h")
-                else:
-                    status_4h = f"4h: memantau sinyal. Slot {n4h}/{STRAT4H_MAX_DEALS}"
-                with t1d_near_miss_lock:
-                    near_4h = t1d_near_miss[:]
-                heartbeat_4h_tick(status_4h, near_4h)
-        except Exception as e: log(f"WARN T1 heartbeat 4h error: {e}")
         time.sleep(T1_SCAN_INTERVAL_SEC)
 
 def run_thread2():
