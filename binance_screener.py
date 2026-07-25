@@ -129,7 +129,22 @@ STRAT4H_HTF_LIMIT       = 120
 ADD_FUND_AUTO           = False
 BTC_FILTER_ENABLED      = False
 
-# ---- PERFORMANCE FILTER (backtest_age_perf_filter.py, 25/07/2026) ----
+# ── STRATEGI #4: CrossEMA-4h (Cross-up EMA20 saat ST Downtrend) ──────────────
+# Basis: backtest_crossema_sweep2.py (25/07/2026)
+# Terbaik: B_NO_PERF+W1 → avg=+24.864% WR=85.5% n=62 wf6=0/6
+# Window entry: 5–15% elapsed = menit ke 12–36 dari candle 4h (240 menit)
+# Perf filter: OFF (counter-trend, perf filter justru merugikan)
+# HTF RSI: ON (identik brkX2-4h)
+STRAT_CROSSEMA_ENABLED      = True
+STRAT_CROSSEMA_ENTRY_MIN    = 5/240    # 5% elapsed = menit ke-12
+STRAT_CROSSEMA_ENTRY_MAX    = 15/240   # 15% elapsed = menit ke-36
+STRAT_CROSSEMA_SCAN_INTERVAL= 240      # scan tiap 4 menit (9x dalam window 36 menit)
+STRAT_CROSSEMA_MAX_DEALS    = 2        # slot — mulai konservatif
+STRAT_CROSSEMA_MAX_HOLD     = 15       # timeout 15 candle 4h = 2.5 hari
+STRAT_CROSSEMA_FWDTEST      = 7        # target forward-test
+STRAT_CROSSEMA_VOLUME_MULT  = 0.4      # identik brkX2-4h
+STRAT_CROSSEMA_VOLUME_MA    = 20
+STRAT_CROSSEMA_MIN_VOL_USD  = 3_000_000
 # PERF_ONLY lebih baik dari baseline: avg +2.711% vs +2.538%, worst -21.15% vs -25.79%, wf6 OK
 # Filter usia saja lebih buruk; usia+perf wf6 HATI-HATI → deploy PERF_ONLY saja
 PERF_FILTER_ENABLED = True
@@ -2796,7 +2811,146 @@ def run_thread1d_4h():
             log(f"WARN T1d 4h error: {e}")
         time.sleep(STRAT4H_SCAN_INTERVAL)
 
-if __name__ == '__main__':
+# ══════════════════════════════════════════════════════════════════════════════
+# THREAD T_CROSSEMA: Strategi #4 — Cross-up EMA20 saat ST Downtrend (4h)
+# Window: 5–15% elapsed = menit ke 12–36, scan tiap 4 menit
+# Basis: backtest_crossema_sweep2.py (25/07/2026)
+#   B_NO_PERF+W1: avg=+24.864% WR=85.5% n=62 wf6=0/6
+# Perf filter OFF (counter-trend), HTF 3D ON (price>EMA50 + MACD>0 + RSI>50)
+# ══════════════════════════════════════════════════════════════════════════════
+_crossema_last_candle_ts: dict = {}   # sym -> candle_open_ms yg sudah di-entry
+
+def thread_crossema_scan():
+    """Scan CrossEMA intrabar: ST=-1, close<EMA20, lalu price_now>EMA20 (cross-up)."""
+    global _crossema_last_candle_ts
+    if not STRAT_CROSSEMA_ENABLED: return
+
+    # Cek slot
+    n_crossema = sum(1 for d in active_deals.values()
+                     if d.get("strategy") == "brkX2_crossema")
+    if n_crossema >= STRAT_CROSSEMA_MAX_DEALS: return
+    if active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS + STRAT4H_MAX_DEALS: return
+
+    # Hitung elapsed candle 4h saat ini
+    now_ms       = int(time.time() * 1000)
+    sec4         = STRAT4H_SECONDS
+    candle_open_ms = (now_ms // (sec4 * 1000)) * (sec4 * 1000)
+    elapsed_pct  = (now_ms - candle_open_ms) / (sec4 * 1000)
+
+    # Hanya scan dalam window 5–15% elapsed
+    if not (STRAT_CROSSEMA_ENTRY_MIN <= elapsed_pct <= STRAT_CROSSEMA_ENTRY_MAX):
+        return
+
+    ticker = get_ticker_24h()
+    if not ticker: return
+
+    with active_deals_lock:
+        existing = set(active_deals.keys())
+
+    for sym_info in ticker:
+        sym = sym_info.get("symbol", "")
+        if not sym.endswith("USDT"): continue
+        if sym in existing: continue
+        if _crossema_last_candle_ts.get(sym) == candle_open_ms: continue
+        vol24 = float(sym_info.get("quoteVolume", 0))
+        if vol24 < STRAT_CROSSEMA_MIN_VOL_USD: continue
+
+        try:
+            df = get_ohlcv_4h(sym, limit=100)
+            if df is None or len(df) < 50: continue
+            df = compute_indicators_4h(df)
+
+            # Lapis 1: candle n-1 tertutup — ST=-1, close<EMA20, vol>=0.4xMA
+            r = df.iloc[-1]
+            sd = r.get("st_dir")
+            if pd.isna(sd) or sd != -1: continue
+            ef = r.get("ema_fast")
+            if pd.isna(ef) or r["close"] >= ef: continue
+            vm = r.get("vol_ma")
+            if pd.isna(vm) or vm <= 0 or r["vol"] < STRAT_CROSSEMA_VOLUME_MULT * vm: continue
+
+            # HTF 3D filter
+            if not htf_filter_4h_ok(sym): continue
+
+            # Lapis 2: harga live (dari candle berjalan) harus > EMA20
+            price_now = get_price_now(sym)
+            if price_now <= 0 or price_now <= float(ef): continue
+
+            # Candle berjalan harus bullish (price > open candle ini)
+            # Ambil open candle berjalan dari data 15m atau estimasi
+            df_live = get_ohlcv(sym, interval="15m", limit=5)
+            open_now = float(df_live.iloc[-1]["open"]) if df_live is not None and len(df_live) > 0 else price_now * 0.99
+            if price_now <= open_now: continue
+
+            # LOLOS → OPEN DEAL
+            atrp         = float(r["atr_pct"]) if not pd.isna(r.get("atr_pct")) else 3.0
+            signal_price = float(r["close"])
+
+            log(f"[T_CROSSEMA] SINYAL: {sym} price={price_now:.6g} "
+                f"EMA20={ef:.6g} atr%={atrp:.2f} elapsed={elapsed_pct*100:.1f}%")
+
+            ok, target_usd, add_usd = open_deal_with_sizing(sym, 0, strategy="brkX2_crossema")
+            if not ok: continue
+
+            entry_price = get_price_now(sym)
+            if entry_price <= 0: entry_price = price_now
+            slip_pct = (entry_price / signal_price - 1) * 100 if signal_price > 0 else 0.0
+
+            add_to_active_deals(sym, {
+                "strategy":         "brkX2_crossema",
+                "entry_price":      entry_price,
+                "peak":             entry_price,
+                "signal_price":     signal_price,
+                "atr_pct":          atrp,
+                "opened_candle_ts": int(candle_open_ms),
+                "trailing_armed":   False,
+                "opened_at":        now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                "target_usd":       target_usd,
+                "add_usd":          add_usd,
+                "tf":               "4h",
+            })
+
+            prog = csv_progress("brkX2_crossema")
+            send_telegram(
+                f"OPEN LONG INTRABAR (CrossEMA Strategi #4 (4h))\n"
+                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                f"Pair  : {to_display_pair(sym)}\n"
+                f"Harga entry (pasar): {entry_price:.6g}\n"
+                f"Harga sinyal (EMA20 cross): {signal_price:.6g}\n"
+                f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"Base  : ${BASE_ORDER_VOLUME}\n"
+                f"Elapsed: {elapsed_pct*100:.1f}% (menit ke ~{int(elapsed_pct*240)})\n"
+                f"Slot crossema: {n_crossema+1}/{STRAT_CROSSEMA_MAX_DEALS}"
+            )
+            csv_log_open({
+                "open_time_wib":  now_wib().strftime("%Y-%m-%d %H:%M:%S"),
+                "symbol":         to_display_pair(sym),
+                "signal_price":   f"{signal_price:.6g}",
+                "entry_price":    f"{entry_price:.6g}",
+                "slip_pct":       f"{slip_pct:+.2f}",
+                "atr_pct":        f"{atrp:.2f}",
+                "trail_dist_pct": f"{trailing_dist(atrp)}",
+                "base_usd":       BASE_ORDER_VOLUME,
+                "score":          0,
+                "strategy":       "brkX2_crossema",
+            })
+            _crossema_last_candle_ts[sym] = candle_open_ms
+
+            n_crossema += 1
+            if n_crossema >= STRAT_CROSSEMA_MAX_DEALS: break
+
+        except Exception as e:
+            log(f"  [T_CROSSEMA] error {sym}: {e}")
+
+def run_thread_crossema():
+    """Thread T_CROSSEMA: scan CrossEMA tiap STRAT_CROSSEMA_SCAN_INTERVAL detik (4 menit)."""
+    while True:
+        try:
+            thread_crossema_scan()
+        except Exception as e:
+            log(f"WARN T_CROSSEMA error: {e}")
+        time.sleep(STRAT_CROSSEMA_SCAN_INTERVAL)
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
@@ -2816,6 +2970,11 @@ if __name__ == '__main__':
     log(f"  Intrabar EARLY   : {'ON' if INTRABAR_EARLY_ENABLED else 'OFF'} (entry {int(INTRABAR_EARLY_ENTRY_PCT*100)}%-{int(INTRABAR_EARLY_END_PCT*100)}% elapsed = menit ke {int(INTRABAR_EARLY_ENTRY_PCT*720)}-{int(INTRABAR_EARLY_END_PCT*720)}, breakout HH{INTRABAR_EARLY_BREAKOUT_LOOKBACK}, scan tiap {INTRABAR_EARLY_SCAN_INTERVAL//60}m)")
     log(f"  Reversal intrabar: {'ON' if REVERSAL_INTRABAR_ENABLED else 'OFF'} (full candle 8h, scan tiap {REVERSAL_INTRABAR_SCAN_INTERVAL//60}m)")
     log(f"  Perf filter      : {'ON' if PERF_FILTER_ENABLED else 'OFF'} (Grade>=B, score>={PERF_SCORE_MIN}, TF 1D/1W/1M/3M/6M/1Y)")
+    log(f"  ---------------------------------------------------")
+    log(f"  STRATEGI #4 CrossEMA-4h: {'ON' if STRAT_CROSSEMA_ENABLED else 'OFF'} | TF 4h")
+    log(f"  Entry: ST=-1 + close<EMA20 + vol>=0.4xMA + HTF 3D (lalu price cross EMA20 intrabar)")
+    log(f"  Window: {int(STRAT_CROSSEMA_ENTRY_MIN*100*240/100)}-{int(STRAT_CROSSEMA_ENTRY_MAX*100*240/100)} menit ({STRAT_CROSSEMA_ENTRY_MIN*100:.0f}%-{STRAT_CROSSEMA_ENTRY_MAX*100:.0f}% elapsed), scan tiap {STRAT_CROSSEMA_SCAN_INTERVAL//60}m")
+    log(f"  Slot: {STRAT_CROSSEMA_MAX_DEALS} | Target forward-test: {STRAT_CROSSEMA_FWDTEST} deal | Perf filter: OFF")
     log(f"  Progressive trail: {'ON' if PROG_TRAIL_ENABLED else 'OFF'} (thr={PROG_TRAIL_THRESHOLD}% stp={PROG_TRAIL_STEP}% red={PROG_TRAIL_REDUCE}% min={PROG_TRAIL_MIN}%)")
     log(f"  Cooldown internal: {COOLDOWN_SECONDS}s ({COOLDOWN_SECONDS/3600:.0f}j, brkX2) -- cegah kirim sinyal yg pasti ditolak 3Commas (deal hantu)")
     log(f"  Add fund auto    : {'ON' if ADD_FUND_AUTO else 'OFF (manual)'}")
@@ -2863,17 +3022,24 @@ if __name__ == '__main__':
     )
 
     n_threads = 4
-    t1 = threading.Thread(target=run_thread1, daemon=True, name="T1-Screener")
-    t2 = threading.Thread(target=run_thread2, daemon=True, name="T2-Monitor")
-    t3 = threading.Thread(target=run_thread3_intrabar, daemon=True, name="T3-Intrabar")
+    t1  = threading.Thread(target=run_thread1, daemon=True, name="T1-Screener")
+    t2  = threading.Thread(target=run_thread2, daemon=True, name="T2-Monitor")
+    t3  = threading.Thread(target=run_thread3_intrabar, daemon=True, name="T3-Intrabar")
     t3r = threading.Thread(target=run_thread_rev_intrabar, daemon=True, name="T3-REV")
     threads = [t1, t2, t3, t3r]
     if STRAT4H_ENABLED:
         t4 = threading.Thread(target=run_thread1d_4h, daemon=True, name="T1d-4h")
         threads.append(t4)
         n_threads = 5
+    if STRAT_CROSSEMA_ENABLED:
+        t_cx = threading.Thread(target=run_thread_crossema, daemon=True, name="T-CrossEMA")
+        threads.append(t_cx)
+        n_threads += 1
     for t in threads: t.start()
-    log(f"{n_threads} thread aktif (T1=screener, T2=monitor, T3=intrabar 12h, T3-REV=reversal intrabar" + (", T1d=intrabar 4h" if STRAT4H_ENABLED else "") + "). Ctrl+C untuk berhenti.")
+    log(f"{n_threads} thread aktif (T1=screener, T2=monitor, T3=intrabar 12h, T3-REV=reversal intrabar"
+        + (", T1d=intrabar 4h" if STRAT4H_ENABLED else "")
+        + (", T-CrossEMA=strategi#4" if STRAT_CROSSEMA_ENABLED else "")
+        + "). Ctrl+C untuk berhenti.")
     try:
         while True: time.sleep(60)
     except KeyboardInterrupt:
