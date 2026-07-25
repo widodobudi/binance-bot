@@ -676,13 +676,13 @@ def should_send_heartbeat(last_sent: float) -> bool:
     if last_sent == 0.0:
         return True  # pertama kali (START)
     now = now_wib()
-    # Jam ganjil yang sudah lewat sejak last_sent
-    last_dt = datetime.fromtimestamp(last_sent)
-    hours_since = (now - last_dt).total_seconds() / 3600
+    # Gunakan time.time() untuk hitung selisih detik — hindari timezone mismatch
+    seconds_since = time.time() - last_sent
+    hours_since = seconds_since / 3600
     if hours_since < 1.5:  # minimal 1.5 jam sejak terakhir kirim
         return False
     # Cek apakah sekarang sudah melewati jam ganjil
-    return now.hour % 2 == 1 and now.minute == 0 or hours_since >= 2
+    return (now.hour % 2 == 1 and now.minute == 0) or hours_since >= 2
 
 def log(msg):
     print(f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
