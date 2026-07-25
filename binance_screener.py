@@ -924,23 +924,52 @@ def is_choppy(df) -> bool:
 _perf_cache_1d: dict = {}   # sym -> (ts_arr, close_arr) — di-load lazy per symbol
 
 def _get_perf_data_1d(sym: str):
-    """Load data 1D untuk symbol dari _cache_htf_1D. Return (ts_arr, close_arr) atau None."""
+    """Load data 1D untuk symbol. Cari dari cache lokal dulu, kalau tidak ada fetch dari Binance."""
     if sym in _perf_cache_1d:
         return _perf_cache_1d[sym]
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    cache_dir  = os.path.join(script_dir, "_cache_htf_1D")
-    if not os.path.isdir(cache_dir):
-        _perf_cache_1d[sym] = None; return None
-    # Cari file dengan candle terbanyak
-    best = None; best_len = 0
-    for fname in os.listdir(cache_dir):
-        if not fname.startswith(sym) or not fname.endswith(".pkl"): continue
+    # Cari cache dir — bisa di /data/_cache_htf_1D (Railway) atau di folder script (lokal)
+    candidates = [
+        "/data/_cache_htf_1D",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "_cache_htf_1D"),
+    ]
+    cache_dir = None
+    for d in candidates:
+        if os.path.isdir(d):
+            cache_dir = d; break
+    if cache_dir is None:
+        # Buat folder cache di /data jika running di Railway
         try:
-            df = pickle.load(open(os.path.join(cache_dir, fname), "rb"))
-            if df is not None and len(df) > best_len and "ts" in df.columns:
-                best = df; best_len = len(df)
+            cache_dir = "/data/_cache_htf_1D"
+            os.makedirs(cache_dir, exist_ok=True)
+        except:
+            cache_dir = None
+    # Cari file cache yang ada
+    best = None; best_len = 0
+    if cache_dir and os.path.isdir(cache_dir):
+        for fname in os.listdir(cache_dir):
+            if not fname.startswith(sym) or not fname.endswith(".pkl"): continue
+            try:
+                df = pickle.load(open(os.path.join(cache_dir, fname), "rb"))
+                if df is not None and len(df) > best_len and "ts" in df.columns:
+                    best = df; best_len = len(df)
+            except: pass
+    # Kalau cache kurang dari 700 candle, fetch dari Binance
+    if best is None or best_len < 700:
+        try:
+            r = _binance_get("/api/v3/klines", {"symbol": sym, "interval": "1d", "limit": 1500})
+            if r and isinstance(r, list) and len(r) >= 30:
+                df_new = pd.DataFrame(r, columns=["ts","open","high","low","close","vol",
+                                                   "ct","qv","nt","tb","tq","ig"])
+                df_new["ts"]    = df_new["ts"].astype(np.int64)
+                df_new["close"] = df_new["close"].astype(float)
+                if cache_dir:
+                    try:
+                        with open(os.path.join(cache_dir, f"{sym}_1d_1500.pkl"), "wb") as f:
+                            pickle.dump(df_new[["ts","close"]], f)
+                    except: pass
+                best = df_new[["ts","close"]]
         except: pass
-    if best is None or best_len < 30:
+    if best is None or len(best) < 30:
         _perf_cache_1d[sym] = None; return None
     ts_arr    = best["ts"].values.astype(np.int64)
     close_arr = best["close"].values.astype(float)
