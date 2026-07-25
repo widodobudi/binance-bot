@@ -974,6 +974,8 @@ def calc_perf_score(sym: str, query_ts_ms: int) -> float:
         if past <= 0: continue
         score += weight if current >= past else -weight
     return score
+
+def check_entry(df) -> bool:
     """Evaluasi pada candle TERTUTUP terakhir (mode a)."""
     if is_choppy(df): return False
     row = df.iloc[-1]
