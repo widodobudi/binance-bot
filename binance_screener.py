@@ -1702,6 +1702,27 @@ def heartbeat_general_tick():
     heartbeat_gen_last_sent    = now
     heartbeat_gen_window_start = now_dt
 
+NEAR_MISS_LOG = "/data/near_miss_log.txt"
+
+def log_near_miss(strategi: str, near_miss_list: list, total_syarat: int):
+    """Append near miss ke file akumulatif. Tidak pernah overwrite."""
+    try:
+        ts = now_wib().strftime('%Y-%m-%d %H:%M')
+        lines = []
+        for item in near_miss_list:
+            if len(item) == 3:
+                n_pass, sym, fails = item
+            else:
+                sym, fails = item
+                n_pass = "?"
+            fails_str = "; ".join(fails) if fails else "semua lolos"
+            lines.append(f"{ts} | {strategi} | {sym} | lolos {n_pass}/{total_syarat} | belum: {fails_str}\n")
+        if lines:
+            with open(NEAR_MISS_LOG, "a", encoding="utf-8") as f:
+                f.writelines(lines)
+    except Exception as e:
+        log(f"WARN log_near_miss: {e}")
+
 def format_near_miss(near_miss, total, max_show=5):
     """Format daftar kandidat terdekat utk heartbeat."""
     if not near_miss:
@@ -1804,6 +1825,7 @@ def thread1_scan():
     if not candidates:
         log(f"[T1] {len(universe)} coin discan, tidak ada yg lolos syarat entry.")
         last_processed_candle_ts = newest_ts
+        log_near_miss("brkX2-12h", near_miss, 7)
         return f"TIDAK ADA coin lolos 7 syarat entry. ({len(universe)} coin discan)\n" + format_near_miss(near_miss, 7)
 
     # urutkan kandidat: ATR% terkecil (paling stabil) dulu
@@ -2028,6 +2050,7 @@ def thread1b_scan_reversal():
 
     if not candidates:
         log(f"[T1b] {len(universe)} coin discan (reversal), tidak ada yg lolos setup.")
+        log_near_miss("Reversal-8h", near_miss, 4)
         return f"REVERSAL: tidak ada coin lolos setup. ({len(universe)} discan)\n" + format_near_miss(near_miss, 4)
 
     # urutkan: ATR% terkecil dulu (paling stabil)
@@ -2975,6 +2998,7 @@ def thread1d_scan_4h():
         status_4h = (f"4h: tidak ada sinyal. ({len(ticker or [])} discan, "
                      f"slot {n4h_active}/{STRAT4H_MAX_DEALS})")
         heartbeat_4h_tick(status_4h, near_miss_4h)
+        log_near_miss("brkX2-4h", near_miss_4h, 7)
         log(f"[T1d] Tidak ada kandidat 4h.")
         return
 
@@ -3240,6 +3264,9 @@ def thread_crossema_scan():
 
         except Exception as e:
             log(f"  [T_CROSSEMA] error {sym}: {e}")
+
+    if _crossema_near_miss:
+        log_near_miss("CrossEMA-4h", _crossema_near_miss, 3)
 
 def run_thread_crossema():
     """Thread T_CROSSEMA: scan CrossEMA tiap STRAT_CROSSEMA_SCAN_INTERVAL detik (4 menit)."""
