@@ -1725,7 +1725,7 @@ def _gdrive_token() -> str:
     now = int(_time.time())
     payload = {
         "iss": sa["client_email"],
-        "scope": "https://www.googleapis.com/auth/drive.file",
+        "scope": "https://www.googleapis.com/auth/drive",
         "aud": "https://oauth2.googleapis.com/token",
         "iat": now,
         "exp": now + 3600,
@@ -1735,7 +1735,11 @@ def _gdrive_token() -> str:
         "grant_type": "urn:ietf:params:oauth2:grantType:jwt-bearer",
         "assertion": signed,
     }, timeout=15)
-    return r.json()["access_token"]
+    resp = r.json()
+    if "access_token" not in resp:
+        log(f"WARN gdrive_token error: {resp}")
+        raise KeyError("access_token")
+    return resp["access_token"]
 
 def gdrive_upload_near_miss():
     """Upload /data/near_miss_log.txt ke Google Drive folder tradingview. Buat baru atau update."""
