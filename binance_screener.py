@@ -1701,8 +1701,91 @@ def heartbeat_general_tick():
     log(f"[HB-GEN] Heartbeat General terkirim")
     heartbeat_gen_last_sent    = now
     heartbeat_gen_window_start = now_dt
+    # Upload near_miss_log.txt ke Google Drive tiap heartbeat General
+    threading.Thread(target=gdrive_upload_near_miss, daemon=True).start()
 
 NEAR_MISS_LOG = "/data/near_miss_log.txt"
+
+# Google Drive — service account + folder tradingview
+GDRIVE_SERVICE_ACCOUNT = os.environ.get("GDRIVE_SERVICE_ACCOUNT", "")  # JSON string
+GDRIVE_NEAR_MISS_FOLDER = os.environ.get("GDRIVE_NEAR_MISS_FOLDER", "")  # folder ID tradingview
+_gdrive_near_miss_file_id = None  # cache file ID setelah pertama kali dibuat
+
+def _gdrive_token() -> str:
+    """Ambil OAuth2 access token dari service account JSON."""
+    import json as _json, time as _time
+    try:
+        import jwt as _jwt  # PyJWT
+    except ImportError:
+        import subprocess
+        subprocess.run(["pip", "install", "PyJWT", "cryptography", "--quiet",
+                        "--break-system-packages"], capture_output=True)
+        import jwt as _jwt
+    sa = _json.loads(GDRIVE_SERVICE_ACCOUNT)
+    now = int(_time.time())
+    payload = {
+        "iss": sa["client_email"],
+        "scope": "https://www.googleapis.com/auth/drive.file",
+        "aud": "https://oauth2.googleapis.com/token",
+        "iat": now,
+        "exp": now + 3600,
+    }
+    signed = _jwt.encode(payload, sa["private_key"], algorithm="RS256")
+    r = requests.post("https://oauth2.googleapis.com/token", data={
+        "grant_type": "urn:ietf:params:oauth2:grantType:jwt-bearer",
+        "assertion": signed,
+    }, timeout=15)
+    return r.json()["access_token"]
+
+def gdrive_upload_near_miss():
+    """Upload /data/near_miss_log.txt ke Google Drive folder tradingview. Buat baru atau update."""
+    global _gdrive_near_miss_file_id
+    if not GDRIVE_SERVICE_ACCOUNT or not GDRIVE_NEAR_MISS_FOLDER:
+        return
+    if not os.path.exists(NEAR_MISS_LOG):
+        return
+    try:
+        token = _gdrive_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        # Cari file yang sudah ada kalau belum di-cache
+        if not _gdrive_near_miss_file_id:
+            r = requests.get(
+                "https://www.googleapis.com/drive/v3/files",
+                headers=headers,
+                params={"q": f"name='near_miss_log.txt' and '{GDRIVE_NEAR_MISS_FOLDER}' in parents and trashed=false",
+                        "fields": "files(id)"},
+                timeout=15)
+            files = r.json().get("files", [])
+            if files:
+                _gdrive_near_miss_file_id = files[0]["id"]
+        with open(NEAR_MISS_LOG, "rb") as f:
+            content = f.read()
+        if _gdrive_near_miss_file_id:
+            # Update file yang sudah ada
+            requests.patch(
+                f"https://www.googleapis.com/upload/drive/v3/files/{_gdrive_near_miss_file_id}",
+                headers=headers,
+                params={"uploadType": "media"},
+                data=content,
+                timeout=30)
+        else:
+            # Buat file baru
+            import json as _json
+            meta = _json.dumps({"name": "near_miss_log.txt", "parents": [GDRIVE_NEAR_MISS_FOLDER]})
+            from requests_toolbelt import MultipartEncoder
+            m = MultipartEncoder(fields={
+                "metadata": ("metadata", meta, "application/json"),
+                "file": ("near_miss_log.txt", content, "text/plain"),
+            })
+            r = requests.post(
+                "https://www.googleapis.com/upload/drive/v3/files",
+                headers={**headers, "Content-Type": m.content_type},
+                params={"uploadType": "multipart"},
+                data=m, timeout=30)
+            _gdrive_near_miss_file_id = r.json().get("id")
+        log("[GDRIVE] near_miss_log.txt berhasil diupload ke Google Drive.")
+    except Exception as e:
+        log(f"WARN gdrive_upload_near_miss: {e}")
 
 def log_near_miss(strategi: str, near_miss_list: list, total_syarat: int):
     """Append near miss ke file akumulatif. Tidak pernah overwrite."""
