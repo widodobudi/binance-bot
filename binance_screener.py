@@ -1732,7 +1732,7 @@ def _gdrive_token() -> str:
     }
     signed = _jwt.encode(payload, sa["private_key"], algorithm="RS256")
     r = requests.post("https://oauth2.googleapis.com/token", data={
-        "grant_type": "urn:ietf:params:oauth2:grantType:jwt-bearer",
+        "grant_type": "urn:ietf:params:oauth2:grant-type:jwt-bearer",
         "assertion": signed,
     }, timeout=15)
     resp = r.json()
