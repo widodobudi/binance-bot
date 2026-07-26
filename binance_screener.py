@@ -1763,19 +1763,22 @@ def gdrive_upload_near_miss():
                 data=content,
                 timeout=30)
         else:
-            # Buat file baru
+            # Buat file baru pakai multipart manual (tanpa requests_toolbelt)
             import json as _json
+            boundary = "----boundary_near_miss_log"
             meta = _json.dumps({"name": "near_miss_log.txt", "parents": [GDRIVE_NEAR_MISS_FOLDER]})
-            from requests_toolbelt import MultipartEncoder
-            m = MultipartEncoder(fields={
-                "metadata": ("metadata", meta, "application/json"),
-                "file": ("near_miss_log.txt", content, "text/plain"),
-            })
+            body = (
+                f"--{boundary}\r\n"
+                f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
+                f"{meta}\r\n"
+                f"--{boundary}\r\n"
+                f"Content-Type: text/plain\r\n\r\n"
+            ).encode() + content + f"\r\n--{boundary}--".encode()
             r = requests.post(
                 "https://www.googleapis.com/upload/drive/v3/files",
-                headers={**headers, "Content-Type": m.content_type},
+                headers={**headers, "Content-Type": f"multipart/related; boundary={boundary}"},
                 params={"uploadType": "multipart"},
-                data=m, timeout=30)
+                data=body, timeout=30)
             _gdrive_near_miss_file_id = r.json().get("id")
         log("[GDRIVE] near_miss_log.txt berhasil diupload ke Google Drive.")
     except Exception as e:
