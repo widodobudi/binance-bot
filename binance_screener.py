@@ -1708,7 +1708,7 @@ NEAR_MISS_LOG = "/data/near_miss_log.txt"
 
 # Google Drive — service account + folder tradingview
 GDRIVE_SERVICE_ACCOUNT = os.environ.get("GDRIVE_SERVICE_ACCOUNT", "")  # JSON string
-GDRIVE_NEAR_MISS_FOLDER = os.environ.get("GDRIVE_NEAR_MISS_FOLDER", "")  # folder ID tradingview
+GDRIVE_NEAR_MISS_FOLDER = "1DwtfVtDc1DhoW80AgNUmUO6zYqFi-ZBC"  # folder tradingview Google Drive
 _gdrive_near_miss_file_id = None  # cache file ID setelah pertama kali dibuat
 
 def _gdrive_token() -> str:
@@ -1740,7 +1740,7 @@ def _gdrive_token() -> str:
 def gdrive_upload_near_miss():
     """Upload /data/near_miss_log.txt ke Google Drive folder tradingview. Buat baru atau update."""
     global _gdrive_near_miss_file_id
-    if not GDRIVE_SERVICE_ACCOUNT or not GDRIVE_NEAR_MISS_FOLDER:
+    if not GDRIVE_SERVICE_ACCOUNT:
         return
     if not os.path.exists(NEAR_MISS_LOG):
         return
