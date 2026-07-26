@@ -1712,34 +1712,24 @@ GDRIVE_NEAR_MISS_FOLDER = "1DwtfVtDc1DhoW80AgNUmUO6zYqFi-ZBC"  # folder tradingv
 _gdrive_near_miss_file_id = None  # cache file ID setelah pertama kali dibuat
 
 def _gdrive_token() -> str:
-    """Ambil OAuth2 access token dari service account JSON."""
-    import json as _json, time as _time
+    """Ambil OAuth2 access token dari service account JSON via google-auth."""
+    import json as _json
     try:
-        import jwt as _jwt  # PyJWT
+        from google.oauth2 import service_account as _sa
+        from google.auth.transport.requests import Request as _Req
     except ImportError:
         import subprocess
-        subprocess.run(["pip", "install", "PyJWT", "cryptography", "--quiet",
+        subprocess.run(["pip", "install", "google-auth", "--quiet",
                         "--break-system-packages"], capture_output=True)
-        import jwt as _jwt
-    sa = _json.loads(GDRIVE_SERVICE_ACCOUNT)
-    now = int(_time.time())
-    payload = {
-        "iss": sa["client_email"],
-        "scope": "https://www.googleapis.com/auth/drive",
-        "aud": "https://oauth2.googleapis.com/token",
-        "iat": now,
-        "exp": now + 3600,
-    }
-    signed = _jwt.encode(payload, sa["private_key"], algorithm="RS256")
-    r = requests.post("https://oauth2.googleapis.com/token", data={
-        "grant_type": "urn:ietf:params:oauth2:grant-type:jwt-bearer",
-        "assertion": signed,
-    }, timeout=15)
-    resp = r.json()
-    if "access_token" not in resp:
-        log(f"WARN gdrive_token error: {resp}")
-        raise KeyError("access_token")
-    return resp["access_token"]
+        from google.oauth2 import service_account as _sa
+        from google.auth.transport.requests import Request as _Req
+    sa_info = _json.loads(GDRIVE_SERVICE_ACCOUNT)
+    creds = _sa.Credentials.from_service_account_info(
+        sa_info,
+        scopes=["https://www.googleapis.com/auth/drive"]
+    )
+    creds.refresh(_Req())
+    return creds.token
 
 def gdrive_upload_near_miss():
     """Upload /data/near_miss_log.txt ke Google Drive folder tradingview. Buat baru atau update."""
