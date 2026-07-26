@@ -1780,6 +1780,13 @@ def gdrive_upload_near_miss():
                 params={"uploadType": "multipart"},
                 data=body, timeout=30)
             _gdrive_near_miss_file_id = r.json().get("id")
+            # Share ke pemilik Drive agar file visible
+            if _gdrive_near_miss_file_id:
+                requests.post(
+                    f"https://www.googleapis.com/drive/v3/files/{_gdrive_near_miss_file_id}/permissions",
+                    headers=headers,
+                    json={"role": "writer", "type": "user", "emailAddress": "widodobudi@gmail.com"},
+                    timeout=15)
         log("[GDRIVE] near_miss_log.txt berhasil diupload ke Google Drive.")
     except Exception as e:
         log(f"WARN gdrive_upload_near_miss: {e}")
