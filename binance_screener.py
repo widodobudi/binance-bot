@@ -805,6 +805,29 @@ def send_3commas(payload: dict, label: str) -> bool:
     log(f"WARN [3C] {label} gagal setelah {_RETRY_COUNT} percobaan — sinyal tidak terkirim.")
     return False
 
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
+GMAIL_TO           = "widodobudi@gmail.com"
+GMAIL_FROM         = "widodobudi@gmail.com"
+
+def send_email_open_long(subject: str, body: str):
+    """Kirim email notifikasi open long ke widodobudi@gmail.com via Gmail SMTP."""
+    if not GMAIL_APP_PASSWORD:
+        log("WARN send_email: GMAIL_APP_PASSWORD belum diset, skip.")
+        return
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        msg          = MIMEText(body, 'plain', 'utf-8')
+        msg['Subject'] = subject
+        msg['From']    = GMAIL_FROM
+        msg['To']      = GMAIL_TO
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15) as smtp:
+            smtp.login(GMAIL_FROM, GMAIL_APP_PASSWORD)
+            smtp.sendmail(GMAIL_FROM, [GMAIL_TO], msg.as_string())
+        log(f"[EMAIL] Terkirim: {subject}")
+    except Exception as e:
+        log(f"WARN send_email: {e}")
+
 def send_open_long(symbol: str, strategy: str = 'brkX2') -> bool:
     bid, tok = commas_creds(strategy)
     return send_3commas({"message_type":"bot","bot_id":bid,
@@ -1945,6 +1968,17 @@ def thread1_scan():
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
             )
+            threading.Thread(target=send_email_open_long, args=("OPEN LONG brkX2-12h: " + to_display_pair(sym), 
+                f"OPEN LONG (Momentum brkX2 (12h))\n"
+                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                f"Pair  : {to_display_pair(sym)}\n"
+                f"Harga entry (pasar): {entry_price:.6g}\n"
+                f"Harga sinyal (candle close): {signal_price:.6g}\n"
+                f"Selisih (lonjakan/slippage): {slip_pct:+.2f}%\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
+                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+            ), daemon=True).start()
             csv_log_open({
                 'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                 'symbol': to_display_pair(sym),
@@ -2095,6 +2129,17 @@ def thread1b_scan_reversal():
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
                 f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
             )
+            threading.Thread(target=send_email_open_long, args=("OPEN LONG Reversal-8h: " + to_display_pair(sym), 
+                f"OPEN LONG (Reversal Doji+HA (8h))\n"
+                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                f"Pair  : {to_display_pair(sym)}\n"
+                f"Harga entry (pasar): {entry_price:.6g}\n"
+                f"Harga sinyal (candle close): {signal_price:.6g}\n"
+                f"Selisih (slippage): {slip_pct:+.2f}%\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"Base  : ${BASE_ORDER_VOLUME}\n"
+                f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+            ), daemon=True).start()
             csv_log_open({
                 'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                 'symbol': to_display_pair(sym),
@@ -2510,6 +2555,18 @@ def thread1c_scan_intrabar():
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
             )
+            threading.Thread(target=send_email_open_long, args=("OPEN LONG INTRABAR brkX2-12h: " + to_display_pair(sym), 
+                f"OPEN LONG INTRABAR (Momentum brkX2 (12h))\n"
+                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                f"Pair  : {to_display_pair(sym)}\n"
+                f"Harga entry (pasar): {entry_price:.6g}\n"
+                f"Harga sinyal (candle n-1 close): {signal_price:.6g}\n"
+                f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
+                f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
+                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+            ), daemon=True).start()
             csv_log_open({
                 'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                 'symbol':         to_display_pair(sym),
@@ -2686,6 +2743,18 @@ def thread1c_scan_intrabar_early():
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
             )
+            threading.Thread(target=send_email_open_long, args=("OPEN LONG INTRABAR EARLY brkX2-12h: " + to_display_pair(sym), 
+                f"OPEN LONG INTRABAR EARLY (Momentum brkX2 (12h))\n"
+                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                f"Pair  : {to_display_pair(sym)}\n"
+                f"Harga entry (pasar): {entry_price:.6g}\n"
+                f"Harga sinyal (candle n-1 close): {signal_price:.6g}\n"
+                f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
+                f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
+                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+            ), daemon=True).start()
             # Deal log
             _ind = _row_indicators(r12, vol_ma=float(r12.get('vol_ma', 0)) if not pd.isna(r12.get('vol_ma', 0)) else None)
             _htf = _get_htf_values(sym)
@@ -2870,6 +2939,30 @@ def thread_rev_intrabar_scan():
                 f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} "
                 f"| total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
             )
+            threading.Thread(target=send_email_open_long, args=("OPEN LONG brkX2-4h: " + to_display_pair(sym), 
+                f"OPEN LONG INTRABAR (Reversal Doji+HA (8h))\n"
+                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                f"Pair  : {to_display_pair(sym)}\n"
+                f"Harga entry (pasar): {entry_price:.6g}\n"
+                f"Harga sinyal (c+1 close): {signal_price:.6g}\n"
+                f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"Base  : ${BASE_ORDER_VOLUME}\n"
+                f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} "
+                f"| total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+            ), daemon=True).start()
+            threading.Thread(target=send_email_open_long, args=("OPEN LONG INTRABAR Reversal-8h: " + to_display_pair(sym), 
+                f"OPEN LONG INTRABAR (Reversal Doji+HA (8h))\n"
+                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                f"Pair  : {to_display_pair(sym)}\n"
+                f"Harga entry (pasar): {entry_price:.6g}\n"
+                f"Harga sinyal (c+1 close): {signal_price:.6g}\n"
+                f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"Base  : ${BASE_ORDER_VOLUME}\n"
+                f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} "
+                f"| total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+            ), daemon=True).start()
             csv_log_open({
                 'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                 'symbol':         to_display_pair(sym),
@@ -3245,6 +3338,18 @@ def thread_crossema_scan():
                 f"Elapsed: {elapsed_pct*100:.1f}% (menit ke ~{int(elapsed_pct*240)})\n"
                 f"Slot crossema: {n_crossema+1}/{STRAT_CROSSEMA_MAX_DEALS}"
             )
+            threading.Thread(target=send_email_open_long, args=("OPEN LONG INTRABAR CrossEMA-4h: " + to_display_pair(sym), 
+                f"OPEN LONG INTRABAR (CrossEMA Strategi #4 (4h))\n"
+                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                f"Pair  : {to_display_pair(sym)}\n"
+                f"Harga entry (pasar): {entry_price:.6g}\n"
+                f"Harga sinyal (EMA20 cross): {signal_price:.6g}\n"
+                f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"Base  : ${BASE_ORDER_VOLUME}\n"
+                f"Elapsed: {elapsed_pct*100:.1f}% (menit ke ~{int(elapsed_pct*240)})\n"
+                f"Slot crossema: {n_crossema+1}/{STRAT_CROSSEMA_MAX_DEALS}"
+            ), daemon=True).start()
             csv_log_open({
                 "open_time_wib":  now_wib().strftime("%Y-%m-%d %H:%M:%S"),
                 "symbol":         to_display_pair(sym),
