@@ -1689,7 +1689,7 @@ def heartbeat_general_tick():
         f"\n---\n"
         f"brkX2-12h  : ST-up + >EMA20 + EMA20>EMA50 + breakout{BREAKOUT_LOOKBACK} + vol>={VOLUME_MULT}xMA + RSI<{RSI_MAX}\n"
         f"Reversal-8h: 3 merah+turun>=5% + doji + HA bull + cross-up EMA20\n"
-        f"brkX2-4h   : ST-up + MACD>0 + ATR>=2% + vol>=0.4xMA + HTF 3D\n"
+        f"brkX2-4h   : ST-up + MACD>0 + ATR>=2% + vol>={STRAT4H_VOLUME_MULT}xMA + HTF 3D\n"
         f"CrossEMA-4h: ST-1 + cross-up EMA20 intrabar menit 12-36\n"
         f"Exit       : trailing adaptif (arm +{TRAIL_ARM_PCT}%) | Base ${BASE_ORDER_VOLUME} | Perf filter ON\n"
         f"---\n"
@@ -3300,7 +3300,7 @@ if __name__ == '__main__':
     log(f"  Perf filter      : {'ON' if PERF_FILTER_ENABLED else 'OFF'} (Grade>=B, score>={PERF_SCORE_MIN}, TF 1D/1W/1M/3M/6M/1Y)")
     log(f"  ---------------------------------------------------")
     log(f"  STRATEGI #4 CrossEMA-4h: {'ON' if STRAT_CROSSEMA_ENABLED else 'OFF'} | TF 4h")
-    log(f"  Entry: ST=-1 + close<EMA20 + vol>=0.4xMA + HTF 3D (lalu price cross EMA20 intrabar)")
+    log(f"  Entry: ST=-1 + close<EMA20 + vol>={STRAT_CROSSEMA_VOLUME_MULT}xMA + HTF 3D (lalu price cross EMA20 intrabar)")
     log(f"  Window: {int(STRAT_CROSSEMA_ENTRY_MIN*100*240/100)}-{int(STRAT_CROSSEMA_ENTRY_MAX*100*240/100)} menit ({STRAT_CROSSEMA_ENTRY_MIN*100:.0f}%-{STRAT_CROSSEMA_ENTRY_MAX*100:.0f}% elapsed), scan tiap {STRAT_CROSSEMA_SCAN_INTERVAL//60}m")
     log(f"  Slot: {STRAT_CROSSEMA_MAX_DEALS} | Target forward-test: {STRAT_CROSSEMA_FWDTEST} deal | Perf filter: OFF")
     log(f"  Progressive trail: {'ON' if PROG_TRAIL_ENABLED else 'OFF'} (thr={PROG_TRAIL_THRESHOLD}% stp={PROG_TRAIL_STEP}% red={PROG_TRAIL_REDUCE}% min={PROG_TRAIL_MIN}%)")
