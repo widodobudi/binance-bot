@@ -1801,7 +1801,7 @@ def thread1_scan():
                 det = entry_detail(df)
                 if det is not None:
                     n_pass, total, fails = det
-                    near_miss.append((n_pass, sym, fails + ["HTF 3D: bearish"], total + 1))
+                    near_miss.append((n_pass, sym, fails + ["HTF 3D: bearish"], 9))
             else:
                 # Performance filter
                 if PERF_FILTER_ENABLED:
@@ -1811,7 +1811,7 @@ def thread1_scan():
                         det = entry_detail(df)
                         if det is not None:
                             n_pass, total, fails = det
-                            near_miss.append((n_pass, sym, fails + [f"Perf Grade<B (score {pscore:.2f})"], total + 1))
+                            near_miss.append((n_pass, sym, fails + [f"Perf Grade<B (score {pscore:.2f})"], 9))
                         continue
                 sc = signal_score(df.iloc[-1])
                 candidates.append((sym, float(df['close'].iloc[-1]), float(df['atr_pct'].iloc[-1]), sc))
@@ -1820,13 +1820,13 @@ def thread1_scan():
             if det is not None:
                 n_pass, total, fails = det
                 if n_pass >= 5:   # tampilkan hanya yg lolos >=5/7
-                    near_miss.append((n_pass, sym, fails, total))
+                    near_miss.append((n_pass, sym, fails, 9))
 
     if not candidates:
         log(f"[T1] {len(universe)} coin discan, tidak ada yg lolos syarat entry.")
         last_processed_candle_ts = newest_ts
-        log_near_miss("brkX2-12h", near_miss, 7)
-        return f"TIDAK ADA coin lolos 7 syarat entry. ({len(universe)} coin discan)\n" + format_near_miss(near_miss, 7)
+        log_near_miss("brkX2-12h", near_miss, 9)
+        return f"TIDAK ADA coin lolos 7 syarat inti + 2 tambahan (HTF 3D, Perf). ({len(universe)} coin discan)\n" + format_near_miss(near_miss, 9)
 
     # urutkan kandidat: ATR% terkecil (paling stabil) dulu
     candidates.sort(key=lambda x: x[2])
@@ -2037,7 +2037,7 @@ def thread1b_scan_reversal():
                     det = entry_detail_reversal(df)
                     if det is not None:
                         n_pass, total, fails = det
-                        near_miss.append((n_pass, sym, fails + [f"Perf Grade<B (score {pscore:.2f})"], total + 1))
+                        near_miss.append((n_pass, sym, fails + [f"Perf Grade<B (score {pscore:.2f})"], 5))
                     continue
             atrp = float(df['atr_pct'].iloc[-1]) if not pd.isna(df['atr_pct'].iloc[-1]) else 3.0
             candidates.append((sym, float(df['close'].iloc[-1]), atrp, int(df['ct'].iloc[-1])))
@@ -2046,12 +2046,12 @@ def thread1b_scan_reversal():
             if det is not None:
                 n_pass, total, fails = det
                 if n_pass >= 2:   # tampilkan hanya yg lolos >=2/4
-                    near_miss.append((n_pass, sym, fails, total))
+                    near_miss.append((n_pass, sym, fails, 5))
 
     if not candidates:
         log(f"[T1b] {len(universe)} coin discan (reversal), tidak ada yg lolos setup.")
-        log_near_miss("Reversal-8h", near_miss, 4)
-        return f"REVERSAL: tidak ada coin lolos setup. ({len(universe)} discan)\n" + format_near_miss(near_miss, 4)
+        log_near_miss("Reversal-8h", near_miss, 5)
+        return f"REVERSAL: tidak ada coin lolos setup. ({len(universe)} discan)\n" + format_near_miss(near_miss, 5)
 
     # urutkan: ATR% terkecil dulu (paling stabil)
     candidates.sort(key=lambda x: x[2])
