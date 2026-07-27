@@ -1725,31 +1725,26 @@ def log_near_miss(strategi: str, near_miss_list: list, total_syarat: int):
         log(f"WARN log_near_miss: {e}")
 
 def format_near_miss(near_miss, total, max_show=5):
-    """Format daftar kandidat terdekat utk heartbeat."""
+    """Format daftar kandidat terdekat utk heartbeat.
+    near_miss: list of (n_pass, sym, fails) atau (n_pass, sym, fails, total_override)
+    total_override dipakai bila ada syarat tambahan (HTF 3D, Perf) sehingga total != total default.
+    """
     if not near_miss:
         return "Kandidat terdekat: tidak ada (semua pair masih jauh dari lolos)."
     near_miss.sort(key=lambda x: x[0], reverse=True)
     lines = ["Kandidat terdekat:"]
-    for n_pass, sym, fails in near_miss[:max_show]:
+    for item in near_miss[:max_show]:
+        n_pass, sym, fails = item[0], item[1], item[2]
+        item_total = item[3] if len(item) > 3 else total
         belum = "; ".join(fails) if fails else "-"
-        lines.append(f"• {to_display_pair(sym)}: lolos {n_pass}/{total} — belum: {belum}")
+        lines.append(f"• {to_display_pair(sym)}: lolos {n_pass}/{item_total} — belum: {belum}")
     sisa = len(near_miss) - max_show
     if sisa > 0:
-        lines.append(f"(+ {sisa} pair lain lolos >={near_miss[max_show-1][0] if max_show<=len(near_miss) else 5}/{total})")
+        last_shown = near_miss[max_show-1] if max_show <= len(near_miss) else near_miss[-1]
+        lines.append(f"(+ {sisa} pair lain lolos >={last_shown[0]}/{total})")
     return "\n".join(lines)
-    """Format daftar kandidat terdekat utk heartbeat: urut n_pass turun, tampilkan max 5, sisanya diringkas.
-    Tiap baris: • PAIR: lolos N/total — belum: syarat1, syarat2"""
-    if not near_miss:
-        return "Kandidat terdekat: tidak ada (semua pair masih jauh dari lolos)."
-    near_miss.sort(key=lambda x: x[0], reverse=True)  # n_pass terbanyak dulu
-    lines = ["Kandidat terdekat:"]
-    for n_pass, sym, fails in near_miss[:max_show]:
-        belum = "; ".join(fails) if fails else "-"
-        lines.append(f"• {to_display_pair(sym)}: lolos {n_pass}/{total} — belum: {belum}")
-    sisa = len(near_miss) - max_show
-    if sisa > 0:
-        lines.append(f"(+ {sisa} pair lain lolos >={near_miss[max_show-1][0] if max_show<=len(near_miss) else 5}/{total})")
-    return "\n".join(lines)
+
+
 
 def thread1_scan():
     global last_processed_candle_ts, heartbeat_window_start, heartbeat_last_sent
@@ -1802,7 +1797,7 @@ def thread1_scan():
                 det = entry_detail(df)
                 if det is not None:
                     n_pass, total, fails = det
-                    near_miss.append((n_pass, sym, fails + ["HTF 3D: bearish"]))
+                    near_miss.append((n_pass, sym, fails + ["HTF 3D: bearish"], total + 1))
             else:
                 # Performance filter
                 if PERF_FILTER_ENABLED:
@@ -1812,7 +1807,7 @@ def thread1_scan():
                         det = entry_detail(df)
                         if det is not None:
                             n_pass, total, fails = det
-                            near_miss.append((n_pass, sym, fails + [f"Perf Grade<B (score {pscore:.2f})"]))
+                            near_miss.append((n_pass, sym, fails + [f"Perf Grade<B (score {pscore:.2f})"], total + 1))
                         continue
                 sc = signal_score(df.iloc[-1])
                 candidates.append((sym, float(df['close'].iloc[-1]), float(df['atr_pct'].iloc[-1]), sc))
@@ -1821,7 +1816,7 @@ def thread1_scan():
             if det is not None:
                 n_pass, total, fails = det
                 if n_pass >= 5:   # tampilkan hanya yg lolos >=5/7
-                    near_miss.append((n_pass, sym, fails))
+                    near_miss.append((n_pass, sym, fails, total))
 
     if not candidates:
         log(f"[T1] {len(universe)} coin discan, tidak ada yg lolos syarat entry.")
@@ -2038,7 +2033,7 @@ def thread1b_scan_reversal():
                     det = entry_detail_reversal(df)
                     if det is not None:
                         n_pass, total, fails = det
-                        near_miss.append((n_pass, sym, fails + [f"Perf Grade<B (score {pscore:.2f})"]))
+                        near_miss.append((n_pass, sym, fails + [f"Perf Grade<B (score {pscore:.2f})"], total + 1))
                     continue
             atrp = float(df['atr_pct'].iloc[-1]) if not pd.isna(df['atr_pct'].iloc[-1]) else 3.0
             candidates.append((sym, float(df['close'].iloc[-1]), atrp, int(df['ct'].iloc[-1])))
@@ -2047,7 +2042,7 @@ def thread1b_scan_reversal():
             if det is not None:
                 n_pass, total, fails = det
                 if n_pass >= 2:   # tampilkan hanya yg lolos >=2/4
-                    near_miss.append((n_pass, sym, fails))
+                    near_miss.append((n_pass, sym, fails, total))
 
     if not candidates:
         log(f"[T1b] {len(universe)} coin discan (reversal), tidak ada yg lolos setup.")
