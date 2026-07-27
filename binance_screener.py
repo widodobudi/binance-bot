@@ -70,7 +70,7 @@ SUPERTREND_LENGTH = 10
 SUPERTREND_MULT   = 3.0
 EMA_FAST          = 20
 EMA_SLOW          = 50
-BREAKOUT_LOOKBACK = 7
+BREAKOUT_LOOKBACK = 5   # diubah dari 7 → 5 (backtest_hh567_sweep.py, 27/07/2026): HH5 avg=+4.057% vs HH7 +3.934%, delta +0.122%, wf6 OK
 VOLUME_MULT       = 0.6   # turun dari 0.8 → backtest_vol_lower_sweep (22/07/2026): delta avg -0.042% (dalam noise), wf6 OK
 MACD_FILTER_ENABLED = True    # True=wajib MACD histogram > 0 saat entry
 
@@ -117,7 +117,7 @@ STRAT4H_ST_LENGTH       = 10
 STRAT4H_ST_MULT         = 3.0
 STRAT4H_MACD_FAST       = 12; STRAT4H_MACD_SLOW = 26; STRAT4H_MACD_SIGNAL = 9
 STRAT4H_ATR_MIN_PCT     = 2.0
-STRAT4H_VOLUME_MULT     = 0.4
+STRAT4H_VOLUME_MULT     = 0.25  # diubah dari 0.4 → 0.25 (backtest_4h_vol_sweep.py, 27/07/2026): delta avg -0.008% (dalam noise), frekuensi naik
 STRAT4H_VOLUME_MA       = 20
 STRAT4H_MIN_VOL_USD     = 3_000_000
 # HTF 3D filter untuk 4h: PRICE_EMA50 + MACD + RSI50
@@ -210,7 +210,7 @@ INTRABAR_EARLY_SCAN_INTERVAL = 240  # 4 menit → 9x scan dalam window 36 menit
 #   HH7 avg=+9.790% WR=87.9% vs baseline HH10 avg=+9.304% WR=88.0% (delta +0.486%, wf6 OK)
 #   HH5/HH8 juga lebih baik tapi HH7 tertinggi; NO_HH bencana (avg +1.213%, WR 60.3%)
 # Hanya berlaku Lapis 2 T3-EARLY; T1 close candle & T3-baseline tetap HH10
-INTRABAR_EARLY_BREAKOUT_LOOKBACK = 7
+INTRABAR_EARLY_BREAKOUT_LOOKBACK = 5   # diubah dari 7 → 5 (backtest_hh567_sweep.py, 27/07/2026)
 
 # T3-REV: intrabar reversal (full candle 8h = 480 menit)
 # Scan syarat reversal dari candle-candle tertutup (c-3..c+1),
@@ -1701,95 +1701,9 @@ def heartbeat_general_tick():
     log(f"[HB-GEN] Heartbeat General terkirim")
     heartbeat_gen_last_sent    = now
     heartbeat_gen_window_start = now_dt
-    # Upload near_miss_log.txt ke Google Drive tiap heartbeat General
-    threading.Thread(target=gdrive_upload_near_miss, daemon=True).start()
 
 NEAR_MISS_LOG = "/data/near_miss_log.txt"
 
-# Google Drive — service account + folder tradingview
-GDRIVE_SERVICE_ACCOUNT = os.environ.get("GDRIVE_SERVICE_ACCOUNT", "")  # JSON string
-GDRIVE_NEAR_MISS_FOLDER = "1DwtfVtDc1DhoW80AgNUmUO6zYqFi-ZBC"  # folder tradingview Google Drive
-_gdrive_near_miss_file_id = None  # cache file ID setelah pertama kali dibuat
-
-def _gdrive_token() -> str:
-    """Ambil OAuth2 access token dari service account JSON via google-auth."""
-    import json as _json
-    try:
-        from google.oauth2 import service_account as _sa
-        from google.auth.transport.requests import Request as _Req
-    except ImportError:
-        import subprocess
-        subprocess.run(["pip", "install", "google-auth", "--quiet",
-                        "--break-system-packages"], capture_output=True)
-        from google.oauth2 import service_account as _sa
-        from google.auth.transport.requests import Request as _Req
-    sa_info = _json.loads(GDRIVE_SERVICE_ACCOUNT)
-    creds = _sa.Credentials.from_service_account_info(
-        sa_info,
-        scopes=["https://www.googleapis.com/auth/drive"]
-    )
-    creds.refresh(_Req())
-    return creds.token
-
-def gdrive_upload_near_miss():
-    """Upload /data/near_miss_log.txt ke Google Drive folder tradingview. Buat baru atau update."""
-    global _gdrive_near_miss_file_id
-    if not GDRIVE_SERVICE_ACCOUNT:
-        return
-    if not os.path.exists(NEAR_MISS_LOG):
-        return
-    try:
-        token = _gdrive_token()
-        headers = {"Authorization": f"Bearer {token}"}
-        # Cari file yang sudah ada kalau belum di-cache
-        if not _gdrive_near_miss_file_id:
-            r = requests.get(
-                "https://www.googleapis.com/drive/v3/files",
-                headers=headers,
-                params={"q": f"name='near_miss_log.txt' and '{GDRIVE_NEAR_MISS_FOLDER}' in parents and trashed=false",
-                        "fields": "files(id)"},
-                timeout=15)
-            files = r.json().get("files", [])
-            if files:
-                _gdrive_near_miss_file_id = files[0]["id"]
-        with open(NEAR_MISS_LOG, "rb") as f:
-            content = f.read()
-        if _gdrive_near_miss_file_id:
-            # Update file yang sudah ada
-            requests.patch(
-                f"https://www.googleapis.com/upload/drive/v3/files/{_gdrive_near_miss_file_id}",
-                headers=headers,
-                params={"uploadType": "media"},
-                data=content,
-                timeout=30)
-        else:
-            # Buat file baru pakai multipart manual (tanpa requests_toolbelt)
-            import json as _json
-            boundary = "----boundary_near_miss_log"
-            meta = _json.dumps({"name": "near_miss_log.txt", "parents": [GDRIVE_NEAR_MISS_FOLDER]})
-            body = (
-                f"--{boundary}\r\n"
-                f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
-                f"{meta}\r\n"
-                f"--{boundary}\r\n"
-                f"Content-Type: text/plain\r\n\r\n"
-            ).encode() + content + f"\r\n--{boundary}--".encode()
-            r = requests.post(
-                "https://www.googleapis.com/upload/drive/v3/files",
-                headers={**headers, "Content-Type": f"multipart/related; boundary={boundary}"},
-                params={"uploadType": "multipart"},
-                data=body, timeout=30)
-            _gdrive_near_miss_file_id = r.json().get("id")
-            # Share ke pemilik Drive agar file visible
-            if _gdrive_near_miss_file_id:
-                requests.post(
-                    f"https://www.googleapis.com/drive/v3/files/{_gdrive_near_miss_file_id}/permissions",
-                    headers=headers,
-                    json={"role": "writer", "type": "user", "emailAddress": "widodobudi@gmail.com"},
-                    timeout=15)
-        log("[GDRIVE] near_miss_log.txt berhasil diupload ke Google Drive.")
-    except Exception as e:
-        log(f"WARN gdrive_upload_near_miss: {e}")
 
 def log_near_miss(strategi: str, near_miss_list: list, total_syarat: int):
     """Append near miss ke file akumulatif. Tidak pernah overwrite."""
