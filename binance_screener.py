@@ -1711,13 +1711,17 @@ def log_near_miss(strategi: str, near_miss_list: list, total_syarat: int):
         ts = now_wib().strftime('%Y-%m-%d %H:%M')
         lines = []
         for item in near_miss_list:
-            if len(item) == 3:
+            if len(item) == 4:
+                n_pass, sym, fails, item_total = item
+            elif len(item) == 3:
                 n_pass, sym, fails = item
+                item_total = total_syarat
             else:
                 sym, fails = item
                 n_pass = "?"
+                item_total = total_syarat
             fails_str = "; ".join(fails) if fails else "semua lolos"
-            lines.append(f"{ts} | {strategi} | {sym} | lolos {n_pass}/{total_syarat} | belum: {fails_str}\n")
+            lines.append(f"{ts} | {strategi} | {sym} | lolos {n_pass}/{item_total} | belum: {fails_str}\n")
         if lines:
             with open(NEAR_MISS_LOG, "a", encoding="utf-8") as f:
                 f.writelines(lines)
