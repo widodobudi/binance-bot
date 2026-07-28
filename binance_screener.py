@@ -144,7 +144,7 @@ STRAT_CROSSEMA_MAX_HOLD     = 15       # timeout 15 candle 4h = 2.5 hari
 STRAT_CROSSEMA_FWDTEST      = 7        # target forward-test
 STRAT_CROSSEMA_VOLUME_MULT  = 0.4      # identik brkX2-4h
 STRAT_CROSSEMA_VOLUME_MA    = 20
-STRAT_CROSSEMA_MIN_VOL_USD  = 3_000_000
+STRAT_CROSSEMA_MIN_VOL_USD  = 1_000_000  # diubah dari 3jt → 1jt (backtest_crossema_vol24h_sweep.py, 28/07/2026): WR 57.6% vs 50.1%, frekuensi +61%, avg -0.048% (dalam noise)
 # PERF_ONLY lebih baik dari baseline: avg +2.711% vs +2.538%, worst -21.15% vs -25.79%, wf6 OK
 # Filter usia saja lebih buruk; usia+perf wf6 HATI-HATI → deploy PERF_ONLY saja
 # Update 25/07/2026: backtest_perf_weight_sweep → EQUAL_thr0.5 terbaik
