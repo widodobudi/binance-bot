@@ -3309,7 +3309,7 @@ def thread_crossema_scan():
                 # Lolos Lapis 1 tapi belum cross EMA20 → catat sebagai near_miss
                 if len(_crossema_near_miss) < 5:
                     gap_pct = (float(ef) / price_now - 1) * 100 if price_now > 0 else 0
-                    _crossema_near_miss.append((sym, [f"belum cross EMA20 (price {price_now:.4g} vs EMA20 {ef:.4g}, gap {gap_pct:.1f}%)"]))
+                    _crossema_near_miss.append((4, sym, [f"belum cross EMA20 (price {price_now:.4g} vs EMA20 {ef:.4g}, gap {gap_pct:.1f}%)"], 6))
                 continue
 
             # Candle berjalan harus bullish (price > open candle ini)
@@ -3317,7 +3317,7 @@ def thread_crossema_scan():
             open_now = float(df_live.iloc[-1]["open"]) if df_live is not None and len(df_live) > 0 else price_now * 0.99
             if price_now <= open_now:
                 if len(_crossema_near_miss) < 5:
-                    _crossema_near_miss.append((sym, [f"candle belum bullish (price {price_now:.4g} vs open {open_now:.4g})"]))
+                    _crossema_near_miss.append((5, sym, [f"candle belum bullish (price {price_now:.4g} vs open {open_now:.4g})"], 6))
                 continue
 
             # LOLOS → OPEN DEAL
