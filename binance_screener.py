@@ -1725,7 +1725,18 @@ def heartbeat_general_tick():
     heartbeat_gen_last_sent    = now
     heartbeat_gen_window_start = now_dt
 
-NEAR_MISS_LOG = "/data/near_miss_log.txt"
+NEAR_MISS_LOG    = "/data/near_miss_log.txt"
+TFPCT_BLOCKED_LOG = "/data/tfpct_blocked_log.txt"
+
+def log_tfpct_blocked(thread: str, strategi: str, elapsed_pct: float, limit_pct: float, keterangan: str):
+    """Append ke tfpct_blocked_log.txt saat scan diblokir karena TF% sudah lewat window."""
+    try:
+        ts = now_wib().strftime('%Y-%m-%d %H:%M')
+        line = f"{ts} | {thread:<6} | {strategi:<12} | TF% {elapsed_pct*100:.1f}% > {limit_pct*100:.1f}% | {keterangan}\n"
+        with open(TFPCT_BLOCKED_LOG, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception as e:
+        log(f"WARN log_tfpct_blocked: {e}")
 
 
 def log_near_miss(strategi: str, near_miss_list: list, total_syarat: int):
@@ -2462,6 +2473,9 @@ def thread1c_scan_intrabar():
     candle_open_ms = (now_ms // sec12_ms) * sec12_ms
     elapsed_pct    = (now_ms - candle_open_ms) / sec12_ms
     if elapsed_pct < INTRABAR_ENTRY_PCT or elapsed_pct > INTRABAR_WINDOW_END:
+        if elapsed_pct > INTRABAR_WINDOW_END:
+            log(f"[T1c] TF% LEWAT window: {elapsed_pct*100:.1f}% > {INTRABAR_WINDOW_END*100:.0f}% (window 60-75% sudah tutup)")
+            log_tfpct_blocked("T1c", "brkX2-12h", elapsed_pct, INTRABAR_WINDOW_END, "window 60-75% sudah tutup")
         return None
     if candle_open_ms <= last_intrabar_candle_ts:
         return None
@@ -2633,6 +2647,9 @@ def thread1c_scan_intrabar_early():
 
     # Hanya entry di window 5-10% elapsed
     if elapsed_pct < INTRABAR_EARLY_ENTRY_PCT or elapsed_pct > INTRABAR_EARLY_END_PCT:
+        if elapsed_pct > INTRABAR_EARLY_END_PCT:
+            log(f"[T1c-E] TF% LEWAT window: {elapsed_pct*100:.1f}% > {INTRABAR_EARLY_END_PCT*100:.0f}% (window 5-10% sudah tutup)")
+            log_tfpct_blocked("T1c-E", "brkX2-12h", elapsed_pct, INTRABAR_EARLY_END_PCT, "window 5-10% sudah tutup")
         return None
     # Anti-double-entry: satu entry per candle per window
     if candle_open_ms <= last_intrabar_early_candle_ts:
@@ -3009,6 +3026,9 @@ def thread1d_scan_4h():
 
     # Hanya entry di window menit ke-5 sampai ke-10
     if not (STRAT4H_ENTRY_MIN_PCT <= elapsed_pct <= STRAT4H_ENTRY_MAX_PCT):
+        if elapsed_pct > STRAT4H_ENTRY_MAX_PCT:
+            log(f"[T1d] TF% LEWAT window: {elapsed_pct*100:.1f}% > {STRAT4H_ENTRY_MAX_PCT*100:.1f}% (window menit 5-10 sudah tutup)")
+            log_tfpct_blocked("T1d", "brkX2-4h", elapsed_pct, STRAT4H_ENTRY_MAX_PCT, "window menit 5-10 sudah tutup")
         return
 
     # Cek slot tersedia
@@ -3245,6 +3265,9 @@ def thread_crossema_scan():
 
     # Hanya scan dalam window 5–15% elapsed
     if not (STRAT_CROSSEMA_ENTRY_MIN <= elapsed_pct <= STRAT_CROSSEMA_ENTRY_MAX):
+        if elapsed_pct > STRAT_CROSSEMA_ENTRY_MAX:
+            log(f"[T_CX] TF% LEWAT window: {elapsed_pct*100:.1f}% > {STRAT_CROSSEMA_ENTRY_MAX*100:.1f}% (window menit 5-15 sudah tutup)")
+            log_tfpct_blocked("T_CX", "CrossEMA-4h", elapsed_pct, STRAT_CROSSEMA_ENTRY_MAX, "window menit 5-15 sudah tutup")
         return
 
     ticker = get_ticker_24h()
