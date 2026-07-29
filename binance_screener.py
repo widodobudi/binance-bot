@@ -121,12 +121,17 @@ STRAT4H_ATR_MIN_PCT     = 2.0
 STRAT4H_VOLUME_MULT     = 0.25  # diubah dari 0.4 → 0.25 (backtest_4h_vol_sweep.py, 27/07/2026): delta avg -0.008% (dalam noise), frekuensi naik
 STRAT4H_VOLUME_MA       = 20
 STRAT4H_MIN_VOL_USD     = 3_000_000
-# HTF 3D filter untuk 4h: PRICE_EMA50 + MACD + RSI50
-STRAT4H_HTF_TF          = "3d"
+# HTF filter baru untuk 4h: vol 12h > X * MA20 volume 12h
+# brkX2-4h: vol12h>2.0xMA (backtest_htf_vol_sweep_4h.py, 29/07/2026): avg +5.352% vs lama +1.989%, WR 84.6%, wf6 OK
+# CrossEMA-4h: vol12h>1.5xMA (backtest_htf_vol_sweep_4h.py, 29/07/2026): avg +2.587% vs lama +0.787%, wf6 neg=1/6 OK
+STRAT4H_HTF_TF          = "12h"   # diubah dari 3d → 12h
+STRAT4H_HTF_VOL_MULT    = 2.0     # brkX2-4h: vol12h > 2.0x MA20
+STRAT4H_HTF_VOL_MA      = 20
+STRAT4H_HTF_LIMIT       = 500     # candle 12h (~1 tahun)
+# Parameter lama (tidak dipakai lagi)
 STRAT4H_HTF_EMA_SLOW    = 50
 STRAT4H_HTF_MACD_FAST   = 12; STRAT4H_HTF_MACD_SLOW = 26; STRAT4H_HTF_MACD_SIGNAL = 9
 STRAT4H_HTF_RSI_LEN     = 14
-STRAT4H_HTF_LIMIT       = 120
 ADD_FUND_AUTO           = False
 BTC_FILTER_ENABLED      = False
 
@@ -146,6 +151,7 @@ STRAT_CROSSEMA_FWDTEST      = 7        # target forward-test
 STRAT_CROSSEMA_VOLUME_MULT  = 0.4      # identik brkX2-4h
 STRAT_CROSSEMA_VOLUME_MA    = 20
 STRAT_CROSSEMA_MIN_VOL_USD  = 1_000_000  # diubah dari 3jt → 1jt (backtest_crossema_vol24h_sweep.py, 28/07/2026): WR 57.6% vs 50.1%, frekuensi +61%, avg -0.048% (dalam noise)
+STRAT_CROSSEMA_HTF_VOL_MULT = 1.5     # HTF 12h: vol>1.5xMA (backtest_htf_vol_sweep_4h.py, 29/07/2026): avg +2.587% vs lama +0.787%, wf6 neg=1/6 OK
 # PERF_ONLY lebih baik dari baseline: avg +2.711% vs +2.538%, worst -21.15% vs -25.79%, wf6 OK
 # Filter usia saja lebih buruk; usia+perf wf6 HATI-HATI → deploy PERF_ONLY saja
 # Update 25/07/2026: backtest_perf_weight_sweep → EQUAL_thr0.5 terbaik
@@ -165,11 +171,15 @@ PERF_TF_CONFIG      = [      # (label, hari_ke_belakang, weight) — equal weigh
 # Hasil backtest: avg +2.600% vs baseline +0.770% (+1.830%), WR 61.3%, tona turun 52%
 HTF_FILTER_ENABLED  = True
 HTF_TIMEFRAME       = "3d"
-HTF_EMA_SLOW        = 50       # price > EMA50 3D
+HTF_EMA_SLOW        = 50       # price > EMA50 3D (lama, tidak dipakai lagi)
 HTF_MACD_FAST       = 12
 HTF_MACD_SLOW       = 26
 HTF_MACD_SIGNAL     = 9
 HTF_CANDLE_LIMIT    = 120      # candle 3D yang diambil (~1 tahun)
+# HTF filter baru brkX2-12h: vol 3D > HTF_VOL_MULT * MA20 volume 3D
+# (backtest_htf_vol_sweep_12h.py, 29/07/2026): avg +6.552% vs lama +4.975%, WR 82.8%, wf6 OK
+HTF_VOL_MULT        = 1.5
+HTF_VOL_MA_PERIOD   = 20
 
 # ---- STRATEGI 2: REVERSAL DOJI + HEIKIN ASHI (8h) ----
 REVERSAL_ENABLED      = True
@@ -1110,7 +1120,7 @@ def entry_detail(df):
     if pd.isna(row['ema_fast']) or pd.isna(row['ema_slow']) or pd.isna(row['hh']) or pd.isna(row['vol_ma']):
         return None
     checks = []  # (lolos?, label_gagal)
-    checks.append((row['st_dir']==1, "Supertrend (belum up)"))
+    checks.append((row['st_dir']==1, "Supertrend (masih Downtrend)"))
     checks.append((row['close']>row['ema_fast'], f"close>EMA20 (close {row['close']:.4g} vs EMA20 {row['ema_fast']:.4g})"))
     checks.append((row['ema_fast']>row['ema_slow'], f"EMA20>EMA50 ({row['ema_fast']:.4g} vs {row['ema_slow']:.4g})"))
     checks.append((row['close']>row['hh'], f"breakout{BREAKOUT_LOOKBACK} (close {row['close']:.4g} vs HH {row['hh']:.4g})"))
@@ -1312,33 +1322,31 @@ def compute_indicators_htf(df):
         df["htf_macd_hist"] = float("nan")
     return df
 
-def htf_filter_ok(symbol: str) -> bool:
+def htf_filter_ok(symbol: str, for_reversal: bool = False) -> bool:
     """
-    HTF 3D filter: entry 12h hanya boleh kalau di candle 3D terakhir:
-      1. close > EMA50 3D  (PRICE_EMA50)
-      2. MACD hist 3D > 0  (MACD)
-    Kalau gagal ambil data → jangan blokir (fail-open).
+    HTF filter:
+    - brkX2-12h & T3: vol 3D > HTF_VOL_MULT * MA20 volume 3D
+      (backtest_htf_vol_sweep_12h.py, 29/07/2026): avg +6.552% vs lama +4.975%, wf6 OK
+    - Reversal-8h: tidak ada HTF filter (HTF lama = tanpa HTF, identik hasilnya)
+    Fail-open kalau data kurang.
     """
+    if for_reversal:
+        return True  # Reversal-8h: HTF dihapus
     if not HTF_FILTER_ENABLED:
         return True
     try:
         df = get_ohlcv_htf(symbol, interval=HTF_TIMEFRAME, limit=HTF_CANDLE_LIMIT)
-        if df is None or len(df) < HTF_MACD_SLOW + HTF_MACD_SIGNAL + 5:
-            return True  # data kurang → fail-open
-        df = compute_indicators_htf(df)
-        row = df.iloc[-1]
-        # Kondisi 1: price > EMA50 3D
-        ema_slow = row.get("htf_ema_slow")
-        if pd.isna(ema_slow) or row["close"] <= ema_slow:
-            return False
-        # Kondisi 2: MACD hist 3D > 0
-        macd_h = row.get("htf_macd_hist")
-        if pd.isna(macd_h) or macd_h <= 0:
-            return False
-        return True
+        if df is None or len(df) < HTF_VOL_MA_PERIOD + 5:
+            return True  # fail-open
+        if 'vol' in df.columns and 'volume' not in df.columns:
+            df = df.rename(columns={'vol': 'volume'})
+        vol_ma = df['volume'].rolling(HTF_VOL_MA_PERIOD).mean().iloc[-1]
+        if pd.isna(vol_ma) or vol_ma <= 0:
+            return True
+        return float(df['volume'].iloc[-1]) > HTF_VOL_MULT * vol_ma
     except Exception as e:
         log(f"  [HTF] error cek {symbol}: {e} → skip filter")
-        return True  # error → fail-open
+        return True  # fail-open
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STRATEGI 3: brkX2-4h — OHLCV, INDIKATOR, ENTRY, HTF FILTER
@@ -1380,31 +1388,25 @@ def compute_indicators_4h(df):
     df["vol24h_usd"] = df["qvol"] * 6   # 6 candle 4h = 24h
     return df
 
-def htf_filter_4h_ok(symbol: str) -> bool:
+def htf_filter_4h_ok(symbol: str, for_crossema: bool = False) -> bool:
     """
-    HTF 3D filter untuk strategi 4h:
-      PRICE_EMA50: close 3D > EMA50 3D
-      MACD       : MACD hist 3D > 0
-      RSI50      : RSI 3D > 50
+    HTF filter untuk strategi 4h (brkX2-4h dan CrossEMA-4h):
+    - brkX2-4h   : vol 12h > STRAT4H_HTF_VOL_MULT (2.0) * MA20 volume 12h
+    - CrossEMA-4h: vol 12h > STRAT_CROSSEMA_HTF_VOL_MULT (1.5) * MA20 volume 12h
+    (backtest_htf_vol_sweep_4h.py, 29/07/2026)
     Fail-open kalau data tidak cukup.
     """
     try:
-        import pandas_ta as _pta
+        vol_mult = STRAT_CROSSEMA_HTF_VOL_MULT if for_crossema else STRAT4H_HTF_VOL_MULT
         df = get_ohlcv_htf(symbol, interval=STRAT4H_HTF_TF, limit=STRAT4H_HTF_LIMIT)
-        if df is None or len(df) < STRAT4H_HTF_MACD_SLOW + STRAT4H_HTF_MACD_SIGNAL + 5:
+        if df is None or len(df) < STRAT4H_HTF_VOL_MA + 5:
             return True  # fail-open
-        df = df.copy()
-        c = df["close"]
-        df["ema50"]  = _pta.ema(c, length=STRAT4H_HTF_EMA_SLOW)
-        _macd = _pta.macd(c, fast=STRAT4H_HTF_MACD_FAST,
-                          slow=STRAT4H_HTF_MACD_SLOW, signal=STRAT4H_HTF_MACD_SIGNAL)
-        df["macd_h"] = _macd[[col for col in _macd.columns if "MACDh" in col][0]]
-        df["rsi"]    = _pta.rsi(c, length=STRAT4H_HTF_RSI_LEN)
-        row   = df.iloc[-1]
-        ema50 = row.get("ema50"); macd_h = row.get("macd_h")
-        rsi   = row.get("rsi");   close  = row.get("close")
-        if any(pd.isna(v) for v in [ema50, macd_h, rsi, close]): return True
-        return (close > ema50) and (macd_h > 0) and (rsi > 50)
+        if 'vol' in df.columns and 'volume' not in df.columns:
+            df = df.rename(columns={'vol': 'volume'})
+        vol_ma = df['volume'].rolling(STRAT4H_HTF_VOL_MA).mean().iloc[-1]
+        if pd.isna(vol_ma) or vol_ma <= 0:
+            return True
+        return float(df['volume'].iloc[-1]) > vol_mult * vol_ma
     except Exception as e:
         log(f"  [HTF4h] error cek {symbol}: {e} → skip filter")
         return True  # fail-open
@@ -3077,7 +3079,7 @@ def thread1d_scan_4h():
                 r = df.iloc[-1]
                 fails = []
                 sd = r.get("st_dir")
-                if pd.isna(sd) or sd != 1: fails.append("Supertrend belum up")
+                if pd.isna(sd) or sd != 1: fails.append("Supertrend masih Downtrend")
                 mh = r.get("macd_hist")
                 if pd.isna(mh) or mh <= 0: fails.append(f"MACD({(f'{mh:.4f}' if mh==mh else 'n/a')}<=0)")
                 atr = r.get("atr_pct")
@@ -3310,8 +3312,8 @@ def thread_crossema_scan():
             vm = r.get("vol_ma")
             if pd.isna(vm) or vm <= 0 or r["vol"] < STRAT_CROSSEMA_VOLUME_MULT * vm: continue
 
-            # HTF 3D filter
-            if not htf_filter_4h_ok(sym): continue
+            # HTF 12h filter (CrossEMA: vol12h>1.5xMA)
+            if not htf_filter_4h_ok(sym, for_crossema=True): continue
 
             # Lapis 2: harga live (dari candle berjalan) harus > EMA20
             price_now = get_price_now(sym)
