@@ -1847,7 +1847,7 @@ def thread1_scan():
                 det = entry_detail(df)
                 if det is not None:
                     n_pass, total, fails = det
-                    near_miss.append((n_pass, sym, fails + ["HTF 3D: bearish"], 9))
+                    near_miss.append((n_pass, sym, fails + [f"HTF 3D: vol<{HTF_VOL_MULT}xMA"], 9))
             else:
                 # Performance filter
                 if PERF_FILTER_ENABLED:
@@ -3095,7 +3095,7 @@ def thread1d_scan_4h():
             # HTF 3D filter
             if not htf_filter_4h_ok(sym):
                 log(f"  [T1d] {sym} lolos 4h tapi DITOLAK HTF 3D filter")
-                near_miss_4h.append((sym, ["HTF 3D: bearish"]))
+                near_miss_4h.append((sym, [f"HTF 12h: vol<{STRAT4H_HTF_VOL_MULT}xMA"]))
                 continue
 
             # Performance filter
