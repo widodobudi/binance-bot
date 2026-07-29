@@ -70,7 +70,8 @@ SUPERTREND_LENGTH = 10
 SUPERTREND_MULT   = 3.0
 EMA_FAST          = 20
 EMA_SLOW          = 50
-BREAKOUT_LOOKBACK = 5   # diubah dari 7 → 5 (backtest_hh567_sweep.py, 27/07/2026): HH5 avg=+4.057% vs HH7 +3.934%, delta +0.122%, wf6 OK
+BREAKOUT_LOOKBACK = 3   # diubah dari 5 → 3 (backtest_hh34567_sweep.py, 29/07/2026): HH3 avg=+4.099% vs HH5 +4.057%, delta +0.042%, wf6 OK; ATR<10% filter menghapus worst -49.23% → -29.49%
+ATR_MAX_PCT       = 10.0  # filter baru: ATR% < 10% saat entry (backtest_hh3_filter_sweep.py, 29/07/2026): delta -0.164%, worst turun dari -49.23% ke -29.49%
 VOLUME_MULT       = 0.6   # turun dari 0.8 → backtest_vol_lower_sweep (22/07/2026): delta avg -0.042% (dalam noise), wf6 OK
 MACD_FILTER_ENABLED = True    # True=wajib MACD histogram > 0 saat entry
 
@@ -1095,6 +1096,10 @@ def check_entry(df) -> bool:
     if MACD_FILTER_ENABLED:
         _mh = row.get('macd_hist')
         if _mh is None or pd.isna(_mh) or _mh <= 0: return False
+    # ATR filter: hindari simbol terlalu volatile (backtest_hh3_filter_sweep.py, 29/07/2026)
+    _atr_pct = row.get('atr_pct')
+    if _atr_pct is not None and not pd.isna(_atr_pct) and _atr_pct >= ATR_MAX_PCT:
+        return False
     return True
 
 def entry_detail(df):
@@ -1122,6 +1127,11 @@ def entry_detail(df):
         sk = row['stoch_k'] if ('stoch_k' in row and not pd.isna(row['stoch_k'])) else None
         stoch_ok = sk is not None and sk < STOCH_MAX
         checks.append((stoch_ok, f"Stoch%K<{STOCH_MAX} (skrg {sk:.1f})" if sk is not None else "Stoch%K (n/a)"))
+    # ATR filter
+    _atr = row.get('atr_pct')
+    if _atr is not None and not pd.isna(_atr):
+        atr_ok = _atr < ATR_MAX_PCT
+        checks.append((atr_ok, f"ATR%<{ATR_MAX_PCT} (skrg {_atr:.1f}%)"))
     n_pass = sum(1 for ok,_ in checks if ok)
     fails = [lab for ok,lab in checks if not ok]
     return (n_pass, len(checks), fails)
@@ -1710,7 +1720,7 @@ def heartbeat_general_tick():
     send_telegram(
         f"{header}\n"
         f"\n---\n"
-        f"brkX2-12h  : ST-up + >EMA20 + EMA20>EMA50 + breakout{BREAKOUT_LOOKBACK} + vol>={VOLUME_MULT}xMA + RSI<{RSI_MAX}\n"
+        f"brkX2-12h  : ST-up + >EMA20 + EMA20>EMA50 + breakout{BREAKOUT_LOOKBACK} + vol>={VOLUME_MULT}xMA + RSI<{RSI_MAX} + ATR<{ATR_MAX_PCT}%\n"
         f"Reversal-8h: 3 merah+turun>=5% + doji + HA bull + cross-up EMA20\n"
         f"brkX2-4h   : ST-up + MACD>0 + ATR>=2% + vol>={STRAT4H_VOLUME_MULT}xMA + HTF 3D\n"
         f"CrossEMA-4h: ST-1 + cross-up EMA20 intrabar menit 12-36\n"
