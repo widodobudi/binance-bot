@@ -208,14 +208,15 @@ INTRABAR_ENTRY_PCT     = 0.60
 INTRABAR_WINDOW_END    = 0.75
 INTRABAR_SCAN_INTERVAL = 300
 
-# T3-EARLY: window intrabar tambahan di awal candle (5-10% elapsed = menit ke 36-72)
+# T3-EARLY: window intrabar tambahan di awal candle (5-59% elapsed = menit ke 36-424)
+# diubah dari 5-10% → 5-59% (29/07/2026): window lebih lebar, tidak overlap T3-BASE (60-75%)
 # Hasil backtest_intrabar_early (17/07/2026): avg +9.519%, WR 75.7%, tona 12, wf6 OK
 # vs T3-baseline 60-75%: avg +3.332%, WR 61.7%
 # vs close candle: avg +0.770%, WR 50.4%
 INTRABAR_EARLY_ENABLED   = True
 INTRABAR_EARLY_ENTRY_PCT = 0.05    # 5% elapsed = menit ke 36
-INTRABAR_EARLY_END_PCT   = 0.10    # 10% elapsed = menit ke 72
-INTRABAR_EARLY_SCAN_INTERVAL = 240  # 4 menit → 9x scan dalam window 36 menit
+INTRABAR_EARLY_END_PCT   = 0.59    # 59% elapsed = menit ke 424 (tepat sebelum T3-BASE di 60%)
+INTRABAR_EARLY_SCAN_INTERVAL = 240  # 4 menit → scan tiap 4 menit dalam window
 # Breakout lookback KHUSUS T3-EARLY: HH7 (bukan HH10)
 # Basis: backtest_early_hh_sweep.py (20/07/2026)
 #   HH7 avg=+9.790% WR=87.9% vs baseline HH10 avg=+9.304% WR=88.0% (delta +0.486%, wf6 OK)
@@ -1479,7 +1480,7 @@ def heartbeat_tick(status_line: str):
         with t3_status_lock:
             es = t3_early_last_status; bs = t3_base_last_status
             en = t3_early_near_miss[:]; bn = t3_base_near_miss[:]
-        t3_str = f"\nIntrabar EARLY (5-10%): {es}"
+        t3_str = f"\nIntrabar EARLY (5-59%): {es}"
         if en: t3_str += " | " + ", ".join(to_display_pair(s) for s,_ in en[:2])
         t3_str += f"\nIntrabar BASE (60-75%): {bs}"
         if bn: t3_str += " | " + ", ".join(to_display_pair(s) for s,_ in bn[:2])
@@ -2376,7 +2377,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
         with t3_status_lock:
             es = t3_early_last_status; bs = t3_base_last_status
             en = t3_early_near_miss[:]; bn = t3_base_near_miss[:]
-        t3_str = f"\nIntrabar EARLY (5-10%): {es}"
+        t3_str = f"\nIntrabar EARLY (5-59%): {es}"
         if en: t3_str += " | " + ", ".join(to_display_pair(s) for s,_ in en[:2])
         t3_str += f"\nIntrabar BASE (60-75%): {bs}"
         if bn: t3_str += " | " + ", ".join(to_display_pair(s) for s,_ in bn[:2])
@@ -2644,7 +2645,7 @@ t1d_near_miss_lock   = threading.Lock()
 
 def thread1c_scan_intrabar_early():
     """
-    T3-EARLY: Scan sinyal brkX2 di awal candle 12h (5-10% elapsed = menit ke 36-72).
+    T3-EARLY: Scan sinyal brkX2 di awal candle 12h (5-59% elapsed = menit ke 36-424).
     Syarat entry IDENTIK dengan T3-baseline dan T1 (close candle).
     Backtest 17/07/2026: avg +9.519%, WR 75.7%, tona 12, wf6 OK (203 symbol).
     Anti-double-entry per candle via last_intrabar_early_candle_ts.
@@ -2657,11 +2658,11 @@ def thread1c_scan_intrabar_early():
     candle_open_ms = (now_ms // sec12_ms) * sec12_ms
     elapsed_pct    = (now_ms - candle_open_ms) / sec12_ms
 
-    # Hanya entry di window 5-10% elapsed
+    # Hanya entry di window 5-59% elapsed
     if elapsed_pct < INTRABAR_EARLY_ENTRY_PCT or elapsed_pct > INTRABAR_EARLY_END_PCT:
         if elapsed_pct > INTRABAR_EARLY_END_PCT:
-            log(f"[T1c-E] TF% LEWAT window: {elapsed_pct*100:.1f}% > {INTRABAR_EARLY_END_PCT*100:.0f}% (window 5-10% sudah tutup)")
-            log_tfpct_blocked("T1c-E", "brkX2-12h", elapsed_pct, INTRABAR_EARLY_END_PCT, "window 5-10% sudah tutup")
+            log(f"[T1c-E] TF% LEWAT window: {elapsed_pct*100:.1f}% > {INTRABAR_EARLY_END_PCT*100:.0f}% (window 5-59% sudah tutup)")
+            log_tfpct_blocked("T1c-E", "brkX2-12h", elapsed_pct, INTRABAR_EARLY_END_PCT, "window 5-59% sudah tutup")
         return None
     # Anti-double-entry: satu entry per candle per window
     if candle_open_ms <= last_intrabar_early_candle_ts:
