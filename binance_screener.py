@@ -178,7 +178,7 @@ HTF_MACD_SIGNAL     = 9
 HTF_CANDLE_LIMIT    = 120      # candle 3D yang diambil (~1 tahun)
 # HTF filter baru brkX2-12h: vol 3D > HTF_VOL_MULT * MA20 volume 3D
 # (backtest_htf_vol_sweep_12h.py, 29/07/2026): avg +6.552% vs lama +4.975%, WR 82.8%, wf6 OK
-HTF_VOL_MULT        = 1.2  # diubah dari 1.5 → 1.2 (backtest_htf_vol_sweep_12h.py, 30/07/2026): avg +5.821% n=1648/bln 92 wf6 OK
+HTF_VOL_MULT        = 0.8  # diubah dari 1.2 → 0.8 (backtest_htf_vol_sweep_12h.py, 30/07/2026): avg +4.628% WR=79.0% n=2261/bln 126 wf6 OK
 HTF_VOL_MA_PERIOD   = 20
 
 # ---- STRATEGI 2: REVERSAL DOJI + HEIKIN ASHI (8h) ----
