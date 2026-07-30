@@ -1327,6 +1327,18 @@ def compute_indicators_htf(df):
         df["htf_macd_hist"] = float("nan")
     return df
 
+def htf_vol_ratio(symbol: str, interval: str, limit: int, vol_ma_period: int) -> float:
+    """Return rasio vol_last/vol_ma untuk display near_miss. Return -1 kalau gagal."""
+    try:
+        df = get_ohlcv_htf(symbol, interval=interval, limit=limit)
+        if df is None or len(df) < vol_ma_period + 2: return -1
+        if 'vol' in df.columns and 'volume' not in df.columns:
+            df = df.rename(columns={'vol': 'volume'})
+        vol_ma = df['volume'].rolling(vol_ma_period).mean().iloc[-1]
+        if pd.isna(vol_ma) or vol_ma <= 0: return -1
+        return float(df['volume'].iloc[-1]) / vol_ma
+    except: return -1
+
 def htf_filter_ok(symbol: str, for_reversal: bool = False) -> bool:
     """
     HTF filter:
@@ -1852,7 +1864,9 @@ def thread1_scan():
                 det = entry_detail(df)
                 if det is not None:
                     n_pass, total, fails = det
-                    near_miss.append((n_pass, sym, fails + [f"HTF 3D: vol<{HTF_VOL_MULT}xMA"], 9))
+                    _rvol = htf_vol_ratio(sym, HTF_TIMEFRAME, HTF_CANDLE_LIMIT, HTF_VOL_MA_PERIOD)
+                    _rvol_str = f"{_rvol:.2f}xMA" if _rvol >= 0 else "?"
+                    near_miss.append((n_pass, sym, fails + [f"HTF 3D: vol<{HTF_VOL_MULT}xMA (skrg {_rvol_str})"], 9))
             else:
                 # Performance filter
                 if PERF_FILTER_ENABLED:
@@ -3102,7 +3116,9 @@ def thread1d_scan_4h():
             # HTF 3D filter
             if not htf_filter_4h_ok(sym):
                 log(f"  [T1d] {sym} lolos 4h tapi DITOLAK HTF 3D filter")
-                near_miss_4h.append((sym, [f"HTF 12h: vol<{STRAT4H_HTF_VOL_MULT}xMA"]))
+                _rvol4h = htf_vol_ratio(sym, STRAT4H_HTF_TF, STRAT4H_HTF_LIMIT, STRAT4H_HTF_VOL_MA)
+                _rvol4h_str = f"{_rvol4h:.2f}xMA" if _rvol4h >= 0 else "?"
+                near_miss_4h.append((sym, [f"HTF 12h: vol<{STRAT4H_HTF_VOL_MULT}xMA (skrg {_rvol4h_str})"]))
                 continue
 
             # Performance filter
