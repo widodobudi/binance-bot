@@ -71,9 +71,9 @@ SUPERTREND_MULT   = 3.0
 EMA_FAST          = 20
 EMA_SLOW          = 50
 BREAKOUT_LOOKBACK = 3   # diubah dari 5 → 3 (backtest_hh34567_sweep.py, 29/07/2026): HH3 avg=+4.099% vs HH5 +4.057%, delta +0.042%, wf6 OK; ATR<10% filter menghapus worst -49.23% → -29.49%
-ATR_MAX_PCT       = 10.0  # filter baru: ATR% < 10% saat entry (backtest_hh3_filter_sweep.py, 29/07/2026): delta -0.164%, worst turun dari -49.23% ke -29.49%
+ATR_MAX_PCT       = 9.0   # diubah dari 10 → 9 (backtest_no_ema_no_macd_filter_sweep.py, 30/07/2026): ATR<9+close>EMA50 avg=+3.074% worst=-29.10% wf6 OK
 VOLUME_MULT       = 0.6   # turun dari 0.8 → backtest_vol_lower_sweep (22/07/2026): delta avg -0.042% (dalam noise), wf6 OK
-MACD_FILTER_ENABLED = True    # True=wajib MACD histogram > 0 saat entry
+MACD_FILTER_ENABLED = False   # dimatikan 30/07/2026 — backtest_no_ema_no_macd: tanpa MACD+close>EMA50 avg=+3.074% wf6 OK
 
 VOLUME_MA_PERIOD  = 20
 RSI_LENGTH        = 14
@@ -1093,24 +1093,29 @@ def calc_perf_score(sym: str, query_ts_ms: int) -> float:
     return score
 
 def check_entry(df) -> bool:
-    """Evaluasi pada candle TERTUTUP terakhir (mode a)."""
+    """Evaluasi pada candle TERTUTUP terakhir (mode a).
+    Update 30/07/2026: hapus EMA20>EMA50, hapus MACD hist>0,
+    ATR<9% (dari <10%), tambah close>EMA50.
+    Backtest: backtest_no_ema_no_macd_filter_sweep.py — ATR<9+close>EMA50:
+    avg=+3.074% worst=-29.10% wf6 OK.
+    """
     if is_choppy(df): return False
     row = df.iloc[-1]
     if pd.isna(row['ema_fast']) or pd.isna(row['ema_slow']) or pd.isna(row['hh']) or pd.isna(row['vol_ma']):
         return False
     if row['st_dir'] != 1: return False
     if not (row['close'] > row['ema_fast']): return False
-    if not (row['ema_fast'] > row['ema_slow']): return False
+    # EMA20>EMA50 dihapus (30/07/2026)
     if not (row['close'] > row['hh']): return False
     if row['vol'] < VOLUME_MULT * row['vol_ma']: return False
     if pd.isna(row['rsi']) or row['rsi'] > RSI_MAX: return False
-    if MACD_FILTER_ENABLED:
-        _mh = row.get('macd_hist')
-        if _mh is None or pd.isna(_mh) or _mh <= 0: return False
-    # ATR filter: hindari simbol terlalu volatile (backtest_hh3_filter_sweep.py, 29/07/2026)
+    # MACD filter dihapus (30/07/2026)
+    # ATR filter: <9% (diubah dari <10%)
     _atr_pct = row.get('atr_pct')
     if _atr_pct is not None and not pd.isna(_atr_pct) and _atr_pct >= ATR_MAX_PCT:
         return False
+    # close > EMA50 (syarat baru pengganti EMA20>EMA50)
+    if not (row['close'] > row['ema_slow']): return False
     return True
 
 def entry_detail(df):
@@ -1123,26 +1128,25 @@ def entry_detail(df):
     checks = []  # (lolos?, label_gagal)
     checks.append((row['st_dir']==1, "Supertrend (masih Downtrend)"))
     checks.append((row['close']>row['ema_fast'], f"close>EMA20 (close {row['close']:.4g} vs EMA20 {row['ema_fast']:.4g})"))
-    checks.append((row['ema_fast']>row['ema_slow'], f"EMA20>EMA50 ({row['ema_fast']:.4g} vs {row['ema_slow']:.4g})"))
+    # EMA20>EMA50 dihapus 30/07/2026
     checks.append((row['close']>row['hh'], f"breakout{BREAKOUT_LOOKBACK} (close {row['close']:.4g} vs HH {row['hh']:.4g})"))
     vx = (row['vol']/row['vol_ma']) if row['vol_ma'] else 0
     checks.append((row['vol']>=VOLUME_MULT*row['vol_ma'], f"vol>={VOLUME_MULT}xMA (skrg {vx:.2f}x)"))
     rsi_ok = (not pd.isna(row['rsi'])) and row['rsi']<=RSI_MAX
     checks.append((rsi_ok, f"RSI<{RSI_MAX} (skrg {row['rsi']:.1f})" if not pd.isna(row['rsi']) else "RSI (n/a)"))
-    if MACD_FILTER_ENABLED:
-        _mh2 = row.get('macd_hist')
-        _macd_ok = _mh2 is not None and not pd.isna(_mh2) and _mh2 > 0
-        _mh2_str = f"{_mh2:.5f}" if (_mh2 is not None and not pd.isna(_mh2)) else "n/a"
-        checks.append((_macd_ok, f"MACD hist>0 (skrg {_mh2_str})"))
+    # MACD filter dihapus 30/07/2026
     if STOCH_MAX is not None:
         sk = row['stoch_k'] if ('stoch_k' in row and not pd.isna(row['stoch_k'])) else None
         stoch_ok = sk is not None and sk < STOCH_MAX
         checks.append((stoch_ok, f"Stoch%K<{STOCH_MAX} (skrg {sk:.1f})" if sk is not None else "Stoch%K (n/a)"))
-    # ATR filter
+    # ATR filter <9%
     _atr = row.get('atr_pct')
     if _atr is not None and not pd.isna(_atr):
         atr_ok = _atr < ATR_MAX_PCT
         checks.append((atr_ok, f"ATR%<{ATR_MAX_PCT} (skrg {_atr:.1f}%)"))
+    # close > EMA50 (syarat baru pengganti EMA20>EMA50)
+    close_ema50_ok = row['close'] > row['ema_slow']
+    checks.append((close_ema50_ok, f"close>EMA50 (close {row['close']:.4g} vs EMA50 {row['ema_slow']:.4g})"))
     n_pass = sum(1 for ok,_ in checks if ok)
     fails = [lab for ok,lab in checks if not ok]
     return (n_pass, len(checks), fails)
@@ -1723,7 +1727,7 @@ def heartbeat_general_tick():
     send_telegram(
         f"{header}\n"
         f"\n---\n"
-        f"brkX2-12h  : ST-up + >EMA20 + EMA20>EMA50 + breakout{BREAKOUT_LOOKBACK} + vol>={VOLUME_MULT}xMA + RSI<{RSI_MAX} + ATR<{ATR_MAX_PCT}%\n"
+        f"brkX2-12h  : ST-up + >EMA20 + close>EMA50 + breakout{BREAKOUT_LOOKBACK} + vol>={VOLUME_MULT}xMA + RSI<{RSI_MAX} + ATR<{ATR_MAX_PCT}%\n"
         f"Reversal-8h: 3 merah+turun>=5% + doji + HA bull + cross-up EMA20\n"
         f"brkX2-4h   : ST-up + MACD>0 + ATR>=2% + vol>={STRAT4H_VOLUME_MULT}xMA + HTF 3D\n"
         f"CrossEMA-4h: ST-1 + cross-up EMA20 intrabar menit 12-36\n"
@@ -2521,7 +2525,8 @@ def thread1c_scan_intrabar():
         r12  = df12.iloc[-1]
         if pd.isna(r12.get('st_dir')) or r12.get('st_dir') != 1: continue
         if pd.isna(r12.get('ema_fast')) or pd.isna(r12.get('ema_slow')): continue
-        if r12['ema_fast'] <= r12['ema_slow']: continue
+        # EMA20>EMA50 dihapus 30/07/2026 — diganti close>EMA50
+        if r12['close'] <= r12['ema_slow']: continue
         if pd.isna(r12.get('hh')) or pd.isna(r12.get('br')): continue
         br_avg = df12['br'].iloc[-CHOPPY_LOOK:].mean()
         if pd.isna(br_avg) or br_avg < CHOPPY_MIN: continue
@@ -2704,7 +2709,8 @@ def thread1c_scan_intrabar_early():
         if is_choppy(df12): continue
         if pd.isna(r12.get('st_dir')) or r12.get('st_dir') != 1: continue
         if pd.isna(r12.get('ema_fast')) or pd.isna(r12.get('ema_slow')): continue
-        if r12['ema_fast'] <= r12['ema_slow']: continue
+        # EMA20>EMA50 dihapus 30/07/2026 — diganti close>EMA50
+        if r12['close'] <= r12['ema_slow']: continue
         if pd.isna(r12.get('hh_early')): continue
         if MACD_FILTER_ENABLED:
             mh = r12.get('macd_hist')
