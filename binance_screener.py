@@ -1045,6 +1045,9 @@ def _get_perf_data_1d(sym: str):
     if best is None or best_len < 700:
         try:
             r = _binance_get("/api/v3/klines", {"symbol": sym, "interval": "1d", "limit": 1500})
+            if r is not None:
+                try: r = r.json()
+                except: r = None
             if r and isinstance(r, list) and len(r) >= 30:
                 df_new = pd.DataFrame(r, columns=["ts","open","high","low","close","vol",
                                                    "ct","qv","nt","tb","tq","ig"])
@@ -1876,7 +1879,7 @@ def thread1_scan():
                         det = entry_detail(df)
                         if det is not None:
                             n_pass, total, fails = det
-                            near_miss.append((n_pass, sym, fails + [f"Perf Grade<B (score {pscore:.2f})"], 9))
+                            near_miss.append((n_pass, sym, fails + [f"Perf Grade masih <B (score {pscore:.2f})"], 9))
                         continue
                 sc = signal_score(df.iloc[-1])
                 candidates.append((sym, float(df['close'].iloc[-1]), float(df['atr_pct'].iloc[-1]), sc))
@@ -2113,7 +2116,7 @@ def thread1b_scan_reversal():
                     det = entry_detail_reversal(df)
                     if det is not None:
                         n_pass, total, fails = det
-                        near_miss.append((n_pass, sym, fails + [f"Perf Grade<B (score {pscore:.2f})"], 5))
+                        near_miss.append((n_pass, sym, fails + [f"Perf Grade masih <B (score {pscore:.2f})"], 5))
                     continue
             atrp = float(df['atr_pct'].iloc[-1]) if not pd.isna(df['atr_pct'].iloc[-1]) else 3.0
             candidates.append((sym, float(df['close'].iloc[-1]), atrp, int(df['ct'].iloc[-1])))
@@ -3126,7 +3129,7 @@ def thread1d_scan_4h():
                 candle_ts = int(df['ct'].iloc[-1])
                 pscore = calc_perf_score(sym, candle_ts)
                 if pd.isna(pscore) or pscore < PERF_SCORE_MIN:
-                    near_miss_4h.append((sym, [f"Perf Grade<B (score {pscore:.2f})"]))
+                    near_miss_4h.append((sym, [f"Perf Grade masih <B (score {pscore:.2f})"]))
                     continue
 
             r    = df.iloc[-1]
