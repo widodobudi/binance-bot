@@ -99,7 +99,7 @@ COMMAS_MAX_ACTIVE_DEALS = 4      # total kedua bot (brkX2 2 + reversal 2). Tiap 
 MAX_DEALS_BRKX2         = 2      # slot brkX2 (bot existing) — set Max active trades=2 di 3Commas
 MAX_DEALS_REVERSAL      = 2      # slot reversal (bot 16921019) — set Max active trades=2 di 3Commas
 
-# ---- STRATEGI 3: brkX2-4h (intrabar 4h, menit ke 5-10) ----
+# ---- STRATEGI 3: brkX2-4h (intrabar 4h, menit ke 5-60) ----
 # Hasil backtest: MACD+SUPERTREND+ATR_MIN+VOLUME + HTF 3D PRICE_EMA50+MACD+RSI50
 # avg=+3.330% WR=58.4% wf6=OK (backtest_4h_htf.py, 15/07/2026)
 STRAT4H_ENABLED         = True
@@ -3065,7 +3065,7 @@ last_4h_candle_ts = {}  # sym -> ts candle 4h yang sudah dientry, cegah double e
 def thread1d_scan_4h():
     """
     Scan sinyal strategi ke-3 (brkX2-4h) setiap 3 menit.
-    Entry saat elapsed candle 4h berada di menit ke 5-10 (2.08%-4.17%).
+    Entry saat elapsed candle 4h berada di menit ke 5-60 (2.08%-25%).
     Syarat: Supertrend+1 + MACD>0 + ATR>=2% + Vol>=1.5xMA + HTF3D filter.
     """
     global last_4h_candle_ts
@@ -3081,8 +3081,8 @@ def thread1d_scan_4h():
     # Hanya entry di window menit ke-5 sampai ke-10
     if not (STRAT4H_ENTRY_MIN_PCT <= elapsed_pct <= STRAT4H_ENTRY_MAX_PCT):
         if elapsed_pct > STRAT4H_ENTRY_MAX_PCT:
-            log(f"[T1d] TF% LEWAT window: {elapsed_pct*100:.1f}% > {STRAT4H_ENTRY_MAX_PCT*100:.1f}% (window menit 5-10 sudah tutup)")
-            log_tfpct_blocked("T1d", "brkX2-4h", elapsed_pct, STRAT4H_ENTRY_MAX_PCT, "window menit 5-10 sudah tutup")
+            log(f"[T1d] TF% LEWAT window: {elapsed_pct*100:.1f}% > {STRAT4H_ENTRY_MAX_PCT*100:.1f}% (window menit 5-60 sudah tutup)")
+            log_tfpct_blocked("T1d", "brkX2-4h", elapsed_pct, STRAT4H_ENTRY_MAX_PCT, "window menit 5-60 sudah tutup")
         return
 
     # Cek slot tersedia
@@ -3328,8 +3328,8 @@ def thread_crossema_scan():
     # Hanya scan dalam window 5–15% elapsed
     if not (STRAT_CROSSEMA_ENTRY_MIN <= elapsed_pct <= STRAT_CROSSEMA_ENTRY_MAX):
         if elapsed_pct > STRAT_CROSSEMA_ENTRY_MAX:
-            log(f"[T_CX] TF% LEWAT window: {elapsed_pct*100:.1f}% > {STRAT_CROSSEMA_ENTRY_MAX*100:.1f}% (window menit 5-15 sudah tutup)")
-            log_tfpct_blocked("T_CX", "CrossEMA-4h", elapsed_pct, STRAT_CROSSEMA_ENTRY_MAX, "window menit 5-15 sudah tutup")
+            log(f"[T_CX] TF% LEWAT window: {elapsed_pct*100:.1f}% > {STRAT_CROSSEMA_ENTRY_MAX*100:.1f}% (window menit 5-60 sudah tutup)")
+            log_tfpct_blocked("T_CX", "CrossEMA-4h", elapsed_pct, STRAT_CROSSEMA_ENTRY_MAX, "window menit 5-60 sudah tutup")
         return
 
     ticker = get_ticker_24h()
@@ -3752,7 +3752,7 @@ if __name__ == '__main__':
         log("  " + "-"*51)
         log(f"  STRATEGI 3 brkX2-4h: ON | TF {STRAT4H_TIMEFRAME}")
         log(f"  Entry: ST+1 + MACD>0 + ATR>={STRAT4H_ATR_MIN_PCT}% + Vol>={STRAT4H_VOLUME_MULT}xMA + HTF {STRAT4H_HTF_TF} (PRICE_EMA50+MACD+RSI50)")
-        log(f"  Intrabar: menit ke 5-10, scan tiap {STRAT4H_SCAN_INTERVAL}s")
+        log(f"  Intrabar: menit ke 5-60 (25% elapsed), scan tiap {STRAT4H_SCAN_INTERVAL}s")
         log(f"  Slot: {STRAT4H_MAX_DEALS} | Target forward-test: {STRAT4H_FWDTEST_TARGET} deal")
         log(f"  Bot : #{COMMAS_BOT_ID_4H}")
     log("="*55)
