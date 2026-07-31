@@ -3634,7 +3634,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
       </tbody>
     </table>
     {% else %}
-    <div class="empty">Belum ada data scan</div>
+    <div class="empty">{{ window_info.get(strategi, "Belum ada data scan") }}</div>
     {% endif %}
     </div>
   </div>
@@ -3673,6 +3673,39 @@ def run_web_dashboard():
                 nm = dict(_dashboard_state["near_miss"])
                 ls = dict(_dashboard_state["last_scan"])
             overrides = load_deal_overrides()
+            # Hitung elapsed candle saat ini untuk info window
+            now_ms = int(time.time() * 1000)
+            el_12h = (now_ms % (SECONDS_PER_CANDLE * 1000)) / (SECONDS_PER_CANDLE * 1000)
+            el_4h  = (now_ms % (STRAT4H_SECONDS * 1000)) / (STRAT4H_SECONDS * 1000)
+            el_8h  = (now_ms % (REVERSAL_SECONDS_PER_CANDLE * 1000)) / (REVERSAL_SECONDS_PER_CANDLE * 1000)
+            def _mnt(pct, sec): return int(pct * sec / 60)
+            window_info = {
+                "brkX2-12h": (
+                    f"Scan tiap candle 12h tutup. "
+                    f"Intrabar EARLY menit {_mnt(INTRABAR_EARLY_ENTRY_PCT, SECONDS_PER_CANDLE/60*60)}-"
+                    f"{_mnt(INTRABAR_EARLY_END_PCT, SECONDS_PER_CANDLE/60*60)} & "
+                    f"BASE menit {_mnt(INTRABAR_ENTRY_PCT, SECONDS_PER_CANDLE/60*60)}-"
+                    f"{_mnt(INTRABAR_WINDOW_END, SECONDS_PER_CANDLE/60*60)}. "
+                    f"Elapsed skrg: {el_12h*100:.1f}%"
+                ),
+                "Reversal-8h": (
+                    f"Scan tiap candle 8h tutup. "
+                    f"Intrabar menit 24-240 (5%-50% elapsed). "
+                    f"Elapsed skrg: {el_8h*100:.1f}%"
+                ),
+                "brkX2-4h": (
+                    f"Scan hanya menit ke 5-60 candle 4h (2%-25% elapsed). "
+                    f"Elapsed skrg: {el_4h*100:.1f}% — "
+                    + ("dalam window, data segera muncul." if STRAT4H_ENTRY_MIN_PCT <= el_4h <= STRAT4H_ENTRY_MAX_PCT
+                       else f"tunggu candle berikutnya menit ke {int(STRAT4H_ENTRY_MIN_PCT*240)}-{int(STRAT4H_ENTRY_MAX_PCT*240)}.")
+                ),
+                "CrossEMA-4h": (
+                    f"Scan hanya menit ke 5-60 candle 4h (2%-25% elapsed). "
+                    f"Elapsed skrg: {el_4h*100:.1f}% — "
+                    + ("dalam window, data segera muncul." if STRAT_CROSSEMA_ENTRY_MIN <= el_4h <= STRAT_CROSSEMA_ENTRY_MAX
+                       else f"tunggu candle berikutnya menit ke {int(STRAT_CROSSEMA_ENTRY_MIN*240)}-{int(STRAT_CROSSEMA_ENTRY_MAX*240)}.")
+                ),
+            }
             return render_template_string(
                 DASHBOARD_HTML,
                 active_deals=deals_display,
@@ -3681,6 +3714,7 @@ def run_web_dashboard():
                 last_scan=ls,
                 overrides=overrides,
                 now=now_wib().strftime("%d/%m %H:%M:%S WIB"),
+                window_info=window_info,
             )
 
         @app.route("/toggle", methods=["POST"])
