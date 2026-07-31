@@ -3486,6 +3486,21 @@ _dashboard_state = {
 }
 _dashboard_lock = threading.Lock()
 
+# ── MANUAL SCAN STATE (brkX2-12h on-demand) ──────────────────────────────────
+_manual_filters = {
+    "vol":   True,
+    "rsi":   True,
+    "stoch": True,
+    "atr":   True,
+    "htf":   True,
+    "perf":  True,
+}
+_manual_filters_lock = threading.Lock()
+_manual_scan_result  = []   # list of dict per pair hasil scan terakhir
+_manual_scan_ts      = ""   # waktu scan terakhir
+_manual_scan_lock    = threading.Lock()
+
+
 def update_dashboard_near_miss(strategi: str, items: list):
     with _dashboard_lock:
         parsed = [
@@ -3611,6 +3626,81 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     {% endif %}
     </div>
   </div>
+  <!-- ═══════════════ MANUAL SCAN brkX2-12h ═══════════════ -->
+  <div class="section-title">Manual Scan brkX2-12h</div>
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-body">
+      <!-- Primary conditions (always required) -->
+      <div style="margin-bottom:10px">
+        <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Primary (selalu wajib)</div>
+        <div id="primary-status" style="display:flex;flex-wrap:wrap;gap:8px;font-size:11px">
+          <span style="color:var(--muted)">— klik Scan untuk lihat nilai aktual —</span>
+        </div>
+      </div>
+      <!-- Secondary conditions (toggleable) -->
+      <div style="margin-bottom:12px">
+        <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Secondary (toggle ON/OFF)</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:6px" id="secondary-grid">
+          <div class="sec-item" data-key="vol">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px">
+              <input type="checkbox" class="sec-cb" data-key="vol" checked style="cursor:pointer">
+              <span class="sec-label">Vol &gt;= 0.6xMA</span>
+              <span class="sec-actual" style="color:var(--muted)">—</span>
+              <span class="sec-status">—</span>
+            </label>
+          </div>
+          <div class="sec-item" data-key="rsi">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px">
+              <input type="checkbox" class="sec-cb" data-key="rsi" checked style="cursor:pointer">
+              <span class="sec-label">RSI &lt; 75</span>
+              <span class="sec-actual" style="color:var(--muted)">—</span>
+              <span class="sec-status">—</span>
+            </label>
+          </div>
+          <div class="sec-item" data-key="stoch">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px">
+              <input type="checkbox" class="sec-cb" data-key="stoch" checked style="cursor:pointer">
+              <span class="sec-label">Stoch%K &lt; 70</span>
+              <span class="sec-actual" style="color:var(--muted)">—</span>
+              <span class="sec-status">—</span>
+            </label>
+          </div>
+          <div class="sec-item" data-key="atr">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px">
+              <input type="checkbox" class="sec-cb" data-key="atr" checked style="cursor:pointer">
+              <span class="sec-label">ATR% &lt; 9%</span>
+              <span class="sec-actual" style="color:var(--muted)">—</span>
+              <span class="sec-status">—</span>
+            </label>
+          </div>
+          <div class="sec-item" data-key="htf">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px">
+              <input type="checkbox" class="sec-cb" data-key="htf" checked style="cursor:pointer">
+              <span class="sec-label">HTF 3D vol &gt; 0.8xMA</span>
+              <span class="sec-actual" style="color:var(--muted)">—</span>
+              <span class="sec-status">—</span>
+            </label>
+          </div>
+          <div class="sec-item" data-key="perf">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px">
+              <input type="checkbox" class="sec-cb" data-key="perf" checked style="cursor:pointer">
+              <span class="sec-label">Perf Grade &gt;= 0.5</span>
+              <span class="sec-actual" style="color:var(--muted)">—</span>
+              <span class="sec-status">—</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <!-- Scan button + status -->
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <button id="btn-scan" onclick="doManualScan()" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:7px 18px;font-size:12px;cursor:pointer;font-family:var(--font)">🔍 Scan Sekarang</button>
+        <span id="scan-status" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+      <!-- Scan results table -->
+      <div id="scan-results"></div>
+    </div>
+  </div>
+
   <div class="section-title">Kandidat Terdekat per Strategi</div>
   <div class="grid">
   {% for strategi, items in near_miss.items() %}
@@ -3641,8 +3731,240 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
   {% endfor %}
   </div>
 </div>
+
+<script>
+// ── Toggle secondary filter ──────────────────────────────────────────────────
+document.querySelectorAll('.sec-cb').forEach(function(cb) {
+  cb.addEventListener('change', function() {
+    var key = this.dataset.key;
+    var val = this.checked;
+    fetch('/manual_filter', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: 'key=' + key + '&value=' + val
+    });
+  });
+});
+
+// ── Manual scan ──────────────────────────────────────────────────────────────
+function doManualScan() {
+  var btn = document.getElementById('btn-scan');
+  var st  = document.getElementById('scan-status');
+  btn.disabled = true;
+  btn.textContent = '⏳ Scanning...';
+  st.textContent = 'Sedang scan semua pair...';
+  fetch('/manual_scan', {method:'POST'})
+    .then(function(r){ return r.json(); })
+    .then(function(data) {
+      btn.disabled = false;
+      btn.textContent = '🔍 Scan Sekarang';
+      st.textContent = 'Scan selesai ' + data.ts + ' — ' + data.pairs.length + ' pair dievaluasi';
+      renderResults(data.pairs);
+    })
+    .catch(function(e) {
+      btn.disabled = false;
+      btn.textContent = '🔍 Scan Sekarang';
+      st.textContent = 'Error: ' + e;
+    });
+}
+
+// ── Render hasil scan ────────────────────────────────────────────────────────
+function renderResults(pairs) {
+  var el = document.getElementById('scan-results');
+  // Update primary status dari pair pertama yang primary_ok
+  var sample = pairs.find(function(p){ return p.primary_ok; }) || pairs[0];
+  if (sample) {
+    var ps = document.getElementById('primary-status');
+    ps.innerHTML =
+      badge(sample.p1_ok, 'ST=+1') + ' ' +
+      badge(sample.p2_ok, 'close(' + fmt(sample.close) + ')>EMA20(' + fmt(sample.ema20) + ')') + ' ' +
+      badge(sample.p3_ok, 'close>EMA50(' + fmt(sample.ema50) + ')') + ' ' +
+      badge(sample.p4_ok, 'close>HH3(' + fmt(sample.hh) + ')');
+  }
+  // Update secondary label aktual dari sample
+  if (sample && sample.secondaries) {
+    sample.secondaries.forEach(function(s) {
+      var items = document.querySelectorAll('.sec-item[data-key="' + s.key + '"]');
+      items.forEach(function(item) {
+        var actualEl = item.querySelector('.sec-actual');
+        var statusEl = item.querySelector('.sec-status');
+        if (actualEl) actualEl.textContent = '(skrg ' + s.actual + ')';
+        if (statusEl) statusEl.innerHTML = s.ok
+          ? '<span style="color:var(--green)">✓</span>'
+          : '<span style="color:var(--red)">✗</span>';
+      });
+    });
+  }
+  // Tabel hasil — tampilkan hanya pair yang primary_ok, max 20
+  var candidates = pairs.filter(function(p){ return p.primary_ok; }).slice(0, 20);
+  if (candidates.length === 0) {
+    el.innerHTML = '<div class="empty">Tidak ada pair lolos 4 syarat primary saat ini.</div>';
+    return;
+  }
+  var rows = candidates.map(function(p) {
+    var secBadges = p.secondaries.map(function(s) {
+      var color = !s.enabled ? 'var(--muted)' : (s.ok ? 'var(--green)' : 'var(--red)');
+      var prefix = s.enabled ? '' : '<s>';
+      var suffix = s.enabled ? '' : '</s>';
+      return '<span style="color:' + color + ';font-size:10px">' + prefix + s.key + ':' + s.actual + suffix + '</span>';
+    }).join(' ');
+    var allBadge = p.all_ok
+      ? '<span style="color:var(--green);font-weight:600">✓ LOLOS</span>'
+      : '<span style="color:var(--yellow)">primary✓</span>';
+    var openBtn = p.all_ok
+      ? '<button onclick="doOpenLong(\''+p.sym+'\')" style="background:var(--green);color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">Open Long</button>'
+      : '<button onclick="doOpenLong(\''+p.sym+'\')" style="background:var(--yellow);color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">Open (bypass)</button>';
+    return '<tr><td class="sym">' + p.sym.replace('USDT','/USDT') + '</td>' +
+           '<td>' + allBadge + '</td>' +
+           '<td style="font-size:10px">' + secBadges + '</td>' +
+           '<td>' + openBtn + '</td></tr>';
+  }).join('');
+  el.innerHTML = '<table><thead><tr><th>Pair</th><th>Status</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
+function badge(ok, label) {
+  var c = ok ? 'var(--green)' : 'var(--red)';
+  return '<span style="color:' + c + ';font-size:11px">' + (ok?'✓':'✗') + ' ' + label + '</span>';
+}
+function fmt(v) {
+  if (v === undefined || v === null) return '?';
+  if (v > 1000) return v.toFixed(0);
+  if (v > 1) return v.toFixed(3);
+  return v.toPrecision(4);
+}
+
+// ── Open Long deal ───────────────────────────────────────────────────────────
+function doOpenLong(sym) {
+  if (!confirm('Open Long MANUAL untuk ' + sym + '?\n\nPastikan slot brkX2 masih tersedia.')) return;
+  var btn = event.target;
+  btn.disabled = true;
+  btn.textContent = '⏳...';
+  var fd = new FormData();
+  fd.append('sym', sym);
+  fetch('/manual_open', {method:'POST', body: fd})
+    .then(function(r){ return r.json(); })
+    .then(function(data) {
+      if (data.ok) {
+        alert('✅ Open Long BERHASIL!\n' + sym + '\nScore: ' + data.score + ' | Target: $' + data.target_usd);
+      } else {
+        alert('❌ Open Long GAGAL:\n' + data.error);
+        btn.disabled = false;
+        btn.textContent = sym.includes('bypass') ? 'Open (bypass)' : 'Open Long';
+      }
+    })
+    .catch(function(e) {
+      alert('Error: ' + e);
+      btn.disabled = false;
+    });
+}
+</script>
 </body>
 </html>'''
+
+def run_manual_scan() -> dict:
+    """Scan on-demand brkX2-12h dengan filter manual dari _manual_filters.
+    Return dict: {
+        "ts": str,
+        "pairs": [ { sym, close, ema20, ema50, hh, st_dir,
+                     vol_ratio, rsi, stoch_k, atr_pct, htf_ratio, perf_score,
+                     primary_ok, params } ]
+    }
+    """
+    global _manual_scan_result, _manual_scan_ts
+    with _manual_filters_lock:
+        filters = dict(_manual_filters)
+
+    pairs = get_usdt_spot_pairs()
+    if not pairs:
+        return {"ts": now_wib().strftime("%H:%M:%S"), "pairs": [], "error": "Gagal ambil pair"}
+    ticker = get_ticker_24h()
+    volmap = {}
+    for t in (ticker or []):
+        try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+        except: pass
+    universe = [p for p in pairs if volmap.get(p, 0) >= MIN_VOLUME_USD]
+
+    results = []
+    with active_deals_lock:
+        existing = set(active_deals.keys())
+
+    for sym in universe:
+        if sym in existing: continue
+        try:
+            df = get_ohlcv(sym, limit=120)
+            if df is None: continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+                if len(df) < 60: continue
+            df = compute_indicators(df)
+            row = df.iloc[-1]
+            if pd.isna(row.get('ema_fast')) or pd.isna(row.get('ema_slow')) or pd.isna(row.get('hh')): continue
+
+            close   = float(row['close'])
+            ema20   = float(row['ema_fast'])
+            ema50   = float(row['ema_slow'])
+            hh      = float(row['hh'])
+            st_dir  = int(row['st_dir']) if not pd.isna(row.get('st_dir')) else 0
+            vol_ma  = float(row['vol_ma']) if not pd.isna(row.get('vol_ma')) and row['vol_ma'] > 0 else 0
+            vol_ratio = float(row['vol']) / vol_ma if vol_ma > 0 else 0
+            rsi     = float(row['rsi']) if not pd.isna(row.get('rsi')) else None
+            stoch_k = float(row['stoch_k']) if 'stoch_k' in row and not pd.isna(row.get('stoch_k')) else None
+            atr_pct = float(row['atr_pct']) if not pd.isna(row.get('atr_pct')) else None
+            candle_ts = int(df['ct'].iloc[-1])
+
+            # HTF ratio
+            htf_ratio = htf_vol_ratio(sym, HTF_TIMEFRAME, HTF_CANDLE_LIMIT, HTF_VOL_MA_PERIOD)
+            # Perf score
+            perf_score = calc_perf_score(sym, candle_ts)
+            if pd.isna(perf_score): perf_score = None
+
+            # 4 PRIMARY — selalu wajib
+            p1_ok = st_dir == 1
+            p2_ok = close > ema20
+            p3_ok = close > ema50
+            p4_ok = close > hh
+            primary_ok = p1_ok and p2_ok and p3_ok and p4_ok
+
+            # 6 SECONDARY — nilai & status
+            s_vol   = {"key":"vol",   "label":f"Vol>={VOLUME_MULT}xMA",  "threshold":f"{VOLUME_MULT}xMA", "actual":f"{vol_ratio:.2f}x",   "ok": vol_ratio >= VOLUME_MULT,                      "enabled": filters["vol"]}
+            s_rsi   = {"key":"rsi",   "label":f"RSI<{RSI_MAX}",          "threshold":str(RSI_MAX),        "actual":f"{rsi:.1f}" if rsi is not None else "n/a",   "ok": rsi is not None and rsi <= RSI_MAX,            "enabled": filters["rsi"]}
+            s_stoch = {"key":"stoch", "label":f"Stoch%K<{STOCH_MAX}",    "threshold":str(STOCH_MAX),      "actual":f"{stoch_k:.1f}" if stoch_k is not None else "n/a", "ok": stoch_k is not None and stoch_k < STOCH_MAX, "enabled": filters["stoch"]}
+            s_atr   = {"key":"atr",   "label":f"ATR%<{ATR_MAX_PCT}%",    "threshold":f"{ATR_MAX_PCT}%",   "actual":f"{atr_pct:.1f}%" if atr_pct is not None else "n/a", "ok": atr_pct is not None and atr_pct < ATR_MAX_PCT, "enabled": filters["atr"]}
+            s_htf   = {"key":"htf",   "label":f"HTF3D vol>{HTF_VOL_MULT}xMA", "threshold":f"{HTF_VOL_MULT}xMA", "actual":f"{htf_ratio:.2f}x" if htf_ratio >= 0 else "n/a", "ok": htf_ratio >= HTF_VOL_MULT,              "enabled": filters["htf"]}
+            s_perf  = {"key":"perf",  "label":f"Perf>={PERF_SCORE_MIN}", "threshold":str(PERF_SCORE_MIN), "actual":f"{perf_score:.2f}" if perf_score is not None else "n/a", "ok": perf_score is not None and perf_score >= PERF_SCORE_MIN, "enabled": filters["perf"]}
+            secondaries = [s_vol, s_rsi, s_stoch, s_atr, s_htf, s_perf]
+
+            # secondary lolos = ok ATAU tidak di-enable
+            secondary_ok = all((s["ok"] if s["enabled"] else True) for s in secondaries)
+            all_ok = primary_ok and secondary_ok
+
+            results.append({
+                "sym":         sym,
+                "close":       close,
+                "ema20":       ema20,
+                "ema50":       ema50,
+                "hh":          hh,
+                "st_dir":      st_dir,
+                "primary_ok":  primary_ok,
+                "secondary_ok":secondary_ok,
+                "all_ok":      all_ok,
+                "secondaries": secondaries,
+                "p1_ok": p1_ok, "p2_ok": p2_ok, "p3_ok": p3_ok, "p4_ok": p4_ok,
+            })
+        except Exception as e:
+            log(f"  [MANUAL] error {sym}: {e}")
+
+    # Sort: all_ok dulu, lalu primary_ok, lalu jumlah secondary ok
+    results.sort(key=lambda x: (not x["all_ok"], not x["primary_ok"],
+                                 -sum(1 for s in x["secondaries"] if s["ok"])))
+
+    ts = now_wib().strftime("%H:%M:%S")
+    with _manual_scan_lock:
+        _manual_scan_result = results
+        _manual_scan_ts = ts
+
+    return {"ts": ts, "pairs": results}
+
 
 def run_web_dashboard():
     """Thread web dashboard Flask."""
@@ -3737,6 +4059,97 @@ def run_web_dashboard():
             with _dashboard_lock:
                 nm = dict(_dashboard_state["near_miss"])
             return jsonify({"active_deals": deals, "near_miss": nm})
+
+        @app.route("/manual_filter", methods=["POST"])
+        def manual_filter():
+            key = request.form.get("key", "")
+            val = request.form.get("value", "false") == "true"
+            with _manual_filters_lock:
+                if key in _manual_filters:
+                    _manual_filters[key] = val
+            return jsonify({"ok": True, "key": key, "value": val})
+
+        @app.route("/manual_scan", methods=["POST"])
+        def manual_scan_endpoint():
+            result = run_manual_scan()
+            return jsonify(result)
+
+        @app.route("/manual_open", methods=["POST"])
+        def manual_open():
+            sym = request.form.get("sym", "").upper().strip()
+            if not sym:
+                return jsonify({"ok": False, "error": "sym kosong"})
+            if not sym.endswith("USDT"):
+                sym = sym + "USDT"
+            with active_deals_lock:
+                if sym in active_deals:
+                    return jsonify({"ok": False, "error": f"{sym} sudah ada di active_deals"})
+            # Ambil data indikator untuk log dokumentasi
+            try:
+                df = get_ohlcv(sym, limit=120)
+                if df is None:
+                    return jsonify({"ok": False, "error": "Gagal ambil OHLCV"})
+                if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                    df = df.iloc[:-1]
+                df = compute_indicators(df)
+                row = df.iloc[-1]
+                close   = float(row['close'])
+                ema20   = float(row['ema_fast'])
+                ema50   = float(row['ema_slow'])
+                hh      = float(row['hh'])
+                st_dir  = int(row['st_dir']) if not pd.isna(row.get('st_dir')) else 0
+                vol_ma  = float(row['vol_ma']) if not pd.isna(row.get('vol_ma')) and row['vol_ma'] > 0 else 0
+                vol_ratio = float(row['vol']) / vol_ma if vol_ma > 0 else 0
+                rsi     = float(row['rsi']) if not pd.isna(row.get('rsi')) else None
+                stoch_k = float(row['stoch_k']) if 'stoch_k' in row and not pd.isna(row.get('stoch_k')) else None
+                atr_pct = float(row['atr_pct']) if not pd.isna(row.get('atr_pct')) else None
+                htf_ratio  = htf_vol_ratio(sym, HTF_TIMEFRAME, HTF_CANDLE_LIMIT, HTF_VOL_MA_PERIOD)
+                perf_score = calc_perf_score(sym, int(df['ct'].iloc[-1]))
+                if pd.isna(perf_score): perf_score = None
+            except Exception as e:
+                return jsonify({"ok": False, "error": f"Gagal ambil indikator: {e}"})
+
+            with _manual_filters_lock:
+                filters = dict(_manual_filters)
+
+            ts = now_wib().strftime("%d/%m/%Y %H:%M:%S")
+            sc = signal_score(row)
+            log(f"[MANUAL-OPEN] {sym} @ {ts}")
+            log(f"  PRIMARY  : ST={st_dir} | close={close:.4g} EMA20={ema20:.4g} EMA50={ema50:.4g} HH={hh:.4g}")
+            log(f"  SECONDARY: vol={vol_ratio:.2f}x(thr{VOLUME_MULT}) RSI={rsi}(thr{RSI_MAX}) Stoch={stoch_k}(thr{STOCH_MAX}) ATR={atr_pct}%(thr{ATR_MAX_PCT}) HTF={htf_ratio:.2f}x(thr{HTF_VOL_MULT}) Perf={perf_score}(thr{PERF_SCORE_MIN})")
+            log(f"  FILTER ON: {[k for k,v in filters.items() if v]}")
+
+            ok, target_usd, add_usd = open_deal_with_sizing(sym, sc, 'brkX2')
+            if ok:
+                add_to_active_deals(sym, {
+                    "strategy":       "brkX2",
+                    "entry_price":    close,
+                    "peak":           close,
+                    "signal_price":   close,
+                    "atr_pct":        atr_pct or 3.0,
+                    "opened_candle_ts": int(df['ct'].iloc[-1]),
+                    "trailing_armed": False,
+                    "opened_at":      now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                    "target_usd":     target_usd,
+                    "add_usd":        add_usd,
+                    "tf":             TIMEFRAME,
+                    "manual":         True,
+                })
+                send_telegram(
+                    f"OPEN LONG MANUAL (brkX2-12h)\n"
+                    f"{ts} WIB\n"
+                    f"Pair  : {to_display_pair(sym)}\n"
+                    f"Close : {close:.4g} | EMA20: {ema20:.4g} | EMA50: {ema50:.4g}\n"
+                    f"ST={st_dir} | Vol={vol_ratio:.2f}x | RSI={rsi} | Stoch={stoch_k}\n"
+                    f"ATR={atr_pct}% | HTF={htf_ratio:.2f}x | Perf={perf_score}\n"
+                    f"Filter ON: {[k for k,v in filters.items() if v]}\n"
+                    f"Score={sc} | Base=${BASE_ORDER_VOLUME}"
+                )
+                log(f"[MANUAL-OPEN] {sym} BERHASIL — score={sc} target=${target_usd}")
+                return jsonify({"ok": True, "sym": sym, "score": sc, "target_usd": target_usd})
+            else:
+                log(f"[MANUAL-OPEN] {sym} GAGAL — 3Commas tidak menerima")
+                return jsonify({"ok": False, "error": "3Commas menolak open long"})
 
         log(f"[WEB] Dashboard jalan di port {WEB_PORT}")
         app.run(host="0.0.0.0", port=WEB_PORT, debug=False, use_reloader=False)
