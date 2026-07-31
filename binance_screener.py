@@ -3752,235 +3752,132 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
 </div>
 
 <script>
-// ── Pause/resume auto-refresh ────────────────────────────────────────────────
-function pauseRefresh() {
-  var m = document.getElementById('meta-refresh');
-  if (m) m.setAttribute('content', '9999');
-}
-function resumeRefresh() {
-  var m = document.getElementById('meta-refresh');
-  if (m) m.setAttribute('content', '30');
-}
+function pauseRefresh(){var m=document.getElementById('meta-refresh');if(m)m.setAttribute('content','9999');}
+function resumeRefresh(){var m=document.getElementById('meta-refresh');if(m)m.setAttribute('content','30');}
 
-// ── Pair select dari dropdown ───────────────────────────────────────────────
-function onPairSelect(sym) {
-  var panel = document.getElementById('pair-detail');
-  if (!sym) { panel.style.display = 'none'; return; }
-  panel.style.display = 'block';
-  panel.innerHTML = '<span style="color:var(--muted)">Mengambil data ' + sym.replace('USDT','/USDT') + '...</span>';
+function onPairSelect(sym){
+  var panel=document.getElementById('pair-detail');
+  if(!sym){panel.style.display='none';return;}
+  panel.style.display='block';
+  panel.innerHTML='Mengambil data '+sym.replace('USDT','/USDT')+'...';
   pauseRefresh();
-  fetch('/api/pair_detail?sym=' + encodeURIComponent(sym))
-    .then(function(r){ return r.json(); })
-    .then(function(d) {
+  fetch('/api/pair_detail?sym='+encodeURIComponent(sym))
+    .then(function(r){return r.json();})
+    .then(function(d){
       resumeRefresh();
-      if (d.error) { panel.innerHTML = '<span style="color:var(--red)">Error: ' + d.error + '</span>'; return; }
-      // Update primary status
-      var ps = document.getElementById('primary-status');
-      ps.innerHTML =
-        badge(d.p1_ok, 'ST=' + (d.st_dir==1?'+1':d.st_dir)) + ' &nbsp; ' +
-        badge(d.p2_ok, 'close ' + fmt(d.close) + ' vs EMA20 ' + fmt(d.ema20)) + ' &nbsp; ' +
-        badge(d.p3_ok, 'close vs EMA50 ' + fmt(d.ema50)) + ' &nbsp; ' +
-        badge(d.p4_ok, 'close vs HH3 ' + fmt(d.hh));
-      // Update secondary actual values
-      updateSec('vol',   d.vol_ratio + 'x',   d.vol_ratio >= d.vol_thr);
-      updateSec('rsi',   d.rsi !== null ? d.rsi : 'n/a',   d.rsi !== null && d.rsi <= d.rsi_thr);
-      updateSec('stoch', d.stoch_k !== null ? d.stoch_k : 'n/a', d.stoch_k !== null && d.stoch_k < d.stoch_thr);
-      updateSec('atr',   d.atr_pct !== null ? d.atr_pct + '%' : 'n/a', d.atr_pct !== null && d.atr_pct < d.atr_thr);
-      updateSec('htf',   d.htf_ratio !== null ? d.htf_ratio + 'x' : 'n/a', d.htf_ratio !== null && d.htf_ratio >= d.htf_thr);
-      updateSec('perf',  d.perf_score !== null ? d.perf_score : 'n/a', d.perf_score !== null && d.perf_score >= d.perf_thr);
-      // Panel ringkasan
-      var allPrimary = d.p1_ok && d.p2_ok && d.p3_ok && d.p4_ok;
-      var color = allPrimary ? 'var(--green)' : 'var(--red)';
-      panel.innerHTML =
-        '<strong style="color:' + color + '">' + sym.replace('USDT','/USDT') + '</strong>' +
-        ' &nbsp;|&nbsp; close: <b>' + fmt(d.close) + '</b>' +
-        ' &nbsp;|&nbsp; EMA20: ' + fmt(d.ema20) +
-        ' &nbsp;|&nbsp; EMA50: ' + fmt(d.ema50) +
-        ' &nbsp;|&nbsp; HH3: ' + fmt(d.hh) +
-        ' &nbsp;|&nbsp; ' + (allPrimary
-          ? '<span style="color:var(--green)">✓ Primary lolos</span>'
-          : '<span style="color:var(--red)">✗ Primary gagal</span>');
+      if(d.error){panel.innerHTML='Error: '+d.error;return;}
+      var ps=document.getElementById('primary-status');
+      ps.innerHTML=
+        badge(d.p1_ok,'ST='+(d.st_dir==1?'+1':d.st_dir))+' &nbsp; '+
+        badge(d.p2_ok,'close '+fmt(d.close)+' vs EMA20 '+fmt(d.ema20))+' &nbsp; '+
+        badge(d.p3_ok,'close vs EMA50 '+fmt(d.ema50))+' &nbsp; '+
+        badge(d.p4_ok,'close vs HH3 '+fmt(d.hh));
+      updateSec('vol',  d.vol_ratio+'x',  d.vol_ratio>=d.vol_thr);
+      updateSec('rsi',  d.rsi!==null?d.rsi:'n/a',  d.rsi!==null&&d.rsi<=d.rsi_thr);
+      updateSec('stoch',d.stoch_k!==null?d.stoch_k:'n/a',d.stoch_k!==null&&d.stoch_k<d.stoch_thr);
+      updateSec('atr',  d.atr_pct!==null?d.atr_pct+'%':'n/a',d.atr_pct!==null&&d.atr_pct<d.atr_thr);
+      updateSec('htf',  d.htf_ratio!==null?d.htf_ratio+'x':'n/a',d.htf_ratio!==null&&d.htf_ratio>=d.htf_thr);
+      updateSec('perf', d.perf_score!==null?d.perf_score:'n/a',d.perf_score!==null&&d.perf_score>=d.perf_thr);
+      var allP=d.p1_ok&&d.p2_ok&&d.p3_ok&&d.p4_ok;
+      panel.innerHTML=
+        '<strong style="color:'+(allP?'var(--green)':'var(--red)')+'">'+sym.replace('USDT','/USDT')+'</strong>'+
+        ' | close: <b>'+fmt(d.close)+'</b>'+
+        ' | EMA20: '+fmt(d.ema20)+' | EMA50: '+fmt(d.ema50)+' | HH3: '+fmt(d.hh)+
+        ' | '+(allP?'<span style="color:var(--green)">Primary OK</span>':'<span style="color:var(--red)">Primary GAGAL</span>');
     })
-    .catch(function(e) {
-      resumeRefresh();
-      panel.innerHTML = '<span style="color:var(--red)">Error: ' + e + '</span>';
-    });
+    .catch(function(e){resumeRefresh();panel.innerHTML='Error: '+e;});
 }
 
-function updateSec(key, actual, ok) {
-  var items = document.querySelectorAll('.sec-item[data-key="' + key + '"]');
-  items.forEach(function(item) {
-    var actualEl = item.querySelector('.sec-actual');
-    var statusEl = item.querySelector('.sec-status');
-    if (actualEl) actualEl.textContent = '(skrg ' + actual + ')';
-    if (statusEl) statusEl.innerHTML = ok
-      ? '<span style="color:var(--green)">✓</span>'
-      : '<span style="color:var(--red)">✗</span>';
+function updateSec(key,actual,ok){
+  document.querySelectorAll('.sec-item[data-key="'+key+'"]').forEach(function(item){
+    var a=item.querySelector('.sec-actual');
+    var s=item.querySelector('.sec-status');
+    if(a)a.textContent='(skrg '+actual+')';
+    if(s)s.innerHTML=ok?'<span style="color:var(--green)">OK</span>':'<span style="color:var(--red)">X</span>';
   });
 }
 
-// ── Toggle secondary filter (init setelah DOM ready) ────────────────────────
-document.addEventListener('DOMContentLoaded', function() {
-  document.querySelectorAll('.sec-cb').forEach(function(cb) {
-    cb.addEventListener('change', function() {
-      var key = this.dataset.key;
-      var val = this.checked;
-      fetch('/manual_filter', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'key=' + key + '&value=' + val
-      });
+document.addEventListener('DOMContentLoaded',function(){
+  document.querySelectorAll('.sec-cb').forEach(function(cb){
+    cb.addEventListener('change',function(){
+      fetch('/manual_filter',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'key='+this.dataset.key+'&value='+this.checked});
     });
   });
 });
 
-// ── Manual scan ──────────────────────────────────────────────────────────────
-function doManualScan() {
-  var btn = document.getElementById('btn-scan');
-  var st  = document.getElementById('scan-status');
-  btn.disabled = true;
-  btn.textContent = '⏳ Scanning...';
-  st.textContent = 'Sedang scan semua pair... (30-60 detik)';
+function doManualScan(){
+  var btn=document.getElementById('btn-scan');
+  var st=document.getElementById('scan-status');
+  btn.disabled=true; btn.textContent='Scanning...';
+  st.textContent='Sedang scan semua pair... (30-60 detik)';
   pauseRefresh();
-  fetch('/manual_scan', {method:'POST'})
-    .then(function(r){ return r.json(); })
-    .then(function(data) {
-      btn.disabled = false;
-      btn.textContent = '🔍 Scan Sekarang';
-      st.textContent = 'Selesai ' + data.ts + ' -- ' + data.pairs.length + ' pair dievaluasi';
-      renderResults(data.pairs);
-      resumeRefresh();
+  fetch('/manual_scan',{method:'POST'})
+    .then(function(r){return r.json();})
+    .then(function(data){
+      btn.disabled=false; btn.textContent='Scan Sekarang';
+      st.textContent='Selesai '+data.ts+' -- '+data.pairs.length+' pair dievaluasi';
+      renderResults(data.pairs); resumeRefresh();
     })
-    .catch(function(e) {
-      btn.disabled = false;
-      btn.textContent = '🔍 Scan Sekarang';
-      st.textContent = 'Error: ' + e;
-      resumeRefresh();
-    });
+    .catch(function(e){btn.disabled=false;btn.textContent='Scan Sekarang';st.textContent='Error: '+e;resumeRefresh();});
 }
 
-function promptOpenLong() {
-  var sym = prompt('Masukkan simbol pair (contoh: BTC atau BTCUSDT):');
-  if (!sym) return;
-  sym = sym.trim().toUpperCase();
-  if (!sym.endsWith('USDT')) sym = sym + 'USDT';
-  if (!confirm('Open Long MANUAL untuk ' + sym + '?\n\nPastikan slot brkX2 masih tersedia.')) return;
-  pauseRefresh();
-  var fd = new FormData();
-  fd.append('sym', sym);
-  var st = document.getElementById('scan-status');
-  st.textContent = 'Membuka deal ' + sym + '...';
-  fetch('/manual_open', {method:'POST', body: fd})
-    .then(function(r){ return r.json(); })
-    .then(function(data) {
+function promptOpenLong(){
+  var sym=prompt('Masukkan simbol pair (contoh: BTC atau BTCUSDT):');
+  if(!sym)return;
+  sym=sym.trim().toUpperCase();
+  if(!sym.endsWith('USDT'))sym=sym+'USDT';
+  if(!confirm('Open Long MANUAL untuk '+sym+'? Pastikan slot brkX2 masih tersedia.'))return;
+  var fd=new FormData(); fd.append('sym',sym);
+  var st=document.getElementById('scan-status');
+  st.textContent='Membuka deal '+sym+'...'; pauseRefresh();
+  fetch('/manual_open',{method:'POST',body:fd})
+    .then(function(r){return r.json();})
+    .then(function(data){
       resumeRefresh();
-      if (data.ok) {
-        st.textContent = '✅ Open Long ' + sym + ' BERHASIL! Score=' + data.score + ' Target=$' + data.target_usd;
-        alert('✅ Open Long BERHASIL!\n' + sym + '\nScore: ' + data.score + ' | Target: $' + data.target_usd);
-      } else {
-        st.textContent = '❌ Gagal: ' + data.error;
-        alert('❌ Open Long GAGAL:\n' + data.error);
-      }
+      if(data.ok){st.textContent='Open Long '+sym+' BERHASIL! Score='+data.score+' Target=$'+data.target_usd;alert('Open Long BERHASIL!\n'+sym+'\nScore: '+data.score+' | Target: $'+data.target_usd);}
+      else{st.textContent='Gagal: '+data.error;alert('Open Long GAGAL:\n'+data.error);}
     })
-    .catch(function(e) {
-      resumeRefresh();
-      st.textContent = 'Error: ' + e;
-      alert('Error: ' + e);
-    });
+    .catch(function(e){resumeRefresh();st.textContent='Error: '+e;});
 }
 
-// ── Render hasil scan ────────────────────────────────────────────────────────
-function renderResults(pairs) {
-  var el = document.getElementById('scan-results');
-  // Update primary status dari pair pertama yang primary_ok
-  var sample = pairs.find(function(p){ return p.primary_ok; }) || pairs[0];
-  if (sample) {
-    var ps = document.getElementById('primary-status');
-    ps.innerHTML =
-      badge(sample.p1_ok, 'ST=+1') + ' ' +
-      badge(sample.p2_ok, 'close(' + fmt(sample.close) + ')>EMA20(' + fmt(sample.ema20) + ')') + ' ' +
-      badge(sample.p3_ok, 'close>EMA50(' + fmt(sample.ema50) + ')') + ' ' +
-      badge(sample.p4_ok, 'close>HH3(' + fmt(sample.hh) + ')');
+function renderResults(pairs){
+  var el=document.getElementById('scan-results');
+  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];
+  if(sample){
+    document.getElementById('primary-status').innerHTML=
+      badge(sample.p1_ok,'ST=+1')+' &nbsp; '+
+      badge(sample.p2_ok,'close('+fmt(sample.close)+')>EMA20('+fmt(sample.ema20)+')')+' &nbsp; '+
+      badge(sample.p3_ok,'close>EMA50('+fmt(sample.ema50)+')')+' &nbsp; '+
+      badge(sample.p4_ok,'close>HH3('+fmt(sample.hh)+')');
+    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});
   }
-  // Update secondary label aktual dari sample
-  if (sample && sample.secondaries) {
-    sample.secondaries.forEach(function(s) {
-      var items = document.querySelectorAll('.sec-item[data-key="' + s.key + '"]');
-      items.forEach(function(item) {
-        var actualEl = item.querySelector('.sec-actual');
-        var statusEl = item.querySelector('.sec-status');
-        if (actualEl) actualEl.textContent = '(skrg ' + s.actual + ')';
-        if (statusEl) statusEl.innerHTML = s.ok
-          ? '<span style="color:var(--green)">✓</span>'
-          : '<span style="color:var(--red)">✗</span>';
-      });
-    });
-  }
-  // Tabel hasil -- tampilkan hanya pair yang primary_ok, max 20
-  var candidates = pairs.filter(function(p){ return p.primary_ok; }).slice(0, 20);
-  if (candidates.length === 0) {
-    el.innerHTML = '<div class="empty">Tidak ada pair lolos 4 syarat primary saat ini.</div>';
-    return;
-  }
-  var rows = candidates.map(function(p) {
-    var secBadges = p.secondaries.map(function(s) {
-      var color = !s.enabled ? 'var(--muted)' : (s.ok ? 'var(--green)' : 'var(--red)');
-      var prefix = s.enabled ? '' : '<s>';
-      var suffix = s.enabled ? '' : '</s>';
-      return '<span style="color:' + color + ';font-size:10px">' + prefix + s.key + ':' + s.actual + suffix + '</span>';
+  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);
+  if(cands.length===0){el.innerHTML='<div class="empty">Tidak ada pair lolos 4 syarat primary.</div>';return;}
+  var rows=cands.map(function(p){
+    var sb=p.secondaries.map(function(s){
+      return '<span style="color:'+(s.ok?'var(--green)':'var(--red)')+';font-size:10px">'+s.key+':'+s.actual+'</span>';
     }).join(' ');
-    var allBadge = p.all_ok
-      ? '<span style="color:var(--green);font-weight:600">✓ LOLOS</span>'
-      : '<span style="color:var(--yellow)">primary✓</span>';
-    var openBtn = p.all_ok
-      ? '<button onclick="doOpenLong(\''+p.sym+'\')" style="background:var(--green);color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">Open Long</button>'
-      : '<button onclick="doOpenLong(\''+p.sym+'\')" style="background:var(--yellow);color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">Open (bypass)</button>';
-    return '<tr><td class="sym">' + p.sym.replace('USDT','/USDT') + '</td>' +
-           '<td>' + allBadge + '</td>' +
-           '<td style="font-size:10px">' + secBadges + '</td>' +
-           '<td>' + openBtn + '</td></tr>';
+    var ab=p.all_ok?'<span style="color:var(--green);font-weight:600">LOLOS</span>':'<span style="color:var(--yellow)">primary OK</span>';
+    var ob='<button onclick="doOpenLong(\''+p.sym+'\')" style="background:'+(p.all_ok?'var(--green)':'var(--yellow)')+';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">'+(p.all_ok?'Open Long':'Open bypass')+'</button>';
+    return '<tr><td class="sym">'+p.sym.replace('USDT','/USDT')+'</td><td>'+ab+'</td><td style="font-size:10px">'+sb+'</td><td>'+ob+'</td></tr>';
   }).join('');
-  el.innerHTML = '<table><thead><tr><th>Pair</th><th>Status</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  el.innerHTML='<table><thead><tr><th>Pair</th><th>Status</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 
-function badge(ok, label) {
-  var c = ok ? 'var(--green)' : 'var(--red)';
-  return '<span style="color:' + c + ';font-size:11px">' + (ok?'✓':'✗') + ' ' + label + '</span>';
-}
-function fmt(v) {
-  if (v === undefined || v === null) return '?';
-  if (v > 1000) return v.toFixed(0);
-  if (v > 1) return v.toFixed(3);
-  return v.toPrecision(4);
-}
-
-// ── Open Long deal ───────────────────────────────────────────────────────────
-function doOpenLong(sym) {
-  if (!confirm('Open Long MANUAL untuk ' + sym + '?\n\nPastikan slot brkX2 masih tersedia.')) return;
-  var btn = event.target;
-  btn.disabled = true;
-  btn.textContent = '⏳...';
-  var fd = new FormData();
-  fd.append('sym', sym);
-  fetch('/manual_open', {method:'POST', body: fd})
-    .then(function(r){ return r.json(); })
-    .then(function(data) {
-      if (data.ok) {
-        alert('✅ Open Long BERHASIL!\n' + sym + '\nScore: ' + data.score + ' | Target: $' + data.target_usd);
-      } else {
-        alert('❌ Open Long GAGAL:\n' + data.error);
-        btn.disabled = false;
-        btn.textContent = sym.includes('bypass') ? 'Open (bypass)' : 'Open Long';
-      }
-    })
-    .catch(function(e) {
-      alert('Error: ' + e);
-      btn.disabled = false;
-    });
+function badge(ok,label){return '<span style="color:'+(ok?'var(--green)':'var(--red)')+';font-size:11px">['+(ok?'OK':'X')+'] '+label+'</span>';}
+function fmt(v){if(v===undefined||v===null)return '?';if(v>1000)return v.toFixed(0);if(v>1)return v.toFixed(3);return v.toPrecision(4);}
+function doOpenLong(sym){
+  if(!confirm('Open Long MANUAL untuk '+sym+'?'))return;
+  var fd=new FormData(); fd.append('sym',sym); pauseRefresh();
+  fetch('/manual_open',{method:'POST',body:fd})
+    .then(function(r){return r.json();})
+    .then(function(data){resumeRefresh();if(data.ok){alert('BERHASIL!\n'+sym+' Score='+data.score+' Target=$'+data.target_usd);}else{alert('GAGAL:\n'+data.error);}})
+    .catch(function(e){resumeRefresh();alert('Error: '+e);});
 }
 </script>
 </body>
-</html>'''
+</html>
+'''
 
 def run_manual_scan() -> dict:
     """Scan on-demand brkX2-12h dengan filter manual dari _manual_filters.
