@@ -3540,7 +3540,11 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
 <div class="header">
   <span class="dot"></span>
   <h1>TRADING BOT DASHBOARD</h1>
-  <span class="status">Auto-refresh 30s &nbsp;|&nbsp; {{ now }}</span>
+  <span class="status">Refresh dalam <span id="cd">30</span>s &nbsp;|&nbsp; {{ now }}</span>
+<script>
+  var s=30;
+  setInterval(function(){s--;document.getElementById('cd').textContent=s<0?0:s;},1000);
+</script>
 </div>
 <div class="container">
   <div class="card">
