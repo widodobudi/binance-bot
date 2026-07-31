@@ -3839,18 +3839,22 @@ def run_manual_scan() -> dict:
             secondary_ok = all((s["ok"] if s["enabled"] else True) for s in secondaries)
             all_ok = primary_ok and secondary_ok
 
+            # Konversi numpy/pandas types ke Python native agar JSON serializable
+            for s in secondaries:
+                s["ok"] = bool(s["ok"])
+                s["enabled"] = bool(s["enabled"])
             results.append({
                 "sym":         sym,
-                "close":       close,
-                "ema20":       ema20,
-                "ema50":       ema50,
-                "hh":          hh,
-                "st_dir":      st_dir,
-                "primary_ok":  primary_ok,
-                "secondary_ok":secondary_ok,
-                "all_ok":      all_ok,
+                "close":       float(close),
+                "ema20":       float(ema20),
+                "ema50":       float(ema50),
+                "hh":          float(hh),
+                "st_dir":      int(st_dir),
+                "primary_ok":  bool(primary_ok),
+                "secondary_ok":bool(secondary_ok),
+                "all_ok":      bool(all_ok),
                 "secondaries": secondaries,
-                "p1_ok": p1_ok, "p2_ok": p2_ok, "p3_ok": p3_ok, "p4_ok": p4_ok,
+                "p1_ok": bool(p1_ok), "p2_ok": bool(p2_ok), "p3_ok": bool(p3_ok), "p4_ok": bool(p4_ok),
             })
         except Exception as e:
             log(f"  [MANUAL] error {sym}: {e}")
