@@ -3636,7 +3636,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
       <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <label style="font-size:11px;color:var(--muted)">Pilih pair kandidat:</label>
         <select id="pair-select" onchange="onPairSelect(this.value)" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 10px;font-size:12px;font-family:var(--font);cursor:pointer;min-width:160px">
-          <option value="">— pilih pair —</option>
+          <option value="">-- pilih pair --</option>
           {% for item in kandidat %}
           <option value="{{ item.sym }}">{{ item.sym.replace("USDT","/USDT") }} ({{ item.n_pass }}/{{ item.total }})</option>
           {% endfor %}
@@ -3644,7 +3644,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
         <span style="font-size:10px;color:var(--muted)">({{ kandidat|length }} kandidat dari scan terakhir)</span>
       </div>
       {% else %}
-      <div style="margin-bottom:12px;font-size:11px;color:var(--muted)">Belum ada kandidat — tunggu scan otomatis berikutnya atau klik Scan Sekarang.</div>
+      <div style="margin-bottom:12px;font-size:11px;color:var(--muted)">Belum ada kandidat -- tunggu scan otomatis berikutnya atau klik Scan Sekarang.</div>
       {% endif %}
       <!-- Pair detail panel -->
       <div id="pair-detail" style="margin-bottom:12px;display:none;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:11px"></div>
@@ -3652,7 +3652,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
       <div style="margin-bottom:10px">
         <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Primary (selalu wajib)</div>
         <div id="primary-status" style="display:flex;flex-wrap:wrap;gap:8px;font-size:11px">
-          <span style="color:var(--muted)">— klik Scan untuk lihat nilai aktual —</span>
+          <span style="color:var(--muted)">-- klik Scan untuk lihat nilai aktual --</span>
         </div>
       </div>
       <!-- Secondary conditions (toggleable) -->
@@ -3663,48 +3663,48 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px">
               <input type="checkbox" class="sec-cb" data-key="vol" checked style="cursor:pointer">
               <span class="sec-label">Vol &gt;= 0.6xMA</span>
-              <span class="sec-actual" style="color:var(--muted)">—</span>
-              <span class="sec-status">—</span>
+              <span class="sec-actual" style="color:var(--muted)">--</span>
+              <span class="sec-status">--</span>
             </label>
           </div>
           <div class="sec-item" data-key="rsi">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px">
               <input type="checkbox" class="sec-cb" data-key="rsi" checked style="cursor:pointer">
               <span class="sec-label">RSI &lt; 75</span>
-              <span class="sec-actual" style="color:var(--muted)">—</span>
-              <span class="sec-status">—</span>
+              <span class="sec-actual" style="color:var(--muted)">--</span>
+              <span class="sec-status">--</span>
             </label>
           </div>
           <div class="sec-item" data-key="stoch">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px">
               <input type="checkbox" class="sec-cb" data-key="stoch" checked style="cursor:pointer">
               <span class="sec-label">Stoch%K &lt; 70</span>
-              <span class="sec-actual" style="color:var(--muted)">—</span>
-              <span class="sec-status">—</span>
+              <span class="sec-actual" style="color:var(--muted)">--</span>
+              <span class="sec-status">--</span>
             </label>
           </div>
           <div class="sec-item" data-key="atr">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px">
               <input type="checkbox" class="sec-cb" data-key="atr" checked style="cursor:pointer">
               <span class="sec-label">ATR% &lt; 9%</span>
-              <span class="sec-actual" style="color:var(--muted)">—</span>
-              <span class="sec-status">—</span>
+              <span class="sec-actual" style="color:var(--muted)">--</span>
+              <span class="sec-status">--</span>
             </label>
           </div>
           <div class="sec-item" data-key="htf">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px">
               <input type="checkbox" class="sec-cb" data-key="htf" checked style="cursor:pointer">
               <span class="sec-label">HTF 3D vol &gt; 0.8xMA</span>
-              <span class="sec-actual" style="color:var(--muted)">—</span>
-              <span class="sec-status">—</span>
+              <span class="sec-actual" style="color:var(--muted)">--</span>
+              <span class="sec-status">--</span>
             </label>
           </div>
           <div class="sec-item" data-key="perf">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px">
               <input type="checkbox" class="sec-cb" data-key="perf" checked style="cursor:pointer">
               <span class="sec-label">Perf Grade &gt;= 0.5</span>
-              <span class="sec-actual" style="color:var(--muted)">—</span>
-              <span class="sec-status">—</span>
+              <span class="sec-actual" style="color:var(--muted)">--</span>
+              <span class="sec-status">--</span>
             </label>
           </div>
         </div>
@@ -3737,13 +3737,13 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
       <tr>
         <td class="sym">{{ item.sym.replace("USDT","/USDT") }}</td>
         <td class="score">{{ item.n_pass }}/{{ item.total }}</td>
-        <td class="fails">{{ "; ".join(item.fails[:2]) }}{% if item.fails|length > 2 %} +{{ item.fails|length - 2 }} lagi{% endif %}</td>
+        <td class="fails">{{ ("; ".join(item.fails[:2]))|e }}{% if item.fails|length > 2 %} +{{ item.fails|length - 2 }} lagi{% endif %}</td>
       </tr>
       {% endfor %}
       </tbody>
     </table>
     {% else %}
-    <div class="empty">{{ window_info.get(strategi, "Belum ada data scan") }}</div>
+    <div class="empty">{{ window_info.get(strategi, "Belum ada data scan")|e }}</div>
     {% endif %}
     </div>
   </div>
@@ -3847,7 +3847,7 @@ function doManualScan() {
     .then(function(data) {
       btn.disabled = false;
       btn.textContent = '🔍 Scan Sekarang';
-      st.textContent = 'Selesai ' + data.ts + ' — ' + data.pairs.length + ' pair dievaluasi';
+      st.textContent = 'Selesai ' + data.ts + ' -- ' + data.pairs.length + ' pair dievaluasi';
       renderResults(data.pairs);
       resumeRefresh();
     })
@@ -3916,7 +3916,7 @@ function renderResults(pairs) {
       });
     });
   }
-  // Tabel hasil — tampilkan hanya pair yang primary_ok, max 20
+  // Tabel hasil -- tampilkan hanya pair yang primary_ok, max 20
   var candidates = pairs.filter(function(p){ return p.primary_ok; }).slice(0, 20);
   if (candidates.length === 0) {
     el.innerHTML = '<div class="empty">Tidak ada pair lolos 4 syarat primary saat ini.</div>';
