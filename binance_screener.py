@@ -3630,6 +3630,24 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
   <div class="section-title">Manual Scan brkX2-12h</div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-body">
+      <!-- Dropdown kandidat dari near_miss brkX2-12h -->
+      {% set kandidat = near_miss.get("brkX2-12h", []) %}
+      {% if kandidat %}
+      <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--muted)">Pilih pair kandidat:</label>
+        <select id="pair-select" onchange="onPairSelect(this.value)" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 10px;font-size:12px;font-family:var(--font);cursor:pointer;min-width:160px">
+          <option value="">— pilih pair —</option>
+          {% for item in kandidat %}
+          <option value="{{ item.sym }}">{{ item.sym.replace("USDT","/USDT") }} ({{ item.n_pass }}/{{ item.total }})</option>
+          {% endfor %}
+        </select>
+        <span style="font-size:10px;color:var(--muted)">({{ kandidat|length }} kandidat dari scan terakhir)</span>
+      </div>
+      {% else %}
+      <div style="margin-bottom:12px;font-size:11px;color:var(--muted)">Belum ada kandidat — tunggu scan otomatis berikutnya atau klik Scan Sekarang.</div>
+      {% endif %}
+      <!-- Pair detail panel -->
+      <div id="pair-detail" style="margin-bottom:12px;display:none;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:11px"></div>
       <!-- Primary conditions (always required) -->
       <div style="margin-bottom:10px">
         <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Primary (selalu wajib)</div>
@@ -3734,6 +3752,63 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
 </div>
 
 <script>
+// ── Pair select dari dropdown ───────────────────────────────────────────────
+function onPairSelect(sym) {
+  var panel = document.getElementById('pair-detail');
+  if (!sym) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  panel.innerHTML = '<span style="color:var(--muted)">Mengambil data ' + sym.replace('USDT','/USDT') + '...</span>';
+  pauseRefresh();
+  fetch('/api/pair_detail?sym=' + encodeURIComponent(sym))
+    .then(function(r){ return r.json(); })
+    .then(function(d) {
+      resumeRefresh();
+      if (d.error) { panel.innerHTML = '<span style="color:var(--red)">Error: ' + d.error + '</span>'; return; }
+      // Update primary status
+      var ps = document.getElementById('primary-status');
+      ps.innerHTML =
+        badge(d.p1_ok, 'ST=' + (d.st_dir==1?'+1':d.st_dir)) + ' &nbsp; ' +
+        badge(d.p2_ok, 'close ' + fmt(d.close) + ' vs EMA20 ' + fmt(d.ema20)) + ' &nbsp; ' +
+        badge(d.p3_ok, 'close vs EMA50 ' + fmt(d.ema50)) + ' &nbsp; ' +
+        badge(d.p4_ok, 'close vs HH3 ' + fmt(d.hh));
+      // Update secondary actual values
+      updateSec('vol',   d.vol_ratio + 'x',   d.vol_ratio >= d.vol_thr);
+      updateSec('rsi',   d.rsi !== null ? d.rsi : 'n/a',   d.rsi !== null && d.rsi <= d.rsi_thr);
+      updateSec('stoch', d.stoch_k !== null ? d.stoch_k : 'n/a', d.stoch_k !== null && d.stoch_k < d.stoch_thr);
+      updateSec('atr',   d.atr_pct !== null ? d.atr_pct + '%' : 'n/a', d.atr_pct !== null && d.atr_pct < d.atr_thr);
+      updateSec('htf',   d.htf_ratio !== null ? d.htf_ratio + 'x' : 'n/a', d.htf_ratio !== null && d.htf_ratio >= d.htf_thr);
+      updateSec('perf',  d.perf_score !== null ? d.perf_score : 'n/a', d.perf_score !== null && d.perf_score >= d.perf_thr);
+      // Panel ringkasan
+      var allPrimary = d.p1_ok && d.p2_ok && d.p3_ok && d.p4_ok;
+      var color = allPrimary ? 'var(--green)' : 'var(--red)';
+      panel.innerHTML =
+        '<strong style="color:' + color + '">' + sym.replace('USDT','/USDT') + '</strong>' +
+        ' &nbsp;|&nbsp; close: <b>' + fmt(d.close) + '</b>' +
+        ' &nbsp;|&nbsp; EMA20: ' + fmt(d.ema20) +
+        ' &nbsp;|&nbsp; EMA50: ' + fmt(d.ema50) +
+        ' &nbsp;|&nbsp; HH3: ' + fmt(d.hh) +
+        ' &nbsp;|&nbsp; ' + (allPrimary
+          ? '<span style="color:var(--green)">✓ Primary lolos</span>'
+          : '<span style="color:var(--red)">✗ Primary gagal</span>');
+    })
+    .catch(function(e) {
+      resumeRefresh();
+      panel.innerHTML = '<span style="color:var(--red)">Error: ' + e + '</span>';
+    });
+}
+
+function updateSec(key, actual, ok) {
+  var items = document.querySelectorAll('.sec-item[data-key="' + key + '"]');
+  items.forEach(function(item) {
+    var actualEl = item.querySelector('.sec-actual');
+    var statusEl = item.querySelector('.sec-status');
+    if (actualEl) actualEl.textContent = '(skrg ' + actual + ')';
+    if (statusEl) statusEl.innerHTML = ok
+      ? '<span style="color:var(--green)">✓</span>'
+      : '<span style="color:var(--red)">✗</span>';
+  });
+}
+
 // ── Toggle secondary filter ──────────────────────────────────────────────────
 document.querySelectorAll('.sec-cb').forEach(function(cb) {
   cb.addEventListener('change', function() {
@@ -4103,6 +4178,51 @@ def run_web_dashboard():
             with _dashboard_lock:
                 nm = dict(_dashboard_state["near_miss"])
             return jsonify({"active_deals": deals, "near_miss": nm})
+
+        @app.route("/api/pair_detail", methods=["GET"])
+        def api_pair_detail():
+            sym = request.args.get("sym", "").upper().strip()
+            if not sym:
+                return jsonify({"error": "sym kosong"})
+            try:
+                df = get_ohlcv(sym, limit=120)
+                if df is None:
+                    return jsonify({"error": "Gagal ambil OHLCV"})
+                if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                    df = df.iloc[:-1]
+                if len(df) < 60:
+                    return jsonify({"error": "Data kurang"})
+                df = compute_indicators(df)
+                row = df.iloc[-1]
+                close   = float(row['close'])
+                ema20   = float(row['ema_fast'])
+                ema50   = float(row['ema_slow'])
+                hh      = float(row['hh'])
+                st_dir  = int(row['st_dir']) if not pd.isna(row.get('st_dir')) else 0
+                vol_ma  = float(row['vol_ma']) if not pd.isna(row.get('vol_ma')) and row['vol_ma'] > 0 else 1
+                vol_ratio = float(row['vol']) / vol_ma
+                rsi     = float(row['rsi']) if not pd.isna(row.get('rsi')) else None
+                stoch_k = float(row['stoch_k']) if 'stoch_k' in row and not pd.isna(row.get('stoch_k')) else None
+                atr_pct = float(row['atr_pct']) if not pd.isna(row.get('atr_pct')) else None
+                htf_ratio  = htf_vol_ratio(sym, HTF_TIMEFRAME, HTF_CANDLE_LIMIT, HTF_VOL_MA_PERIOD)
+                perf_score = calc_perf_score(sym, int(df['ct'].iloc[-1]))
+                if pd.isna(perf_score): perf_score = None
+                return jsonify({
+                    "sym": sym,
+                    "close": close, "ema20": ema20, "ema50": ema50, "hh": hh, "st_dir": st_dir,
+                    "vol_ratio": round(vol_ratio, 2), "vol_thr": VOLUME_MULT,
+                    "rsi": round(rsi, 1) if rsi is not None else None, "rsi_thr": RSI_MAX,
+                    "stoch_k": round(stoch_k, 1) if stoch_k is not None else None, "stoch_thr": STOCH_MAX,
+                    "atr_pct": round(atr_pct, 2) if atr_pct is not None else None, "atr_thr": ATR_MAX_PCT,
+                    "htf_ratio": round(htf_ratio, 2) if htf_ratio >= 0 else None, "htf_thr": HTF_VOL_MULT,
+                    "perf_score": round(perf_score, 2) if perf_score is not None else None, "perf_thr": PERF_SCORE_MIN,
+                    "p1_ok": st_dir == 1,
+                    "p2_ok": close > ema20,
+                    "p3_ok": close > ema50,
+                    "p4_ok": close > hh,
+                })
+            except Exception as e:
+                return jsonify({"error": str(e)})
 
         @app.route("/manual_filter", methods=["POST"])
         def manual_filter():
