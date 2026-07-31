@@ -1959,6 +1959,8 @@ def thread1_scan():
 
         if not reentry_ok:
             log(f"[T1] Candle terbaru sudah diproses (ts={newest_ts}), tidak ada kandidat re-entry yang layak.")
+            log_near_miss("brkX2-12h", near_miss, 9)
+            update_dashboard_near_miss("brkX2-12h", near_miss)
             return (f"{len(candidates)} kandidat LOLOS 7/7 tapi candle sudah diproses "
                     f"(tunggu candle 12h baru): {lolos_syms}")
 
@@ -3134,16 +3136,18 @@ def thread1d_scan_4h():
                 sk = r.get("stoch_k")
                 if sk is not None and not pd.isna(sk) and sk >= STRAT4H_STOCH_MAX:
                     fails.append(f"Stoch%K<{STRAT4H_STOCH_MAX} (skrg {sk:.1f})")
+                total_4h = 7  # ST + MACD + ATR + Vol + Stoch + HTF + Perf
+                n_pass_4h = total_4h - len(fails)
                 if len(fails) <= 1:  # hampir lolos (max 1 syarat gagal)
-                    near_miss_4h.append((sym, fails))
+                    near_miss_4h.append((n_pass_4h, sym, fails, total_4h))
                 continue
 
-            # HTF 3D filter
+            # HTF 12h filter
             if not htf_filter_4h_ok(sym):
-                log(f"  [T1d] {sym} lolos 4h tapi DITOLAK HTF 3D filter")
+                log(f"  [T1d] {sym} lolos 4h tapi DITOLAK HTF 12h filter")
                 _rvol4h = htf_vol_ratio(sym, STRAT4H_HTF_TF, STRAT4H_HTF_LIMIT, STRAT4H_HTF_VOL_MA)
                 _rvol4h_str = f"{_rvol4h:.2f}xMA" if _rvol4h >= 0 else "?"
-                near_miss_4h.append((sym, [f"HTF 12h: vol<{STRAT4H_HTF_VOL_MULT}xMA (skrg {_rvol4h_str})"]))
+                near_miss_4h.append((6, sym, [f"HTF 12h: vol<{STRAT4H_HTF_VOL_MULT}xMA (skrg {_rvol4h_str})"], 7))
                 continue
 
             # Performance filter
@@ -3151,7 +3155,7 @@ def thread1d_scan_4h():
                 candle_ts = int(df['ct'].iloc[-1])
                 pscore = calc_perf_score(sym, candle_ts)
                 if pd.isna(pscore) or pscore < PERF_SCORE_MIN:
-                    near_miss_4h.append((sym, [f"Perf Grade masih <B (score {pscore:.2f})"]))
+                    near_miss_4h.append((6, sym, [f"Perf Grade masih <B (score {pscore:.2f})"], 7))
                     continue
 
             r    = df.iloc[-1]
