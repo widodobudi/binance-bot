@@ -2225,22 +2225,25 @@ def thread2_monitor():
         add_usd      = d.get('add_usd', 0)
         add_fund_sent = d.get('add_fund_sent', False)
         if add_usd > 0 and not add_fund_sent:
-            strat = d.get('strategy', 'brkX2')
-            log(f"[T2] {sym} kirim add fund ${add_usd} (deal confirmed aktif)")
-            send_add_funds(sym, add_usd, strat, delay=0)
-            deal_log_write({
-                'timestamp_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
-                'event_type':    'ADD_FUND',
-                'strategy':      strat,
-                'symbol':        to_display_pair(sym),
-                'thread':        'T2',
-                'add_usd':       add_usd,
-                'total_usd':     BASE_ORDER_VOLUME + add_usd,
-            })
-            with active_deals_lock:
-                if sym in active_deals:
-                    active_deals[sym]['add_fund_sent'] = True
-            save_active_deals()
+            if not get_deal_override(sym, 'auto_add_fund', True):
+                log(f"[T2] {sym} add fund di-skip (auto_add_fund=OFF via dashboard)")
+            else:
+                strat = d.get('strategy', 'brkX2')
+                log(f"[T2] {sym} kirim add fund ${add_usd} (deal confirmed aktif)")
+                send_add_funds(sym, add_usd, strat, delay=0)
+                deal_log_write({
+                    'timestamp_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                    'event_type':    'ADD_FUND',
+                    'strategy':      strat,
+                    'symbol':        to_display_pair(sym),
+                    'thread':        'T2',
+                    'add_usd':       add_usd,
+                    'total_usd':     BASE_ORDER_VOLUME + add_usd,
+                })
+                with active_deals_lock:
+                    if sym in active_deals:
+                        active_deals[sym]['add_fund_sent'] = True
+                save_active_deals()
 
         # update peak
         peak = max(d.get('peak',entry), price)
@@ -2293,6 +2296,9 @@ def thread2_monitor():
         save_active_deals()
 
         if do_close:
+            if not get_deal_override(sym, 'auto_close', True):
+                log(f"[T2] {sym} close di-skip (auto_close=OFF via dashboard)")
+                continue
             log(f"[T2] CLOSE {sym}: {reason} | profit {prof_from_entry:.2f}%")
             strat = d.get('strategy','brkX2')
             if strat == 'reversal':
