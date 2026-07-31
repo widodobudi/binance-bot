@@ -3819,15 +3819,17 @@ function updateSec(key, actual, ok) {
   });
 }
 
-// ── Toggle secondary filter ──────────────────────────────────────────────────
-document.querySelectorAll('.sec-cb').forEach(function(cb) {
-  cb.addEventListener('change', function() {
-    var key = this.dataset.key;
-    var val = this.checked;
-    fetch('/manual_filter', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: 'key=' + key + '&value=' + val
+// ── Toggle secondary filter (init setelah DOM ready) ────────────────────────
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('.sec-cb').forEach(function(cb) {
+    cb.addEventListener('change', function() {
+      var key = this.dataset.key;
+      var val = this.checked;
+      fetch('/manual_filter', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'key=' + key + '&value=' + val
+      });
     });
   });
 });
