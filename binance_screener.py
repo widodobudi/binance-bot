@@ -1894,6 +1894,7 @@ def thread1_scan():
         log(f"[T1] {len(universe)} coin discan, tidak ada yg lolos syarat entry.")
         last_processed_candle_ts = newest_ts
         log_near_miss("brkX2-12h", near_miss, 9)
+        update_dashboard_near_miss("brkX2-12h", near_miss)
         return f"TIDAK ADA coin lolos 7 syarat inti + 2 tambahan (HTF 3D, Perf). ({len(universe)} coin discan)\n" + format_near_miss(near_miss, 9)
 
     # urutkan kandidat: ATR% terkecil (paling stabil) dulu
@@ -2130,6 +2131,7 @@ def thread1b_scan_reversal():
     if not candidates:
         log(f"[T1b] {len(universe)} coin discan (reversal), tidak ada yg lolos setup.")
         log_near_miss("Reversal-8h", near_miss, 5)
+        update_dashboard_near_miss("Reversal-8h", near_miss)
         return f"REVERSAL: tidak ada coin lolos setup. ({len(universe)} discan)\n" + format_near_miss(near_miss, 5)
 
     # urutkan: ATR% terkecil dulu (paling stabil)
@@ -2922,11 +2924,11 @@ def thread_rev_intrabar_scan():
             continue
 
         # ── Lapis 1: setup dari candle tertutup ──────────────────────────────
-        # Struktur: c-3, c-2, c-1 = 3 merah, c0 = doji, c+1 = candle RUNNING sekarang
-        # df_closed[-1] = c0 (doji), df_closed[-2...-4] = c-1, c-2, c-3
+        # c+1 = df_closed[-1], c0 = df_closed[-2], c-1..c-3 = df_closed[-3..-5]
         n = len(df_closed)
-        im3, im2, im1 = n-4, n-3, n-2
-        i0  = n - 1   # c0 = doji = candle tertutup terakhir
+        im3, im2, im1 = n-5, n-4, n-3
+        i0  = n - 2
+        i1  = n - 1
 
         c0 = df_closed.iloc[i0]
         if any(pd.isna(c0.get(x, float('nan'))) for x in ['ema_fast', 'ema_slow', 'body_ratio']):
@@ -2949,26 +2951,18 @@ def thread_rev_intrabar_scan():
         if not (c0['body_ratio'] < REVERSAL_DOJI_MAX):
             continue
 
-        # ── Cek elapsed c+1 (candle running sekarang) ────────────────────────
-        # c+1 = candle 8h yang sedang berjalan setelah c0 doji
-        # Candle open 8h setelah c0 tutup
-        c0_close_ts = int(c0.get('ct', 0)) if 'ct' in c0.index else candle_open_ms
-        c1_open_ms  = candle_open_ms  # candle 8h saat ini = c+1
-        elapsed_pct = (now_ms - c1_open_ms) / (sec8 * 1000)
-        REV_INTRABAR_ELAPSED_MIN = 0.05   # 5% = menit ke-24
-        REV_INTRABAR_ELAPSED_MAX = 0.50   # 50% = menit ke-240
-        # Pastikan c0 memang candle 8h sebelum candle running ini
-        if not (REV_INTRABAR_ELAPSED_MIN <= elapsed_pct <= REV_INTRABAR_ELAPSED_MAX):
+        # Syarat 3: c+1 HA bullish
+        if not bool(df_closed['ha_bull'].iloc[i1]):
             continue
 
-        # ── Lapis 2: konfirmasi harga live (c+1 sedang berjalan) ─────────────
-        ema20_now = float(c0['ema_fast'])  # EMA20 dari c0 tertutup
+        # ── Lapis 2: konfirmasi harga live (c+2 sedang berjalan) ─────────────
+        ema20_now = float(df_closed['ema_fast'].iloc[i1])
         if price_now <= 0 or price_now <= ema20_now:
             continue   # belum cross-up EMA20
 
         # ── LOLOS → OPEN DEAL ─────────────────────────────────────────────────
-        signal_price = float(c0['close'])  # close c0 (doji) sebagai referensi sinyal
-        atrp = float(c0['atr_pct']) if not pd.isna(c0.get('atr_pct', float('nan'))) else 3.0
+        signal_price = float(df_closed['close'].iloc[i1])
+        atrp = float(df_closed['atr_pct'].iloc[i1]) if not pd.isna(df_closed['atr_pct'].iloc[i1]) else 3.0
 
         log(f"[T3-REV] SINYAL REVERSAL INTRABAR: {sym} price_now={price_now:.6g} "
             f"EMA20={ema20_now:.6g} atr%={atrp:.2f}")
@@ -2993,7 +2987,7 @@ def thread_rev_intrabar_scan():
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (c+2 intrabar 5-50%): {signal_price:.6g}\n"
+                f"Harga sinyal (c+1 close): {signal_price:.6g}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
@@ -3005,7 +2999,7 @@ def thread_rev_intrabar_scan():
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (c+2 intrabar 5-50%): {signal_price:.6g}\n"
+                f"Harga sinyal (c+1 close): {signal_price:.6g}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
@@ -3017,7 +3011,7 @@ def thread_rev_intrabar_scan():
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (c+2 intrabar 5-50%): {signal_price:.6g}\n"
+                f"Harga sinyal (c+1 close): {signal_price:.6g}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
@@ -3158,6 +3152,7 @@ def thread1d_scan_4h():
                      f"slot {n4h_active}/{STRAT4H_MAX_DEALS})")
         heartbeat_4h_tick(status_4h, near_miss_4h)
         log_near_miss("brkX2-4h", near_miss_4h, 7)
+        update_dashboard_near_miss("brkX2-4h", near_miss_4h)
         log(f"[T1d] Tidak ada kandidat 4h.")
         return
 
@@ -3441,6 +3436,7 @@ def thread_crossema_scan():
 
     if _crossema_near_miss:
         log_near_miss("CrossEMA-4h", _crossema_near_miss, 3)
+        update_dashboard_near_miss("CrossEMA-4h", _crossema_near_miss)
 
 def run_thread_crossema():
     """Thread T_CROSSEMA: scan CrossEMA tiap STRAT_CROSSEMA_SCAN_INTERVAL detik (4 menit)."""
@@ -3528,6 +3524,9 @@ if __name__ == '__main__':
         threads.append(t_cx)
         n_threads += 1
     for t in threads: t.start()
+    # Web dashboard thread
+    t_web = threading.Thread(target=run_web_dashboard, daemon=True, name="T-Web")
+    t_web.start()
     log(f"{n_threads} thread aktif (T1=screener, T2=monitor, T3=intrabar 12h, T3-REV=reversal intrabar"
         + (", T1d=intrabar 4h" if STRAT4H_ENABLED else "")
         + (", T-CrossEMA=strategi#4" if STRAT_CROSSEMA_ENABLED else "")
@@ -3544,3 +3543,268 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         log("Dihentikan.")
         sys.exit(0)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WEB DASHBOARD — Flask server untuk monitoring dan kontrol deal
+# ══════════════════════════════════════════════════════════════════════════════
+
+DEAL_OVERRIDES_FILE = "/data/deal_overrides.json"
+WEB_PORT = int(os.environ.get("PORT", 8080))
+
+# Shared state untuk dashboard — diupdate oleh thread scanner
+_dashboard_state = {
+    "near_miss": {
+        "brkX2-12h": [],
+        "Reversal-8h": [],
+        "brkX2-4h": [],
+        "CrossEMA-4h": [],
+    },
+    "last_scan": {},
+}
+_dashboard_lock = threading.Lock()
+
+def update_dashboard_near_miss(strategi: str, items: list):
+    """Update near_miss untuk dashboard. items = list of (n_pass, sym, fails, total)"""
+    with _dashboard_lock:
+        _dashboard_state["near_miss"][strategi] = [
+            {
+                "sym": item[1] if len(item) > 1 else item[0],
+                "n_pass": item[0] if isinstance(item[0], int) else 0,
+                "total": item[3] if len(item) > 3 else 9,
+                "fails": item[2] if len(item) > 2 else item[1] if len(item) > 1 else [],
+            }
+            for item in items[:10]
+        ]
+        _dashboard_state["last_scan"][strategi] = now_wib().strftime("%H:%M:%S")
+
+def load_deal_overrides() -> dict:
+    try:
+        if os.path.exists(DEAL_OVERRIDES_FILE):
+            with open(DEAL_OVERRIDES_FILE, "r") as f:
+                return json.load(f)
+    except: pass
+    return {}
+
+def save_deal_overrides(overrides: dict):
+    try:
+        with open(DEAL_OVERRIDES_FILE, "w") as f:
+            json.dump(overrides, f, indent=2)
+    except Exception as e:
+        log(f"WARN save_deal_overrides: {e}")
+
+def get_deal_override(sym: str, key: str, default: bool = True) -> bool:
+    """Cek apakah auto-action diizinkan untuk deal ini. Default True (auto aktif)."""
+    overrides = load_deal_overrides()
+    return overrides.get(sym, {}).get(key, default)
+
+DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="refresh" content="30">
+<title>Bot Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d2e;
+    --border: #2a2d3e;
+    --accent: #4f9eff;
+    --green: #00c896;
+    --red: #ff4f6a;
+    --yellow: #ffb84f;
+    --text: #e2e8f0;
+    --muted: #8892a4;
+    --font: 'SF Mono', 'Fira Code', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; }
+  .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 16px; }
+  .header h1 { font-size: 15px; color: var(--accent); letter-spacing: 0.05em; }
+  .header .status { font-size: 11px; color: var(--muted); }
+  .header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 6px; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .card-header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .card-header h2 { font-size: 12px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; }
+  .card-header .scan-time { font-size: 10px; color: var(--muted); }
+  .card-body { padding: 12px 16px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; padding: 6px 8px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); }
+  td { padding: 8px 8px; border-bottom: 1px solid #1e2133; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .sym { color: var(--accent); font-weight: 600; }
+  .score { color: var(--yellow); }
+  .fails { color: var(--muted); font-size: 11px; line-height: 1.5; }
+  .profit-pos { color: var(--green); }
+  .profit-neg { color: var(--red); }
+  .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 10px; }
+  .badge-armed { background: rgba(0,200,150,0.15); color: var(--green); }
+  .badge-wait { background: rgba(255,184,79,0.15); color: var(--yellow); }
+  .toggle-wrap { display: flex; gap: 12px; }
+  .toggle-item { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+  .toggle-item input[type=checkbox] { accent-color: var(--accent); cursor: pointer; }
+  .empty { color: var(--muted); font-size: 12px; padding: 12px 0; text-align: center; }
+  .section-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  @media(max-width:768px){ .grid{grid-template-columns:1fr;} }
+</style>
+</head>
+<body>
+<div class="header">
+  <span class="dot"></span>
+  <h1>TRADING BOT DASHBOARD</h1>
+  <span class="status">Auto-refresh 30s &nbsp;|&nbsp; {{ now }}</span>
+</div>
+<div class="container">
+
+  <!-- ACTIVE DEALS -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+      <h2>Active Deals ({{ active_count }})</h2>
+    </div>
+    <div class="card-body">
+    {% if active_deals %}
+    <table>
+      <thead><tr>
+        <th>Pair</th><th>Strategi</th><th>Entry</th><th>Harga Skrg</th><th>Profit</th><th>Status</th><th>Auto Add Fund</th><th>Auto Close</th>
+      </tr></thead>
+      <tbody>
+      {% for sym, d in active_deals.items() %}
+      <tr>
+        <td class="sym">{{ sym.replace('USDT','/USDT') }}</td>
+        <td>{{ d.strategy }}</td>
+        <td>{{ "%.4g"|format(d.entry_price) }}</td>
+        <td>{{ "%.4g"|format(d.last_price) if d.last_price else '-' }}</td>
+        <td class="{{ 'profit-pos' if d.upnl_pct > 0 else 'profit-neg' }}">
+          {{ '%+.2f'|format(d.upnl_pct) }}%
+        </td>
+        <td>
+          {% if d.trailing_armed %}
+          <span class="badge badge-armed">ARMED</span>
+          {% else %}
+          <span class="badge badge-wait">WAIT ARM</span>
+          {% endif %}
+        </td>
+        <td>
+          <form method="POST" action="/toggle" style="display:inline">
+            <input type="hidden" name="sym" value="{{ sym }}">
+            <input type="hidden" name="key" value="auto_add_fund">
+            <input type="checkbox" name="value" onchange="this.form.submit()"
+              {{ 'checked' if overrides.get(sym,{}).get('auto_add_fund',True) else '' }}>
+          </form>
+        </td>
+        <td>
+          <form method="POST" action="/toggle" style="display:inline">
+            <input type="hidden" name="sym" value="{{ sym }}">
+            <input type="hidden" name="key" value="auto_close">
+            <input type="checkbox" name="onchange="this.form.submit()"
+              {{ 'checked' if overrides.get(sym,{}).get('auto_close',True) else '' }}>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">Tidak ada deal aktif saat ini</div>
+    {% endif %}
+    </div>
+  </div>
+
+  <!-- NEAR MISS -->
+  <div class="section-title">Kandidat Terdekat per Strategi</div>
+  <div class="grid">
+  {% for strategi, items in near_miss.items() %}
+  <div class="card">
+    <div class="card-header">
+      <h2>{{ strategi }}</h2>
+      <span class="scan-time">Scan: {{ last_scan.get(strategi, '-') }}</span>
+    </div>
+    <div class="card-body">
+    {% if items %}
+    <table>
+      <thead><tr><th>Pair</th><th>Lolos</th><th>Belum</th></tr></thead>
+      <tbody>
+      {% for item in items %}
+      <tr>
+        <td class="sym">{{ item.sym.replace('USDT','/USDT') }}</td>
+        <td class="score">{{ item.n_pass }}/{{ item.total }}</td>
+        <td class="fails">{{ '; '.join(item.fails[:2]) }}{% if item.fails|length > 2 %} +{{ item.fails|length - 2 }} lagi{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">Belum ada data scan</div>
+    {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  </div>
+
+</div>
+</body>
+</html>"""
+
+def run_web_dashboard():
+    """Thread web dashboard Flask."""
+    try:
+        from flask import Flask, render_template_string, request, redirect, jsonify
+        app = Flask(__name__)
+        app.secret_key = os.urandom(24)
+
+        @app.route("/")
+        def index():
+            with active_deals_lock:
+                deals = dict(active_deals)
+            # Hitung uPnL per deal
+            deals_display = {}
+            for sym, d in deals.items():
+                dd = dict(d)
+                ep = dd.get("entry_price", 0)
+                lp = dd.get("last_price", ep)
+                dd["upnl_pct"] = (lp/ep - 1)*100 if ep > 0 else 0
+                deals_display[sym] = dd
+
+            with _dashboard_lock:
+                nm = dict(_dashboard_state["near_miss"])
+                ls = dict(_dashboard_state["last_scan"])
+
+            overrides = load_deal_overrides()
+            return render_template_string(
+                DASHBOARD_HTML,
+                active_deals=deals_display,
+                active_count=len(deals_display),
+                near_miss=nm,
+                last_scan=ls,
+                overrides=overrides,
+                now=now_wib().strftime("%d/%m %H:%M:%S WIB"),
+            )
+
+        @app.route("/toggle", methods=["POST"])
+        def toggle():
+            sym = request.form.get("sym", "")
+            key = request.form.get("key", "")
+            value = "value" in request.form
+            if sym and key:
+                overrides = load_deal_overrides()
+                if sym not in overrides:
+                    overrides[sym] = {}
+                overrides[sym][key] = value
+                save_deal_overrides(overrides)
+            return redirect("/")
+
+        @app.route("/api/state")
+        def api_state():
+            with active_deals_lock:
+                deals = dict(active_deals)
+            with _dashboard_lock:
+                nm = dict(_dashboard_state["near_miss"])
+            return jsonify({"active_deals": deals, "near_miss": nm})
+
+        log(f"[WEB] Dashboard jalan di port {WEB_PORT}")
+        app.run(host="0.0.0.0", port=WEB_PORT, debug=False, use_reloader=False)
+    except Exception as e:
+        log(f"WARN web dashboard error: {e}")
