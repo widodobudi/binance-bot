@@ -3699,7 +3699,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <form method="POST" action="/toggle" style="display:inline">
             <input type="hidden" name="sym" value="{{ sym }}">
             <input type="hidden" name="key" value="auto_close">
-            <input type="checkbox" name="onchange="this.form.submit()"
+            <input type="checkbox" name="value" onchange="this.form.submit()"
               {{ 'checked' if overrides.get(sym,{}).get('auto_close',True) else '' }}>
           </form>
         </td>
@@ -3751,7 +3751,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 def run_web_dashboard():
     """Thread web dashboard Flask."""
     try:
-        from flask import Flask, render_template_string, request, redirect, jsonify
+        try:
+            from flask import Flask, render_template_string, request, redirect, jsonify
+        except ImportError:
+            import subprocess
+            subprocess.run(["pip", "install", "flask", "--quiet", "--break-system-packages"],
+                          capture_output=True)
+            from flask import Flask, render_template_string, request, redirect, jsonify
         app = Flask(__name__)
         app.secret_key = os.urandom(24)
 
