@@ -3540,7 +3540,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="refresh" content="30">
+<meta id="meta-refresh" http-equiv="refresh" content="30">
 <title>Bot Dashboard</title>
 <style>
   :root{--bg:#0f1117;--surface:#1a1d2e;--border:#2a2d3e;--accent:#4f9eff;--green:#00c896;--red:#ff4f6a;--yellow:#ffb84f;--text:#e2e8f0;--muted:#8892a4;--font:'SF Mono','Fira Code',monospace}
@@ -3692,8 +3692,9 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
         </div>
       </div>
       <!-- Scan button + status -->
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
         <button id="btn-scan" onclick="doManualScan()" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:7px 18px;font-size:12px;cursor:pointer;font-family:var(--font)">🔍 Scan Sekarang</button>
+        <button id="btn-open-prompt" onclick="promptOpenLong()" style="background:var(--green);color:#000;border:none;border-radius:4px;padding:7px 18px;font-size:12px;cursor:pointer;font-family:var(--font)">📈 Open Long Deal</button>
         <span id="scan-status" style="font-size:11px;color:var(--muted)"></span>
       </div>
       <!-- Scan results table -->
@@ -3747,24 +3748,67 @@ document.querySelectorAll('.sec-cb').forEach(function(cb) {
 });
 
 // ── Manual scan ──────────────────────────────────────────────────────────────
+function pauseRefresh() {
+  // Matikan meta-refresh sementara agar fetch tidak dibatalkan
+  var m = document.getElementById('meta-refresh');
+  if (m) m.setAttribute('content', '9999');
+}
+function resumeRefresh() {
+  var m = document.getElementById('meta-refresh');
+  if (m) m.setAttribute('content', '30');
+}
+
 function doManualScan() {
   var btn = document.getElementById('btn-scan');
   var st  = document.getElementById('scan-status');
   btn.disabled = true;
   btn.textContent = '⏳ Scanning...';
-  st.textContent = 'Sedang scan semua pair...';
+  st.textContent = 'Sedang scan semua pair... (30-60 detik)';
+  pauseRefresh();
   fetch('/manual_scan', {method:'POST'})
     .then(function(r){ return r.json(); })
     .then(function(data) {
       btn.disabled = false;
       btn.textContent = '🔍 Scan Sekarang';
-      st.textContent = 'Scan selesai ' + data.ts + ' — ' + data.pairs.length + ' pair dievaluasi';
+      st.textContent = 'Selesai ' + data.ts + ' — ' + data.pairs.length + ' pair dievaluasi';
       renderResults(data.pairs);
+      resumeRefresh();
     })
     .catch(function(e) {
       btn.disabled = false;
       btn.textContent = '🔍 Scan Sekarang';
       st.textContent = 'Error: ' + e;
+      resumeRefresh();
+    });
+}
+
+function promptOpenLong() {
+  var sym = prompt('Masukkan simbol pair (contoh: BTC atau BTCUSDT):');
+  if (!sym) return;
+  sym = sym.trim().toUpperCase();
+  if (!sym.endsWith('USDT')) sym = sym + 'USDT';
+  if (!confirm('Open Long MANUAL untuk ' + sym + '?\n\nPastikan slot brkX2 masih tersedia.')) return;
+  pauseRefresh();
+  var fd = new FormData();
+  fd.append('sym', sym);
+  var st = document.getElementById('scan-status');
+  st.textContent = 'Membuka deal ' + sym + '...';
+  fetch('/manual_open', {method:'POST', body: fd})
+    .then(function(r){ return r.json(); })
+    .then(function(data) {
+      resumeRefresh();
+      if (data.ok) {
+        st.textContent = '✅ Open Long ' + sym + ' BERHASIL! Score=' + data.score + ' Target=$' + data.target_usd;
+        alert('✅ Open Long BERHASIL!\n' + sym + '\nScore: ' + data.score + ' | Target: $' + data.target_usd);
+      } else {
+        st.textContent = '❌ Gagal: ' + data.error;
+        alert('❌ Open Long GAGAL:\n' + data.error);
+      }
+    })
+    .catch(function(e) {
+      resumeRefresh();
+      st.textContent = 'Error: ' + e;
+      alert('Error: ' + e);
     });
 }
 
