@@ -2922,11 +2922,11 @@ def thread_rev_intrabar_scan():
             continue
 
         # ── Lapis 1: setup dari candle tertutup ──────────────────────────────
-        # c+1 = df_closed[-1], c0 = df_closed[-2], c-1..c-3 = df_closed[-3..-5]
+        # Struktur: c-3, c-2, c-1 = 3 merah, c0 = doji, c+1 = candle RUNNING sekarang
+        # df_closed[-1] = c0 (doji), df_closed[-2...-4] = c-1, c-2, c-3
         n = len(df_closed)
-        im3, im2, im1 = n-5, n-4, n-3
-        i0  = n - 2
-        i1  = n - 1
+        im3, im2, im1 = n-4, n-3, n-2
+        i0  = n - 1   # c0 = doji = candle tertutup terakhir
 
         c0 = df_closed.iloc[i0]
         if any(pd.isna(c0.get(x, float('nan'))) for x in ['ema_fast', 'ema_slow', 'body_ratio']):
@@ -2949,25 +2949,26 @@ def thread_rev_intrabar_scan():
         if not (c0['body_ratio'] < REVERSAL_DOJI_MAX):
             continue
 
-        # Syarat 3: c+1 HA bullish → DIHAPUS 31/07/2026
-        # Diganti dengan elapsed filter 5%-50% pada candle c+2 (running)
-        # Backtest: 5%-50% avg=+4.133% WR=94.7% worst=-8.55% vs baseline +3.238%
-
-        # ── Cek elapsed c+2 (candle running sekarang) ────────────────────────
-        elapsed_pct = (now_ms - candle_open_ms) / (sec8 * 1000)
+        # ── Cek elapsed c+1 (candle running sekarang) ────────────────────────
+        # c+1 = candle 8h yang sedang berjalan setelah c0 doji
+        # Candle open 8h setelah c0 tutup
+        c0_close_ts = int(c0.get('ct', 0)) if 'ct' in c0.index else candle_open_ms
+        c1_open_ms  = candle_open_ms  # candle 8h saat ini = c+1
+        elapsed_pct = (now_ms - c1_open_ms) / (sec8 * 1000)
         REV_INTRABAR_ELAPSED_MIN = 0.05   # 5% = menit ke-24
         REV_INTRABAR_ELAPSED_MAX = 0.50   # 50% = menit ke-240
+        # Pastikan c0 memang candle 8h sebelum candle running ini
         if not (REV_INTRABAR_ELAPSED_MIN <= elapsed_pct <= REV_INTRABAR_ELAPSED_MAX):
             continue
 
-        # ── Lapis 2: konfirmasi harga live (c+2 sedang berjalan) ─────────────
-        ema20_now = float(df_closed['ema_fast'].iloc[i1])
+        # ── Lapis 2: konfirmasi harga live (c+1 sedang berjalan) ─────────────
+        ema20_now = float(c0['ema_fast'])  # EMA20 dari c0 tertutup
         if price_now <= 0 or price_now <= ema20_now:
             continue   # belum cross-up EMA20
 
         # ── LOLOS → OPEN DEAL ─────────────────────────────────────────────────
-        signal_price = float(df_closed['close'].iloc[i1])
-        atrp = float(df_closed['atr_pct'].iloc[i1]) if not pd.isna(df_closed['atr_pct'].iloc[i1]) else 3.0
+        signal_price = float(c0['close'])  # close c0 (doji) sebagai referensi sinyal
+        atrp = float(c0['atr_pct']) if not pd.isna(c0.get('atr_pct', float('nan'))) else 3.0
 
         log(f"[T3-REV] SINYAL REVERSAL INTRABAR: {sym} price_now={price_now:.6g} "
             f"EMA20={ema20_now:.6g} atr%={atrp:.2f}")
