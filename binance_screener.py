@@ -2949,8 +2949,15 @@ def thread_rev_intrabar_scan():
         if not (c0['body_ratio'] < REVERSAL_DOJI_MAX):
             continue
 
-        # Syarat 3: c+1 HA bullish
-        if not bool(df_closed['ha_bull'].iloc[i1]):
+        # Syarat 3: c+1 HA bullish → DIHAPUS 31/07/2026
+        # Diganti dengan elapsed filter 5%-50% pada candle c+2 (running)
+        # Backtest: 5%-50% avg=+4.133% WR=94.7% worst=-8.55% vs baseline +3.238%
+
+        # ── Cek elapsed c+2 (candle running sekarang) ────────────────────────
+        elapsed_pct = (now_ms - candle_open_ms) / (sec8 * 1000)
+        REV_INTRABAR_ELAPSED_MIN = 0.05   # 5% = menit ke-24
+        REV_INTRABAR_ELAPSED_MAX = 0.50   # 50% = menit ke-240
+        if not (REV_INTRABAR_ELAPSED_MIN <= elapsed_pct <= REV_INTRABAR_ELAPSED_MAX):
             continue
 
         # ── Lapis 2: konfirmasi harga live (c+2 sedang berjalan) ─────────────
@@ -2985,7 +2992,7 @@ def thread_rev_intrabar_scan():
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (c+1 close): {signal_price:.6g}\n"
+                f"Harga sinyal (c+2 intrabar 5-50%): {signal_price:.6g}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
@@ -2997,7 +3004,7 @@ def thread_rev_intrabar_scan():
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (c+1 close): {signal_price:.6g}\n"
+                f"Harga sinyal (c+2 intrabar 5-50%): {signal_price:.6g}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
@@ -3009,7 +3016,7 @@ def thread_rev_intrabar_scan():
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (c+1 close): {signal_price:.6g}\n"
+                f"Harga sinyal (c+2 intrabar 5-50%): {signal_price:.6g}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
