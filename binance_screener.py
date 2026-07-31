@@ -3831,10 +3831,11 @@ def run_manual_scan() -> dict:
             p2_ok = close > ema20
             p3_ok = close > ema50
             p4_ok = close > hh
-            primary_ok = p1_ok and p2_ok and p3_ok and p4_ok
+            p5_ok = vol_ratio <= VOL_MAX_MULT  # batas atas vol — selalu wajib
+            primary_ok = p1_ok and p2_ok and p3_ok and p4_ok and p5_ok
 
             # 6 SECONDARY — nilai & status
-            s_vol   = {"key":"vol",   "label":f"Vol>={VOLUME_MULT}xMA",  "threshold":f"{VOLUME_MULT}xMA", "actual":f"{vol_ratio:.2f}x",   "ok": vol_ratio >= VOLUME_MULT and vol_ratio <= VOL_MAX_MULT, "enabled": filters["vol"]}
+            s_vol   = {"key":"vol",   "label":f"Vol>={VOLUME_MULT}xMA",  "threshold":f"{VOLUME_MULT}xMA", "actual":f"{vol_ratio:.2f}x",   "ok": vol_ratio >= VOLUME_MULT,  "enabled": filters["vol"]}
             s_rsi   = {"key":"rsi",   "label":f"RSI<{RSI_MAX}",          "threshold":str(RSI_MAX),        "actual":f"{rsi:.1f}" if rsi is not None else "n/a",   "ok": rsi is not None and rsi <= RSI_MAX,            "enabled": filters["rsi"]}
             s_stoch = {"key":"stoch", "label":f"Stoch%K<{STOCH_MAX}",    "threshold":str(STOCH_MAX),      "actual":f"{stoch_k:.1f}" if stoch_k is not None else "n/a", "ok": stoch_k is not None and stoch_k < STOCH_MAX, "enabled": filters["stoch"]}
             s_atr   = {"key":"atr",   "label":f"ATR%<{ATR_MAX_PCT}%",    "threshold":f"{ATR_MAX_PCT}%",   "actual":f"{atr_pct:.1f}%" if atr_pct is not None else "n/a", "ok": atr_pct is not None and atr_pct < ATR_MAX_PCT, "enabled": filters["atr"]}
