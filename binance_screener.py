@@ -3752,6 +3752,16 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
 </div>
 
 <script>
+// ── Pause/resume auto-refresh ────────────────────────────────────────────────
+function pauseRefresh() {
+  var m = document.getElementById('meta-refresh');
+  if (m) m.setAttribute('content', '9999');
+}
+function resumeRefresh() {
+  var m = document.getElementById('meta-refresh');
+  if (m) m.setAttribute('content', '30');
+}
+
 // ── Pair select dari dropdown ───────────────────────────────────────────────
 function onPairSelect(sym) {
   var panel = document.getElementById('pair-detail');
@@ -3823,16 +3833,6 @@ document.querySelectorAll('.sec-cb').forEach(function(cb) {
 });
 
 // ── Manual scan ──────────────────────────────────────────────────────────────
-function pauseRefresh() {
-  // Matikan meta-refresh sementara agar fetch tidak dibatalkan
-  var m = document.getElementById('meta-refresh');
-  if (m) m.setAttribute('content', '9999');
-}
-function resumeRefresh() {
-  var m = document.getElementById('meta-refresh');
-  if (m) m.setAttribute('content', '30');
-}
-
 function doManualScan() {
   var btn = document.getElementById('btn-scan');
   var st  = document.getElementById('scan-status');
