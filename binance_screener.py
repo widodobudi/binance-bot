@@ -3467,15 +3467,18 @@ _dashboard_lock = threading.Lock()
 
 def update_dashboard_near_miss(strategi: str, items: list):
     with _dashboard_lock:
-        _dashboard_state["near_miss"][strategi] = [
+        parsed = [
             {
                 "sym": item[1] if len(item) > 1 and isinstance(item[1], str) else (item[0] if isinstance(item[0], str) else "?"),
                 "n_pass": item[0] if isinstance(item[0], int) else 0,
                 "total": item[3] if len(item) > 3 else 9,
                 "fails": item[2] if len(item) > 2 else [],
             }
-            for item in items[:10]
+            for item in items
         ]
+        # Urutkan berdasarkan n_pass descending (terbanyak lolos di atas)
+        parsed.sort(key=lambda x: -x["n_pass"])
+        _dashboard_state["near_miss"][strategi] = parsed[:10]
         _dashboard_state["last_scan"][strategi] = now_wib().strftime("%H:%M:%S")
 
 def load_deal_overrides() -> dict:
