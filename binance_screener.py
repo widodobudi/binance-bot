@@ -109,7 +109,7 @@ STRAT4H_MAX_DEALS       = 5       # slot brkX2-4h — set Max active trades=5 di
 STRAT4H_MAX_HOLD_CANDLES= 15      # timeout 15 candle 4h = 2.5 hari
 STRAT4H_SCAN_INTERVAL   = 180     # scan tiap 3 menit (180 detik)
 STRAT4H_ENTRY_MIN_PCT   = 5/240   # menit ke-5 dari 240 menit candle 4h = 2.08%
-STRAT4H_ENTRY_MAX_PCT   = 10/240  # menit ke-10 dari 240 menit candle 4h = 4.17%
+STRAT4H_ENTRY_MAX_PCT   = 60/240  # menit ke-60 dari 240 menit = 25% elapsed (diubah dari 10/240, 31/07/2026)
 STRAT4H_FWDTEST_TARGET  = 7       # target forward-test: 7 deal
 # Entry conditions 4h
 STRAT4H_EMA_FAST        = 9
@@ -144,8 +144,8 @@ BTC_FILTER_ENABLED      = False
 # HTF RSI: ON (identik brkX2-4h)
 STRAT_CROSSEMA_ENABLED      = True
 STRAT_CROSSEMA_ENTRY_MIN    = 5/240    # 5% elapsed = menit ke-12
-STRAT_CROSSEMA_ENTRY_MAX    = 15/240   # 15% elapsed = menit ke-36
-STRAT_CROSSEMA_SCAN_INTERVAL= 240      # scan tiap 4 menit (9x dalam window 36 menit)
+STRAT_CROSSEMA_ENTRY_MAX    = 60/240   # 25% elapsed = menit ke-60 (diubah dari 15/240, 31/07/2026)
+STRAT_CROSSEMA_SCAN_INTERVAL= 240      # scan tiap 4 menit (~14x dalam window 55 menit)
 STRAT_CROSSEMA_MAX_DEALS    = 2        # slot — mulai konservatif
 STRAT_CROSSEMA_MAX_HOLD     = 15       # timeout 15 candle 4h = 2.5 hari
 STRAT_CROSSEMA_FWDTEST      = 7        # target forward-test
@@ -218,12 +218,9 @@ INTRABAR_EARLY_ENABLED   = True
 INTRABAR_EARLY_ENTRY_PCT = 0.05    # 5% elapsed = menit ke 36
 INTRABAR_EARLY_END_PCT   = 0.59    # 59% elapsed = menit ke 424 (tepat sebelum T3-BASE di 60%)
 INTRABAR_EARLY_SCAN_INTERVAL = 240  # 4 menit → scan tiap 4 menit dalam window
-# Breakout lookback KHUSUS T3-EARLY: HH7 (bukan HH10)
-# Basis: backtest_early_hh_sweep.py (20/07/2026)
-#   HH7 avg=+9.790% WR=87.9% vs baseline HH10 avg=+9.304% WR=88.0% (delta +0.486%, wf6 OK)
-#   HH5/HH8 juga lebih baik tapi HH7 tertinggi; NO_HH bencana (avg +1.213%, WR 60.3%)
-# Hanya berlaku Lapis 2 T3-EARLY; T1 close candle & T3-baseline tetap HH10
-INTRABAR_EARLY_BREAKOUT_LOOKBACK = 5   # diubah dari 7 → 5 (backtest_hh567_sweep.py, 27/07/2026)
+# Breakout lookback KHUSUS T3-EARLY: disamakan HH3 (ikuti T1 candle close, 31/07/2026)
+# History: HH10 baseline → HH7 (backtest_early_hh_sweep.py 20/07) → HH5 (27/07) → HH3 (31/07)
+INTRABAR_EARLY_BREAKOUT_LOOKBACK = 3   # diubah dari 5 → 3 (ikuti T1 HH3, 31/07/2026)
 
 # T3-REV: intrabar reversal (full candle 8h = 480 menit)
 # Scan syarat reversal dari candle-candle tertutup (c-3..c+1),
