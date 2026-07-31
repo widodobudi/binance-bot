@@ -1226,12 +1226,18 @@ def check_entry_reversal(df) -> bool:
     return True
 
 def entry_detail_reversal(df):
-    """Untuk heartbeat: (n_lolos, 4, list_gagal) tanpa mempengaruhi keputusan. None kalau choppy/data kurang."""
+    """Untuk heartbeat: (n_lolos, 5, list_gagal) tanpa mempengaruhi keputusan. None kalau choppy/data kurang.
+    df[-1] = c+1 (candle konfirmasi, sudah tutup)
+    df[-2] = c0 (doji)
+    df[-3,-4,-5] = c-1, c-2, c-3 (3 candle merah)
+    Total 5 syarat: 3merah, doji, HA bull, cross EMA20, Perf (ditambah di luar)
+    """
     if len(df) < 6: return None
     if is_choppy(df): return None
     n = len(df)
-    im3, im2, im1 = n-6, n-5, n-4
-    i0 = n-3; i1, i2 = n-2, n-1
+    im3, im2, im1 = n-5, n-4, n-3   # c-3, c-2, c-1 (3 merah)
+    i0 = n - 2                        # c0 (doji)
+    i1 = n - 1                        # c+1 (konfirmasi)
     c0 = df.iloc[i0]
     if any(pd.isna(c0[x]) for x in ['ema_fast','ema_slow','body_ratio']): return None
     checks = []
@@ -1248,8 +1254,8 @@ def entry_detail_reversal(df):
     # syarat 3: c+1 HA bull
     s3 = bool(df['ha_bull'].iloc[i1])
     checks.append((s3, "c+1 HA bullish (belum)"))
-    # syarat 4: cross-up EMA20
-    s4 = _cross_up(df, i1, 'ema_fast') or _cross_up(df, i2, 'ema_fast')
+    # syarat 4: cross-up EMA20 di c+1
+    s4 = _cross_up(df, i1, 'ema_fast')
     checks.append((s4, "cross-up EMA20 (belum)"))
     n_pass = sum(1 for ok,_ in checks if ok)
     fails = [lab for ok,lab in checks if not ok]
