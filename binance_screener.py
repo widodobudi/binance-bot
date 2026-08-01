@@ -81,6 +81,7 @@ RSI_LENGTH        = 14
 RSI_MAX           = 75
 STOCH_MAX         = 70      # syarat ke-7: Stoch %K < 70 (hindari entry terlalu overbought). None = matikan.
 MIN_VOLUME_USD    = 3_000_000   # dinaikkan dari 1jt ke 3jt (backtest_entry_filter2)
+SYMBOL_BLACKLIST  = {'GIGGLEUSDT', 'SOXLBUSDT'}  # pair blacklist — tidak akan di-scan sama sekali
 REVERSAL_MIN_VOL_USD = 1_500_000  # min vol24h khusus reversal (lebih rendah untuk perluas universe)
 
 TRAIL_ARM_PCT     = 2.0
@@ -1861,6 +1862,7 @@ def thread1_scan():
     for sym in universe:
         with active_deals_lock:
             if sym in active_deals: continue
+        if sym in SYMBOL_BLACKLIST: continue
         df = get_ohlcv(sym, limit=120)
         if df is None: continue
         # mode (a): pastikan candle terakhir SUDAH tutup
@@ -2117,6 +2119,7 @@ def thread1b_scan_reversal():
     for sym in universe:
         with active_deals_lock:
             if sym in active_deals: continue   # satu coin, satu deal (lintas strategi)
+        if sym in SYMBOL_BLACKLIST: continue
         df = get_ohlcv(sym, interval=REVERSAL_TIMEFRAME, limit=120)
         if df is None or len(df) < 60: continue
         # mode (a): pastikan candle terakhir SUDAH tutup
@@ -3112,6 +3115,7 @@ def thread1d_scan_4h():
         sym = sym_info.get("symbol", "")
         if not sym.endswith("USDT"): continue
         if sym in existing: continue
+        if sym in SYMBOL_BLACKLIST: continue
         if sym in last_4h_candle_ts and last_4h_candle_ts[sym] == candle_open_ms:
             continue
         if vol_map.get(sym, 0) < STRAT4H_MIN_VOL_USD:
@@ -3350,6 +3354,7 @@ def thread_crossema_scan():
         sym = sym_info.get("symbol", "")
         if not sym.endswith("USDT"): continue
         if sym in existing: continue
+        if sym in SYMBOL_BLACKLIST: continue
         if _crossema_last_candle_ts.get(sym) == candle_open_ms: continue
         vol24 = float(sym_info.get("quoteVolume", 0))
         if vol24 < STRAT_CROSSEMA_MIN_VOL_USD: continue
