@@ -3543,7 +3543,7 @@ def get_deal_override(sym: str, key: str, default: bool = True) -> bool:
     return load_deal_overrides().get(sym, {}).get(key, default)
 
 # ── Inline JS untuk dashboard (ASCII-only, served via /dash.js) ──────────────
-_DASH_JS = 'var _refreshTimer=null;\nfunction startRefresh(){if(_refreshTimer)return;_refreshTimer=setInterval(function(){window.location.reload();},30000);}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){var cb=document.getElementById(\'cb-pause-refresh\');return cb&&cb.checked;}\nfunction pauseRefresh(){stopRefresh();}\nfunction resumeRefresh(){if(!isPauseChecked())startRefresh();}\nfunction onPauseRefreshToggle(checked){if(checked){stopRefresh();}else{startRefresh();}}\ndocument.addEventListener(\'DOMContentLoaded\',function(){startRefresh();document.querySelectorAll(\'.sec-cb\').forEach(function(cb){cb.addEventListener(\'change\',function(){fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});});});});\nfunction onPairSelect(sym){var panel=document.getElementById(\'pair-detail\');if(!sym){panel.style.display=\'none\';return;}panel.style.display=\'block\';panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';pauseRefresh();fetch(\'/api/pair_detail?sym=\'+encodeURIComponent(sym)).then(function(r){return r.json();}).then(function(d){resumeRefresh();if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}document.getElementById(\'primary-status\').innerHTML=badge(d.p1_ok,\'ST=\'+(d.st_dir==1?\'+1\':d.st_dir))+\' \'+badge(d.p2_ok,\'close \'+fmt(d.close)+\' vs EMA20 \'+fmt(d.ema20))+\' \'+badge(d.p3_ok,\'close vs EMA50 \'+fmt(d.ema50))+\' \'+badge(d.p4_ok,\'close vs HH3 \'+fmt(d.hh));updateSec(\'vol\',d.vol_ratio+\'x\',d.vol_ratio>=d.vol_thr&&d.vol_ratio<=(d.vol_max_thr||99));updateSec(\'rsi\',d.rsi!==null?d.rsi:\'n/a\',d.rsi!==null&&d.rsi<=d.rsi_thr);updateSec(\'stoch\',d.stoch_k!==null?d.stoch_k:\'n/a\',d.stoch_k!==null&&d.stoch_k<d.stoch_thr);updateSec(\'atr\',d.atr_pct!==null?d.atr_pct+\'%\':\'n/a\',d.atr_pct!==null&&d.atr_pct<d.atr_thr);updateSec(\'htf\',d.htf_ratio!==null?d.htf_ratio+\'x\':\'n/a\',d.htf_ratio!==null&&d.htf_ratio>=d.htf_thr);updateSec(\'perf\',d.perf_score!==null?d.perf_score:\'n/a\',d.perf_score!==null&&d.perf_score>=d.perf_thr);var allP=d.p1_ok&&d.p2_ok&&d.p3_ok&&d.p4_ok;panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | close:\'+fmt(d.close)+\' EMA20:\'+fmt(d.ema20)+\' EMA50:\'+fmt(d.ema50)+\' HH3:\'+fmt(d.hh)+\' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');}).catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});}\nfunction updateSec(key,actual,ok){document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');if(a)a.textContent=\'(skrg \'+actual+\')\';if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';});}\nfunction doManualScan(){var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');btn.disabled=true;btn.textContent=\'Scanning...\';st.textContent=\'Sedang scan semua pair... (30-60 detik)\';pauseRefresh();fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';renderResults(data.pairs);resumeRefresh();}).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});}\nfunction promptOpenLong(){var sel=document.getElementById(\'pair-select\');var sym=sel?sel.value:\'\';if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}if(!confirm(\'Open Long: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;execOpenLong(sym);}\nfunction execOpenLong(sym){var fd=new FormData();fd.append(\'sym\',sym);var st=document.getElementById(\'scan-status\');if(st)st.textContent=\'Membuka deal \'+sym+\'...\';pauseRefresh();fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){resumeRefresh();var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);if(st)st.textContent=msg;alert(msg);}).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});}\nfunction renderResults(pairs){var el=document.getElementById(\'scan-results\');var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];if(sample){document.getElementById(\'primary-status\').innerHTML=badge(sample.p1_ok,\'ST=+1\')+\' \'+badge(sample.p2_ok,\'close(\'+fmt(sample.close)+\')>EMA20(\'+fmt(sample.ema20)+\')\')+\' \'+badge(sample.p3_ok,\'close>EMA50(\'+fmt(sample.ema50)+\')\')+\' \'+badge(sample.p4_ok,\'close>HH3(\'+fmt(sample.hh)+\')\');if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});}var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos 4 syarat primary.</div>\';return;}var rows=cands.map(function(p){var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';}).join(\'\');el.innerHTML=\'<table><thead><tr><th>Pair</th><th>Status</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';}\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){if(v===undefined||v===null)return \'?\';if(v>1000)return v.toFixed(0);if(v>1)return v.toFixed(3);return v.toPrecision(4);}\nfunction doOpenLong(sym){execOpenLong(sym);}\n\n'
+_DASH_JS = 'var _refreshTimer=null;\nvar _curStrat=\'brkX2-12h\';\nfunction startRefresh(){if(_refreshTimer)return;_refreshTimer=setInterval(function(){window.location.reload();},30000);}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){var cb=document.getElementById(\'cb-pause-refresh\');return cb&&cb.checked;}\nfunction pauseRefresh(){stopRefresh();}\nfunction resumeRefresh(){if(!isPauseChecked())startRefresh();}\nfunction onPauseRefreshToggle(checked){if(checked){stopRefresh();}else{startRefresh();}}\n\n// Definisi secondary per strategi\nvar STRAT_SECONDARY={\n  \'brkX2-12h\':[\n    {key:\'vol\',label:\'Vol 0.6x--5.0xMA\'},{key:\'rsi\',label:\'RSI<75\'},\n    {key:\'stoch\',label:\'Stoch%K<70\'},{key:\'atr\',label:\'ATR%<9%\'},\n    {key:\'htf\',label:\'HTF 3D vol>0.8xMA\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'Reversal-8h T1\':[\n    {key:\'ha_bull\',label:\'c+1 HA bullish\'},{key:\'cross\',label:\'cross-up EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'Reversal-8h T3-REV\':[\n    {key:\'elapsed\',label:\'Elapsed 5%-50%\'},{key:\'cross_live\',label:\'price_now>EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'brkX2-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'stoch\',label:\'Stoch%K<80\'},\n    {key:\'htf\',label:\'HTF12h vol>2.0xMA\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'CrossEMA-4h\':[\n    {key:\'vol\',label:\'Vol>=0.4xMA\'},{key:\'htf\',label:\'HTF12h vol>1.5xMA\'},\n    {key:\'vol24\',label:\'Vol24h>=$1.0jt\'}\n  ]\n};\n\nfunction onStratSelect(strat){\n  _curStrat=strat;\n  // Update dropdown kandidat\n  var opts=document.querySelectorAll(\'.nm-opt\');\n  var count=0;\n  opts.forEach(function(o){\n    var show=o.getAttribute(\'data-strat\')===strat;\n    o.style.display=show?\'\':\'none\';\n    if(show)count++;\n  });\n  document.getElementById(\'nm-count\').textContent=\'(\'+count+\' kandidat dari scan terakhir)\';\n  // Reset pair select\n  var sel=document.getElementById(\'pair-select\');if(sel)sel.value=\'\';\n  // Reset panel\n  var panel=document.getElementById(\'pair-detail\');if(panel)panel.style.display=\'none\';\n  // Update secondary grid\n  renderSecondaryGrid(strat);\n  // Reset primary status\n  var ps=document.getElementById(\'primary-status\');\n  if(ps)ps.innerHTML=\'<span style="color:var(--muted)">-- pilih pair untuk lihat nilai aktual --</span>\';\n}\n\nfunction renderSecondaryGrid(strat){\n  var grid=document.getElementById(\'secondary-grid\');\n  if(!grid)return;\n  var defs=STRAT_SECONDARY[strat]||[];\n  grid.innerHTML=defs.map(function(d){\n    return \'<div class="sec-item" data-key="\'+d.key+\'"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px"><input type="checkbox" class="sec-cb" data-key="\'+d.key+\'" checked style="cursor:pointer"><span class="sec-label">\'+d.label+\'</span><span class="sec-actual" style="color:var(--muted)">--</span><span class="sec-status">--</span></label></div>\';\n  }).join(\'\');\n  // Re-attach event listeners\n  grid.querySelectorAll(\'.sec-cb\').forEach(function(cb){\n    cb.addEventListener(\'change\',function(){\n      fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});\n    });\n  });\n}\n\ndocument.addEventListener(\'DOMContentLoaded\',function(){\n  startRefresh();\n  onStratSelect(\'brkX2-12h\');\n});\n\nfunction onPairSelect(sym){\n  var panel=document.getElementById(\'pair-detail\');\n  if(!sym){panel.style.display=\'none\';return;}\n  panel.style.display=\'block\';\n  panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';\n  pauseRefresh();\n  fetch(\'/api/strategy_detail?sym=\'+encodeURIComponent(sym)+\'&strat=\'+encodeURIComponent(_curStrat))\n    .then(function(r){return r.json();})\n    .then(function(d){\n      resumeRefresh();\n      if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}\n      // Update primary\n      var ps=document.getElementById(\'primary-status\');\n      ps.innerHTML=d.primary.map(function(p){return badge(p.ok,p.label+\' (\'+p.actual+\')\');}).join(\' \');\n      // Update secondary\n      d.secondary.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n      // Panel ringkasan\n      var allP=d.primary_ok;\n      panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | \'+\n        d.primary.map(function(p){return (p.ok?\'<span style="color:var(--green)">\':\'<span style="color:var(--red)">\') + p.label+\': \'+p.actual+\'</span>\';}).join(\' | \')+\n        \' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');\n    })\n    .catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});\n}\n\nfunction updateSec(key,actual,ok){\n  document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){\n    var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');\n    if(a)a.textContent=\'(skrg \'+actual+\')\';\n    if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';\n  });\n}\n\nfunction doManualScan(){\n  var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');\n  btn.disabled=true;btn.textContent=\'Scanning...\';\n  st.textContent=\'Sedang scan semua pair... (30-60 detik)\';\n  pauseRefresh();\n  fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){\n    btn.disabled=false;btn.textContent=\'Scan Sekarang\';\n    st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';\n    renderResults(data.pairs);resumeRefresh();\n  }).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});\n}\n\nfunction promptOpenLong(){\n  var sel=document.getElementById(\'pair-select\');\n  var sym=sel?sel.value:\'\';\n  if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}\n  if(!confirm(\'Open Long: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;\n  execOpenLong(sym);\n}\n\nfunction execOpenLong(sym){\n  var fd=new FormData();fd.append(\'sym\',sym);\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Membuka deal \'+sym+\'...\';\n  pauseRefresh();\n  fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){\n    resumeRefresh();\n    var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);\n    if(st)st.textContent=msg;alert(msg);\n  }).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction renderResults(pairs){\n  var el=document.getElementById(\'scan-results\');\n  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];\n  if(sample){\n    document.getElementById(\'primary-status\').innerHTML=\n      sample.secondaries?sample.secondaries.map(function(s){return badge(s.ok,s.key+\':\'+s.actual);}).join(\' \'):\'\';\n    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n  }\n  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);\n  if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos syarat primary.</div>\';return;}\n  var rows=cands.map(function(p){\n    var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');\n    var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';\n    var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';\n    return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';\n  }).join(\'\');\n  el.innerHTML=\'<table><thead><tr><th>Pair</th><th>Status</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';\n}\n\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){if(v===undefined||v===null)return \'?\';if(v>1000)return v.toFixed(0);if(v>1)return v.toFixed(3);return v.toPrecision(4);}\nfunction doOpenLong(sym){execOpenLong(sym);}\n'
 
 DASHBOARD_HTML = '''<!DOCTYPE html>
 <html lang="id">
@@ -3635,26 +3635,39 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     {% endif %}
     </div>
   </div>
-  <!-- ═══════════════ MANUAL SCAN brkX2-12h ═══════════════ -->
-  <div class="section-title">Manual Scan brkX2-12h</div>
+  <!-- ═══════════════ MANUAL SCAN ═══════════════ -->
+  <div class="section-title">Manual Scan</div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-body">
-      <!-- Dropdown kandidat dari near_miss brkX2-12h -->
-      {% set kandidat = near_miss.get("brkX2-12h", []) %}
-      {% if kandidat %}
+      <!-- Dropdown strategi -->
+      <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--muted)">Strategi:</label>
+        <select id="strat-select" onchange="onStratSelect(this.value)" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 10px;font-size:12px;font-family:var(--font);cursor:pointer;min-width:180px">
+          <option value="brkX2-12h">brkX2-12h</option>
+          <option value="Reversal-8h T1">Reversal-8h T1</option>
+          <option value="Reversal-8h T3-REV">Reversal-8h T3-REV</option>
+          <option value="brkX2-4h">brkX2-4h</option>
+          <option value="CrossEMA-4h">CrossEMA-4h</option>
+        </select>
+      </div>
+      <!-- Dropdown kandidat dinamis per strategi -->
+      {% set all_nm = {
+        "brkX2-12h": near_miss.get("brkX2-12h", []),
+        "Reversal-8h T1": near_miss.get("Reversal-8h", []),
+        "Reversal-8h T3-REV": near_miss.get("Reversal-8h", []),
+        "brkX2-4h": near_miss.get("brkX2-4h", []),
+        "CrossEMA-4h": near_miss.get("CrossEMA-4h", [])
+      } %}
       <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <label style="font-size:11px;color:var(--muted)">Pilih pair kandidat:</label>
         <select id="pair-select" onchange="onPairSelect(this.value)" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 10px;font-size:12px;font-family:var(--font);cursor:pointer;min-width:160px">
           <option value="">-- pilih pair --</option>
-          {% for item in kandidat %}
-          <option value="{{ item.sym }}">{{ item.sym.replace("USDT","/USDT") }} ({{ item.n_pass }}/{{ item.total }})</option>
-          {% endfor %}
+          {% for stk, kandidat in all_nm.items() %}{% for item in kandidat %}
+          <option value="{{ item.sym }}" class="nm-opt" data-strat="{{ stk }}" style="display:none">{{ item.sym.replace("USDT","/USDT") }} ({{ item.n_pass }}/{{ item.total }})</option>
+          {% endfor %}{% endfor %}
         </select>
-        <span style="font-size:10px;color:var(--muted)">({{ kandidat|length }} kandidat dari scan terakhir)</span>
+        <span id="nm-count" style="font-size:10px;color:var(--muted)"></span>
       </div>
-      {% else %}
-      <div style="margin-bottom:12px;font-size:11px;color:var(--muted)">Belum ada kandidat -- tunggu scan otomatis berikutnya atau klik Scan Sekarang.</div>
-      {% endif %}
       <!-- Pair detail panel -->
       <div id="pair-detail" style="margin-bottom:12px;display:none;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:11px"></div>
       <!-- Primary conditions (always required) -->
@@ -3764,7 +3777,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
   </div>
 </div>
 
-<script src="/dash.js?v=1785540499"></script>
+<script src="/dash.js?v=1785552228"></script>
 </body>
 </html>
 '''
@@ -4021,6 +4034,168 @@ def run_web_dashboard():
                     "p3_ok": close > ema50,
                     "p4_ok": close > hh,
                 })
+            except Exception as e:
+                return jsonify({"error": str(e)})
+
+        @app.route("/api/strategy_detail", methods=["GET"])
+        def api_strategy_detail():
+            sym   = request.args.get("sym", "").upper().strip()
+            strat = request.args.get("strat", "brkX2-12h")
+            if not sym: return jsonify({"error": "sym kosong"})
+
+            try:
+                if strat == "brkX2-12h":
+                    df = get_ohlcv(sym, limit=120)
+                    if df is None: return jsonify({"error": "Gagal ambil OHLCV"})
+                    if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
+                    if len(df) < 60: return jsonify({"error": "Data kurang"})
+                    df = compute_indicators(df)
+                    row = df.iloc[-1]
+                    close  = float(row['close']); ema20 = float(row['ema_fast']); ema50 = float(row['ema_slow'])
+                    hh     = float(row['hh']); st_dir = int(row['st_dir']) if not pd.isna(row.get('st_dir')) else 0
+                    vol_ma = float(row['vol_ma']) if not pd.isna(row.get('vol_ma')) and row['vol_ma']>0 else 1
+                    vol_ratio = float(row['vol'])/vol_ma
+                    rsi    = float(row['rsi']) if not pd.isna(row.get('rsi')) else None
+                    stoch_k= float(row['stoch_k']) if 'stoch_k' in row and not pd.isna(row.get('stoch_k')) else None
+                    atr_pct= float(row['atr_pct']) if not pd.isna(row.get('atr_pct')) else None
+                    htf_r  = htf_vol_ratio(sym, HTF_TIMEFRAME, HTF_CANDLE_LIMIT, HTF_VOL_MA_PERIOD)
+                    perf   = calc_perf_score(sym, int(df['ct'].iloc[-1]))
+                    if pd.isna(perf): perf = None
+                    p = [st_dir==1, close>ema20, close>ema50, close>hh]
+                    return jsonify({"strat": strat, "sym": sym,
+                        "primary": [
+                            {"label":"ST=+1","ok":p[0],"actual":f"ST={st_dir}"},
+                            {"label":f"close>{ema20:.4g} (EMA20)","ok":p[1],"actual":f"{close:.4g}"},
+                            {"label":f"close>{ema50:.4g} (EMA50)","ok":p[2],"actual":f"{close:.4g}"},
+                            {"label":f"close>HH3 {hh:.4g}","ok":p[3],"actual":f"{close:.4g}"},
+                        ],
+                        "secondary": [
+                            {"key":"vol","label":f"Vol {VOLUME_MULT}x--{VOL_MAX_MULT}xMA","actual":f"{vol_ratio:.2f}x","ok":VOLUME_MULT<=vol_ratio<=VOL_MAX_MULT,"thr":f"{VOLUME_MULT}x-{VOL_MAX_MULT}x"},
+                            {"key":"rsi","label":f"RSI<{RSI_MAX}","actual":f"{rsi:.1f}" if rsi else "n/a","ok":rsi is not None and rsi<=RSI_MAX,"thr":str(RSI_MAX)},
+                            {"key":"stoch","label":f"Stoch%K<{STOCH_MAX}","actual":f"{stoch_k:.1f}" if stoch_k else "n/a","ok":stoch_k is not None and stoch_k<STOCH_MAX,"thr":str(STOCH_MAX)},
+                            {"key":"atr","label":f"ATR%<{ATR_MAX_PCT}%","actual":f"{atr_pct:.1f}%" if atr_pct else "n/a","ok":atr_pct is not None and atr_pct<ATR_MAX_PCT,"thr":f"{ATR_MAX_PCT}%"},
+                            {"key":"htf","label":f"HTF3D vol>{HTF_VOL_MULT}xMA","actual":f"{htf_r:.2f}x" if htf_r>=0 else "n/a","ok":htf_r>=HTF_VOL_MULT,"thr":f"{HTF_VOL_MULT}x"},
+                            {"key":"perf","label":f"Perf>={PERF_SCORE_MIN}","actual":f"{perf:.2f}" if perf else "n/a","ok":perf is not None and perf>=PERF_SCORE_MIN,"thr":str(PERF_SCORE_MIN)},
+                        ],
+                        "primary_ok": all(p),
+                    })
+
+                elif strat in ("Reversal-8h T1","Reversal-8h T3-REV"):
+                    df = get_ohlcv(sym, interval=REVERSAL_TIMEFRAME, limit=60)
+                    if df is None: return jsonify({"error": "Gagal ambil OHLCV 8h"})
+                    if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
+                    df = compute_indicators(df)
+                    n = len(df)
+                    if n < 6: return jsonify({"error": "Data kurang"})
+                    # c0=doji, c-1,c-2,c-3=merah
+                    im3,im2,im1 = n-5,n-4,n-3; i0=n-2; i1=n-1
+                    c0 = df.iloc[i0]; c1 = df.iloc[i1]
+                    all_red = all(df.iloc[i]['close']<df.iloc[i]['open'] for i in (im3,im2,im1))
+                    open_c3 = float(df.iloc[im3]['open']); close_c1 = float(df.iloc[im1]['close'])
+                    drop = (close_c1/open_c3-1)*100 if open_c3>0 else 0
+                    n_red = sum(1 for i in (im3,im2,im1) if df.iloc[i]['close']<df.iloc[i]['open'])
+                    doji_ok = float(c0.get('body_ratio',1)) < REVERSAL_DOJI_MAX
+                    below_ema = float(c0['close'])<float(c0['ema_fast']) and float(c0['close'])<float(c0['ema_slow'])
+                    p1_ok = all_red and drop<=-5.0
+                    p2_ok = doji_ok and below_ema
+                    # secondary
+                    ha_bull = bool(df['ha_bull'].iloc[i1]) if 'ha_bull' in df.columns else False
+                    cross_ok= _cross_up(df, i1, 'ema_fast')
+                    vol24 = float(c1.get('vol',0)) * float(c1.get('close',0))
+                    perf  = calc_perf_score(sym, int(df['ct'].iloc[i0]))
+                    if pd.isna(perf): perf = None
+                    elapsed_pct = 0
+                    if strat == "Reversal-8h T3-REV":
+                        price_now = get_price_now(sym)
+                        cross_live = price_now > float(c0['ema_fast']) if price_now>0 else False
+                        candle_open_ms = int(df['ts'].iloc[-1]) if 'ts' in df.columns else 0
+                        now_ms = int(time.time()*1000)
+                        elapsed_pct = (now_ms-candle_open_ms)/(8*3600*1000) if candle_open_ms>0 else 0
+                        sec_extra = [
+                            {"key":"elapsed","label":"Elapsed 5%-50%","actual":f"{elapsed_pct*100:.1f}%","ok":0.05<=elapsed_pct<=0.50,"thr":"5%-50%"},
+                            {"key":"cross_live","label":"price_now>EMA20","actual":f"{price_now:.4g}" if price_now>0 else "n/a","ok":cross_live,"thr":f">{c0['ema_fast']:.4g}"},
+                        ]
+                    else:
+                        sec_extra = [
+                            {"key":"ha_bull","label":"c+1 HA bullish","actual":"Ya" if ha_bull else "Belum","ok":ha_bull,"thr":"bullish"},
+                            {"key":"cross","label":"cross-up EMA20","actual":"Ya" if cross_ok else "Belum","ok":cross_ok,"thr":"cross up"},
+                        ]
+                    p = [p1_ok, p2_ok]
+                    return jsonify({"strat": strat, "sym": sym,
+                        "primary": [
+                            {"label":f"3 candle merah+turun>=5%","ok":p1_ok,"actual":f"{n_red}/3 merah, turun {drop:.1f}%"},
+                            {"label":f"c0 doji<{REVERSAL_DOJI_MAX} & <EMA20/50","ok":p2_ok,"actual":f"body {c0.get('body_ratio',0):.2f}"},
+                        ],
+                        "secondary": sec_extra + [
+                            {"key":"perf","label":f"Perf>={PERF_SCORE_MIN}","actual":f"{perf:.2f}" if perf else "n/a","ok":perf is not None and perf>=PERF_SCORE_MIN,"thr":str(PERF_SCORE_MIN)},
+                            {"key":"vol24","label":f"Vol24h>=${REVERSAL_MIN_VOL_USD/1e6:.1f}jt","actual":f"${vol24/1e6:.2f}jt","ok":vol24>=REVERSAL_MIN_VOL_USD,"thr":f"${REVERSAL_MIN_VOL_USD/1e6:.1f}jt"},
+                        ],
+                        "primary_ok": all(p),
+                    })
+
+                elif strat == "brkX2-4h":
+                    df = get_ohlcv_4h(sym, limit=100)
+                    if df is None: return jsonify({"error": "Gagal ambil OHLCV 4h"})
+                    if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
+                    df = compute_indicators_4h(df)
+                    row = df.iloc[-1]
+                    st_dir = int(row['st_dir']) if not pd.isna(row.get('st_dir')) else 0
+                    macd_h = float(row.get('macd_hist',0)) if not pd.isna(row.get('macd_hist')) else None
+                    atr_pct= float(row['atr_pct']) if not pd.isna(row.get('atr_pct')) else None
+                    vol_ma = float(row['vol_ma']) if not pd.isna(row.get('vol_ma')) and row['vol_ma']>0 else 1
+                    vol_ratio= float(row['vol'])/vol_ma
+                    stoch_k= float(row['stoch_k']) if 'stoch_k' in row and not pd.isna(row.get('stoch_k')) else None
+                    htf_r  = htf_vol_ratio(sym, STRAT4H_HTF_TF, STRAT4H_HTF_LIMIT, STRAT4H_HTF_VOL_MA)
+                    perf   = calc_perf_score(sym, int(df['ct'].iloc[-1]))
+                    if pd.isna(perf): perf = None
+                    p = [st_dir==1, macd_h is not None and macd_h>0, atr_pct is not None and atr_pct>=STRAT4H_ATR_MIN_PCT]
+                    return jsonify({"strat": strat, "sym": sym,
+                        "primary": [
+                            {"label":"ST=+1","ok":p[0],"actual":f"ST={st_dir}"},
+                            {"label":"MACD hist>0","ok":p[1],"actual":f"{macd_h:.4f}" if macd_h else "n/a"},
+                            {"label":f"ATR%>={STRAT4H_ATR_MIN_PCT}%","ok":p[2],"actual":f"{atr_pct:.1f}%" if atr_pct else "n/a"},
+                        ],
+                        "secondary": [
+                            {"key":"vol","label":f"Vol>={STRAT4H_VOLUME_MULT}xMA","actual":f"{vol_ratio:.2f}x","ok":vol_ratio>=STRAT4H_VOLUME_MULT,"thr":f"{STRAT4H_VOLUME_MULT}x"},
+                            {"key":"stoch","label":f"Stoch%K<{STRAT4H_STOCH_MAX}","actual":f"{stoch_k:.1f}" if stoch_k else "n/a","ok":stoch_k is not None and stoch_k<STRAT4H_STOCH_MAX,"thr":str(STRAT4H_STOCH_MAX)},
+                            {"key":"htf","label":f"HTF12h vol>{STRAT4H_HTF_VOL_MULT}xMA","actual":f"{htf_r:.2f}x" if htf_r>=0 else "n/a","ok":htf_r>=STRAT4H_HTF_VOL_MULT,"thr":f"{STRAT4H_HTF_VOL_MULT}x"},
+                            {"key":"perf","label":f"Perf>={PERF_SCORE_MIN}","actual":f"{perf:.2f}" if perf else "n/a","ok":perf is not None and perf>=PERF_SCORE_MIN,"thr":str(PERF_SCORE_MIN)},
+                        ],
+                        "primary_ok": all(p),
+                    })
+
+                elif strat == "CrossEMA-4h":
+                    df = get_ohlcv_4h(sym, limit=100)
+                    if df is None: return jsonify({"error": "Gagal ambil OHLCV 4h"})
+                    if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
+                    df = compute_indicators_4h(df)
+                    row = df.iloc[-1]
+                    st_dir = int(row['st_dir']) if not pd.isna(row.get('st_dir')) else 0
+                    close  = float(row['close']); ema20 = float(row['ema_fast'])
+                    vol_ma = float(row['vol_ma']) if not pd.isna(row.get('vol_ma')) and row['vol_ma']>0 else 1
+                    vol_ratio= float(row['vol'])/vol_ma
+                    price_now= get_price_now(sym)
+                    cross_ok = price_now>0 and price_now>ema20
+                    htf_r  = htf_vol_ratio(sym, STRAT4H_HTF_TF, STRAT4H_HTF_LIMIT, STRAT4H_HTF_VOL_MA)
+                    vol24  = float(row.get('vol24h_usd',0)) if 'vol24h_usd' in row else 0
+                    p = [st_dir==-1, close<ema20, cross_ok]
+                    return jsonify({"strat": strat, "sym": sym,
+                        "primary": [
+                            {"label":"ST=-1 (downtrend)","ok":p[0],"actual":f"ST={st_dir}"},
+                            {"label":f"close<EMA20 {ema20:.4g}","ok":p[1],"actual":f"{close:.4g}"},
+                            {"label":f"price_now>EMA20 (cross)","ok":p[2],"actual":f"{price_now:.4g}" if price_now>0 else "n/a"},
+                        ],
+                        "secondary": [
+                            {"key":"vol","label":f"Vol>={STRAT_CROSSEMA_VOLUME_MULT}xMA","actual":f"{vol_ratio:.2f}x","ok":vol_ratio>=STRAT_CROSSEMA_VOLUME_MULT,"thr":f"{STRAT_CROSSEMA_VOLUME_MULT}x"},
+                            {"key":"htf","label":f"HTF12h vol>{STRAT_CROSSEMA_HTF_VOL_MULT}xMA","actual":f"{htf_r:.2f}x" if htf_r>=0 else "n/a","ok":htf_r>=STRAT_CROSSEMA_HTF_VOL_MULT,"thr":f"{STRAT_CROSSEMA_HTF_VOL_MULT}x"},
+                            {"key":"vol24","label":f"Vol24h>=${STRAT_CROSSEMA_MIN_VOL_USD/1e6:.1f}jt","actual":f"${vol24/1e6:.2f}jt","ok":vol24>=STRAT_CROSSEMA_MIN_VOL_USD,"thr":f"${STRAT_CROSSEMA_MIN_VOL_USD/1e6:.1f}jt"},
+                        ],
+                        "primary_ok": all(p),
+                    })
+
+                else:
+                    return jsonify({"error": f"Strategi tidak dikenal: {strat}"})
+
             except Exception as e:
                 return jsonify({"error": str(e)})
 
