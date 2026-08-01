@@ -3904,15 +3904,7 @@ def run_web_dashboard():
             from flask import Flask, render_template_string, request, redirect, jsonify
 
         app = Flask(__name__)
-        import numpy as np, json as _json
-        class _NumpyEncoder(_json.JSONEncoder):
-            def default(self, obj):
-                if isinstance(obj, np.bool_): return bool(obj)
-                if isinstance(obj, np.integer): return int(obj)
-                if isinstance(obj, np.floating): return float(obj)
-                if isinstance(obj, np.ndarray): return obj.tolist()
-                return super().default(obj)
-        app.json_encoder = _NumpyEncoder
+
         app.secret_key = os.urandom(24)
 
         @app.route("/")
@@ -4068,16 +4060,24 @@ def run_web_dashboard():
 
         @app.route("/api/strategy_detail", methods=["GET"])
         def api_strategy_detail():
+            import numpy as np
+            def _s(obj):
+                if isinstance(obj, dict): return {k:_s(v) for k,v in obj.items()}
+                if isinstance(obj, list): return [_s(v) for v in obj]
+                if isinstance(obj, np.bool_): return bool(obj)
+                if isinstance(obj, np.integer): return int(obj)
+                if isinstance(obj, np.floating): return float(obj)
+                return obj
             sym   = request.args.get("sym", "").upper().strip()
             strat = request.args.get("strat", "brkX2-12h")
-            if not sym: return jsonify({"error": "sym kosong"})
+            if not sym: return jsonify(_s({"error": "sym kosong"}))
 
             try:
                 if strat == "brkX2-12h":
                     df = get_ohlcv(sym, limit=120)
-                    if df is None: return jsonify({"error": "Gagal ambil OHLCV"})
+                    if df is None: return jsonify(_s({"error": "Gagal ambil OHLCV"}))
                     if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
-                    if len(df) < 60: return jsonify({"error": "Data kurang"})
+                    if len(df) < 60: return jsonify(_s({"error": "Data kurang"}))
                     df = compute_indicators(df)
                     row = df.iloc[-1]
                     close  = float(row['close']); ema20 = float(row['ema_fast']); ema50 = float(row['ema_slow'])
@@ -4091,7 +4091,7 @@ def run_web_dashboard():
                     perf   = calc_perf_score(sym, int(df['ct'].iloc[-1]))
                     if pd.isna(perf): perf = None
                     p = [st_dir==1, close>ema20, close>ema50, close>hh]
-                    return jsonify({"strat": strat, "sym": sym,
+                    return jsonify(_s({"strat": strat, "sym": sym,
                         "primary": [
                             {"label":"ST=+1","ok":p[0],"actual":f"ST={st_dir}"},
                             {"label":f"close>{ema20:.4g} (EMA20)","ok":p[1],"actual":f"{close:.4g}"},
@@ -4107,15 +4107,16 @@ def run_web_dashboard():
                             {"key":"perf","label":f"Perf>={PERF_SCORE_MIN}","actual":f"{perf:.2f}" if perf else "n/a","ok":perf is not None and perf>=PERF_SCORE_MIN,"thr":str(PERF_SCORE_MIN)},
                         ],
                         "primary_ok": all(p),
-                    })
+                    }))
+
 
                 elif strat in ("Reversal-8h T1","Reversal-8h T3-REV"):
                     df = get_ohlcv(sym, interval=REVERSAL_TIMEFRAME, limit=60)
-                    if df is None: return jsonify({"error": "Gagal ambil OHLCV 8h"})
+                    if df is None: return jsonify(_s({"error": "Gagal ambil OHLCV 8h"}))
                     if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
                     df = compute_indicators(df)
                     n = len(df)
-                    if n < 6: return jsonify({"error": "Data kurang"})
+                    if n < 6: return jsonify(_s({"error": "Data kurang"}))
                     # c0=doji, c-1,c-2,c-3=merah
                     im3,im2,im1 = n-5,n-4,n-3; i0=n-2; i1=n-1
                     c0 = df.iloc[i0]; c1 = df.iloc[i1]
@@ -4150,7 +4151,7 @@ def run_web_dashboard():
                             {"key":"cross","label":"cross-up EMA20","actual":"Ya" if cross_ok else "Belum","ok":cross_ok,"thr":"cross up"},
                         ]
                     p = [p1_ok, p2_ok]
-                    return jsonify({"strat": strat, "sym": sym,
+                    return jsonify(_s({"strat": strat, "sym": sym,
                         "primary": [
                             {"label":f"3 candle merah+turun>=5%","ok":p1_ok,"actual":f"{n_red}/3 merah, turun {drop:.1f}%"},
                             {"label":f"c0 doji<{REVERSAL_DOJI_MAX} & <EMA20/50","ok":p2_ok,"actual":f"body {c0.get('body_ratio',0):.2f}"},
@@ -4160,11 +4161,12 @@ def run_web_dashboard():
                             {"key":"vol24","label":f"Vol24h>=${REVERSAL_MIN_VOL_USD/1e6:.1f}jt","actual":f"${vol24/1e6:.2f}jt","ok":vol24>=REVERSAL_MIN_VOL_USD,"thr":f"${REVERSAL_MIN_VOL_USD/1e6:.1f}jt"},
                         ],
                         "primary_ok": all(p),
-                    })
+                    }))
+
 
                 elif strat == "brkX2-4h":
                     df = get_ohlcv_4h(sym, limit=100)
-                    if df is None: return jsonify({"error": "Gagal ambil OHLCV 4h"})
+                    if df is None: return jsonify(_s({"error": "Gagal ambil OHLCV 4h"}))
                     if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
                     df = compute_indicators_4h(df)
                     row = df.iloc[-1]
@@ -4178,7 +4180,7 @@ def run_web_dashboard():
                     perf   = calc_perf_score(sym, int(df['ct'].iloc[-1]))
                     if pd.isna(perf): perf = None
                     p = [st_dir==1, macd_h is not None and macd_h>0, atr_pct is not None and atr_pct>=STRAT4H_ATR_MIN_PCT]
-                    return jsonify({"strat": strat, "sym": sym,
+                    return jsonify(_s({"strat": strat, "sym": sym,
                         "primary": [
                             {"label":"ST=+1","ok":p[0],"actual":f"ST={st_dir}"},
                             {"label":"MACD hist>0","ok":p[1],"actual":f"{macd_h:.4f}" if macd_h else "n/a"},
@@ -4191,11 +4193,12 @@ def run_web_dashboard():
                             {"key":"perf","label":f"Perf>={PERF_SCORE_MIN}","actual":f"{perf:.2f}" if perf else "n/a","ok":perf is not None and perf>=PERF_SCORE_MIN,"thr":str(PERF_SCORE_MIN)},
                         ],
                         "primary_ok": all(p),
-                    })
+                    }))
+
 
                 elif strat == "CrossEMA-4h":
                     df = get_ohlcv_4h(sym, limit=100)
-                    if df is None: return jsonify({"error": "Gagal ambil OHLCV 4h"})
+                    if df is None: return jsonify(_s({"error": "Gagal ambil OHLCV 4h"}))
                     if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
                     df = compute_indicators_4h(df)
                     row = df.iloc[-1]
@@ -4208,7 +4211,7 @@ def run_web_dashboard():
                     htf_r  = htf_vol_ratio(sym, STRAT4H_HTF_TF, STRAT4H_HTF_LIMIT, STRAT4H_HTF_VOL_MA)
                     vol24  = float(row.get('vol24h_usd',0)) if 'vol24h_usd' in row else 0
                     p = [st_dir==-1, close<ema20, cross_ok]
-                    return jsonify({"strat": strat, "sym": sym,
+                    return jsonify(_s({"strat": strat, "sym": sym,
                         "primary": [
                             {"label":"ST=-1 (downtrend)","ok":p[0],"actual":f"ST={st_dir}"},
                             {"label":f"close<EMA20 {ema20:.4g}","ok":p[1],"actual":f"{close:.4g}"},
@@ -4220,13 +4223,14 @@ def run_web_dashboard():
                             {"key":"vol24","label":f"Vol24h>=${STRAT_CROSSEMA_MIN_VOL_USD/1e6:.1f}jt","actual":f"${vol24/1e6:.2f}jt","ok":vol24>=STRAT_CROSSEMA_MIN_VOL_USD,"thr":f"${STRAT_CROSSEMA_MIN_VOL_USD/1e6:.1f}jt"},
                         ],
                         "primary_ok": all(p),
-                    })
+                    }))
+
 
                 else:
-                    return jsonify({"error": f"Strategi tidak dikenal: {strat}"})
+                    return jsonify(_s({"error": f"Strategi tidak dikenal: {strat}"}))
 
             except Exception as e:
-                return jsonify({"error": str(e)})
+                return jsonify(_s({"error": str(e)}))
 
         @app.route("/manual_filter", methods=["POST"])
         def manual_filter():
