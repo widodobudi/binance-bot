@@ -1402,7 +1402,7 @@ def get_ohlcv_4h(symbol: str, limit: int = 300):
         return None
 
 def compute_indicators_4h(df):
-    """Hitung indikator entry 4h: Supertrend, MACD, ATR%, Vol MA, Vol24h."""
+    """Hitung indikator entry 4h: Supertrend, MACD, ATR%, Vol MA, Vol24h, Stoch."""
     import pandas_ta as _pta
     df = df.copy()
     c, h, l = df["close"], df["high"], df["low"]
@@ -1414,6 +1414,9 @@ def compute_indicators_4h(df):
     df["atr_pct"]    = _pta.atr(h, l, c, length=14) / c * 100
     df["vol_ma"]     = df["vol"].rolling(STRAT4H_VOLUME_MA).mean()
     df["vol24h_usd"] = df["qvol"] * 6   # 6 candle 4h = 24h
+    stoch = _pta.stoch(h, l, c)
+    sk_col = [col for col in stoch.columns if col.startswith("STOCHk")]
+    df["stoch_k"] = stoch[sk_col[0]] if sk_col else float("nan")
     return df
 
 def htf_filter_4h_ok(symbol: str, for_crossema: bool = False) -> bool:
