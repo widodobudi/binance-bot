@@ -3633,7 +3633,7 @@ DASHBOARD_HTML = '''
         </td>
         <td>{{ fmt_price(d.get("last_price",0)) if d.get("last_price") else "-" }}</td>
         <td class="{{ "profit-pos" if d.get("upnl_pct",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_pct",0)) }}%</td>
-        <td>{% if d.get("trailing_armed") %}<span class="badge badge-armed">ARMED</span>{% else %}<span class="badge badge-wait">WAIT</span>{% endif %}</td>
+        <td>{% if d.get("trailing_armed") %}<span class="badge badge-armed">isArmed: Yes</span>{% else %}<span class="badge badge-wait">isArmed: NotYet</span>{% endif %}</td>
         <td>
           <form method="POST" action="/toggle" style="display:inline">
             <input type="hidden" name="sym" value="{{ sym }}">
