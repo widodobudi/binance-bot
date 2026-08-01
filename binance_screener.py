@@ -3984,9 +3984,10 @@ def run_web_dashboard():
                     return jsonify({"ok": False, "error": f"{sym} tidak ada di active_deals"})
                 active_deals[sym][field] = val
                 if field == "entry_price":
-                    # Update peak juga kalau peak < entry baru
-                    if active_deals[sym].get("peak", 0) < val:
-                        active_deals[sym]["peak"] = val
+                    # Reset peak dan trailing_armed saat entry dikoreksi
+                    active_deals[sym]["peak"] = val
+                    active_deals[sym]["trailing_armed"] = False
+                    log(f"[EDIT_DEAL] {sym} peak dan trailing_armed direset")
                 d = dict(active_deals)
             # Simpan ke file
             try:
