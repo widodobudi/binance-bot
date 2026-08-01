@@ -3122,8 +3122,8 @@ def thread1d_scan_4h():
             continue
 
         try:
-            df = get_ohlcv_4h(sym, limit=100)
-            if df is None or len(df) < 50: continue
+            df = get_ohlcv_4h(sym, limit=500)
+            if df is None or len(df) < 500: continue  # filter pair baru (<~83 hari listing)
             df = compute_indicators_4h(df)
 
             if not check_entry_4h(df):
@@ -3360,8 +3360,8 @@ def thread_crossema_scan():
         if vol24 < STRAT_CROSSEMA_MIN_VOL_USD: continue
 
         try:
-            df = get_ohlcv_4h(sym, limit=100)
-            if df is None or len(df) < 50: continue
+            df = get_ohlcv_4h(sym, limit=500)
+            if df is None or len(df) < 500: continue  # filter pair baru (<~83 hari listing)
             df = compute_indicators_4h(df)
 
             # Lapis 1: candle n-1 tertutup — ST=-1, close<EMA20, vol>=0.4xMA
