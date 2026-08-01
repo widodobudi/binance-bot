@@ -3621,7 +3621,7 @@ DASHBOARD_HTML = '''
     <div class="card-body">
     {% if active_deals %}
     <table>
-      <thead><tr><th>Pair</th><th>Strategi</th><th>Entry / Average</th><th>Harga Skrg</th><th>Profit</th><th>Status</th><th>Auto Add Fund</th><th>Auto Close</th></tr></thead>
+      <thead><tr><th>Pair</th><th>Strategi</th><th>Entry / Average</th><th>Harga Skrg</th><th>Profit</th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr>
