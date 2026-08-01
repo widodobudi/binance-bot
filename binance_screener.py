@@ -3602,13 +3602,14 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     <div class="card-body">
     {% if active_deals %}
     <table>
-      <thead><tr><th>Pair</th><th>Strategi</th><th>Entry</th><th>Harga Skrg</th><th>Profit</th><th>Status</th><th>Auto Add Fund</th><th>Auto Close</th></tr></thead>
+      <thead><tr><th>Pair</th><th>Strategi</th><th>Entry / Average</th><th>Harga Skrg</th><th>Profit</th><th>Status</th><th>Auto Add Fund</th><th>Auto Close</th></tr></thead>
       <tbody>
       {% for sym, d in active_deals.items() %}
       <tr>
         <td class="sym">{{ sym.replace("USDT","/USDT") }}</td>
         <td>{{ d.get("strategy","-") }}</td>
         <td>
+          <div style="font-size:9px;color:var(--muted);margin-bottom:2px">{{ "Average" if d.get("add_fund_sent") else "Entry" }}</div>
           <span id="ep-{{ sym }}" style="cursor:pointer;text-decoration:underline dotted" title="Klik untuk edit" onclick="editEntry('{{ sym }}','{{ \"%.6g\"|format(d.get(\"entry_price\",0)) }}')">{{ "%.4g"|format(d.get("entry_price",0)) }}</span>
         </td>
         <td>{{ "%.4g"|format(d.get("last_price",0)) if d.get("last_price") else "-" }}</td>
