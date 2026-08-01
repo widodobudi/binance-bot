@@ -1788,8 +1788,8 @@ def log_near_miss(strategi: str, near_miss_list: list, total_syarat: int):
         ts = now_wib().strftime('%Y-%m-%d %H:%M')
         lines = []
         for item in near_miss_list:
-            if len(item) == 4:
-                n_pass, sym, fails, item_total = item
+            if len(item) >= 4:
+                n_pass, sym, fails, item_total = item[0], item[1], item[2], item[3]
             elif len(item) == 3:
                 n_pass, sym, fails = item
                 item_total = total_syarat
