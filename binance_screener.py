@@ -4293,10 +4293,13 @@ def run_web_dashboard():
 
             ok, target_usd, add_usd = open_deal_with_sizing(sym, sc, 'brkX2')
             if ok:
+                entry_price = get_price_now(sym)
+                if entry_price <= 0:
+                    entry_price = close  # fallback ke close candle kalau gagal
                 add_to_active_deals(sym, {
                     "strategy":       "brkX2",
-                    "entry_price":    close,
-                    "peak":           close,
+                    "entry_price":    entry_price,
+                    "peak":           entry_price,
                     "signal_price":   close,
                     "atr_pct":        atr_pct or 3.0,
                     "opened_candle_ts": int(df['ct'].iloc[-1]),
