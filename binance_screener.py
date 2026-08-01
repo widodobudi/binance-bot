@@ -232,9 +232,9 @@ REVERSAL_INTRABAR_SCAN_INTERVAL = 480   # 8 menit → 60x scan per candle 8h
 
 # ---- PROGRESSIVE TRAILING ----
 PROG_TRAIL_ENABLED   = True
-PROG_TRAIL_THRESHOLD = 3.0
+PROG_TRAIL_THRESHOLD = 1.0   # diubah dari 3.0 → 1.0 (backtest_prog_trail_sweep_all.py, 01/08/2026): thr1.0_red0.5 delta +0.387% wf6 0/6 semua strategi
 PROG_TRAIL_STEP      = 1.0
-PROG_TRAIL_REDUCE    = 0.4
+PROG_TRAIL_REDUCE    = 0.5   # diubah dari 0.4 → 0.5 (backtest_prog_trail_sweep_all.py, 01/08/2026)
 PROG_TRAIL_MIN       = 0.4
 
 HEARTBEAT_INTERVAL_SEC = 2 * 3600   # notif heartbeat tiap 2 jam, terpaku jam ganjil WIB (01,03,05,...,23)
@@ -4252,9 +4252,9 @@ def run_web_dashboard():
                     return jsonify(_s({"strat": strat, "sym": sym,
                         "primary": [
                             {"label":"ST=+1","ok":p[0],"actual":f"ST={st_dir}"},
-                            {"label":f"close>{ema20:.4g} (EMA20)","ok":p[1],"actual":f"{close:.4g}"},
-                            {"label":f"close>{ema50:.4g} (EMA50)","ok":p[2],"actual":f"{close:.4g}"},
-                            {"label":f"close>HH3 {hh:.4g}","ok":p[3],"actual":f"{close:.4g}"},
+                            {"label":f"close vs EMA20 {ema20:.4g}","ok":p[1],"actual":f"{close:.4g} ({(close/ema20-1)*100:+.2f}%)"},
+                            {"label":f"close vs EMA50 {ema50:.4g}","ok":p[2],"actual":f"{close:.4g} ({(close/ema50-1)*100:+.2f}%)"},
+                            {"label":f"close vs HH3 {hh:.4g}","ok":p[3],"actual":f"{close:.4g} ({(close/hh-1)*100:+.2f}%)"},
                         ],
                         "secondary": [
                             {"key":"vol","label":f"Vol {VOLUME_MULT}x--{VOL_MAX_MULT}xMA","actual":f"{vol_ratio:.2f}x","ok":VOLUME_MULT<=vol_ratio<=VOL_MAX_MULT,"thr":f"{VOLUME_MULT}x-{VOL_MAX_MULT}x"},
@@ -4372,8 +4372,8 @@ def run_web_dashboard():
                     return jsonify(_s({"strat": strat, "sym": sym,
                         "primary": [
                             {"label":"ST=-1 (downtrend)","ok":p[0],"actual":f"ST={st_dir}"},
-                            {"label":f"close<EMA20 {ema20:.4g}","ok":p[1],"actual":f"{close:.4g}"},
-                            {"label":f"price_now>EMA20 (cross)","ok":p[2],"actual":f"{price_now:.4g}" if price_now>0 else "n/a"},
+                            {"label":f"close vs EMA20 {ema20:.4g}","ok":p[1],"actual":f"{close:.4g} ({(close/ema20-1)*100:+.2f}%)"},
+                            {"label":f"price_now>EMA20 (cross)","ok":p[2],"actual":f"{price_now:.4g} ({(price_now/ema20-1)*100:+.2f}%)" if price_now>0 else "n/a"},
                         ],
                         "secondary": [
                             {"key":"vol","label":f"Vol>={STRAT_CROSSEMA_VOLUME_MULT}xMA","actual":f"{vol_ratio:.2f}x","ok":vol_ratio>=STRAT_CROSSEMA_VOLUME_MULT,"thr":f"{STRAT_CROSSEMA_VOLUME_MULT}x"},
