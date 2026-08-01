@@ -408,7 +408,7 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
             if target is None:
                 log(f"   [CSV] tidak ketemu baris OPEN utk {symbol} saat CLOSE"); return
             target['close_time_wib'] = close_time_wib
-            target['exit_price']     = f"{exit_price:.6g}" if isinstance(exit_price,(int,float)) else exit_price
+            target['exit_price']     = f"{_fmt_price(exit_price)}" if isinstance(exit_price,(int,float)) else exit_price
             target['profit_pct']     = f"{profit_pct:.2f}" if isinstance(profit_pct,(int,float)) else profit_pct
             target['exit_reason']    = exit_reason
             target['status']         = 'CLOSED'
@@ -1131,9 +1131,9 @@ def entry_detail(df):
         return None
     checks = []  # (lolos?, label_gagal)
     checks.append((row['st_dir']==1, "Supertrend (masih Downtrend)"))
-    checks.append((row['close']>row['ema_fast'], f"close>EMA20 (close {row['close']:.4g} vs EMA20 {row['ema_fast']:.4g})"))
+    checks.append((row['close']>row['ema_fast'], f"close>EMA20 (close {_fmt_price(row['close'])} vs EMA20 {_fmt_price(row['ema_fast'])})"))
     # EMA20>EMA50 dihapus 30/07/2026
-    checks.append((row['close']>row['hh'], f"breakout{BREAKOUT_LOOKBACK} (close {row['close']:.4g} vs HH {row['hh']:.4g})"))
+    checks.append((row['close']>row['hh'], f"breakout{BREAKOUT_LOOKBACK} (close {_fmt_price(row['close'])} vs HH {_fmt_price(row['hh'])})"))
     vx = (row['vol']/row['vol_ma']) if row['vol_ma'] else 0
     vol_ok = row['vol']>=VOLUME_MULT*row['vol_ma'] and (row['vol_ma']<=0 or vx<=VOL_MAX_MULT)
     checks.append((vol_ok, f"vol>={VOLUME_MULT}x dan <={VOL_MAX_MULT}xMA (skrg {vx:.2f}x)"))
@@ -1151,7 +1151,7 @@ def entry_detail(df):
         checks.append((atr_ok, f"ATR%<{ATR_MAX_PCT} (skrg {_atr:.1f}%)"))
     # close > EMA50 (syarat baru pengganti EMA20>EMA50)
     close_ema50_ok = row['close'] > row['ema_slow']
-    checks.append((close_ema50_ok, f"close>EMA50 (close {row['close']:.4g} vs EMA50 {row['ema_slow']:.4g})"))
+    checks.append((close_ema50_ok, f"close>EMA50 (close {_fmt_price(row['close'])} vs EMA50 {_fmt_price(row['ema_slow'])})"))
     n_pass = sum(1 for ok,_ in checks if ok)
     fails = [lab for ok,lab in checks if not ok]
     return (n_pass, len(checks), fails)
@@ -1991,7 +1991,7 @@ def thread1_scan():
             log(f"[T1] {sym} LOLOS 7/7 tapi masih cooldown internal (sisa {sisa/3600:.1f} jam) -> skip, tidak kirim sinyal.")
             cooldown_held.append((sym, sisa))
             continue  # jangan kirim webhook yg pasti ditolak 3Commas (cegah deal hantu)
-        log(f"[T1] SINYAL: {sym} close_candle={signal_price:.6g} atr%={atrp:.2f} skor={score}")
+        log(f"[T1] SINYAL: {sym} close_candle={_fmt_price(signal_price)} atr%={atrp:.2f} skor={score}")
         ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2')
         if ok:
             entry_price = get_price_now(sym)
@@ -2028,8 +2028,8 @@ def thread1_scan():
                 f"OPEN LONG (Momentum brkX2 (12h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (candle close): {signal_price:.6g}\n"
+                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                f"Harga sinyal (candle close): {_fmt_price(signal_price)}\n"
                 f"Selisih (lonjakan/slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
@@ -2039,8 +2039,8 @@ def thread1_scan():
                 f"OPEN LONG (Momentum brkX2 (12h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (candle close): {signal_price:.6g}\n"
+                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                f"Harga sinyal (candle close): {_fmt_price(signal_price)}\n"
                 f"Selisih (lonjakan/slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
@@ -2049,8 +2049,8 @@ def thread1_scan():
             csv_log_open({
                 'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                 'symbol': to_display_pair(sym),
-                'signal_price': f"{signal_price:.6g}",
-                'entry_price': f"{entry_price:.6g}",
+                'signal_price': f"{_fmt_price(signal_price)}",
+                'entry_price': f"{_fmt_price(entry_price)}",
                 'slip_pct': f"{slip_pct:+.2f}",
                 'atr_pct': f"{atrp:.2f}",
                 'trail_dist_pct': f"{trailing_dist(atrp)}",
@@ -2067,8 +2067,8 @@ def thread1_scan():
                 'strategy':         'brkX2',
                 'symbol':           to_display_pair(sym),
                 'thread':           'T1',
-                'signal_price':     f"{signal_price:.6g}",
-                'entry_price':      f"{entry_price:.6g}",
+                'signal_price':     f"{_fmt_price(signal_price)}",
+                'entry_price':      f"{_fmt_price(entry_price)}",
                 'slip_pct':         f"{slip_pct:+.2f}",
                 'score':            score,
                 'base_usd':         BASE_ORDER_VOLUME,
@@ -2176,7 +2176,7 @@ def thread1b_scan_reversal():
             break
         with active_deals_lock:
             if sym in active_deals: continue
-        log(f"[T1b] SINYAL REVERSAL: {sym} close_candle={signal_price:.6g} atr%={atrp:.2f}")
+        log(f"[T1b] SINYAL REVERSAL: {sym} close_candle={_fmt_price(signal_price)} atr%={atrp:.2f}")
         if send_open_long(sym, 'reversal'):
             entry_price = get_price_now(sym)
             if entry_price <= 0: entry_price = signal_price
@@ -2191,8 +2191,8 @@ def thread1b_scan_reversal():
                 f"OPEN LONG (Reversal Doji+HA (8h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (candle close): {signal_price:.6g}\n"
+                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                f"Harga sinyal (candle close): {_fmt_price(signal_price)}\n"
                 f"Selisih (slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
@@ -2202,8 +2202,8 @@ def thread1b_scan_reversal():
                 f"OPEN LONG (Reversal Doji+HA (8h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (candle close): {signal_price:.6g}\n"
+                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                f"Harga sinyal (candle close): {_fmt_price(signal_price)}\n"
                 f"Selisih (slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
@@ -2212,8 +2212,8 @@ def thread1b_scan_reversal():
             csv_log_open({
                 'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                 'symbol': to_display_pair(sym),
-                'signal_price': f"{signal_price:.6g}",
-                'entry_price': f"{entry_price:.6g}",
+                'signal_price': f"{_fmt_price(signal_price)}",
+                'entry_price': f"{_fmt_price(entry_price)}",
                 'slip_pct': f"{slip_pct:+.2f}",
                 'atr_pct': f"{atrp:.2f}",
                 'trail_dist_pct': f"{trailing_dist(atrp)}",
@@ -2285,7 +2285,7 @@ def thread2_monitor():
         if armed:
             stop = peak*(1 - tdist/100)
             if price <= stop:
-                do_close=True; reason=f"trailing (turun ke {price:.6g} dari puncak {peak:.6g}, dev {tdist}%)"
+                do_close=True; reason=f"trailing (turun ke {_fmt_price(price)} dari puncak {_fmt_price(peak)}, dev {tdist}%)"
 
         # batas hold sadar-strategi:
         #  brkX2  : MAX_HOLD_DAYS candle 12h (5*12jam=2.5 hari)
@@ -2339,8 +2339,8 @@ def thread2_monitor():
                     'strategy':      strat,
                     'symbol':        to_display_pair(sym),
                     'thread':        'T2',
-                    'entry_price':   f"{d.get('entry_price', ''):.6g}" if d.get('entry_price') else '',
-                    'exit_price':    f"{price:.6g}",
+                    'entry_price':   _fmt_price(d.get('entry_price')) if d.get('entry_price') else '',
+                    'exit_price':    f"{_fmt_price(price)}",
                     'profit_pct':    f"{prof_from_entry:.2f}",
                     'exit_reason':   reason,
                     'trailing_armed':str(armed),
@@ -2626,8 +2626,8 @@ def thread1c_scan_intrabar():
                 f"OPEN LONG INTRABAR (Momentum brkX2 (12h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (candle n-1 close): {signal_price:.6g}\n"
+                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                f"Harga sinyal (candle n-1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
@@ -2638,8 +2638,8 @@ def thread1c_scan_intrabar():
                 f"OPEN LONG INTRABAR (Momentum brkX2 (12h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (candle n-1 close): {signal_price:.6g}\n"
+                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                f"Harga sinyal (candle n-1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
@@ -2649,8 +2649,8 @@ def thread1c_scan_intrabar():
             csv_log_open({
                 'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                 'symbol':         to_display_pair(sym),
-                'signal_price':   f"{signal_price:.6g}",
-                'entry_price':    f"{entry_price:.6g}",
+                'signal_price':   f"{_fmt_price(signal_price)}",
+                'entry_price':    f"{_fmt_price(entry_price)}",
                 'slip_pct':       f"{slip_pct:+.2f}",
                 'atr_pct':        f"{atrp:.2f}",
                 'trail_dist_pct': f"{trailing_dist(atrp)}",
@@ -2667,8 +2667,8 @@ def thread1c_scan_intrabar():
                 'strategy':             'brkX2',
                 'symbol':               to_display_pair(sym),
                 'thread':               'T1c',
-                'signal_price':         f"{signal_price:.6g}",
-                'entry_price':          f"{entry_price:.6g}",
+                'signal_price':         f"{_fmt_price(signal_price)}",
+                'entry_price':          f"{_fmt_price(entry_price)}",
                 'slip_pct':             f"{slip_pct:+.2f}",
                 'score':                score,
                 'base_usd':             BASE_ORDER_VOLUME,
@@ -2676,7 +2676,7 @@ def thread1c_scan_intrabar():
                 'total_usd':            target_usd,
                 'trail_dist_pct':       f"{trailing_dist(atrp)}",
                 'intrabar_elapsed_pct': f"{elapsed_pct*100:.1f}",
-                'intrabar_price_live':  f"{price_now:.6g}",
+                'intrabar_price_live':  _fmt_price(price_now),
                 **_ind,
                 **_htf,
             })
@@ -2818,8 +2818,8 @@ def thread1c_scan_intrabar_early():
                 f"OPEN LONG INTRABAR EARLY (Momentum brkX2 (12h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (candle n-1 close): {signal_price:.6g}\n"
+                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                f"Harga sinyal (candle n-1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
@@ -2830,8 +2830,8 @@ def thread1c_scan_intrabar_early():
                 f"OPEN LONG INTRABAR EARLY (Momentum brkX2 (12h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (candle n-1 close): {signal_price:.6g}\n"
+                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                f"Harga sinyal (candle n-1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
@@ -2847,8 +2847,8 @@ def thread1c_scan_intrabar_early():
                 'strategy':             'brkX2',
                 'symbol':               to_display_pair(sym),
                 'thread':               'T1c-E',
-                'signal_price':         f"{signal_price:.6g}",
-                'entry_price':          f"{entry_price:.6g}",
+                'signal_price':         f"{_fmt_price(signal_price)}",
+                'entry_price':          f"{_fmt_price(entry_price)}",
                 'slip_pct':             f"{slip_pct:+.2f}",
                 'score':                score,
                 'base_usd':             BASE_ORDER_VOLUME,
@@ -2856,7 +2856,7 @@ def thread1c_scan_intrabar_early():
                 'total_usd':            target_usd,
                 'trail_dist_pct':       f"{trailing_dist(atrp)}",
                 'intrabar_elapsed_pct': f"{elapsed_pct*100:.1f}",
-                'intrabar_price_live':  f"{price_now:.6g}",
+                'intrabar_price_live':  _fmt_price(price_now),
                 **_ind,
                 **_htf,
             })
@@ -3014,8 +3014,8 @@ def thread_rev_intrabar_scan():
                 f"OPEN LONG INTRABAR (Reversal Doji+HA (8h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (c+1 close): {signal_price:.6g}\n"
+                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                f"Harga sinyal (c+1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
@@ -3026,8 +3026,8 @@ def thread_rev_intrabar_scan():
                 f"OPEN LONG INTRABAR (Reversal Doji+HA (8h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (c+1 close): {signal_price:.6g}\n"
+                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                f"Harga sinyal (c+1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
@@ -3038,8 +3038,8 @@ def thread_rev_intrabar_scan():
                 f"OPEN LONG INTRABAR (Reversal Doji+HA (8h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (c+1 close): {signal_price:.6g}\n"
+                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                f"Harga sinyal (c+1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
@@ -3049,8 +3049,8 @@ def thread_rev_intrabar_scan():
             csv_log_open({
                 'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                 'symbol':         to_display_pair(sym),
-                'signal_price':   f"{signal_price:.6g}",
-                'entry_price':    f"{entry_price:.6g}",
+                'signal_price':   f"{_fmt_price(signal_price)}",
+                'entry_price':    f"{_fmt_price(entry_price)}",
                 'slip_pct':       f"{slip_pct:+.2f}",
                 'atr_pct':        f"{atrp:.2f}",
                 'trail_dist_pct': f"{trailing_dist(atrp)}",
@@ -3232,8 +3232,8 @@ def thread1d_scan_4h():
             f"OPEN LONG (brkX2-4h)\n"
             f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
             f"Pair  : {to_display_pair(sym)}\n"
-            f"Harga entry (pasar): {entry_price:.4g}\n"
-            f"Harga sinyal (4h live): {signal_price:.4g}\n"
+            f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+            f"Harga sinyal (4h live): {_fmt_price(signal_price)}\n"
             f"Selisih (slippage): {slip_pct:+.2f}%\n"
             f"ATR%  : {atrp:.2f}  (trailing {trail_d}% stlh +{trail_arm}%)\n"
             f"Skor sinyal: {score}/5 -> modal ${target_usd:.0f}"
@@ -3248,8 +3248,8 @@ def thread1d_scan_4h():
         csv_log_open({
             'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
             'symbol':         to_display_pair(sym),
-            'signal_price':   f"{signal_price:.6g}",
-            'entry_price':    f"{entry_price:.6g}",
+            'signal_price':   f"{_fmt_price(signal_price)}",
+            'entry_price':    f"{_fmt_price(entry_price)}",
             'slip_pct':       f"{slip_pct:+.2f}",
             'atr_pct':        f"{atrp:.2f}",
             'trail_dist_pct': f"{trailing_dist(atrp)}",
@@ -3263,8 +3263,8 @@ def thread1d_scan_4h():
             "strategy":       "brkX2_4h",
             "symbol":         to_display_pair(sym),
             "thread":         "T1d",
-            "signal_price":   f"{signal_price:.6g}",
-            "entry_price":    f"{entry_price:.6g}",
+            "signal_price":   f"{_fmt_price(signal_price)}",
+            "entry_price":    f"{_fmt_price(entry_price)}",
             "slip_pct":       f"{slip_pct:+.2f}",
             "score":          score,
             "base_usd":       BASE_ORDER_VOLUME,
@@ -3282,7 +3282,7 @@ def thread1d_scan_4h():
             f"total {prog['total_pct']:+.1f}%)"
         )
         opened_any = True
-        log(f"  [T1d] OPEN {sym} @ {entry_price:.4g} (4h intrabar)")
+        log(f"  [T1d] OPEN {sym} @ {_fmt_price(entry_price)} (4h intrabar)")
 
 def run_thread1d_4h():
     """Thread T1d: scan 4h intrabar tiap STRAT4H_SCAN_INTERVAL detik."""
@@ -3385,7 +3385,7 @@ def thread_crossema_scan():
                 # Lolos Lapis 1 tapi belum cross EMA20 → catat sebagai near_miss
                 if len(_crossema_near_miss) < 5:
                     gap_pct = (float(ef) / price_now - 1) * 100 if price_now > 0 else 0
-                    _crossema_near_miss.append((4, sym, [f"belum cross EMA20 (price {price_now:.4g} vs EMA20 {ef:.4g}, gap {gap_pct:.1f}%)"], 6))
+                    _crossema_near_miss.append((4, sym, [f"belum cross EMA20 (price {_fmt_price(price_now)} vs EMA20 {_fmt_price(ef)}, gap {gap_pct:.1f}%)"], 6))
                 continue
 
             # Candle berjalan harus bullish (price > open candle ini)
@@ -3393,7 +3393,7 @@ def thread_crossema_scan():
             open_now = float(df_live.iloc[-1]["open"]) if df_live is not None and len(df_live) > 0 else price_now * 0.99
             if price_now <= open_now:
                 if len(_crossema_near_miss) < 5:
-                    _crossema_near_miss.append((5, sym, [f"candle belum bullish (price {price_now:.4g} vs open {open_now:.4g})"], 6))
+                    _crossema_near_miss.append((5, sym, [f"candle belum bullish (price {_fmt_price(price_now)} vs open {_fmt_price(open_now)})"], 6))
                 continue
 
             # LOLOS → OPEN DEAL
@@ -3429,8 +3429,8 @@ def thread_crossema_scan():
                 f"OPEN LONG INTRABAR (CrossEMA Strategi #4 (4h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (EMA20 cross): {signal_price:.6g}\n"
+                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                f"Harga sinyal (EMA20 cross): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
@@ -3441,8 +3441,8 @@ def thread_crossema_scan():
                 f"OPEN LONG INTRABAR (CrossEMA Strategi #4 (4h))\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {entry_price:.6g}\n"
-                f"Harga sinyal (EMA20 cross): {signal_price:.6g}\n"
+                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                f"Harga sinyal (EMA20 cross): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
@@ -3452,8 +3452,8 @@ def thread_crossema_scan():
             csv_log_open({
                 "open_time_wib":  now_wib().strftime("%Y-%m-%d %H:%M:%S"),
                 "symbol":         to_display_pair(sym),
-                "signal_price":   f"{signal_price:.6g}",
-                "entry_price":    f"{entry_price:.6g}",
+                "signal_price":   f"{_fmt_price(signal_price)}",
+                "entry_price":    f"{_fmt_price(entry_price)}",
                 "slip_pct":       f"{slip_pct:+.2f}",
                 "atr_pct":        f"{atrp:.2f}",
                 "trail_dist_pct": f"{trailing_dist(atrp)}",
@@ -4040,8 +4040,8 @@ def run_web_dashboard():
                         f"{ts} WIB\n"
                         f"Pair     : {to_display_pair(sym)}\n"
                         f"Add fund : ${add_usd}\n"
-                        f"Harga    : {price_now:.6g}\n"
-                        f"Avg price: {avg_price:.6g}\n"
+                        f"Harga    : {_fmt_price(price_now)}\n"
+                        f"Avg price: {_fmt_price(avg_price)}\n"
                         f"Strategi : {strat}"
                     )
                     return jsonify({"ok": True, "sym": sym, "add_usd": add_usd,
@@ -4081,8 +4081,8 @@ def run_web_dashboard():
                         'strategy':      strat,
                         'symbol':        to_display_pair(sym),
                         'thread':        'MANUAL',
-                        'entry_price':   f"{entry:.6g}" if entry else '',
-                        'exit_price':    f"{price_now:.6g}",
+                        'entry_price':   _fmt_price(entry) if entry else '',
+                        'exit_price':    _fmt_price(price_now),
                         'profit_pct':    f"{prof:.2f}",
                         'exit_reason':   reason,
                         'trailing_armed':str(d.get('trailing_armed', False)),
@@ -4098,7 +4098,7 @@ def run_web_dashboard():
                         f"CLOSE MANUAL (dashboard)\n"
                         f"{ts} WIB\n"
                         f"Pair  : {to_display_pair(sym)}\n"
-                        f"Exit  : {price_now:.6g} | Profit: {prof:+.2f}%\n"
+                        f"Exit  : {_fmt_price(price_now)} | Profit: {prof:+.2f}%\n"
                         f"Strategi: {strat}"
                     )
                     return jsonify({"ok": True, "sym": sym, "price": price_now, "profit_pct": round(prof, 2)})
