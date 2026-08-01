@@ -3904,6 +3904,15 @@ def run_web_dashboard():
             from flask import Flask, render_template_string, request, redirect, jsonify
 
         app = Flask(__name__)
+        import numpy as np, json as _json
+        class _NumpyEncoder(_json.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, np.bool_): return bool(obj)
+                if isinstance(obj, np.integer): return int(obj)
+                if isinstance(obj, np.floating): return float(obj)
+                if isinstance(obj, np.ndarray): return obj.tolist()
+                return super().default(obj)
+        app.json_encoder = _NumpyEncoder
         app.secret_key = os.urandom(24)
 
         @app.route("/")
@@ -4036,6 +4045,26 @@ def run_web_dashboard():
                 })
             except Exception as e:
                 return jsonify({"error": str(e)})
+
+        def _b(v):
+            if v is None: return False
+            try: return bool(v)
+            except: return False
+        def _f(v):
+            if v is None: return None
+            try: return float(v)
+            except: return None
+        def _sanitize(obj):
+            """Konversi numpy types ke Python native agar JSON serializable."""
+            import numpy as np
+            if isinstance(obj, dict):
+                return {k: _sanitize(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [_sanitize(v) for v in obj]
+            if isinstance(obj, (np.bool_,)): return bool(obj)
+            if isinstance(obj, (np.integer,)): return int(obj)
+            if isinstance(obj, (np.floating,)): return float(obj)
+            return obj
 
         @app.route("/api/strategy_detail", methods=["GET"])
         def api_strategy_detail():
