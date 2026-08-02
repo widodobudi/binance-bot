@@ -5033,6 +5033,64 @@ def run_web_dashboard():
                         "primary_ok": all(p),
                     }))
 
+                elif strat in ("Akumulasi-4h", "Akumulasi-4h Entry A", "Akumulasi-4h Entry B"):
+                    df = get_ohlcv_4h(sym, limit=AKUM_CANDLE_LIMIT)
+                    if df is None: return jsonify(_s({"error": "Gagal ambil OHLCV 4h"}))
+                    if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
+                    if len(df) < AKUM_SIDEWAYS_CANDLES + 50:
+                        return jsonify(_s({"error": f"Data kurang ({len(df)} candle)"}))
+                    res = score_akumulasi(df, sym)
+                    if res is None:
+                        return jsonify(_s({"error": "Gagal hitung skor akumulasi"}))
+                    # Hitung support/resistance dari jendela sideways
+                    window = df.iloc[-(AKUM_SIDEWAYS_CANDLES):]
+                    support    = float(window['low'].min())
+                    resistance = float(window['high'].max())
+                    p = [
+                        res['primary_score'] >= 1,  # range sideways OK
+                        res['primary_score'] >= 2,  # EMA konvergen
+                        res['primary_score'] >= 3,  # OBV slope+
+                        res['primary_score'] >= 4,  # ATR turun
+                    ]
+                    primary_labels = [
+                        {"label": f"Range sideways <{AKUM_RANGE_PCT*100:.0f}%",
+                         "ok": bool(res.get('p1_range')), "actual": res.get('range_pct','?')},
+                        {"label": f"EMA konvergen <{AKUM_EMA_GAP_PCT*100:.0f}%",
+                         "ok": bool(res.get('p2_ema')), "actual": res.get('ema_gap','?')},
+                        {"label": "OBV slope positif",
+                         "ok": bool(res.get('p3_obv')), "actual": res.get('obv_slope','?')},
+                        {"label": f"ATR turun >{AKUM_ATR_DROP_PCT*100:.0f}%",
+                         "ok": bool(res.get('p4_atr')), "actual": res.get('atr_drop','?')},
+                    ]
+                    secondary_labels = [
+                        {"key":"vol_asim","label":"Vol hijau>merah",
+                         "actual": res.get('vol_asim','?'), "ok": bool(res.get('s1_vol'))},
+                        {"key":"rsi","label":"RSI 30-55",
+                         "actual": res.get('rsi','?'), "ok": bool(res.get('s2_rsi'))},
+                        {"key":"macd_flat","label":"MACD flat~0",
+                         "actual": res.get('macd_flat','?'), "ok": bool(res.get('s3_macd'))},
+                        {"key":"body_ratio","label":"Body ratio<0.42",
+                         "actual": res.get('body_ratio','?'), "ok": bool(res.get('s4_body'))},
+                    ]
+                    extra = {}
+                    if strat in ("Akumulasi-4h Entry A", "Akumulasi-4h Entry B"):
+                        sig_a = detect_entry_a_spring(df, support) if strat == "Akumulasi-4h Entry A" else None
+                        sig_b = detect_entry_b_breakout(df, resistance, support) if strat == "Akumulasi-4h Entry B" else None
+                        sig = sig_a or sig_b
+                        extra = {
+                            "support": _fmt_price(support),
+                            "resistance": _fmt_price(resistance),
+                            "entry_signal": sig if sig else None,
+                            "signal_detected": sig is not None,
+                        }
+                    return jsonify(_s({
+                        "strat": strat, "sym": sym,
+                        "primary": primary_labels,
+                        "secondary": secondary_labels,
+                        "primary_ok": res['primary_ok'],
+                        "akum_score": res['total_score'],
+                        **extra,
+                    }))
 
                 else:
                     return jsonify(_s({"error": f"Strategi tidak dikenal: {strat}"}))
