@@ -3848,7 +3848,7 @@ DASHBOARD_HTML = '''
 
   <div class="section-title">Kandidat Terdekat per Strategi</div>
   <div class="grid">
-  {% for strategi, items in near_miss.items() %}
+  {% for strategi, items in near_miss.items() %}{% if strategi != "Akumulasi-4h" %}
   <div class="card">
     <div class="card-header">
       <h2>{{ strategi }}</h2>
@@ -3873,7 +3873,7 @@ DASHBOARD_HTML = '''
     {% endif %}
     </div>
   </div>
-  {% endfor %}
+  {% endif %}{% endfor %}
   </div>
 
   <!-- ═══════════════ AKUMULASI DETECTOR ═══════════════ -->
