@@ -3679,11 +3679,11 @@ DASHBOARD_HTML = '''
   @media(max-width:768px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
-<body>
+<body onload="restoreCards()">
 <div class="header">
   <span class="dot"></span>
   <h1>TRADING BOT DASHBOARD</h1>
-  <span class="status">Refresh dalam <span id="cd">30</span>s &nbsp;|&nbsp; {{ now }}</span>
+  <span class="status">Refresh dalam <span id="cd">30</span>s &nbsp;|&nbsp; <label style="font-size:11px;cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="cb-pause-refresh" onchange="onPauseRefreshToggle(this.checked)" style="cursor:pointer"> Pause</label> &nbsp;|&nbsp; {{ now }}</span>
 <script>
   var s=30;setInterval(function(){if(typeof _refreshTimer!=='undefined'&&_refreshTimer){s--;if(s<0)s=30;}document.getElementById('cd').textContent=s;},1000);
 </script>
@@ -3841,10 +3841,7 @@ DASHBOARD_HTML = '''
         <button id="btn-addfund" onclick="promptAddFund()" style="background:#ff9f43;color:#000;border:none;border-radius:4px;padding:7px 18px;font-size:12px;cursor:pointer;font-family:var(--font)">Add Fund</button>
         <button id="btn-close-deal" onclick="promptCloseDeal()" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:7px 18px;font-size:12px;cursor:pointer;font-family:var(--font)">Close Deal</button>
         <span id="scan-status" style="font-size:11px;color:var(--muted)"></span>
-        <label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;margin-left:8px" title="Centang untuk menghentikan auto-refresh selama analisis">
-          <input type="checkbox" id="cb-pause-refresh" onchange="onPauseRefreshToggle(this.checked)" style="cursor:pointer">
-          <span>Pause auto-refresh</span>
-        </label>
+
       </div>
       <!-- Scan results table -->
       <div id="scan-results"></div>
@@ -3912,6 +3909,7 @@ DASHBOARD_HTML = '''
           <th>Primary (4)</th>
           <th>Secondary (4)</th>
           <th>Belum lolos</th>
+          <th>Sideways sejak</th>
         </tr>
       </thead>
       <tbody>
@@ -3940,6 +3938,9 @@ DASHBOARD_HTML = '''
             <span style="color:var(--green)">✓ Semua lolos</span>
           {% endif %}
         </td>
+        <td style="font-size:10px;color:var(--muted);white-space:nowrap">
+          {{ item.get("sideways_start", "-") if item.get("sideways_start") else "-" }}
+        </td>
       </tr>
       {% endfor %}
       </tbody>
@@ -3954,7 +3955,7 @@ DASHBOARD_HTML = '''
   </div>
 </div>
 
-<script src="/dash.js?v=1785631425"></script>
+<script src="/dash.js?v=1785683182"></script>
 </body>
 </html>
 '''
@@ -4043,10 +4044,11 @@ def score_akumulasi(df, sym: str) -> dict:
         p3_ok  = obv_slope > 0
         p3_val = f"slope {obv_slope:+.0f}"
 
-        # P4: ATR sekarang ≤ (1 - AKUM_ATR_DROP_PCT) × ATR puncak N candle ke belakang
-        lookback_start = max(0, len(df) - AKUM_ATR_LOOKBACK)
-        atr_history = df['atr'].iloc[lookback_start:-AKUM_SIDEWAYS_CANDLES]  # periode sebelum jendela
-        atr_now     = float(row['atr']) if not pd.isna(row.get('atr')) else None
+        # P4: ATR sekarang <= (1 - AKUM_ATR_DROP_PCT) x ATR puncak dari lookback
+        atr_now = float(row['atr']) if not pd.isna(row.get('atr')) else None
+        # Ambil ATR dari periode sebelum jendela sideways (atau seluruh df kalau tidak cukup)
+        pre_window = df['atr'].iloc[:-AKUM_SIDEWAYS_CANDLES] if len(df) > AKUM_SIDEWAYS_CANDLES + 10 else df['atr']
+        atr_history = pre_window.dropna()
         if atr_now is None or len(atr_history) < 5:
             p4_ok  = False
             p4_val = "n/a"
@@ -4116,6 +4118,10 @@ def score_akumulasi(df, sym: str) -> dict:
             "body_ratio":     s4_val,
             "p1_ok": p1_ok, "p2_ok": p2_ok, "p3_ok": p3_ok, "p4_ok": p4_ok,
             "s1_ok": s1_ok, "s2_ok": s2_ok, "s3_ok": s3_ok, "s4_ok": s4_ok,
+            # waktu mulai jendela sideways
+            "sideways_start": win.index[0].strftime("%d/%m %H:%M") if hasattr(win.index[0], 'strftime') else str(win.index[0]),
+            "support":        round(float(lo_min), 8),
+            "resistance":     round(float(hi_max), 8),
         }
     except Exception as e:
         log(f"  [AKUM] score error {sym}: {e}")
@@ -4322,6 +4328,8 @@ def thread_akum_scan():
             for r in full_ok:
                 lines.append(
                     f"• {to_display_pair(r['sym'])} | Score {r['total_score']}/12\n"
+                    f"  Sideways sejak: {r.get('sideways_start','-')} WIB\n"
+                    f"  Support: {_fmt_price(r.get('support',0))} | Resistance: {_fmt_price(r.get('resistance',0))}\n"
                     f"  Range {r['range_pct']} | EMAGap {r['ema_gap']} | OBV {r['obv_slope']}\n"
                     f"  ATR {r['atr_drop']} | RSI {r['rsi']} | Vol {r['vol_asim']}"
                 )
@@ -5052,30 +5060,30 @@ def run_web_dashboard():
                     support    = float(window['low'].min())
                     resistance = float(window['high'].max())
                     p = [
-                        res['primary_score'] >= 1,  # range sideways OK
-                        res['primary_score'] >= 2,  # EMA konvergen
-                        res['primary_score'] >= 3,  # OBV slope+
-                        res['primary_score'] >= 4,  # ATR turun
+                        bool(res.get('p1_ok')),
+                        bool(res.get('p2_ok')),
+                        bool(res.get('p3_ok')),
+                        bool(res.get('p4_ok')),
                     ]
                     primary_labels = [
                         {"label": f"Range sideways <{AKUM_RANGE_PCT*100:.0f}%",
-                         "ok": bool(res.get('p1_range')), "actual": res.get('range_pct','?')},
+                         "ok": bool(res.get('p1_ok')), "actual": res.get('range_pct','?')},
                         {"label": f"EMA konvergen <{AKUM_EMA_GAP_PCT*100:.0f}%",
-                         "ok": bool(res.get('p2_ema')), "actual": res.get('ema_gap','?')},
+                         "ok": bool(res.get('p2_ok')), "actual": res.get('ema_gap','?')},
                         {"label": "OBV slope positif",
-                         "ok": bool(res.get('p3_obv')), "actual": res.get('obv_slope','?')},
+                         "ok": bool(res.get('p3_ok')), "actual": res.get('obv_slope','?')},
                         {"label": f"ATR turun >{AKUM_ATR_DROP_PCT*100:.0f}%",
-                         "ok": bool(res.get('p4_atr')), "actual": res.get('atr_drop','?')},
+                         "ok": bool(res.get('p4_ok')), "actual": res.get('atr_drop','?')},
                     ]
                     secondary_labels = [
                         {"key":"vol_asim","label":"Vol hijau>merah",
-                         "actual": res.get('vol_asim','?'), "ok": bool(res.get('s1_vol'))},
+                         "actual": res.get('vol_asim','?'), "ok": bool(res.get('s1_ok'))},
                         {"key":"rsi","label":"RSI 30-55",
-                         "actual": res.get('rsi','?'), "ok": bool(res.get('s2_rsi'))},
+                         "actual": res.get('rsi','?'), "ok": bool(res.get('s2_ok'))},
                         {"key":"macd_flat","label":"MACD flat~0",
-                         "actual": res.get('macd_flat','?'), "ok": bool(res.get('s3_macd'))},
+                         "actual": res.get('macd_flat','?'), "ok": bool(res.get('s3_ok'))},
                         {"key":"body_ratio","label":"Body ratio<0.42",
-                         "actual": res.get('body_ratio','?'), "ok": bool(res.get('s4_body'))},
+                         "actual": res.get('body_ratio','?'), "ok": bool(res.get('s4_ok'))},
                     ]
                     extra = {}
                     if strat in ("Akumulasi-4h Entry A", "Akumulasi-4h Entry B"):
