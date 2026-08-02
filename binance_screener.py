@@ -50,11 +50,13 @@ COMMAS_BOT_ID_4H      = int(os.environ.get("COMMAS_BOT_ID_4H", "16935970"))
 COMMAS_EMAIL_TOKEN_4H = os.environ.get("COMMAS_EMAIL_TOKEN_4H", "f97400b9-e9a4-4058-913e-35eb8372f920")
 
 def commas_creds(strategy: str):
-    """Pilih (bot_id, email_token) sesuai strategi. reversal -> bot baru; 4h -> bot brkX2-4h; lainnya -> bot existing (brkX2)."""
+    """Pilih (bot_id, email_token) sesuai strategi."""
     if strategy == 'reversal':
         return COMMAS_BOT_ID_REVERSAL, COMMAS_EMAIL_TOKEN_REVERSAL
     if strategy == 'brkX2_4h':
         return COMMAS_BOT_ID_4H, COMMAS_EMAIL_TOKEN_4H
+    if strategy in ('akum_entry_a', 'akum_entry_b'):
+        return AKUM_ENTRY_BOT_ID, AKUM_ENTRY_EMAIL_TOKEN
     return COMMAS_BOT_ID, COMMAS_EMAIL_TOKEN
 COMMAS_DELAY_SEC   = 0
 # Kredensial WAJIB lewat environment variable (jangan hardcode di kode—repo publik!).
@@ -160,6 +162,58 @@ STRAT_CROSSEMA_HTF_VOL_MULT = 1.5     # HTF 12h: vol>1.5xMA (backtest_htf_vol_sw
 # Update 25/07/2026: backtest_perf_weight_sweep → EQUAL_thr0.5 terbaik
 #   avg +3.052% WR 77.7% n=1316 vs PINE_thr1.0 avg +2.711% WR 75.5% n=955
 #   Semua TF bobot sama (1/6), threshold 0.5 = cukup 3 dari 6 TF positif
+# ── STRATEGI #5: Akumulasi Detector (4h, scan periodik) ───────────────────────
+# Deteksi cryptopair yang sedang berada di fase AKUMULASI (sideways setelah downtrend).
+# Indikator PRIMARY (semua harus lolos):
+#   P1. Harga dalam range sideways: (high_max - low_min) / close < AKUM_RANGE_PCT
+#   P2. EMA20/50/200 konvergen & datar: gap EMA20 vs EMA200 < AKUM_EMA_GAP_PCT
+#   P3. OBV naik (higher lows) saat harga flat: OBV slope positif
+#   P4. ATR turun ≥30% dari puncak tren turun sebelumnya
+# Indikator SECONDARY (minimal AKUM_MIN_SECONDARY yang harus lolos):
+#   S1. Volume hijau > volume merah (asimetri positif)
+#   S2. RSI 30-55 (zona netral-rendah, bukan oversold ekstrem)
+#   S3. MACD histogram flat dekat nol (|hist| < AKUM_MACD_FLAT_PCT * close)
+#   S4. Candle body/range ratio kecil (rata-rata < AKUM_BODY_RATIO_MAX → konsolidasi)
+# Output: maks AKUM_MAX_RESULTS pair dengan skor akumulasi tertinggi (max 5)
+STRAT_AKUM_ENABLED        = True
+AKUM_TIMEFRAME            = "4h"
+AKUM_SCAN_INTERVAL        = 1800        # scan tiap 30 menit
+AKUM_CANDLE_LIMIT         = 500         # candle 4h untuk hitung sideways (~83 hari)
+AKUM_SIDEWAYS_CANDLES     = 120         # jendela sideways yang dinilai (120 candle 4h = 20 hari)
+AKUM_RANGE_PCT            = 0.18        # P1: range sideways ≤18% dari close
+AKUM_EMA_GAP_PCT          = 0.06        # P2: gap EMA20 vs EMA200 ≤6%
+AKUM_ATR_DROP_PCT         = 0.25        # P4: ATR sekarang ≤ (1 - 0.25) * ATR puncak = turun ≥25%
+AKUM_ATR_LOOKBACK         = 100         # candle lookback untuk cari ATR puncak
+AKUM_MACD_FLAT_PCT        = 0.005       # S3: |MACD hist| < 0.5% × close → flat
+AKUM_BODY_RATIO_MAX       = 0.42        # S4: rata-rata body/range < 0.42 → konsolidasi
+AKUM_MIN_SECONDARY        = 2           # minimal 2 dari 4 secondary harus lolos
+AKUM_MAX_RESULTS          = 5           # tampilkan maks 5 pair
+AKUM_MIN_VOL_USD          = 1_000_000   # min vol24h $1jt
+_akum_near_miss: list     = []
+_akum_last_scan_ts: str   = ""
+_akum_lock                = threading.Lock()
+
+# ── STRATEGI #5 ENTRY (Extension dari Akumulasi Detector) ─────────────────────
+AKUM_ENTRY_BOT_ID         = 16945621
+AKUM_ENTRY_EMAIL_TOKEN    = "f97400b9-e9a4-4058-913e-35eb8372f920"
+AKUM_ENTRY_SCAN_INTERVAL  = 900          # scan tiap 15 menit
+AKUM_ENTRY_MAX_DEALS      = 3            # max 3 deal aktif strategi #5
+AKUM_ENTRY_TIMEOUT        = 30           # timeout 30 candle 4h = 5 hari
+AKUM_ENTRY_SL_BUFFER      = 0.005        # SL 0.5% di bawah Spring low / Resistance
+AKUM_ENTRY_FWDTEST_TARGET = 10           # target forward-test 10 deal
+
+# Entry A — Spring/Fakeout
+AKUM_A_VOL_SPIKE_MULT     = 2.5          # volume spike saat breakdown > 2.5x vol MA
+AKUM_A_RSI_MIN            = 20           # RSI sempat < 35 (Spring oversold)
+AKUM_A_RSI_MAX_ENTRY      = 50           # RSI sudah naik kembali < 50 saat entry
+AKUM_A_OBV_SLOPE_CANDLES  = 5           # OBV slope dihitung dari 5 candle terakhir
+AKUM_A_REENTRY_CANDLES    = 3           # max 3 candle untuk re-entry ke atas support
+
+# Entry B — Breakout + Retest
+AKUM_B_VOL_BREAKOUT_MULT  = 1.5         # volume breakout > 1.5x vol MA
+AKUM_B_RETEST_TOL_PCT     = 0.02        # retest dalam ±2% dari resistance
+AKUM_B_RETEST_VOL_MAX     = 0.8         # volume retest < 80% volume breakout
+
 PERF_FILTER_ENABLED = True
 PERF_SCORE_MIN      = 0.5    # EQUAL_thr0.5: cukup 3 dari 6 TF positif
 PERF_TF_CONFIG      = [      # (label, hari_ke_belakang, weight) — equal weight
@@ -1475,6 +1529,12 @@ def active_deal_count_4h() -> int:
     with active_deals_lock:
         return sum(1 for d in active_deals.values() if d.get("strategy") == "brkX2_4h")
 
+def active_deal_count_akum() -> int:
+    """Jumlah deal aktif strategi akumulasi entry A/B."""
+    with active_deals_lock:
+        return sum(1 for d in active_deals.values()
+                   if d.get("strategy") in ("akum_entry_a", "akum_entry_b"))
+
 # ===================== THREAD 1: SCREENER + OPEN LONG =====================
 def active_deal_count() -> int:
     with active_deals_lock:
@@ -2297,6 +2357,15 @@ def thread2_monitor():
         elif d.get('strategy','brkX2') == 'brkX2_4h':
             hold_limit_sec = STRAT4H_MAX_HOLD_CANDLES * STRAT4H_SECONDS
             hold_label = f"batas {STRAT4H_MAX_HOLD_CANDLES} candle 4h"
+        elif d.get('strategy','') in ('akum_entry_a', 'akum_entry_b'):
+            timeout_c = d.get('timeout_candles', AKUM_ENTRY_TIMEOUT)
+            hold_limit_sec = timeout_c * STRAT4H_SECONDS
+            hold_label = f"batas {timeout_c} candle 4h (akumulasi)"
+            # Cek SL khusus akumulasi
+            sl_price = d.get('sl_price', 0)
+            if sl_price > 0 and price <= sl_price:
+                do_close = True
+                reason = f"SL akumulasi tercapai (price {_fmt_price(price)} <= SL {_fmt_price(sl_price)})"
         else:
             hold_limit_sec = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
             hold_label = f"batas {MAX_HOLD_DAYS} candle"
@@ -3495,6 +3564,7 @@ _dashboard_state = {
         "Reversal-8h": [],
         "brkX2-4h": [],
         "CrossEMA-4h": [],
+        "Akumulasi-4h": [],
     },
     "last_scan": {},
 }
@@ -3551,7 +3621,7 @@ def get_deal_override(sym: str, key: str, default: bool = True) -> bool:
     return load_deal_overrides().get(sym, {}).get(key, default)
 
 # ── Inline JS untuk dashboard (ASCII-only, served via /dash.js) ──────────────
-_DASH_JS = 'var _refreshTimer=null;\nvar _curStrat=\'brkX2-12h\';\nfunction startRefresh(){if(_refreshTimer)return;_refreshTimer=setInterval(function(){window.location.reload();},30000);}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){var cb=document.getElementById(\'cb-pause-refresh\');return cb&&cb.checked;}\nfunction pauseRefresh(){stopRefresh();}\nfunction resumeRefresh(){if(!isPauseChecked())startRefresh();}\nfunction onPauseRefreshToggle(checked){if(checked){stopRefresh();}else{startRefresh();}}\n\n// Definisi secondary per strategi\nvar STRAT_SECONDARY={\n  \'brkX2-12h\':[\n    {key:\'vol\',label:\'Vol 0.6x--5.0xMA\'},{key:\'rsi\',label:\'RSI<75\'},\n    {key:\'stoch\',label:\'Stoch%K<70\'},{key:\'atr\',label:\'ATR%<9%\'},\n    {key:\'htf\',label:\'HTF 3D vol>0.8xMA\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'Reversal-8h T1\':[\n    {key:\'ha_bull\',label:\'c+1 HA bullish\'},{key:\'cross\',label:\'cross-up EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'Reversal-8h T3-REV\':[\n    {key:\'elapsed\',label:\'Elapsed 5%-50%\'},{key:\'cross_live\',label:\'price_now>EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'brkX2-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'stoch\',label:\'Stoch%K<80\'},\n    {key:\'htf\',label:\'HTF12h vol>2.0xMA\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'CrossEMA-4h\':[\n    {key:\'vol\',label:\'Vol>=0.4xMA\'},{key:\'htf\',label:\'HTF12h vol>1.5xMA\'},\n    {key:\'vol24\',label:\'Vol24h>=$1.0jt\'}\n  ]\n};\n\nfunction onStratSelect(strat){\n  _curStrat=strat;\n  // Update dropdown kandidat\n  var opts=document.querySelectorAll(\'.nm-opt\');\n  var count=0;\n  opts.forEach(function(o){\n    var show=o.getAttribute(\'data-strat\')===strat;\n    o.style.display=show?\'\':\'none\';\n    if(show)count++;\n  });\n  document.getElementById(\'nm-count\').textContent=\'(\'+count+\' kandidat dari scan terakhir)\';\n  // Reset pair select\n  var sel=document.getElementById(\'pair-select\');if(sel)sel.value=\'\';\n  // Reset panel\n  var panel=document.getElementById(\'pair-detail\');if(panel)panel.style.display=\'none\';\n  // Update secondary grid\n  renderSecondaryGrid(strat);\n  // Reset primary status\n  var ps=document.getElementById(\'primary-status\');\n  if(ps)ps.innerHTML=\'<span style="color:var(--muted)">-- pilih pair untuk lihat nilai aktual --</span>\';\n}\n\nfunction renderSecondaryGrid(strat){\n  var grid=document.getElementById(\'secondary-grid\');\n  if(!grid)return;\n  var defs=STRAT_SECONDARY[strat]||[];\n  grid.innerHTML=defs.map(function(d){\n    return \'<div class="sec-item" data-key="\'+d.key+\'"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px"><input type="checkbox" class="sec-cb" data-key="\'+d.key+\'" checked style="cursor:pointer"><span class="sec-label">\'+d.label+\'</span><span class="sec-actual" style="color:var(--muted)">--</span><span class="sec-status">--</span></label></div>\';\n  }).join(\'\');\n  // Re-attach event listeners\n  grid.querySelectorAll(\'.sec-cb\').forEach(function(cb){\n    cb.addEventListener(\'change\',function(){\n      fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});\n    });\n  });\n}\n\ndocument.addEventListener(\'DOMContentLoaded\',function(){\n  startRefresh();\n  onStratSelect(\'brkX2-12h\');\n});\n\nfunction onPairSelect(sym){\n  var panel=document.getElementById(\'pair-detail\');\n  if(!sym){panel.style.display=\'none\';return;}\n  panel.style.display=\'block\';\n  panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';\n  pauseRefresh();\n  fetch(\'/api/strategy_detail?sym=\'+encodeURIComponent(sym)+\'&strat=\'+encodeURIComponent(_curStrat))\n    .then(function(r){return r.json();})\n    .then(function(d){\n      resumeRefresh();\n      if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}\n      // Update primary\n      var ps=document.getElementById(\'primary-status\');\n      ps.innerHTML=d.primary.map(function(p){return badge(p.ok,p.label+\' (\'+p.actual+\')\');}).join(\' \');\n      // Update secondary\n      d.secondary.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n      // Panel ringkasan\n      var allP=d.primary_ok;\n      panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | \'+\n        d.primary.map(function(p){return (p.ok?\'<span style="color:var(--green)">\':\'<span style="color:var(--red)">\') + p.label+\': \'+p.actual+\'</span>\';}).join(\' | \')+\n        \' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');\n    })\n    .catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});\n}\n\nfunction updateSec(key,actual,ok){\n  document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){\n    var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');\n    if(a)a.textContent=\'(skrg \'+actual+\')\';\n    if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';\n  });\n}\n\nfunction doManualScan(){\n  var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');\n  btn.disabled=true;btn.textContent=\'Scanning...\';\n  st.textContent=\'Sedang scan semua pair... (30-60 detik)\';\n  pauseRefresh();\n  fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){\n    btn.disabled=false;btn.textContent=\'Scan Sekarang\';\n    st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';\n    renderResults(data.pairs);resumeRefresh();\n  }).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});\n}\n\nfunction promptOpenLong(){\n  var sel=document.getElementById(\'pair-select\');\n  var sym=sel?sel.value:\'\';\n  if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}\n  var ss=document.getElementById(\'strat-select\');var strat=ss?ss.value:\'brkX2-12h\';\n  if(!confirm(\'Open Long [\'+strat+\']: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;\n  execOpenLong(sym,strat);\n}\n\nfunction execOpenLong(sym,strat){\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'strat\',strat||\"brkX2-12h\");\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Membuka deal \'+sym+\'...\';\n  pauseRefresh();\n  fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){\n    resumeRefresh();\n    var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);\n    if(st)st.textContent=msg;alert(msg);\n  }).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction renderResults(pairs){\n  var el=document.getElementById(\'scan-results\');\n  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];\n  if(sample){\n    document.getElementById(\'primary-status\').innerHTML=\n      sample.secondaries?sample.secondaries.map(function(s){return badge(s.ok,s.key+\':\'+s.actual);}).join(\' \'):\'\';\n    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n  }\n  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);\n  if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos syarat primary.</div>\';return;}\n  var rows=cands.map(function(p){\n    var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');\n    var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';\n    var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';\n    return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';\n  }).join(\'\');\n  el.innerHTML=\'<table><thead><tr><th>Pair</th><th>isArmed</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';\n}\n\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){\n  if(v===undefined||v===null)return \'?\';\n  if(v>=1000)return v.toFixed(0);\n  if(v>=1)return v.toFixed(4);\n  if(v>=0.01)return v.toFixed(6);\n  if(v>=0.0001)return v.toFixed(8);\n  // harga sangat kecil seperti SHIB: pakai fixed decimal\n  var s=v.toFixed(10);\n  // hapus trailing zeros berlebihan tapi sisakan min 2 significant digits\n  return parseFloat(s).toPrecision(4);\n}\nfunction doOpenLong(sym){execOpenLong(sym);}\n\nfunction editEntry(sym,curVal){\n  var v=prompt(\'Edit entry price untuk \'+sym.replace(\'USDT\',\'/USDT\')+\':\\n(harga aktual dari 3Commas)\',curVal);\n  if(v===null)return;\n  v=parseFloat(v);\n  if(isNaN(v)||v<=0){alert(\'Nilai tidak valid\');return;}\n  if(!confirm(\'Set entry \'+sym.replace(\'USDT\',\'/USDT\')+\' = \'+v+\'?\'))return;\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'field\',\'entry_price\');fd.append(\'value\',v);\n  pauseRefresh();\n  fetch(\'/edit_deal\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var el=document.getElementById(\'ep-\'+sym);\n        if(el)el.textContent=v;\n        alert(\'Entry \'+sym.replace(\'USDT\',\'/USDT\')+\' diupdate ke \'+v);\n      } else {\n        alert(\'Gagal: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction promptCloseDeal(){\n  var deals=document.querySelectorAll(\'#active-deals-body tr\');\n  var syms=[];\n  deals.forEach(function(tr){\n    var td=tr.querySelector(\'td.sym\');\n    if(td)syms.push(td.textContent.replace(\'/USDT\',\'USDT\').trim());\n  });\n  if(syms.length===0){alert(\'Tidak ada deal aktif saat ini.\');return;}\n  var sym=syms.length===1?syms[0]:prompt(\'Pilih pair yang mau di-close:\\n\'+syms.map(function(s){return s.replace(\'USDT\',\'/USDT\');}).join(\'\\n\')+\'\\n\\nKetik simbol (contoh: PUMP atau PUMPUSDT):\');\n  if(!sym)return;\n  sym=sym.trim().toUpperCase();\n  if(!sym.endsWith(\'USDT\'))sym=sym+\'USDT\';\n  if(!confirm(\'CLOSE DEAL \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan kirim sinyal close ke 3Commas sekarang.\'))return;\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Menutup deal \'+sym+\'...\';\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_close\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var msg=\'Close \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! Price=\'+data.price+\' Profit=\'+data.profit_pct+\'%\';\n        if(st)st.textContent=msg;\n        alert(msg);\n        setTimeout(function(){window.location.reload();},2000);\n      } else {\n        if(st)st.textContent=\'Gagal: \'+data.error;\n        alert(\'Close GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction promptAddFund(){\n  var deals=document.querySelectorAll(\'#active-deals-body tr\');\n  var syms=[];\n  deals.forEach(function(tr){\n    var td=tr.querySelector(\'td.sym\');\n    if(td)syms.push(td.textContent.replace(\'/USDT\',\'USDT\').trim());\n  });\n  if(syms.length===0){alert(\'Tidak ada deal aktif saat ini.\');return;}\n  var sym=syms.length===1?syms[0]:prompt(\'Pilih pair untuk Add Fund:\\n\'+syms.map(function(s){return s.replace(\'USDT\',\'/USDT\');}).join(\'\\n\')+\'\\n\\nKetik simbol:\');\n  if(!sym)return;\n  sym=sym.trim().toUpperCase();\n  if(!sym.endsWith(\'USDT\'))sym=sym+\'USDT\';\n  if(!confirm(\'ADD FUND untuk \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nNominal sesuai sizing saat open deal.\\nAverage price akan diupdate otomatis.\'))return;\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Mengirim add fund \'+sym+\'...\';\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_addfund\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var msg=\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! +$\'+data.add_usd+\' @ \'+data.price+\' | Avg=\'+data.avg_price;\n        if(st)st.textContent=msg;\n        alert(msg);\n        setTimeout(function(){window.location.reload();},2000);\n      } else {\n        if(st)st.textContent=\'Gagal: \'+data.error;\n        alert(\'Add Fund GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n'
+_DASH_JS = 'var _refreshTimer=null;\nvar _curStrat=\'brkX2-12h\';\nfunction startRefresh(){if(_refreshTimer)return;_refreshTimer=setInterval(function(){window.location.reload();},30000);}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){var cb=document.getElementById(\'cb-pause-refresh\');return cb&&cb.checked;}\nfunction pauseRefresh(){stopRefresh();}\nfunction resumeRefresh(){if(!isPauseChecked())startRefresh();}\nfunction onPauseRefreshToggle(checked){if(checked){stopRefresh();}else{startRefresh();}}\n\n// Definisi secondary per strategi\nvar STRAT_SECONDARY={\n  \'brkX2-12h\':[\n    {key:\'vol\',label:\'Vol 0.6x--5.0xMA\'},{key:\'rsi\',label:\'RSI<75\'},\n    {key:\'stoch\',label:\'Stoch%K<70\'},{key:\'atr\',label:\'ATR%<9%\'},\n    {key:\'htf\',label:\'HTF 3D vol>0.8xMA\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'Reversal-8h T1\':[\n    {key:\'ha_bull\',label:\'c+1 HA bullish\'},{key:\'cross\',label:\'cross-up EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'Reversal-8h T3-REV\':[\n    {key:\'elapsed\',label:\'Elapsed 5%-50%\'},{key:\'cross_live\',label:\'price_now>EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'brkX2-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'stoch\',label:\'Stoch%K<80\'},\n    {key:\'htf\',label:\'HTF12h vol>2.0xMA\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'CrossEMA-4h\':[\n    {key:\'vol\',label:\'Vol>=0.4xMA\'},{key:\'htf\',label:\'HTF12h vol>1.5xMA\'},\n    {key:\'vol24\',label:\'Vol24h>=$1.0jt\'}\n  ],\n  \'Akumulasi-4h\':[\n    {key:\'vol_asim\',label:\'Vol hijau>merah\'},{key:\'rsi\',label:\'RSI 30-55\'},\n    {key:\'macd_flat\',label:\'MACD flat~0\'},{key:\'body_ratio\',label:\'Body ratio<0.42\'}\n  ],\n  \'Akumulasi-4h Entry A\':[\n    {key:\'vol_spike\',label:\'Vol spike>2.5xMA\'},{key:\'rsi_low\',label:\'RSI sempat<35\'},\n    {key:\'obv_div\',label:\'OBV divergensi\'},{key:\'reentry\',label:\'Close kembali>support\'}\n  ],\n  \'Akumulasi-4h Entry B\':[\n    {key:\'breakout\',label:\'Close>resistance+vol\'},{key:\'retest\',label:\'Retest tdk jebol\'},\n    {key:\'vol_retest\',label:\'Vol retest<80% breakout\'},{key:\'ema_cross\',label:\'EMA20>EMA50\'}\n  ]\n};\n\nfunction onStratSelect(strat){\n  _curStrat=strat;\n  // Update dropdown kandidat\n  var opts=document.querySelectorAll(\'.nm-opt\');\n  var count=0;\n  opts.forEach(function(o){\n    var show=o.getAttribute(\'data-strat\')===strat;\n    o.style.display=show?\'\':\'none\';\n    if(show)count++;\n  });\n  document.getElementById(\'nm-count\').textContent=\'(\'+count+\' kandidat dari scan terakhir)\';\n  // Reset pair select\n  var sel=document.getElementById(\'pair-select\');if(sel)sel.value=\'\';\n  // Reset panel\n  var panel=document.getElementById(\'pair-detail\');if(panel)panel.style.display=\'none\';\n  // Update secondary grid\n  renderSecondaryGrid(strat);\n  // Reset primary status\n  var ps=document.getElementById(\'primary-status\');\n  if(ps)ps.innerHTML=\'<span style="color:var(--muted)">-- pilih pair untuk lihat nilai aktual --</span>\';\n}\n\nfunction renderSecondaryGrid(strat){\n  var grid=document.getElementById(\'secondary-grid\');\n  if(!grid)return;\n  var defs=STRAT_SECONDARY[strat]||[];\n  grid.innerHTML=defs.map(function(d){\n    return \'<div class="sec-item" data-key="\'+d.key+\'"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px"><input type="checkbox" class="sec-cb" data-key="\'+d.key+\'" checked style="cursor:pointer"><span class="sec-label">\'+d.label+\'</span><span class="sec-actual" style="color:var(--muted)">--</span><span class="sec-status">--</span></label></div>\';\n  }).join(\'\');\n  // Re-attach event listeners\n  grid.querySelectorAll(\'.sec-cb\').forEach(function(cb){\n    cb.addEventListener(\'change\',function(){\n      fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});\n    });\n  });\n}\n\ndocument.addEventListener(\'DOMContentLoaded\',function(){\n  startRefresh();\n  onStratSelect(\'brkX2-12h\');\n});\n\nfunction onPairSelect(sym){\n  var panel=document.getElementById(\'pair-detail\');\n  if(!sym){panel.style.display=\'none\';return;}\n  panel.style.display=\'block\';\n  panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';\n  pauseRefresh();\n  fetch(\'/api/strategy_detail?sym=\'+encodeURIComponent(sym)+\'&strat=\'+encodeURIComponent(_curStrat))\n    .then(function(r){return r.json();})\n    .then(function(d){\n      resumeRefresh();\n      if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}\n      // Update primary\n      var ps=document.getElementById(\'primary-status\');\n      ps.innerHTML=d.primary.map(function(p){return badge(p.ok,p.label+\' (\'+p.actual+\')\');}).join(\' \');\n      // Update secondary\n      d.secondary.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n      // Panel ringkasan\n      var allP=d.primary_ok;\n      panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | \'+\n        d.primary.map(function(p){return (p.ok?\'<span style="color:var(--green)">\':\'<span style="color:var(--red)">\') + p.label+\': \'+p.actual+\'</span>\';}).join(\' | \')+\n        \' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');\n    })\n    .catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});\n}\n\nfunction updateSec(key,actual,ok){\n  document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){\n    var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');\n    if(a)a.textContent=\'(skrg \'+actual+\')\';\n    if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';\n  });\n}\n\nfunction doManualScan(){\n  var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');\n  btn.disabled=true;btn.textContent=\'Scanning...\';\n  st.textContent=\'Sedang scan semua pair... (30-60 detik)\';\n  pauseRefresh();\n  fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){\n    btn.disabled=false;btn.textContent=\'Scan Sekarang\';\n    st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';\n    renderResults(data.pairs);resumeRefresh();\n  }).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});\n}\n\nfunction promptOpenLong(){\n  var sel=document.getElementById(\'pair-select\');\n  var sym=sel?sel.value:\'\';\n  if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}\n  var ss=document.getElementById(\'strat-select\');var strat=ss?ss.value:\'brkX2-12h\';\n  if(!confirm(\'Open Long [\'+strat+\']: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;\n  execOpenLong(sym,strat);\n}\n\nfunction execOpenLong(sym,strat){\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'strat\',strat||\"brkX2-12h\");\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Membuka deal \'+sym+\'...\';\n  pauseRefresh();\n  fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){\n    resumeRefresh();\n    var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);\n    if(st)st.textContent=msg;alert(msg);\n  }).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction renderResults(pairs){\n  var el=document.getElementById(\'scan-results\');\n  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];\n  if(sample){\n    document.getElementById(\'primary-status\').innerHTML=\n      sample.secondaries?sample.secondaries.map(function(s){return badge(s.ok,s.key+\':\'+s.actual);}).join(\' \'):\'\';\n    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n  }\n  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);\n  if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos syarat primary.</div>\';return;}\n  var rows=cands.map(function(p){\n    var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');\n    var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';\n    var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';\n    return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';\n  }).join(\'\');\n  el.innerHTML=\'<table><thead><tr><th>Pair</th><th>isArmed</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';\n}\n\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){\n  if(v===undefined||v===null)return \'?\';\n  if(v>=1000)return v.toFixed(0);\n  if(v>=1)return v.toFixed(4);\n  if(v>=0.01)return v.toFixed(6);\n  if(v>=0.0001)return v.toFixed(8);\n  // harga sangat kecil seperti SHIB: pakai fixed decimal\n  var s=v.toFixed(10);\n  // hapus trailing zeros berlebihan tapi sisakan min 2 significant digits\n  return parseFloat(s).toPrecision(4);\n}\nfunction doOpenLong(sym){execOpenLong(sym);}\n\nfunction editEntry(sym,curVal){\n  var v=prompt(\'Edit entry price untuk \'+sym.replace(\'USDT\',\'/USDT\')+\':\\n(harga aktual dari 3Commas)\',curVal);\n  if(v===null)return;\n  v=parseFloat(v);\n  if(isNaN(v)||v<=0){alert(\'Nilai tidak valid\');return;}\n  if(!confirm(\'Set entry \'+sym.replace(\'USDT\',\'/USDT\')+\' = \'+v+\'?\'))return;\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'field\',\'entry_price\');fd.append(\'value\',v);\n  pauseRefresh();\n  fetch(\'/edit_deal\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var el=document.getElementById(\'ep-\'+sym);\n        if(el)el.textContent=v;\n        alert(\'Entry \'+sym.replace(\'USDT\',\'/USDT\')+\' diupdate ke \'+v);\n      } else {\n        alert(\'Gagal: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction promptCloseDeal(){\n  var deals=document.querySelectorAll(\'#active-deals-body tr\');\n  var syms=[];\n  deals.forEach(function(tr){\n    var td=tr.querySelector(\'td.sym\');\n    if(td)syms.push(td.textContent.replace(\'/USDT\',\'USDT\').trim());\n  });\n  if(syms.length===0){alert(\'Tidak ada deal aktif saat ini.\');return;}\n  var sym=syms.length===1?syms[0]:prompt(\'Pilih pair yang mau di-close:\\n\'+syms.map(function(s){return s.replace(\'USDT\',\'/USDT\');}).join(\'\\n\')+\'\\n\\nKetik simbol (contoh: PUMP atau PUMPUSDT):\');\n  if(!sym)return;\n  sym=sym.trim().toUpperCase();\n  if(!sym.endsWith(\'USDT\'))sym=sym+\'USDT\';\n  if(!confirm(\'CLOSE DEAL \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan kirim sinyal close ke 3Commas sekarang.\'))return;\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Menutup deal \'+sym+\'...\';\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_close\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var msg=\'Close \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! Price=\'+data.price+\' Profit=\'+data.profit_pct+\'%\';\n        if(st)st.textContent=msg;\n        alert(msg);\n        setTimeout(function(){window.location.reload();},2000);\n      } else {\n        if(st)st.textContent=\'Gagal: \'+data.error;\n        alert(\'Close GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction promptAddFund(){\n  var deals=document.querySelectorAll(\'#active-deals-body tr\');\n  var syms=[];\n  deals.forEach(function(tr){\n    var td=tr.querySelector(\'td.sym\');\n    if(td)syms.push(td.textContent.replace(\'/USDT\',\'USDT\').trim());\n  });\n  if(syms.length===0){alert(\'Tidak ada deal aktif saat ini.\');return;}\n  var sym=syms.length===1?syms[0]:prompt(\'Pilih pair untuk Add Fund:\\n\'+syms.map(function(s){return s.replace(\'USDT\',\'/USDT\');}).join(\'\\n\')+\'\\n\\nKetik simbol:\');\n  if(!sym)return;\n  sym=sym.trim().toUpperCase();\n  if(!sym.endsWith(\'USDT\'))sym=sym+\'USDT\';\n  if(!confirm(\'ADD FUND untuk \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nNominal sesuai sizing saat open deal.\\nAverage price akan diupdate otomatis.\'))return;\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Mengirim add fund \'+sym+\'...\';\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_addfund\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var msg=\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! +$\'+data.add_usd+\' @ \'+data.price+\' | Avg=\'+data.avg_price;\n        if(st)st.textContent=msg;\n        alert(msg);\n        setTimeout(function(){window.location.reload();},2000);\n      } else {\n        if(st)st.textContent=\'Gagal: \'+data.error;\n        alert(\'Add Fund GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n'
 
 def _fmt_price(v):
     """Format harga agar tidak pakai notasi scientific (e-06 dll)."""
@@ -3670,6 +3740,9 @@ DASHBOARD_HTML = '''
           <option value="Reversal-8h T3-REV">Reversal-8h T3-REV</option>
           <option value="brkX2-4h">brkX2-4h</option>
           <option value="CrossEMA-4h">CrossEMA-4h</option>
+          <option value="Akumulasi-4h">Akumulasi-4h ⭐</option>
+          <option value="Akumulasi-4h Entry A">Akumulasi Entry A (Spring)</option>
+          <option value="Akumulasi-4h Entry B">Akumulasi Entry B (Breakout)</option>
         </select>
       </div>
       <!-- Dropdown kandidat dinamis per strategi -->
@@ -3678,7 +3751,10 @@ DASHBOARD_HTML = '''
         "Reversal-8h T1": near_miss.get("Reversal-8h", []),
         "Reversal-8h T3-REV": near_miss.get("Reversal-8h", []),
         "brkX2-4h": near_miss.get("brkX2-4h", []),
-        "CrossEMA-4h": near_miss.get("CrossEMA-4h", [])
+        "CrossEMA-4h": near_miss.get("CrossEMA-4h", []),
+        "Akumulasi-4h Entry A": near_miss.get("Akumulasi-4h", []),
+        "Akumulasi-4h Entry B": near_miss.get("Akumulasi-4h", []),
+        "Akumulasi-4h": near_miss.get("Akumulasi-4h", [])
       } %}
       <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <label style="font-size:11px;color:var(--muted)">Pilih pair kandidat:</label>
@@ -3799,12 +3875,570 @@ DASHBOARD_HTML = '''
   </div>
   {% endfor %}
   </div>
+
+  <!-- ═══════════════ AKUMULASI DETECTOR ═══════════════ -->
+  <div class="section-title">⭐ Strategi #5 — Akumulasi Detector (4h)</div>
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+      <h2>Akumulasi-4h &nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Fase sideways post-downtrend | TF 4h | Maks 5 pair</span></h2>
+      <span class="scan-time">Scan: {{ last_scan.get("Akumulasi-4h","-") }}</span>
+    </div>
+    <div class="card-body">
+    {% set akum_items = near_miss.get("Akumulasi-4h", []) %}
+    {% if akum_items %}
+    <!-- Legend indikator -->
+    <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:10px;font-size:10px">
+      <span style="color:var(--muted)">PRIMARY: </span>
+      <span style="color:var(--accent)">P1 Range≤18%</span>
+      <span style="color:var(--accent)">P2 EMAGap≤6%</span>
+      <span style="color:var(--accent)">P3 OBV↑</span>
+      <span style="color:var(--accent)">P4 ATR↓≥25%</span>
+      <span style="color:var(--muted);margin-left:8px">SECONDARY: </span>
+      <span style="color:var(--yellow)">S1 Vol G>R</span>
+      <span style="color:var(--yellow)">S2 RSI 30-55</span>
+      <span style="color:var(--yellow)">S3 MACD flat</span>
+      <span style="color:var(--yellow)">S4 Body ratio kecil</span>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr>
+          <th>Pair</th>
+          <th>Score</th>
+          <th>Primary (4)</th>
+          <th>Secondary (4)</th>
+          <th>Belum lolos</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for item in akum_items %}
+      <tr>
+        <td class="sym" style="white-space:nowrap">{{ item.sym.replace("USDT","/USDT") }}</td>
+        <td>
+          {% set sc = item.n_pass * 2 %}
+          <span style="color:{% if item.n_pass == 4 %}var(--green){% elif item.n_pass == 3 %}var(--yellow){% else %}var(--muted){% endif %};font-weight:600">
+            P{{ item.n_pass }}/4
+          </span>
+        </td>
+        <td style="font-size:10px;line-height:1.6">
+          {% for detail in (item.fails[:0] if item.n_pass == 4 else []) %}{% endfor %}
+          <span style="color:{% if item.n_pass==4 %}var(--green){% else %}var(--yellow){% endif %}">
+            {{ item.n_pass }}/4 lolos
+          </span>
+        </td>
+        <td style="font-size:10px;line-height:1.6">
+          <span style="color:var(--muted)">≥2 required</span>
+        </td>
+        <td class="fails" style="font-size:10px;line-height:1.5;max-width:220px">
+          {% if item.fails %}
+            {{ ("; ".join(item.fails[:3]))|e }}{% if item.fails|length > 3 %} +{{ item.fails|length - 3 }} lagi{% endif %}
+          {% else %}
+            <span style="color:var(--green)">✓ Semua lolos</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div style="margin-top:10px;font-size:10px;color:var(--muted)">
+      Scan otomatis tiap 30 menit. Pair lolos PRIMARY ≥3/4 ditampilkan. Score maks = P×2 + S×1 = 12.
+    </div>
+    {% else %}
+    <div class="empty">{{ window_info.get("Akumulasi-4h", "Belum ada data scan (maks 30 menit setelah bot start).")|e }}</div>
+    {% endif %}
+    </div>
+  </div>
 </div>
 
 <script src="/dash.js?v=1785631425"></script>
 </body>
 </html>
 '''
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STRATEGI #5: Akumulasi Detector — deteksi fase akumulasi (sideways post-downtrend)
+# Thread: T_AKUM, scan tiap 30 menit, output maks 5 pair
+# PRIMARY  : range sideways, EMA konvergen, OBV slope+, ATR turun
+# SECONDARY: volume asimetri, RSI 30-55, MACD flat, body ratio kecil
+# ══════════════════════════════════════════════════════════════════════════════
+
+def compute_indicators_akum(df):
+    """Hitung indikator khusus Akumulasi Detector pada dataframe 4h."""
+    close, high, low, vol = df['close'], df['high'], df['low'], df['vol']
+    df['ema20']  = ta.ema(close, length=20)
+    df['ema50']  = ta.ema(close, length=50)
+    df['ema200'] = ta.ema(close, length=200)
+    df['atr']    = ta.atr(high, low, close, length=14)
+    df['rsi']    = ta.rsi(close, length=14)
+    _macd = ta.macd(close, fast=12, slow=26, signal=9)
+    hist_col = [c for c in _macd.columns if 'MACDh' in c]
+    df['macd_hist'] = _macd[hist_col[0]] if hist_col else float('nan')
+    # OBV manual
+    obv = [0.0]
+    cv = close.values; vv = vol.values
+    for i in range(1, len(cv)):
+        if cv[i] > cv[i-1]:   obv.append(obv[-1] + vv[i])
+        elif cv[i] < cv[i-1]: obv.append(obv[-1] - vv[i])
+        else:                  obv.append(obv[-1])
+    df['obv'] = obv
+    # body ratio
+    rng = (high - low).replace(0, float('nan'))
+    df['body_ratio'] = (close - df['open']).abs() / rng
+    return df
+
+def score_akumulasi(df, sym: str) -> dict:
+    """
+    Hitung skor akumulasi untuk 1 symbol. Return dict dengan detail atau None kalau data kurang.
+    Skor 0-8: 4 primary (bobot 2) + 4 secondary (bobot 1).
+    Ambil N = AKUM_SIDEWAYS_CANDLES candle terakhir sebagai jendela sideways.
+    """
+    try:
+        if len(df) < AKUM_SIDEWAYS_CANDLES + 50:
+            return None
+        # Candle berjalan dibuang, pakai yang sudah tutup
+        if df['ct'].iloc[-1] >= int(time.time() * 1000):
+            df = df.iloc[:-1]
+        if len(df) < AKUM_SIDEWAYS_CANDLES + 50:
+            return None
+        df = compute_indicators_akum(df)
+        # Jendela sideways = N candle terakhir
+        win = df.iloc[-AKUM_SIDEWAYS_CANDLES:]
+        row = df.iloc[-1]
+
+        close_now = float(row['close'])
+        if close_now <= 0:
+            return None
+
+        # ── PRIMARY ────────────────────────────────────────────────────────────
+        # P1: range sideways ≤ AKUM_RANGE_PCT
+        hi_max  = float(win['high'].max())
+        lo_min  = float(win['low'].min())
+        range_pct = (hi_max - lo_min) / close_now if close_now > 0 else 99
+        p1_ok = range_pct <= AKUM_RANGE_PCT
+        p1_val = f"{range_pct*100:.1f}%"
+
+        # P2: EMA20 vs EMA200 konvergen & datar
+        ema20_now  = float(row['ema20'])  if not pd.isna(row.get('ema20'))  else None
+        ema200_now = float(row['ema200']) if not pd.isna(row.get('ema200')) else None
+        if ema20_now is None or ema200_now is None or ema200_now == 0:
+            return None
+        ema_gap = abs(ema20_now - ema200_now) / ema200_now
+        p2_ok  = ema_gap <= AKUM_EMA_GAP_PCT
+        p2_val = f"{ema_gap*100:.1f}%"
+
+        # P3: OBV slope positif (linear regression atas N/2 candle terakhir)
+        obv_win = win['obv'].values
+        n_obv   = len(obv_win)
+        if n_obv < 10:
+            return None
+        x = np.arange(n_obv)
+        try:
+            obv_slope = float(np.polyfit(x, obv_win, 1)[0])
+        except Exception:
+            obv_slope = 0.0
+        p3_ok  = obv_slope > 0
+        p3_val = f"slope {obv_slope:+.0f}"
+
+        # P4: ATR sekarang ≤ (1 - AKUM_ATR_DROP_PCT) × ATR puncak N candle ke belakang
+        lookback_start = max(0, len(df) - AKUM_ATR_LOOKBACK)
+        atr_history = df['atr'].iloc[lookback_start:-AKUM_SIDEWAYS_CANDLES]  # periode sebelum jendela
+        atr_now     = float(row['atr']) if not pd.isna(row.get('atr')) else None
+        if atr_now is None or len(atr_history) < 5:
+            p4_ok  = False
+            p4_val = "n/a"
+        else:
+            atr_peak = float(atr_history.max())
+            atr_drop = 1 - (atr_now / atr_peak) if atr_peak > 0 else 0
+            p4_ok  = atr_drop >= AKUM_ATR_DROP_PCT
+            p4_val = f"turun {atr_drop*100:.0f}%"
+
+        primary_ok    = p1_ok and p2_ok and p3_ok and p4_ok
+        primary_score = sum([p1_ok, p2_ok, p3_ok, p4_ok])
+
+        # ── SECONDARY ──────────────────────────────────────────────────────────
+        # S1: volume candle hijau > merah (asimetri)
+        green_vol = float(win.loc[win['close'] >= win['open'], 'vol'].sum())
+        red_vol   = float(win.loc[win['close']  < win['open'], 'vol'].sum())
+        s1_ok  = green_vol > red_vol
+        s1_val = f"G:{green_vol/max(red_vol,1):.2f}x"
+
+        # S2: RSI 30-55
+        rsi_now = float(row['rsi']) if not pd.isna(row.get('rsi')) else None
+        s2_ok   = rsi_now is not None and 30 <= rsi_now <= 55
+        s2_val  = f"{rsi_now:.1f}" if rsi_now is not None else "n/a"
+
+        # S3: MACD histogram flat dekat nol
+        macd_now = float(row['macd_hist']) if not pd.isna(row.get('macd_hist')) else None
+        s3_ok    = macd_now is not None and abs(macd_now) < AKUM_MACD_FLAT_PCT * close_now
+        s3_val   = f"{macd_now:.5f}" if macd_now is not None else "n/a"
+
+        # S4: rata-rata body/range kecil (konsolidasi)
+        avg_body = float(win['body_ratio'].mean(skipna=True))
+        s4_ok    = avg_body < AKUM_BODY_RATIO_MAX
+        s4_val   = f"{avg_body:.2f}"
+
+        secondary_score = sum([s1_ok, s2_ok, s3_ok, s4_ok])
+        secondary_ok    = secondary_score >= AKUM_MIN_SECONDARY
+        total_score     = primary_score * 2 + secondary_score  # max 12
+
+        # Kumpulkan fails
+        fails = []
+        if not p1_ok: fails.append(f"Range {p1_val} >18%")
+        if not p2_ok: fails.append(f"EMAGap {p2_val} >6%")
+        if not p3_ok: fails.append(f"OBV {p3_val} ↓")
+        if not p4_ok: fails.append(f"ATR {p4_val} <25%")
+        if not s1_ok: fails.append(f"Vol asimetri {s1_val}")
+        if not s2_ok: fails.append(f"RSI {s2_val} OOB")
+        if not s3_ok: fails.append(f"MACD {s3_val} tdk flat")
+        if not s4_ok: fails.append(f"Body {s4_val} >0.42")
+
+        return {
+            "sym":            sym,
+            "close":          close_now,
+            "primary_ok":     primary_ok,
+            "secondary_ok":   secondary_ok,
+            "total_score":    total_score,
+            "primary_score":  primary_score,
+            "secondary_score":secondary_score,
+            "fails":          fails,
+            # nilai indikator utk display
+            "range_pct":      p1_val,
+            "ema_gap":        p2_val,
+            "obv_slope":      p3_val,
+            "atr_drop":       p4_val,
+            "vol_asim":       s1_val,
+            "rsi":            s2_val,
+            "macd_flat":      s3_val,
+            "body_ratio":     s4_val,
+            "p1_ok": p1_ok, "p2_ok": p2_ok, "p3_ok": p3_ok, "p4_ok": p4_ok,
+            "s1_ok": s1_ok, "s2_ok": s2_ok, "s3_ok": s3_ok, "s4_ok": s4_ok,
+        }
+    except Exception as e:
+        log(f"  [AKUM] score error {sym}: {e}")
+        return None
+
+
+def detect_entry_a_spring(df, support: float) -> dict | None:
+    """
+    Deteksi Entry A — Spring/Fakeout Wyckoff (TF 4h).
+    Kondisi:
+    1. Harga tembus support (low < support) lalu close kembali di atas dalam 1-3 candle
+    2. Volume candle breakdown > AKUM_A_VOL_SPIKE_MULT × vol MA
+    3. OBV tidak turun saat harga turun (divergensi bullish)
+    4. RSI sempat < AKUM_A_RSI_MIN lalu naik kembali < AKUM_A_RSI_MAX_ENTRY
+    Return: dict info atau None kalau tidak ada sinyal.
+    """
+    if len(df) < 20: return None
+    try:
+        import pandas_ta as _pta
+        df = df.copy()
+        df['vol_ma'] = df['vol'].rolling(20).mean()
+        df['rsi'] = _pta.rsi(df['close'], length=14)
+        obv = [0.0]
+        for i in range(1, len(df)):
+            if df['close'].iloc[i] > df['close'].iloc[i-1]:
+                obv.append(obv[-1] + df['vol'].iloc[i])
+            elif df['close'].iloc[i] < df['close'].iloc[i-1]:
+                obv.append(obv[-1] - df['vol'].iloc[i])
+            else:
+                obv.append(obv[-1])
+        df['obv'] = obv
+
+        # Cari candle Spring: low < support dan vol spike
+        for lookback in range(3, min(AKUM_A_REENTRY_CANDLES + 4, len(df) - 1)):
+            spring_idx = len(df) - 1 - lookback
+            if spring_idx < 5: break
+            row_s = df.iloc[spring_idx]
+            if row_s['low'] >= support: continue
+            # Cek vol spike
+            vol_ma = row_s.get('vol_ma', 0)
+            if pd.isna(vol_ma) or vol_ma <= 0: continue
+            if row_s['vol'] < AKUM_A_VOL_SPIKE_MULT * vol_ma: continue
+            # Cek re-entry ke atas support dalam 1-3 candle setelah spring
+            reentry_ok = False
+            for k in range(1, AKUM_A_REENTRY_CANDLES + 1):
+                if spring_idx + k >= len(df): break
+                if df.iloc[spring_idx + k]['close'] > support:
+                    reentry_ok = True; break
+            if not reentry_ok: continue
+            # Cek RSI: sempat rendah
+            rsi_window = df['rsi'].iloc[max(0, spring_idx-3):spring_idx+1]
+            if rsi_window.min() >= AKUM_A_RSI_MIN: continue
+            # Cek RSI sekarang sudah naik
+            rsi_now = df['rsi'].iloc[-1]
+            if pd.isna(rsi_now) or rsi_now >= AKUM_A_RSI_MAX_ENTRY: continue
+            # Cek OBV divergensi: OBV slope positif di 5 candle terakhir
+            obv_recent = df['obv'].iloc[-AKUM_A_OBV_SLOPE_CANDLES:]
+            obv_slope = (obv_recent.iloc[-1] - obv_recent.iloc[0])
+            if obv_slope <= 0: continue
+            # Spring valid
+            spring_low = float(row_s['low'])
+            sl_price   = round(spring_low * (1 - AKUM_ENTRY_SL_BUFFER), 8)
+            return {
+                'type':       'A',
+                'spring_low': spring_low,
+                'sl_price':   sl_price,
+                'support':    support,
+                'rsi_now':    round(float(rsi_now), 1),
+                'vol_ratio':  round(float(row_s['vol']) / float(vol_ma), 2),
+                'obv_slope':  round(obv_slope, 2),
+            }
+    except Exception as e:
+        log(f"[AKUM-ENTRY-A] error: {e}")
+    return None
+
+
+def detect_entry_b_breakout(df, resistance: float, support: float) -> dict | None:
+    """
+    Deteksi Entry B — Breakout + Retest Resistance Wyckoff (TF 4h).
+    Kondisi:
+    1. Ada candle yang close > resistance dengan vol > AKUM_B_VOL_BREAKOUT_MULT × vol MA
+    2. Setelah breakout, harga turun retest ke resistance ± AKUM_B_RETEST_TOL_PCT
+    3. Retest tidak tembus resistance (low >= resistance * (1 - AKUM_B_RETEST_TOL_PCT))
+    4. Volume retest < AKUM_B_RETEST_VOL_MAX × volume candle breakout
+    5. EMA20 > EMA50 (konfirmasi uptrend)
+    Return: dict info atau None.
+    """
+    if len(df) < 20: return None
+    try:
+        import pandas_ta as _pta
+        df = df.copy()
+        df['vol_ma'] = df['vol'].rolling(20).mean()
+        df['ema20']  = _pta.ema(df['close'], length=20)
+        df['ema50']  = _pta.ema(df['close'], length=50)
+
+        # Cek EMA konfirmasi
+        last = df.iloc[-1]
+        if pd.isna(last.get('ema20')) or pd.isna(last.get('ema50')): return None
+        if last['ema20'] <= last['ema50']: return None
+
+        # Cari candle breakout: close > resistance + vol tinggi
+        breakout_idx = None
+        breakout_vol = 0.0
+        for i in range(len(df) - 10, len(df) - 1):
+            if i < 5: continue
+            r = df.iloc[i]
+            vol_ma = r.get('vol_ma', 0)
+            if pd.isna(vol_ma) or vol_ma <= 0: continue
+            if r['close'] > resistance and r['vol'] >= AKUM_B_VOL_BREAKOUT_MULT * vol_ma:
+                breakout_idx = i
+                breakout_vol = float(r['vol'])
+                break
+        if breakout_idx is None: return None
+
+        # Cari candle retest setelah breakout
+        retest_low = resistance * (1 - AKUM_B_RETEST_TOL_PCT)
+        for j in range(breakout_idx + 1, len(df)):
+            r = df.iloc[j]
+            # Harga turun ke zona resistance
+            if r['low'] <= resistance * (1 + AKUM_B_RETEST_TOL_PCT) and r['low'] >= retest_low:
+                # Tidak tembus ke bawah (support tetap aman)
+                if r['low'] < retest_low: continue
+                # Volume retest lebih rendah dari breakout
+                if breakout_vol > 0 and r['vol'] >= AKUM_B_RETEST_VOL_MAX * breakout_vol: continue
+                # Retest valid — candle terakhir sudah kembali di atas resistance
+                if df.iloc[-1]['close'] < resistance: continue
+                sl_price = round(resistance * (1 - AKUM_ENTRY_SL_BUFFER), 8)
+                return {
+                    'type':          'B',
+                    'resistance':    resistance,
+                    'support':       support,
+                    'sl_price':      sl_price,
+                    'breakout_idx':  breakout_idx,
+                    'ema20':         round(float(last['ema20']), 6),
+                    'ema50':         round(float(last['ema50']), 6),
+                    'retest_low':    round(float(r['low']), 8),
+                    'vol_ratio_bo':  round(float(df.iloc[breakout_idx]['vol']) /
+                                          float(df.iloc[breakout_idx]['vol_ma']), 2),
+                }
+    except Exception as e:
+        log(f"[AKUM-ENTRY-B] error: {e}")
+    return None
+
+
+def thread_akum_scan():
+    """Scan Akumulasi Detector: cari pair dalam fase akumulasi (sideways post-downtrend)."""
+    global _akum_near_miss, _akum_last_scan_ts
+    if not STRAT_AKUM_ENABLED:
+        return
+    log("[T_AKUM] Scan Akumulasi Detector (4h)...")
+    try:
+        pairs = get_usdt_spot_pairs()
+        if not pairs:
+            log("[T_AKUM] Gagal ambil pair."); return
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except: pass
+        universe = [p for p in pairs
+                    if volmap.get(p, 0) >= AKUM_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST]
+
+        results = []
+        for sym in universe:
+            try:
+                df = get_ohlcv(sym, interval=AKUM_TIMEFRAME, limit=AKUM_CANDLE_LIMIT)
+                if df is None or len(df) < AKUM_SIDEWAYS_CANDLES + 50:
+                    continue
+                res = score_akumulasi(df, sym)
+                if res is None:
+                    continue
+                # Hanya simpan yang lolos minimal 3 dari 4 primary
+                if res['primary_score'] >= 3:
+                    results.append(res)
+            except Exception as e:
+                log(f"  [T_AKUM] error {sym}: {e}")
+
+        # Sort: primary_ok dulu, lalu total_score descending
+        results.sort(key=lambda x: (not x['primary_ok'], -x['total_score']))
+        top = results[:AKUM_MAX_RESULTS]
+
+        ts = now_wib().strftime("%H:%M:%S")
+        with _akum_lock:
+            _akum_near_miss    = top
+            _akum_last_scan_ts = ts
+
+        # Format near_miss untuk update_dashboard_near_miss
+        # Struktur: (n_pass, sym, fails, total_syarat)  — total 8 (4P×2 + 4S×1 = 12 → pakai skor mentah)
+        nm_items = [
+            (res['primary_score'], res['sym'], res['fails'], 4)
+            for res in top
+        ]
+        update_dashboard_near_miss("Akumulasi-4h", nm_items)
+
+        n_full = sum(1 for r in top if r['primary_ok'] and r['secondary_ok'])
+        log(f"[T_AKUM] {len(universe)} pair discan → {len(results)} kandidat, "
+            f"{n_full} lolos penuh. Top {len(top)} ditampilkan.")
+
+        # Telegram notif kalau ada yang lolos semua
+        full_ok = [r for r in top if r['primary_ok'] and r['secondary_ok']]
+        if full_ok:
+            lines = ["AKUMULASI TERDETEKSI (Strategi #5)\n" + ts + " WIB"]
+            for r in full_ok:
+                lines.append(
+                    f"• {to_display_pair(r['sym'])} | Score {r['total_score']}/12\n"
+                    f"  Range {r['range_pct']} | EMAGap {r['ema_gap']} | OBV {r['obv_slope']}\n"
+                    f"  ATR {r['atr_drop']} | RSI {r['rsi']} | Vol {r['vol_asim']}"
+                )
+            send_telegram("\n".join(lines))
+
+    except Exception as e:
+        log(f"WARN [T_AKUM] scan error: {e}")
+
+
+def run_thread_akum():
+    """Thread T_AKUM: scan akumulasi tiap AKUM_SCAN_INTERVAL detik."""
+    log("[T_AKUM] Thread akumulasi dimulai.")
+    while True:
+        try:
+            thread_akum_scan()
+        except Exception as e:
+            log(f"WARN [T_AKUM] thread error: {e}")
+        time.sleep(AKUM_SCAN_INTERVAL)
+
+
+def thread_akum_entry_scan():
+    """
+    Scan Entry A (Spring) dan Entry B (Breakout Retest) untuk pair yang
+    sudah terdeteksi dalam fase akumulasi oleh T_AKUM.
+    Jalan tiap AKUM_ENTRY_SCAN_INTERVAL detik.
+    """
+    with _akum_lock:
+        kandidat = list(_akum_near_miss)
+    if not kandidat:
+        log("[T_AKUM_ENTRY] Tidak ada kandidat akumulasi, skip.")
+        return
+
+    n_akum = active_deal_count_akum()
+    if n_akum >= AKUM_ENTRY_MAX_DEALS:
+        log(f"[T_AKUM_ENTRY] Slot penuh {n_akum}/{AKUM_ENTRY_MAX_DEALS}, skip.")
+        return
+
+    for item in kandidat:
+        sym   = item.get('sym', '')
+        score = item.get('score', 0)
+        support    = item.get('support')
+        resistance = item.get('resistance')
+        if not sym or support is None or resistance is None: continue
+
+        with active_deals_lock:
+            if sym in active_deals: continue
+        if sym in SYMBOL_BLACKLIST: continue
+
+        try:
+            df = get_ohlcv_4h(sym, limit=AKUM_CANDLE_LIMIT)
+            if df is None or len(df) < AKUM_SIDEWAYS_CANDLES + 50: continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) < AKUM_SIDEWAYS_CANDLES + 10: continue
+
+            # Coba Entry A dulu
+            sig = detect_entry_a_spring(df, support)
+            entry_type = 'A'
+            if sig is None:
+                sig = detect_entry_b_breakout(df, resistance, support)
+                entry_type = 'B'
+            if sig is None: continue
+
+            # Open deal
+            price_now = get_price_now(sym)
+            if price_now <= 0: continue
+            strat_key = f'akum_entry_{entry_type.lower()}'
+            ok, target_usd, add_usd = open_deal_with_sizing(sym, score, strat_key)
+            if not ok:
+                log(f"[T_AKUM_ENTRY] {sym} Entry {entry_type}: 3Commas tolak")
+                continue
+
+            ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+            add_to_active_deals(sym, {
+                'strategy':        strat_key,
+                'entry_price':     price_now,
+                'peak':            price_now,
+                'signal_price':    price_now,
+                'sl_price':        sig['sl_price'],
+                'atr_pct':         item.get('atr_pct', 3.0),
+                'opened_candle_ts': int(df['ct'].iloc[-1]),
+                'trailing_armed':  False,
+                'opened_at':       ts,
+                'target_usd':      target_usd,
+                'add_usd':         add_usd,
+                'tf':              AKUM_TIMEFRAME,
+                'akum_score':      score,
+                'entry_type':      entry_type,
+                'support':         support,
+                'resistance':      resistance,
+                'timeout_candles': AKUM_ENTRY_TIMEOUT,
+            })
+            log(f"[T_AKUM_ENTRY] {sym} OPEN Entry {entry_type} @ {_fmt_price(price_now)} "
+                f"SL={_fmt_price(sig['sl_price'])} score={score}")
+            send_telegram(
+                f"OPEN LONG Akumulasi Entry {entry_type}\n"
+                f"{ts} WIB\n"
+                f"Pair      : {to_display_pair(sym)}\n"
+                f"Entry     : {_fmt_price(price_now)}\n"
+                f"SL        : {_fmt_price(sig['sl_price'])}\n"
+                f"Support   : {_fmt_price(support)}\n"
+                f"Resistance: {_fmt_price(resistance)}\n"
+                f"Score     : {score} | Target: ${target_usd}"
+            )
+            n_akum = active_deal_count_akum()
+            if n_akum >= AKUM_ENTRY_MAX_DEALS: break
+
+        except Exception as e:
+            log(f"[T_AKUM_ENTRY] error {sym}: {e}")
+
+
+def run_thread_akum_entry():
+    """Thread T_AKUM_ENTRY: scan entry A/B tiap AKUM_ENTRY_SCAN_INTERVAL detik."""
+    log("[T_AKUM_ENTRY] Thread entry akumulasi dimulai.")
+    while True:
+        try:
+            thread_akum_entry_scan()
+        except Exception as e:
+            log(f"WARN [T_AKUM_ENTRY] thread error: {e}")
+        time.sleep(AKUM_ENTRY_SCAN_INTERVAL)
+
+
 
 def run_manual_scan() -> dict:
     """Scan on-demand brkX2-12h dengan filter manual dari _manual_filters.
@@ -3977,6 +4611,10 @@ def run_web_dashboard():
                     f"Elapsed skrg: {el_4h*100:.1f}% — "
                     + ("dalam window, data segera muncul." if STRAT_CROSSEMA_ENTRY_MIN <= el_4h <= STRAT_CROSSEMA_ENTRY_MAX
                        else f"tunggu candle berikutnya menit ke {int(STRAT_CROSSEMA_ENTRY_MIN*240)}-{int(STRAT_CROSSEMA_ENTRY_MAX*240)}.")
+                ),
+                "Akumulasi-4h": (
+                    f"Scan tiap 30 menit. Deteksi fase akumulasi (sideways post-downtrend) TF 4h. "
+                    f"Scan terakhir: {_akum_last_scan_ts or 'belum ada'}."
                 ),
             }
             return render_template_string(
@@ -4542,6 +5180,12 @@ if __name__ == '__main__':
     log(f"  Perf filter      : {'ON' if PERF_FILTER_ENABLED else 'OFF'} (Grade>=B, score>={PERF_SCORE_MIN}, TF 1D/1W/1M/3M/6M/1Y)")
     log(f"  ---------------------------------------------------")
     log(f"  STRATEGI #4 CrossEMA-4h: {'ON' if STRAT_CROSSEMA_ENABLED else 'OFF'} | TF 4h")
+    if STRAT_AKUM_ENABLED:
+        log("  " + "-"*51)
+        log(f"  STRATEGI #5 Akumulasi-4h: ON | TF {AKUM_TIMEFRAME}")
+        log(f"  PRIMARY : Range≤{int(AKUM_RANGE_PCT*100)}% | EMAGap≤{int(AKUM_EMA_GAP_PCT*100)}% | OBV↑ | ATR↓≥{int(AKUM_ATR_DROP_PCT*100)}%")
+        log(f"  SECONDARY: Vol G>R | RSI 30-55 | MACD flat | Body ratio<{AKUM_BODY_RATIO_MAX}")
+        log(f"  Scan tiap {AKUM_SCAN_INTERVAL//60} menit | Jendela {AKUM_SIDEWAYS_CANDLES} candle 4h | Tampil maks {AKUM_MAX_RESULTS} pair")
     log(f"  Entry: ST=-1 + close<EMA20 + vol>={STRAT_CROSSEMA_VOLUME_MULT}xMA + HTF 3D (lalu price cross EMA20 intrabar)")
     log(f"  Window: {int(STRAT_CROSSEMA_ENTRY_MIN*100*240/100)}-{int(STRAT_CROSSEMA_ENTRY_MAX*100*240/100)} menit ({STRAT_CROSSEMA_ENTRY_MIN*100:.0f}%-{STRAT_CROSSEMA_ENTRY_MAX*100:.0f}% elapsed), scan tiap {STRAT_CROSSEMA_SCAN_INTERVAL//60}m")
     log(f"  Slot: {STRAT_CROSSEMA_MAX_DEALS} | Target forward-test: {STRAT_CROSSEMA_FWDTEST} deal | Perf filter: OFF")
@@ -4596,12 +5240,21 @@ if __name__ == '__main__':
         t_cx = threading.Thread(target=run_thread_crossema, daemon=True, name="T-CrossEMA")
         threads.append(t_cx)
         n_threads += 1
+    if STRAT_AKUM_ENABLED:
+        t_akum = threading.Thread(target=run_thread_akum, daemon=True, name="T-Akum")
+        threads.append(t_akum)
+        n_threads += 1
+        t_akum_entry = threading.Thread(target=run_thread_akum_entry, daemon=True, name="T-AkumEntry")
+        threads.append(t_akum_entry)
+        n_threads += 1
     for t in threads: t.start()
     t_web = threading.Thread(target=run_web_dashboard, daemon=True, name="T-Web")
     t_web.start()
     log(f"{n_threads} thread aktif (T1=screener, T2=monitor, T3=intrabar 12h, T3-REV=reversal intrabar"
         + (", T1d=intrabar 4h" if STRAT4H_ENABLED else "")
         + (", T-CrossEMA=strategi#4" if STRAT_CROSSEMA_ENABLED else "")
+        + (", T-Akum=strategi#5 Akumulasi" if STRAT_AKUM_ENABLED else "")
+        + (", T-AkumEntry=strategi#5 Entry A/B" if STRAT_AKUM_ENABLED else "")
         + "). Ctrl+C untuk berhenti.")
     # Kirim heartbeat START saat deploy/restart
     # Delay 15 detik agar T1 belum selesai scan pertama saat heartbeat startup dikirim
