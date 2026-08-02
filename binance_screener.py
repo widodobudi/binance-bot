@@ -4019,7 +4019,8 @@ def score_akumulasi(df, sym: str) -> dict:
         df = compute_indicators_akum(df)
         # Jendela sideways = N candle terakhir
         win = df.iloc[-AKUM_SIDEWAYS_CANDLES:]
-        log(f"[AKUM DEBUG] {sym} win.index[0]={win.index[0]!r} type={type(win.index[0]).__name__}")
+        # Hapus debug log setelah fix
+        _ts0 = win['ts'].iloc[0] if 'ts' in win.columns else None
         row = df.iloc[-1]
 
         close_now = float(row['close'])
@@ -4133,12 +4134,7 @@ def score_akumulasi(df, sym: str) -> dict:
             # waktu mulai jendela sideways
             "support":        round(float(lo_min), 8),
             "resistance":     round(float(hi_max), 8),
-            "sideways_start": (lambda idx: (
-                (pd.Timestamp(int(idx), unit='ms') + pd.Timedelta(hours=7)).strftime("%d/%m %H:%M")
-                if isinstance(idx, (int, float, np.integer, np.floating))
-                else (idx + pd.Timedelta(hours=7)).strftime("%d/%m %H:%M")
-                if hasattr(idx, 'strftime') else "-"
-            ))(win.index[0]) if len(win) > 0 else "-",
+            "sideways_start": (pd.Timestamp(int(_ts0), unit='ms') + pd.Timedelta(hours=7)).strftime("%d/%m %H:%M") if _ts0 is not None and int(_ts0) > 0 else "-",
         }
     except Exception as e:
         log(f"  [AKUM] score error {sym}: {e}")
