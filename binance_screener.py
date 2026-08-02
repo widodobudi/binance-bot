@@ -4132,7 +4132,12 @@ def score_akumulasi(df, sym: str) -> dict:
             # waktu mulai jendela sideways
             "support":        round(float(lo_min), 8),
             "resistance":     round(float(hi_max), 8),
-            "sideways_start": pd.Timestamp(win.index[0]).strftime("%d/%m %H:%M") if len(win) > 0 else "-",
+            "sideways_start": (lambda idx: (
+                (pd.Timestamp(int(idx), unit='ms') + pd.Timedelta(hours=7)).strftime("%d/%m %H:%M")
+                if isinstance(idx, (int, float, np.integer, np.floating))
+                else (idx + pd.Timedelta(hours=7)).strftime("%d/%m %H:%M")
+                if hasattr(idx, 'strftime') else "-"
+            ))(win.index[0]) if len(win) > 0 else "-",
         }
     except Exception as e:
         log(f"  [AKUM] score error {sym}: {e}")
