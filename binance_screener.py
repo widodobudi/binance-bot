@@ -3587,17 +3587,28 @@ _manual_scan_lock    = threading.Lock()
 
 def update_dashboard_near_miss(strategi: str, items: list):
     with _dashboard_lock:
-        parsed = [
-            {
-                "sym": item[1] if len(item) > 1 and isinstance(item[1], str) else (item[0] if isinstance(item[0], str) else "?"),
-                "n_pass": item[0] if isinstance(item[0], int) else 0,
-                "total": item[3] if len(item) > 3 else 9,
-                "fails": item[2] if len(item) > 2 else [],
-                "vol_ratio": item[4] if len(item) > 4 else None,
-            }
-            for item in items
-        ]
-        # Urutkan berdasarkan n_pass descending (terbanyak lolos di atas)
+        parsed = []
+        for item in items:
+            sym    = item[1] if len(item) > 1 and isinstance(item[1], str) else (item[0] if isinstance(item[0], str) else "?")
+            n_pass = item[0] if isinstance(item[0], int) else 0
+            total  = item[3] if len(item) > 3 else 9
+            fails  = item[2] if len(item) > 2 else []
+            # item[4]: vol_ratio (brkX2) atau sideways_start (Akumulasi)
+            extra4 = item[4] if len(item) > 4 else None
+            if strategi == "Akumulasi-4h":
+                vol_ratio      = None
+                sideways_start = extra4 if isinstance(extra4, str) else None
+            else:
+                vol_ratio      = extra4 if isinstance(extra4, (int, float)) else None
+                sideways_start = None
+            parsed.append({
+                "sym":            sym,
+                "n_pass":         n_pass,
+                "total":          total,
+                "fails":          fails,
+                "vol_ratio":      vol_ratio,
+                "sideways_start": sideways_start,
+            })
         parsed.sort(key=lambda x: -x["n_pass"])
         _dashboard_state["near_miss"][strategi] = parsed[:10]
         _dashboard_state["last_scan"][strategi] = now_wib().strftime("%H:%M:%S")
@@ -4119,9 +4130,9 @@ def score_akumulasi(df, sym: str) -> dict:
             "p1_ok": p1_ok, "p2_ok": p2_ok, "p3_ok": p3_ok, "p4_ok": p4_ok,
             "s1_ok": s1_ok, "s2_ok": s2_ok, "s3_ok": s3_ok, "s4_ok": s4_ok,
             # waktu mulai jendela sideways
-            "sideways_start": win.index[0].strftime("%d/%m %H:%M") if hasattr(win.index[0], 'strftime') else str(win.index[0]),
             "support":        round(float(lo_min), 8),
             "resistance":     round(float(hi_max), 8),
+            "sideways_start": pd.Timestamp(win.index[0]).strftime("%d/%m %H:%M") if len(win) > 0 else "-",
         }
     except Exception as e:
         log(f"  [AKUM] score error {sym}: {e}")
@@ -4312,7 +4323,7 @@ def thread_akum_scan():
         # Format near_miss untuk update_dashboard_near_miss
         # Struktur: (n_pass, sym, fails, total_syarat)  — total 8 (4P×2 + 4S×1 = 12 → pakai skor mentah)
         nm_items = [
-            (res['primary_score'], res['sym'], res['fails'], 4)
+            (res['primary_score'], res['sym'], res['fails'], 4, res.get('sideways_start',''))
             for res in top
         ]
         update_dashboard_near_miss("Akumulasi-4h", nm_items)
