@@ -4019,6 +4019,7 @@ def score_akumulasi(df, sym: str) -> dict:
         df = compute_indicators_akum(df)
         # Jendela sideways = N candle terakhir
         win = df.iloc[-AKUM_SIDEWAYS_CANDLES:]
+        log(f"[AKUM DEBUG] {sym} win.index[0]={win.index[0]!r} type={type(win.index[0]).__name__}")
         row = df.iloc[-1]
 
         close_now = float(row['close'])
