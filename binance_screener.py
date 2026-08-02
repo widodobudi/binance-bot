@@ -3626,7 +3626,7 @@ DASHBOARD_HTML = '''
       {% for sym, d in active_deals.items() %}
       <tr>
         <td class="sym">{{ sym.replace("USDT","/USDT") }}</td>
-        <td>{{ d.get("strategy","-") }}</td>
+        <td>{% set _sm = {"brkX2":"brkX2-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h"} %}{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</td>
         <td>
           <div style="font-size:9px;color:var(--muted);margin-bottom:2px">{{ "Average" if d.get("add_fund_sent") else "Entry" }}</div>
           <span id="ep-{{ sym }}" style="cursor:pointer;text-decoration:underline dotted" title="Klik untuk edit" onclick="editEntry('{{ sym }}','{{ fmt_price(d.get(\"entry_price\",0)) }}')">{{ fmt_price(d.get("entry_price",0)) }}</span>
