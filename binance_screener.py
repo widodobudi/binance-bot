@@ -4021,6 +4021,8 @@ def score_akumulasi(df, sym: str) -> dict:
         win = df.iloc[-AKUM_SIDEWAYS_CANDLES:]
         # Hapus debug log setelah fix
         _ts0 = win['ts'].iloc[0] if 'ts' in win.columns else None
+        if sym == 'BTCUSDT':
+            log(f"[AKUM TS0] ts_in_cols={'ts' in win.columns} _ts0={_ts0!r} type={type(_ts0).__name__}")
         row = df.iloc[-1]
 
         close_now = float(row['close'])
@@ -5088,27 +5090,73 @@ def run_web_dashboard():
                         {"label": f"ATR turun >{AKUM_ATR_DROP_PCT*100:.0f}%",
                          "ok": bool(res.get('p4_ok')), "actual": res.get('atr_drop','?')},
                     ]
-                    secondary_labels = [
-                        {"key":"vol_asim","label":"Vol hijau>merah",
-                         "actual": res.get('vol_asim','?'), "ok": bool(res.get('s1_ok'))},
-                        {"key":"rsi","label":"RSI 30-55",
-                         "actual": res.get('rsi','?'), "ok": bool(res.get('s2_ok'))},
-                        {"key":"macd_flat","label":"MACD flat~0",
-                         "actual": res.get('macd_flat','?'), "ok": bool(res.get('s3_ok'))},
-                        {"key":"body_ratio","label":"Body ratio<0.42",
-                         "actual": res.get('body_ratio','?'), "ok": bool(res.get('s4_ok'))},
-                    ]
-                    extra = {}
-                    if strat in ("Akumulasi-4h Entry A", "Akumulasi-4h Entry B"):
-                        sig_a = detect_entry_a_spring(df, support) if strat == "Akumulasi-4h Entry A" else None
-                        sig_b = detect_entry_b_breakout(df, resistance, support) if strat == "Akumulasi-4h Entry B" else None
-                        sig = sig_a or sig_b
+                    if strat == "Akumulasi-4h":
+                        secondary_labels = [
+                            {"key":"vol_asim","label":"Vol hijau>merah",
+                             "actual": res.get('vol_asim','?'), "ok": bool(res.get('s1_ok'))},
+                            {"key":"rsi","label":"RSI 30-55",
+                             "actual": res.get('rsi','?'), "ok": bool(res.get('s2_ok'))},
+                            {"key":"macd_flat","label":"MACD flat~0",
+                             "actual": res.get('macd_flat','?'), "ok": bool(res.get('s3_ok'))},
+                            {"key":"body_ratio","label":"Body ratio<0.42",
+                             "actual": res.get('body_ratio','?'), "ok": bool(res.get('s4_ok'))},
+                        ]
+                        extra = {}
+                    elif strat == "Akumulasi-4h Entry A":
+                        sig = detect_entry_a_spring(df, support)
+                        row_last = df.iloc[-1]
+                        vol_ma = float(row_last.get('vol_ma', 0)) if not pd.isna(row_last.get('vol_ma', 0)) else 0
+                        vol_ratio = float(row_last['vol'])/vol_ma if vol_ma > 0 else 0
+                        rsi_now = float(row_last['rsi']) if not pd.isna(row_last.get('rsi')) else None
+                        secondary_labels = [
+                            {"key":"vol_spike","label":f"Vol spike>{AKUM_A_VOL_SPIKE_MULT}xMA",
+                             "actual": f"{vol_ratio:.2f}x", "ok": vol_ratio >= AKUM_A_VOL_SPIKE_MULT},
+                            {"key":"rsi_low","label":f"RSI sempat<{AKUM_A_RSI_MIN}",
+                             "actual": f"{rsi_now:.1f}" if rsi_now else "n/a",
+                             "ok": rsi_now is not None and rsi_now < AKUM_A_RSI_MAX_ENTRY},
+                            {"key":"obv_div","label":"OBV divergensi",
+                             "actual": "Terdeteksi" if sig and sig.get('obv_slope',0) > 0 else "Belum",
+                             "ok": bool(sig and sig.get('obv_slope',0) > 0)},
+                            {"key":"reentry","label":"Close kembali>support",
+                             "actual": "Ya" if sig else "Belum",
+                             "ok": bool(sig)},
+                        ]
                         extra = {
                             "support": _fmt_price(support),
                             "resistance": _fmt_price(resistance),
                             "entry_signal": sig if sig else None,
                             "signal_detected": sig is not None,
                         }
+                    elif strat == "Akumulasi-4h Entry B":
+                        sig = detect_entry_b_breakout(df, resistance, support)
+                        row_last = df.iloc[-1]
+                        ema20 = float(row_last.get('ema20', 0)) if not pd.isna(row_last.get('ema20', 0)) else 0
+                        ema50 = float(row_last.get('ema50', 0)) if not pd.isna(row_last.get('ema50', 0)) else 0
+                        close_last = float(row_last['close'])
+                        ema_cross = ema20 > ema50
+                        secondary_labels = [
+                            {"key":"breakout","label":f"Close>resistance+vol",
+                             "actual": f"{_fmt_price(close_last)} vs {_fmt_price(resistance)}",
+                             "ok": close_last > resistance},
+                            {"key":"retest","label":"Retest tdk jebol",
+                             "actual": "Terdeteksi" if sig else "Belum",
+                             "ok": bool(sig)},
+                            {"key":"vol_retest","label":"Vol retest<80% breakout",
+                             "actual": "OK" if sig else "Belum",
+                             "ok": bool(sig)},
+                            {"key":"ema_cross","label":"EMA20>EMA50",
+                             "actual": f"{_fmt_price(ema20)} vs {_fmt_price(ema50)}",
+                             "ok": ema_cross},
+                        ]
+                        extra = {
+                            "support": _fmt_price(support),
+                            "resistance": _fmt_price(resistance),
+                            "entry_signal": sig if sig else None,
+                            "signal_detected": sig is not None,
+                        }
+                    else:
+                        secondary_labels = []
+                        extra = {}
                     return jsonify(_s({
                         "strat": strat, "sym": sym,
                         "primary": primary_labels,
