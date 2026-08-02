@@ -5293,6 +5293,7 @@ def run_web_dashboard():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
+    log("  BUILD: 20260803-A (sideways_ts debug)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
