@@ -4486,14 +4486,40 @@ def thread_akum_entry_scan():
         log("[T_AKUM_ENTRY] Tidak ada kandidat akumulasi, skip.")
         return
 
+    # Pass 1: Update status Entry A/B untuk semua kandidat (tanpa guard slot)
+    for item in kandidat:
+        sym        = item.get('sym', '')
+        support    = item.get('support')
+        resistance = item.get('resistance')
+        if not sym or support is None or resistance is None: continue
+        if sym in SYMBOL_BLACKLIST: continue
+        try:
+            df = get_ohlcv_4h(sym, limit=AKUM_CANDLE_LIMIT)
+            if df is None or len(df) < AKUM_SIDEWAYS_CANDLES + 50: continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) < AKUM_SIDEWAYS_CANDLES + 10: continue
+            sig_a = detect_entry_a_spring(df, support)
+            sig_b = detect_entry_b_breakout(df, resistance, support)
+            ts_entry = now_wib().strftime("%H:%M")
+            with _akum_lock:
+                _akum_entry_status[sym] = {
+                    "entry_a": sig_a is not None,
+                    "entry_b": sig_b is not None,
+                    "ts": ts_entry,
+                }
+        except Exception as e:
+            log(f"[T_AKUM_ENTRY] error status {sym}: {e}")
+
+    # Pass 2: Open deal (dengan guard slot dan active_deals)
     n_akum = active_deal_count_akum()
     if n_akum >= AKUM_ENTRY_MAX_DEALS:
-        log(f"[T_AKUM_ENTRY] Slot penuh {n_akum}/{AKUM_ENTRY_MAX_DEALS}, skip.")
+        log(f"[T_AKUM_ENTRY] Slot penuh {n_akum}/{AKUM_ENTRY_MAX_DEALS}, skip open.")
         return
 
     for item in kandidat:
         sym   = item.get('sym', '')
-        score = item.get('score', 0)
+        score = item.get('weighted_score') or item.get('total_score') or item.get('score', 0)
         support    = item.get('support')
         resistance = item.get('resistance')
         if not sym or support is None or resistance is None: continue
@@ -4509,22 +4535,11 @@ def thread_akum_entry_scan():
                 df = df.iloc[:-1]
             if len(df) < AKUM_SIDEWAYS_CANDLES + 10: continue
 
-            # Cek Entry A dan B secara independen untuk status dashboard
-            sig_a = detect_entry_a_spring(df, support)
-            sig_b = detect_entry_b_breakout(df, resistance, support)
-            ts_entry = now_wib().strftime("%H:%M")
-            with _akum_lock:
-                _akum_entry_status[sym] = {
-                    "entry_a": sig_a is not None,
-                    "entry_b": sig_b is not None,
-                    "ts": ts_entry,
-                }
-
             # Coba Entry A dulu untuk open deal
-            sig = sig_a
+            sig = detect_entry_a_spring(df, support)
             entry_type = 'A'
             if sig is None:
-                sig = sig_b
+                sig = detect_entry_b_breakout(df, resistance, support)
                 entry_type = 'B'
             if sig is None: continue
 
