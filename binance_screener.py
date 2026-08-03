@@ -4113,6 +4113,24 @@ def score_akumulasi(df, sym: str) -> dict:
         if not s3_ok: fails.append(f"MACD {s3_val} tdk flat")
         if not s4_ok: fails.append(f"Body {s4_val} >0.42")
 
+        # Cari kapan harga mulai bergerak dalam range ini (scan mundur)
+        _ts_col2 = 'ot' if 'ot' in df.columns else ('ts' if 'ts' in df.columns else None)
+        _lo_tol = float(lo_min) * 0.98
+        _hi_tol = float(hi_max) * 1.02
+        _sw_start_ts = None
+        for _i in range(len(df) - 1, -1, -1):
+            _r = df.iloc[_i]
+            if float(_r['high']) > _hi_tol or float(_r['low']) < _lo_tol:
+                if _i + 1 < len(df) and _ts_col2:
+                    _sw_start_ts = int(df.iloc[_i + 1][_ts_col2])
+                break
+        if _sw_start_ts is None and _ts0 is not None:
+            _sw_start_ts = int(_ts0)
+        _sideways_start_str = (
+            (pd.Timestamp(_sw_start_ts, unit='ms') + pd.Timedelta(hours=7)).strftime("%d/%m %H:%M")
+            if _sw_start_ts and _sw_start_ts > 0 else "-"
+        )
+
         return {
             "sym":            sym,
             "close":          close_now,
@@ -4133,10 +4151,9 @@ def score_akumulasi(df, sym: str) -> dict:
             "body_ratio":     s4_val,
             "p1_ok": p1_ok, "p2_ok": p2_ok, "p3_ok": p3_ok, "p4_ok": p4_ok,
             "s1_ok": s1_ok, "s2_ok": s2_ok, "s3_ok": s3_ok, "s4_ok": s4_ok,
-            # waktu mulai jendela sideways
             "support":        round(float(lo_min), 8),
             "resistance":     round(float(hi_max), 8),
-            "sideways_start": (pd.Timestamp(int(_ts0), unit='ms') + pd.Timedelta(hours=7)).strftime("%d/%m %H:%M") if _ts0 is not None and int(_ts0) > 0 else "-",
+            "sideways_start": _sideways_start_str,
         }
     except Exception as e:
         log(f"  [AKUM] score error {sym}: {e}")
