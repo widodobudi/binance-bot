@@ -189,6 +189,15 @@ AKUM_BODY_RATIO_MAX       = 0.42        # S4: rata-rata body/range < 0.42 → ko
 AKUM_MIN_SECONDARY        = 2           # minimal 2 dari 4 secondary harus lolos
 AKUM_MAX_RESULTS          = 5           # tampilkan maks 5 pair
 AKUM_MIN_VOL_USD          = 1_000_000   # min vol24h $1jt
+# Ranking berbobot (total 100) — gating wajib: OBV slope+ DAN ATR turun ≥25%
+AKUM_W_OBV      = 25   # P3 OBV slope positif
+AKUM_W_ATR      = 20   # P4 ATR turun ≥25%
+AKUM_W_RANGE    = 15   # P1 Range ≤18%
+AKUM_W_VOL      = 15   # S1 Vol hijau > merah
+AKUM_W_EMAGAP   = 10   # P2 EMAGap ≤6%
+AKUM_W_RSI      = 5    # S2 RSI 30-55
+AKUM_W_MACD     = 5    # S3 MACD flat
+AKUM_W_BODY     = 5    # S4 Body ratio kecil
 _akum_near_miss: list     = []
 _akum_last_scan_ts: str   = ""
 _akum_lock                = threading.Lock()
@@ -3632,7 +3641,7 @@ def get_deal_override(sym: str, key: str, default: bool = True) -> bool:
     return load_deal_overrides().get(sym, {}).get(key, default)
 
 # ── Inline JS untuk dashboard (ASCII-only, served via /dash.js) ──────────────
-_DASH_JS = 'var _refreshTimer=null;\nvar _curStrat=\'brkX2-12h\';\nfunction startRefresh(){if(_refreshTimer)return;_refreshTimer=setInterval(function(){window.location.reload();},30000);}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){var cb=document.getElementById(\'cb-pause-refresh\');return cb&&cb.checked;}\nfunction pauseRefresh(){stopRefresh();}\nfunction resumeRefresh(){if(!isPauseChecked())startRefresh();}\nfunction onPauseRefreshToggle(checked){if(checked){stopRefresh();}else{startRefresh();}}\n\n// Definisi secondary per strategi\nvar STRAT_SECONDARY={\n  \'brkX2-12h\':[\n    {key:\'vol\',label:\'Vol 0.6x--5.0xMA\'},{key:\'rsi\',label:\'RSI<75\'},\n    {key:\'stoch\',label:\'Stoch%K<70\'},{key:\'atr\',label:\'ATR%<9%\'},\n    {key:\'htf\',label:\'HTF 3D vol>0.8xMA\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'Reversal-8h T1\':[\n    {key:\'ha_bull\',label:\'c+1 HA bullish\'},{key:\'cross\',label:\'cross-up EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'Reversal-8h T3-REV\':[\n    {key:\'elapsed\',label:\'Elapsed 5%-50%\'},{key:\'cross_live\',label:\'price_now>EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'brkX2-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'stoch\',label:\'Stoch%K<80\'},\n    {key:\'htf\',label:\'HTF12h vol>2.0xMA\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'CrossEMA-4h\':[\n    {key:\'vol\',label:\'Vol>=0.4xMA\'},{key:\'htf\',label:\'HTF12h vol>1.5xMA\'},\n    {key:\'vol24\',label:\'Vol24h>=$1.0jt\'}\n  ],\n  \'Akumulasi-4h\':[\n    {key:\'vol_asim\',label:\'Vol hijau>merah\'},{key:\'rsi\',label:\'RSI 30-55\'},\n    {key:\'macd_flat\',label:\'MACD flat~0\'},{key:\'body_ratio\',label:\'Body ratio<0.42\'}\n  ],\n  \'Akumulasi-4h Entry A\':[\n    {key:\'vol_spike\',label:\'Vol spike>2.5xMA\'},{key:\'rsi_low\',label:\'RSI sempat<35\'},\n    {key:\'obv_div\',label:\'OBV divergensi\'},{key:\'reentry\',label:\'Close kembali>support\'}\n  ],\n  \'Akumulasi-4h Entry B\':[\n    {key:\'breakout\',label:\'Close>resistance+vol\'},{key:\'retest\',label:\'Retest tdk jebol\'},\n    {key:\'vol_retest\',label:\'Vol retest<80% breakout\'},{key:\'ema_cross\',label:\'EMA20>EMA50\'}\n  ]\n};\n\nfunction onStratSelect(strat){\n  _curStrat=strat;\n  // Update dropdown kandidat\n  var opts=document.querySelectorAll(\'.nm-opt\');\n  var count=0;\n  opts.forEach(function(o){\n    var show=o.getAttribute(\'data-strat\')===strat;\n    o.style.display=show?\'\':\'none\';\n    if(show)count++;\n  });\n  document.getElementById(\'nm-count\').textContent=\'(\'+count+\' kandidat dari scan terakhir)\';\n  // Reset pair select\n  var sel=document.getElementById(\'pair-select\');if(sel)sel.value=\'\';\n  // Reset panel\n  var panel=document.getElementById(\'pair-detail\');if(panel)panel.style.display=\'none\';\n  // Update secondary grid\n  renderSecondaryGrid(strat);\n  // Reset primary status\n  var ps=document.getElementById(\'primary-status\');\n  if(ps)ps.innerHTML=\'<span style="color:var(--muted)">-- pilih pair untuk lihat nilai aktual --</span>\';\n}\n\nfunction renderSecondaryGrid(strat){\n  var grid=document.getElementById(\'secondary-grid\');\n  if(!grid)return;\n  var defs=STRAT_SECONDARY[strat]||[];\n  grid.innerHTML=defs.map(function(d){\n    return \'<div class="sec-item" data-key="\'+d.key+\'"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px"><input type="checkbox" class="sec-cb" data-key="\'+d.key+\'" checked style="cursor:pointer"><span class="sec-label">\'+d.label+\'</span><span class="sec-actual" style="color:var(--muted)">--</span><span class="sec-status">--</span></label></div>\';\n  }).join(\'\');\n  // Re-attach event listeners\n  grid.querySelectorAll(\'.sec-cb\').forEach(function(cb){\n    cb.addEventListener(\'change\',function(){\n      fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});\n    });\n  });\n}\n\ndocument.addEventListener(\'DOMContentLoaded\',function(){\n  startRefresh();\n  onStratSelect(\'brkX2-12h\');\n});\n\nfunction onPairSelect(sym){\n  var panel=document.getElementById(\'pair-detail\');\n  if(!sym){panel.style.display=\'none\';return;}\n  panel.style.display=\'block\';\n  panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';\n  pauseRefresh();\n  fetch(\'/api/strategy_detail?sym=\'+encodeURIComponent(sym)+\'&strat=\'+encodeURIComponent(_curStrat))\n    .then(function(r){return r.json();})\n    .then(function(d){\n      resumeRefresh();\n      if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}\n      // Update primary\n      var ps=document.getElementById(\'primary-status\');\n      ps.innerHTML=d.primary.map(function(p){return badge(p.ok,p.label+\' (\'+p.actual+\')\');}).join(\' \');\n      // Update secondary\n      d.secondary.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n      // Panel ringkasan\n      var allP=d.primary_ok;\n      panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | \'+\n        d.primary.map(function(p){return (p.ok?\'<span style="color:var(--green)">\':\'<span style="color:var(--red)">\') + p.label+\': \'+p.actual+\'</span>\';}).join(\' | \')+\n        \' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');\n    })\n    .catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});\n}\n\nfunction updateSec(key,actual,ok){\n  document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){\n    var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');\n    if(a)a.textContent=\'(skrg \'+actual+\')\';\n    if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';\n  });\n}\n\nfunction doManualScan(){\n  var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');\n  btn.disabled=true;btn.textContent=\'Scanning...\';\n  st.textContent=\'Sedang scan semua pair... (30-60 detik)\';\n  pauseRefresh();\n  fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){\n    btn.disabled=false;btn.textContent=\'Scan Sekarang\';\n    st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';\n    renderResults(data.pairs);resumeRefresh();\n  }).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});\n}\n\nfunction promptOpenLong(){\n  var sel=document.getElementById(\'pair-select\');\n  var sym=sel?sel.value:\'\';\n  if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}\n  var ss=document.getElementById(\'strat-select\');var strat=ss?ss.value:\'brkX2-12h\';\n  if(!confirm(\'Open Long [\'+strat+\']: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;\n  execOpenLong(sym,strat);\n}\n\nfunction execOpenLong(sym,strat){\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'strat\',strat||\"brkX2-12h\");\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Membuka deal \'+sym+\'...\';\n  pauseRefresh();\n  fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){\n    resumeRefresh();\n    var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);\n    if(st)st.textContent=msg;alert(msg);\n  }).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction renderResults(pairs){\n  var el=document.getElementById(\'scan-results\');\n  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];\n  if(sample){\n    document.getElementById(\'primary-status\').innerHTML=\n      sample.secondaries?sample.secondaries.map(function(s){return badge(s.ok,s.key+\':\'+s.actual);}).join(\' \'):\'\';\n    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n  }\n  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);\n  if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos syarat primary.</div>\';return;}\n  var rows=cands.map(function(p){\n    var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');\n    var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';\n    var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';\n    return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';\n  }).join(\'\');\n  el.innerHTML=\'<table><thead><tr><th>Pair</th><th>isArmed</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';\n}\n\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){\n  if(v===undefined||v===null)return \'?\';\n  if(v>=1000)return v.toFixed(0);\n  if(v>=1)return v.toFixed(4);\n  if(v>=0.01)return v.toFixed(6);\n  if(v>=0.0001)return v.toFixed(8);\n  // harga sangat kecil seperti SHIB: pakai fixed decimal\n  var s=v.toFixed(10);\n  // hapus trailing zeros berlebihan tapi sisakan min 2 significant digits\n  return parseFloat(s).toPrecision(4);\n}\nfunction doOpenLong(sym){execOpenLong(sym);}\n\nfunction _setCookie(k,v){document.cookie=k+\'=\'+v+\';path=/;max-age=2592000\';}\n\nfunction _getCookie(k){var m=document.cookie.match(\'(^|;) ?\'+k+\'=([^;]*)(;|$)\');return m?m[2]:null;}\n\nfunction toggleCard(header){var card=header.parentElement;var name=\'c_\'+(card.querySelector(\'h2\').textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));card.classList.toggle(\'collapsed\');var collapsed=card.classList.contains(\'collapsed\');_setCookie(name,collapsed?\'1\':\'0\');}\n\nfunction restoreCards(){document.querySelectorAll(\'.card\').forEach(function(card){var h=card.querySelector(\'h2\');if(!h)return;var name=\'c_\'+(h.textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));if(_getCookie(name)===\'1\')card.classList.add(\'collapsed\');});}\n\nfunction editEntry(sym,curVal){\n  var v=prompt(\'Edit entry price untuk \'+sym.replace(\'USDT\',\'/USDT\')+\':\\n(harga aktual dari 3Commas)\',curVal);\n  if(v===null)return;\n  v=parseFloat(v);\n  if(isNaN(v)||v<=0){alert(\'Nilai tidak valid\');return;}\n  if(!confirm(\'Set entry \'+sym.replace(\'USDT\',\'/USDT\')+\' = \'+v+\'?\'))return;\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'field\',\'entry_price\');fd.append(\'value\',v);\n  pauseRefresh();\n  fetch(\'/edit_deal\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var el=document.getElementById(\'ep-\'+sym);\n        if(el)el.textContent=v;\n        alert(\'Entry \'+sym.replace(\'USDT\',\'/USDT\')+\' diupdate ke \'+v);\n      } else {\n        alert(\'Gagal: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction promptCloseDeal(){\n  var deals=document.querySelectorAll(\'#active-deals-body tr\');\n  var syms=[];\n  deals.forEach(function(tr){\n    var td=tr.querySelector(\'td.sym\');\n    if(td)syms.push(td.textContent.replace(\'/USDT\',\'USDT\').trim());\n  });\n  if(syms.length===0){alert(\'Tidak ada deal aktif saat ini.\');return;}\n  var sym=syms.length===1?syms[0]:prompt(\'Pilih pair yang mau di-close:\\n\'+syms.map(function(s){return s.replace(\'USDT\',\'/USDT\');}).join(\'\\n\')+\'\\n\\nKetik simbol (contoh: PUMP atau PUMPUSDT):\');\n  if(!sym)return;\n  sym=sym.trim().toUpperCase();\n  if(!sym.endsWith(\'USDT\'))sym=sym+\'USDT\';\n  if(!confirm(\'CLOSE DEAL \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan kirim sinyal close ke 3Commas sekarang.\'))return;\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Menutup deal \'+sym+\'...\';\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_close\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var msg=\'Close \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! Price=\'+data.price+\' Profit=\'+data.profit_pct+\'%\';\n        if(st)st.textContent=msg;\n        alert(msg);\n        setTimeout(function(){window.location.reload();},2000);\n      } else {\n        if(st)st.textContent=\'Gagal: \'+data.error;\n        alert(\'Close GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction promptAddFund(){\n  var deals=document.querySelectorAll(\'#active-deals-body tr\');\n  var syms=[];\n  deals.forEach(function(tr){\n    var td=tr.querySelector(\'td.sym\');\n    if(td)syms.push(td.textContent.replace(\'/USDT\',\'USDT\').trim());\n  });\n  if(syms.length===0){alert(\'Tidak ada deal aktif saat ini.\');return;}\n  var sym=syms.length===1?syms[0]:prompt(\'Pilih pair untuk Add Fund:\\n\'+syms.map(function(s){return s.replace(\'USDT\',\'/USDT\');}).join(\'\\n\')+\'\\n\\nKetik simbol:\');\n  if(!sym)return;\n  sym=sym.trim().toUpperCase();\n  if(!sym.endsWith(\'USDT\'))sym=sym+\'USDT\';\n  if(!confirm(\'ADD FUND untuk \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nNominal sesuai sizing saat open deal.\\nAverage price akan diupdate otomatis.\'))return;\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Mengirim add fund \'+sym+\'...\';\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_addfund\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var msg=\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! +$\'+data.add_usd+\' @ \'+data.price+\' | Avg=\'+data.avg_price;\n        if(st)st.textContent=msg;\n        alert(msg);\n        setTimeout(function(){window.location.reload();},2000);\n      } else {\n        if(st)st.textContent=\'Gagal: \'+data.error;\n        alert(\'Add Fund GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n'
+_DASH_JS = 'var _refreshTimer=null;\nvar _curStrat=\'brkX2-12h\';\nfunction startRefresh(){if(_refreshTimer)return;_refreshTimer=setInterval(function(){window.location.reload();},30000);}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){var cb=document.getElementById(\'cb-pause-refresh\');return cb&&cb.checked;}\nfunction pauseRefresh(){stopRefresh();}\nfunction resumeRefresh(){if(!isPauseChecked())startRefresh();}\nfunction onPauseRefreshToggle(checked){if(checked){stopRefresh();}else{startRefresh();}}\n\n// Definisi secondary per strategi\nvar STRAT_SECONDARY={\n  \'brkX2-12h\':[\n    {key:\'vol\',label:\'Vol 0.6x--5.0xMA\'},{key:\'rsi\',label:\'RSI<75\'},\n    {key:\'stoch\',label:\'Stoch%K<70\'},{key:\'atr\',label:\'ATR%<9%\'},\n    {key:\'htf\',label:\'HTF 3D vol>0.8xMA\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'Reversal-8h T1\':[\n    {key:\'ha_bull\',label:\'c+1 HA bullish\'},{key:\'cross\',label:\'cross-up EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'Reversal-8h T3-REV\':[\n    {key:\'elapsed\',label:\'Elapsed 5%-50%\'},{key:\'cross_live\',label:\'price_now>EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'brkX2-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'stoch\',label:\'Stoch%K<80\'},\n    {key:\'htf\',label:\'HTF12h vol>2.0xMA\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'CrossEMA-4h\':[\n    {key:\'vol\',label:\'Vol>=0.4xMA\'},{key:\'htf\',label:\'HTF12h vol>1.5xMA\'},\n    {key:\'vol24\',label:\'Vol24h>=$1.0jt\'}\n  ],\n  \'Akumulasi-4h\':[\n    {key:\'vol_asim\',label:\'Vol hijau>merah\'},{key:\'rsi\',label:\'RSI 30-55\'},\n    {key:\'macd_flat\',label:\'MACD flat~0\'},{key:\'body_ratio\',label:\'Body ratio<0.42\'}\n  ]\n};\n\nfunction onStratSelect(strat){\n  _curStrat=strat;\n  // Update dropdown kandidat\n  var opts=document.querySelectorAll(\'.nm-opt\');\n  var count=0;\n  opts.forEach(function(o){\n    var show=o.getAttribute(\'data-strat\')===strat;\n    o.style.display=show?\'\':\'none\';\n    if(show)count++;\n  });\n  document.getElementById(\'nm-count\').textContent=\'(\'+count+\' kandidat dari scan terakhir)\';\n  // Reset pair select\n  var sel=document.getElementById(\'pair-select\');if(sel)sel.value=\'\';\n  // Reset panel\n  var panel=document.getElementById(\'pair-detail\');if(panel)panel.style.display=\'none\';\n  // Update secondary grid\n  renderSecondaryGrid(strat);\n  // Reset primary status\n  var ps=document.getElementById(\'primary-status\');\n  if(ps)ps.innerHTML=\'<span style="color:var(--muted)">-- pilih pair untuk lihat nilai aktual --</span>\';\n}\n\nfunction renderSecondaryGrid(strat){\n  var grid=document.getElementById(\'secondary-grid\');\n  if(!grid)return;\n  var defs=STRAT_SECONDARY[strat]||[];\n  grid.innerHTML=defs.map(function(d){\n    return \'<div class="sec-item" data-key="\'+d.key+\'"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px"><input type="checkbox" class="sec-cb" data-key="\'+d.key+\'" checked style="cursor:pointer"><span class="sec-label">\'+d.label+\'</span><span class="sec-actual" style="color:var(--muted)">--</span><span class="sec-status">--</span></label></div>\';\n  }).join(\'\');\n  // Re-attach event listeners\n  grid.querySelectorAll(\'.sec-cb\').forEach(function(cb){\n    cb.addEventListener(\'change\',function(){\n      fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});\n    });\n  });\n}\n\ndocument.addEventListener(\'DOMContentLoaded\',function(){\n  startRefresh();\n  onStratSelect(\'brkX2-12h\');\n});\n\nfunction onPairSelect(sym){\n  var panel=document.getElementById(\'pair-detail\');\n  if(!sym){panel.style.display=\'none\';return;}\n  panel.style.display=\'block\';\n  panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';\n  pauseRefresh();\n  fetch(\'/api/strategy_detail?sym=\'+encodeURIComponent(sym)+\'&strat=\'+encodeURIComponent(_curStrat))\n    .then(function(r){return r.json();})\n    .then(function(d){\n      resumeRefresh();\n      if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}\n      // Update primary\n      var ps=document.getElementById(\'primary-status\');\n      ps.innerHTML=d.primary.map(function(p){return badge(p.ok,p.label+\' (\'+p.actual+\')\');}).join(\' \');\n      // Update secondary\n      d.secondary.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n      // Panel ringkasan\n      var allP=d.primary_ok;\n      panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | \'+\n        d.primary.map(function(p){return (p.ok?\'<span style="color:var(--green)">\':\'<span style="color:var(--red)">\') + p.label+\': \'+p.actual+\'</span>\';}).join(\' | \')+\n        \' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');\n    })\n    .catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});\n}\n\nfunction updateSec(key,actual,ok){\n  document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){\n    var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');\n    if(a)a.textContent=\'(skrg \'+actual+\')\';\n    if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';\n  });\n}\n\nfunction doManualScan(){\n  var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');\n  btn.disabled=true;btn.textContent=\'Scanning...\';\n  st.textContent=\'Sedang scan semua pair... (30-60 detik)\';\n  pauseRefresh();\n  fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){\n    btn.disabled=false;btn.textContent=\'Scan Sekarang\';\n    st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';\n    renderResults(data.pairs);resumeRefresh();\n  }).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});\n}\n\nfunction promptOpenLong(){\n  var sel=document.getElementById(\'pair-select\');\n  var sym=sel?sel.value:\'\';\n  if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}\n  var ss=document.getElementById(\'strat-select\');var strat=ss?ss.value:\'brkX2-12h\';\n  if(!confirm(\'Open Long [\'+strat+\']: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;\n  execOpenLong(sym,strat);\n}\n\nfunction execOpenLong(sym,strat){\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'strat\',strat||\"brkX2-12h\");\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Membuka deal \'+sym+\'...\';\n  pauseRefresh();\n  fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){\n    resumeRefresh();\n    var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);\n    if(st)st.textContent=msg;alert(msg);\n  }).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction renderResults(pairs){\n  var el=document.getElementById(\'scan-results\');\n  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];\n  if(sample){\n    document.getElementById(\'primary-status\').innerHTML=\n      sample.secondaries?sample.secondaries.map(function(s){return badge(s.ok,s.key+\':\'+s.actual);}).join(\' \'):\'\';\n    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n  }\n  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);\n  if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos syarat primary.</div>\';return;}\n  var rows=cands.map(function(p){\n    var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');\n    var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';\n    var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';\n    return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';\n  }).join(\'\');\n  el.innerHTML=\'<table><thead><tr><th>Pair</th><th>isArmed</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';\n}\n\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){\n  if(v===undefined||v===null)return \'?\';\n  if(v>=1000)return v.toFixed(0);\n  if(v>=1)return v.toFixed(4);\n  if(v>=0.01)return v.toFixed(6);\n  if(v>=0.0001)return v.toFixed(8);\n  // harga sangat kecil seperti SHIB: pakai fixed decimal\n  var s=v.toFixed(10);\n  // hapus trailing zeros berlebihan tapi sisakan min 2 significant digits\n  return parseFloat(s).toPrecision(4);\n}\nfunction doOpenLong(sym){execOpenLong(sym);}\n\nfunction _setCookie(k,v){document.cookie=k+\'=\'+v+\';path=/;max-age=2592000\';}\n\nfunction _getCookie(k){var m=document.cookie.match(\'(^|;) ?\'+k+\'=([^;]*)(;|$)\');return m?m[2]:null;}\n\nfunction toggleCard(header){var card=header.parentElement;var name=\'c_\'+(card.querySelector(\'h2\').textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));card.classList.toggle(\'collapsed\');var collapsed=card.classList.contains(\'collapsed\');_setCookie(name,collapsed?\'1\':\'0\');}\n\nfunction restoreCards(){document.querySelectorAll(\'.card\').forEach(function(card){var h=card.querySelector(\'h2\');if(!h)return;var name=\'c_\'+(h.textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));if(_getCookie(name)===\'1\')card.classList.add(\'collapsed\');});}\n\nfunction editEntry(sym,curVal){\n  var v=prompt(\'Edit entry price untuk \'+sym.replace(\'USDT\',\'/USDT\')+\':\\n(harga aktual dari 3Commas)\',curVal);\n  if(v===null)return;\n  v=parseFloat(v);\n  if(isNaN(v)||v<=0){alert(\'Nilai tidak valid\');return;}\n  if(!confirm(\'Set entry \'+sym.replace(\'USDT\',\'/USDT\')+\' = \'+v+\'?\'))return;\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'field\',\'entry_price\');fd.append(\'value\',v);\n  pauseRefresh();\n  fetch(\'/edit_deal\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var el=document.getElementById(\'ep-\'+sym);\n        if(el)el.textContent=v;\n        alert(\'Entry \'+sym.replace(\'USDT\',\'/USDT\')+\' diupdate ke \'+v);\n      } else {\n        alert(\'Gagal: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction promptCloseDeal(){\n  var deals=document.querySelectorAll(\'#active-deals-body tr\');\n  var syms=[];\n  deals.forEach(function(tr){\n    var td=tr.querySelector(\'td.sym\');\n    if(td)syms.push(td.textContent.replace(\'/USDT\',\'USDT\').trim());\n  });\n  if(syms.length===0){alert(\'Tidak ada deal aktif saat ini.\');return;}\n  var sym=syms.length===1?syms[0]:prompt(\'Pilih pair yang mau di-close:\\n\'+syms.map(function(s){return s.replace(\'USDT\',\'/USDT\');}).join(\'\\n\')+\'\\n\\nKetik simbol (contoh: PUMP atau PUMPUSDT):\');\n  if(!sym)return;\n  sym=sym.trim().toUpperCase();\n  if(!sym.endsWith(\'USDT\'))sym=sym+\'USDT\';\n  if(!confirm(\'CLOSE DEAL \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan kirim sinyal close ke 3Commas sekarang.\'))return;\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Menutup deal \'+sym+\'...\';\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_close\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var msg=\'Close \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! Price=\'+data.price+\' Profit=\'+data.profit_pct+\'%\';\n        if(st)st.textContent=msg;\n        alert(msg);\n        setTimeout(function(){window.location.reload();},2000);\n      } else {\n        if(st)st.textContent=\'Gagal: \'+data.error;\n        alert(\'Close GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction promptAddFund(){\n  var deals=document.querySelectorAll(\'#active-deals-body tr\');\n  var syms=[];\n  deals.forEach(function(tr){\n    var td=tr.querySelector(\'td.sym\');\n    if(td)syms.push(td.textContent.replace(\'/USDT\',\'USDT\').trim());\n  });\n  if(syms.length===0){alert(\'Tidak ada deal aktif saat ini.\');return;}\n  var sym=syms.length===1?syms[0]:prompt(\'Pilih pair untuk Add Fund:\\n\'+syms.map(function(s){return s.replace(\'USDT\',\'/USDT\');}).join(\'\\n\')+\'\\n\\nKetik simbol:\');\n  if(!sym)return;\n  sym=sym.trim().toUpperCase();\n  if(!sym.endsWith(\'USDT\'))sym=sym+\'USDT\';\n  if(!confirm(\'ADD FUND untuk \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nNominal sesuai sizing saat open deal.\\nAverage price akan diupdate otomatis.\'))return;\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Mengirim add fund \'+sym+\'...\';\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_addfund\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var msg=\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! +$\'+data.add_usd+\' @ \'+data.price+\' | Avg=\'+data.avg_price;\n        if(st)st.textContent=msg;\n        alert(msg);\n        setTimeout(function(){window.location.reload();},2000);\n      } else {\n        if(st)st.textContent=\'Gagal: \'+data.error;\n        alert(\'Add Fund GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n'
 
 def _fmt_price(v):
     """Format harga agar tidak pakai notasi scientific (e-06 dll)."""
@@ -3757,8 +3766,6 @@ DASHBOARD_HTML = '''
           <option value="brkX2-4h">brkX2-4h</option>
           <option value="CrossEMA-4h">CrossEMA-4h</option>
           <option value="Akumulasi-4h">Akumulasi-4h ⭐</option>
-          <option value="Akumulasi-4h Entry A">Akumulasi Entry A (Spring)</option>
-          <option value="Akumulasi-4h Entry B">Akumulasi Entry B (Breakout)</option>
         </select>
       </div>
       <!-- Dropdown kandidat dinamis per strategi -->
@@ -3768,8 +3775,6 @@ DASHBOARD_HTML = '''
         "Reversal-8h T3-REV": near_miss.get("Reversal-8h", []),
         "brkX2-4h": near_miss.get("brkX2-4h", []),
         "CrossEMA-4h": near_miss.get("CrossEMA-4h", []),
-        "Akumulasi-4h Entry A": near_miss.get("Akumulasi-4h", []),
-        "Akumulasi-4h Entry B": near_miss.get("Akumulasi-4h", []),
         "Akumulasi-4h": near_miss.get("Akumulasi-4h", [])
       } %}
       <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -3901,24 +3906,25 @@ DASHBOARD_HTML = '''
     {% if akum_items %}
     <!-- Legend indikator -->
     <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:10px;font-size:10px">
-      <span style="color:var(--muted)">PRIMARY: </span>
-      <span style="color:var(--accent)">P1 Range≤18%</span>
-      <span style="color:var(--accent)">P2 EMAGap≤6%</span>
-      <span style="color:var(--accent)">P3 OBV↑</span>
-      <span style="color:var(--accent)">P4 ATR↓≥25%</span>
-      <span style="color:var(--muted);margin-left:8px">SECONDARY: </span>
-      <span style="color:var(--yellow)">S1 Vol G>R</span>
-      <span style="color:var(--yellow)">S2 RSI 30-55</span>
-      <span style="color:var(--yellow)">S3 MACD flat</span>
-      <span style="color:var(--yellow)">S4 Body ratio kecil</span>
+      <span style="color:var(--muted)">GATING (wajib): </span>
+      <span style="color:var(--accent)">P3 OBV↑ (25)</span>
+      <span style="color:var(--accent)">P4 ATR↓≥25% (20)</span>
+      <span style="color:var(--muted);margin-left:8px">BOBOT: </span>
+      <span style="color:var(--accent)">P1 Range≤18% (15)</span>
+      <span style="color:var(--yellow)">S1 Vol G>R (15)</span>
+      <span style="color:var(--accent)">P2 EMAGap≤6% (10)</span>
+      <span style="color:var(--yellow)">S2 RSI 30-55 (5)</span>
+      <span style="color:var(--yellow)">S3 MACD flat (5)</span>
+      <span style="color:var(--yellow)">S4 Body ratio kecil (5)</span>
     </div>
     <table style="width:100%;border-collapse:collapse">
       <thead>
         <tr>
           <th>Pair</th>
-          <th>Score</th>
-          <th>Primary (4)</th>
-          <th>Secondary (4)</th>
+          <th>Skor /100</th>
+          <th>Gating</th>
+          <th>Primary</th>
+          <th>Secondary</th>
           <th>Belum lolos</th>
           <th>Sideways sejak</th>
         </tr>
@@ -3927,22 +3933,28 @@ DASHBOARD_HTML = '''
       {% for item in akum_items %}
       <tr>
         <td class="sym" style="white-space:nowrap">{{ item.sym.replace("USDT","/USDT") }}</td>
-        <td>
-          {% set sc = item.n_pass * 2 %}
-          <span style="color:{% if item.n_pass == 4 %}var(--green){% elif item.n_pass == 3 %}var(--yellow){% else %}var(--muted){% endif %};font-weight:600">
-            P{{ item.n_pass }}/4
+        <td style="font-weight:600;text-align:center">
+          {% set ws = item.get("weighted_score", 0) %}
+          <span style="color:{% if ws >= 70 %}var(--green){% elif ws >= 45 %}var(--yellow){% else %}var(--muted){% endif %}">
+            {{ ws }}
+          </span>
+        </td>
+        <td style="text-align:center;font-size:11px">
+          {% if item.get("gating_ok") %}
+            <span style="color:var(--green)">✓</span>
+          {% else %}
+            <span style="color:var(--red)">✗</span>
+          {% endif %}
+        </td>
+        <td style="font-size:10px;line-height:1.6">
+          <span style="color:{% if item.n_pass==4 %}var(--green){% elif item.n_pass==3 %}var(--yellow){% else %}var(--muted){% endif %}">
+            {{ item.n_pass }}/4
           </span>
         </td>
         <td style="font-size:10px;line-height:1.6">
-          {% for detail in (item.fails[:0] if item.n_pass == 4 else []) %}{% endfor %}
-          <span style="color:{% if item.n_pass==4 %}var(--green){% else %}var(--yellow){% endif %}">
-            {{ item.n_pass }}/4 lolos
-          </span>
+          <span style="color:var(--muted)">≥2 req</span>
         </td>
-        <td style="font-size:10px;line-height:1.6">
-          <span style="color:var(--muted)">≥2 required</span>
-        </td>
-        <td class="fails" style="font-size:10px;line-height:1.5;max-width:220px">
+        <td class="fails" style="font-size:10px;line-height:1.5;max-width:200px">
           {% if item.fails %}
             {{ ("; ".join(item.fails[:3]))|e }}{% if item.fails|length > 3 %} +{{ item.fails|length - 3 }} lagi{% endif %}
           {% else %}
@@ -3957,7 +3969,7 @@ DASHBOARD_HTML = '''
       </tbody>
     </table>
     <div style="margin-top:10px;font-size:10px;color:var(--muted)">
-      Scan otomatis tiap 30 menit. Pair lolos PRIMARY ≥3/4 ditampilkan. Score maks = P×2 + S×1 = 12.
+      Scan otomatis tiap 30 menit. Gating wajib: OBV↑ + ATR↓≥25%. Urut skor tertinggi. Skor maks = 100.
     </div>
     {% else %}
     <div class="empty">{{ window_info.get("Akumulasi-4h", "Belum ada data scan (maks 30 menit setelah bot start).")|e }}</div>
@@ -3966,7 +3978,7 @@ DASHBOARD_HTML = '''
   </div>
 </div>
 
-<script src="/dash.js?v=1785683182"></script>
+<script src="/dash.js?v=1785739306"></script>
 </body>
 </html>
 '''
@@ -4102,6 +4114,21 @@ def score_akumulasi(df, sym: str) -> dict:
         secondary_ok    = secondary_score >= AKUM_MIN_SECONDARY
         total_score     = primary_score * 2 + secondary_score  # max 12
 
+        # Ranking berbobot (total 100) — gating wajib: OBV slope+ DAN ATR turun ≥25%
+        gating_ok = p3_ok and p4_ok   # wajib lolos untuk masuk ranking
+        weighted_score = 0
+        if gating_ok:
+            weighted_score = (
+                (AKUM_W_OBV    if p3_ok else 0) +
+                (AKUM_W_ATR    if p4_ok else 0) +
+                (AKUM_W_RANGE  if p1_ok else 0) +
+                (AKUM_W_VOL    if s1_ok else 0) +
+                (AKUM_W_EMAGAP if p2_ok else 0) +
+                (AKUM_W_RSI    if s2_ok else 0) +
+                (AKUM_W_MACD   if s3_ok else 0) +
+                (AKUM_W_BODY   if s4_ok else 0)
+            )
+
         # Kumpulkan fails
         fails = []
         if not p1_ok: fails.append(f"Range {p1_val} >18%")
@@ -4154,6 +4181,8 @@ def score_akumulasi(df, sym: str) -> dict:
             "support":        round(float(lo_min), 8),
             "resistance":     round(float(hi_max), 8),
             "sideways_start": _sideways_start_str,
+            "weighted_score": weighted_score,
+            "gating_ok":      gating_ok,
         }
     except Exception as e:
         log(f"  [AKUM] score error {sym}: {e}")
@@ -4332,8 +4361,8 @@ def thread_akum_scan():
             except Exception as e:
                 log(f"  [T_AKUM] error {sym}: {e}")
 
-        # Sort: primary_ok dulu, lalu total_score descending
-        results.sort(key=lambda x: (not x['primary_ok'], -x['total_score']))
+        # Sort: gating_ok + primary_ok dulu, lalu weighted_score descending
+        results.sort(key=lambda x: (not x['gating_ok'], not x['primary_ok'], -x['weighted_score']))
         top = results[:AKUM_MAX_RESULTS]
 
         ts = now_wib().strftime("%H:%M:%S")
@@ -4358,8 +4387,9 @@ def thread_akum_scan():
         if full_ok:
             lines = ["AKUMULASI TERDETEKSI (Strategi #5)\n" + ts + " WIB"]
             for r in full_ok:
+                gate_str = "✓ Gating OK" if r.get('gating_ok') else "⚠ Gating FAIL"
                 lines.append(
-                    f"• {to_display_pair(r['sym'])} | Score {r['total_score']}/12\n"
+                    f"• {to_display_pair(r['sym'])} | Skor {r.get('weighted_score',0)}/100 ({gate_str})\n"
                     f"  Sideways sejak: {r.get('sideways_start','-')} WIB\n"
                     f"  Support: {_fmt_price(r.get('support',0))} | Resistance: {_fmt_price(r.get('resistance',0))}\n"
                     f"  Range {r['range_pct']} | EMAGap {r['ema_gap']} | OBV {r['obv_slope']}\n"
@@ -5310,7 +5340,7 @@ def run_web_dashboard():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  BUILD: 20260803-A (sideways_ts debug)")
+    log("  BUILD: 20260803-B (akum weighted score + dropdown simplified)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
