@@ -4019,10 +4019,10 @@ def score_akumulasi(df, sym: str) -> dict:
         df = compute_indicators_akum(df)
         # Jendela sideways = N candle terakhir
         win = df.iloc[-AKUM_SIDEWAYS_CANDLES:]
-        # Hapus debug log setelah fix
-        _ts0 = win['ts'].iloc[0] if 'ts' in win.columns else None
-        if sym == 'BTCUSDT':
-            log(f"[AKUM TS0] ts_in_cols={'ts' in win.columns} _ts0={_ts0!r} type={type(_ts0).__name__}")
+        # Ambil timestamp candle pertama jendela sideways
+        # get_ohlcv pakai kolom 'ot', get_ohlcv_4h pakai 'ts'
+        _ts_col = 'ot' if 'ot' in win.columns else ('ts' if 'ts' in win.columns else None)
+        _ts0 = int(win[_ts_col].iloc[0]) if _ts_col else None
         row = df.iloc[-1]
 
         close_now = float(row['close'])
