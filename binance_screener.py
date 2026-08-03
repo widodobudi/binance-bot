@@ -201,6 +201,9 @@ AKUM_W_BODY     = 5    # S4 Body ratio kecil
 _akum_near_miss: list     = []
 _akum_last_scan_ts: str   = ""
 _akum_lock                = threading.Lock()
+# Status Entry A/B per pair — diupdate tiap scan entry, dibaca oleh dashboard
+# Format: { "XLMUSDT": {"entry_a": True/False, "entry_b": True/False, "ts": "HH:MM"}, ... }
+_akum_entry_status: dict  = {}
 
 # ── STRATEGI #5 ENTRY (Extension dari Akumulasi Detector) ─────────────────────
 AKUM_ENTRY_BOT_ID         = 16945621
@@ -3607,9 +3610,13 @@ def update_dashboard_near_miss(strategi: str, items: list):
             if strategi == "Akumulasi-4h":
                 vol_ratio      = None
                 sideways_start = extra4 if isinstance(extra4, str) else None
+                weighted_score = item[5] if len(item) > 5 else 0
+                gating_ok      = item[6] if len(item) > 6 else False
             else:
                 vol_ratio      = extra4 if isinstance(extra4, (int, float)) else None
                 sideways_start = None
+                weighted_score = 0
+                gating_ok      = False
             parsed.append({
                 "sym":            sym,
                 "n_pass":         n_pass,
@@ -3617,8 +3624,13 @@ def update_dashboard_near_miss(strategi: str, items: list):
                 "fails":          fails,
                 "vol_ratio":      vol_ratio,
                 "sideways_start": sideways_start,
+                "weighted_score": weighted_score,
+                "gating_ok":      gating_ok,
             })
-        parsed.sort(key=lambda x: -x["n_pass"])
+        if strategi == "Akumulasi-4h":
+            parsed.sort(key=lambda x: (-x["weighted_score"], -x["n_pass"]))
+        else:
+            parsed.sort(key=lambda x: -x["n_pass"])
         _dashboard_state["near_miss"][strategi] = parsed[:10]
         _dashboard_state["last_scan"][strategi] = now_wib().strftime("%H:%M:%S")
 
@@ -3971,6 +3983,59 @@ DASHBOARD_HTML = '''
     <div style="margin-top:10px;font-size:10px;color:var(--muted)">
       Scan otomatis tiap 30 menit. Gating wajib: OBV↑ + ATR↓≥25%. Urut skor tertinggi. Skor maks = 100.
     </div>
+
+    <!-- ── ENTRY A / B STATUS ── -->
+    {% if akum_items %}
+    <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">
+        Entry Status (scan tiap 15 menit)
+        <span style="color:var(--accent);margin-left:8px">A = Spring/Fakeout</span>
+        <span style="color:var(--yellow);margin-left:8px">B = Breakout+Retest</span>
+      </div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead>
+          <tr>
+            <th>Pair</th>
+            <th>Entry A (Spring)</th>
+            <th>Entry B (Breakout)</th>
+            <th>Detail Entry A</th>
+            <th>Detail Entry B</th>
+            <th>Update</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for item in akum_items %}
+        {% set es = akum_entry_status.get(item.sym, {}) %}
+        <tr>
+          <td class="sym" style="white-space:nowrap">{{ item.sym.replace("USDT","/USDT") }}</td>
+          <td style="text-align:center">
+            {% if not es %}
+              <span style="color:var(--muted);font-size:10px">menunggu scan</span>
+            {% elif es.entry_a %}
+              <span style="color:var(--green);font-weight:600">✓ SIAP</span>
+            {% else %}
+              <span style="color:var(--muted);font-size:10px">✗ belum</span>
+            {% endif %}
+          </td>
+          <td style="text-align:center">
+            {% if not es %}
+              <span style="color:var(--muted);font-size:10px">menunggu scan</span>
+            {% elif es.entry_b %}
+              <span style="color:var(--green);font-weight:600">✓ SIAP</span>
+            {% else %}
+              <span style="color:var(--muted);font-size:10px">✗ belum</span>
+            {% endif %}
+          </td>
+          <td style="font-size:10px;color:var(--muted)">Vol spike>2.5x | RSI sempat&lt;35 | OBV div | Close&gt;support</td>
+          <td style="font-size:10px;color:var(--muted)">Close&gt;resistance+vol | Retest ±2% | Vol retest&lt;80% | EMA20&gt;EMA50</td>
+          <td style="font-size:10px;color:var(--muted);white-space:nowrap">{{ es.get("ts", "-") if es else "-" }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
     {% else %}
     <div class="empty">{{ window_info.get("Akumulasi-4h", "Belum ada data scan (maks 30 menit setelah bot start).")|e }}</div>
     {% endif %}
@@ -4371,9 +4436,10 @@ def thread_akum_scan():
             _akum_last_scan_ts = ts
 
         # Format near_miss untuk update_dashboard_near_miss
-        # Struktur: (n_pass, sym, fails, total_syarat)  — total 8 (4P×2 + 4S×1 = 12 → pakai skor mentah)
+        # Struktur: (n_pass, sym, fails, total, sideways_start, weighted_score, gating_ok)
         nm_items = [
-            (res['primary_score'], res['sym'], res['fails'], 4, res.get('sideways_start',''))
+            (res['primary_score'], res['sym'], res['fails'], 4,
+             res.get('sideways_start',''), res.get('weighted_score', 0), res.get('gating_ok', False))
             for res in top
         ]
         update_dashboard_near_miss("Akumulasi-4h", nm_items)
@@ -4447,11 +4513,22 @@ def thread_akum_entry_scan():
                 df = df.iloc[:-1]
             if len(df) < AKUM_SIDEWAYS_CANDLES + 10: continue
 
-            # Coba Entry A dulu
-            sig = detect_entry_a_spring(df, support)
+            # Cek Entry A dan B secara independen untuk status dashboard
+            sig_a = detect_entry_a_spring(df, support)
+            sig_b = detect_entry_b_breakout(df, resistance, support)
+            ts_entry = now_wib().strftime("%H:%M")
+            with _akum_lock:
+                _akum_entry_status[sym] = {
+                    "entry_a": sig_a is not None,
+                    "entry_b": sig_b is not None,
+                    "ts": ts_entry,
+                }
+
+            # Coba Entry A dulu untuk open deal
+            sig = sig_a
             entry_type = 'A'
             if sig is None:
-                sig = detect_entry_b_breakout(df, resistance, support)
+                sig = sig_b
                 entry_type = 'B'
             if sig is None: continue
 
@@ -4692,6 +4769,8 @@ def run_web_dashboard():
                     f"Scan terakhir: {_akum_last_scan_ts or 'belum ada'}."
                 ),
             }
+            with _akum_lock:
+                akum_entry_status = dict(_akum_entry_status)
             return render_template_string(
                 DASHBOARD_HTML,
                 active_deals=deals_display,
@@ -4702,6 +4781,7 @@ def run_web_dashboard():
                 now=now_wib().strftime("%d/%m %H:%M:%S WIB"),
                 window_info=window_info,
                 fmt_price=_fmt_price,
+                akum_entry_status=akum_entry_status,
             )
 
         @app.route("/manual_addfund", methods=["POST"])
