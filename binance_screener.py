@@ -3998,8 +3998,6 @@ DASHBOARD_HTML = '''
             <th>Pair</th>
             <th>Entry A (Spring)</th>
             <th>Entry B (Breakout)</th>
-            <th>Detail Entry A</th>
-            <th>Detail Entry B</th>
             <th>Update</th>
           </tr>
         </thead>
@@ -4026,8 +4024,6 @@ DASHBOARD_HTML = '''
               <span style="color:var(--muted);font-size:10px">✗ belum</span>
             {% endif %}
           </td>
-          <td style="font-size:10px;color:var(--muted)">Vol spike>2.5x | RSI sempat&lt;35 | OBV div | Close&gt;support</td>
-          <td style="font-size:10px;color:var(--muted)">Close&gt;resistance+vol | Retest ±2% | Vol retest&lt;80% | EMA20&gt;EMA50</td>
           <td style="font-size:10px;color:var(--muted);white-space:nowrap">{{ es.get("ts", "-") if es else "-" }}</td>
         </tr>
         {% endfor %}
