@@ -177,9 +177,11 @@ STRAT_CROSSEMA_HTF_VOL_MULT = 1.5     # HTF 12h: vol>1.5xMA (backtest_htf_vol_sw
 # Output: maks AKUM_MAX_RESULTS pair dengan skor akumulasi tertinggi (max 5)
 STRAT_AKUM_ENABLED        = True
 AKUM_TIMEFRAME            = "4h"
+AKUM_TIMEFRAME_HOURS      = 4           # jam per candle — ubah ini kalau TF berubah
+AKUM_SIDEWAYS_DAYS        = 30          # minimum hari sideways (Wyckoff standard: 30-56 hari)
+AKUM_SIDEWAYS_CANDLES     = int(AKUM_SIDEWAYS_DAYS * 24 / AKUM_TIMEFRAME_HOURS)  # = 180 candle 4h
 AKUM_SCAN_INTERVAL        = 1800        # scan tiap 30 menit
-AKUM_CANDLE_LIMIT         = 500         # candle 4h untuk hitung sideways (~83 hari)
-AKUM_SIDEWAYS_CANDLES     = 120         # jendela sideways yang dinilai (120 candle 4h = 20 hari)
+AKUM_CANDLE_LIMIT         = max(500, AKUM_SIDEWAYS_CANDLES * 3)  # buffer 3x jendela = 540
 AKUM_RANGE_PCT            = 0.18        # P1: range sideways ≤18% dari close
 AKUM_EMA_GAP_PCT          = 0.06        # P2: gap EMA20 vs EMA200 ≤6%
 AKUM_ATR_DROP_PCT         = 0.25        # P4: ATR sekarang ≤ (1 - 0.25) * ATR puncak = turun ≥25%
