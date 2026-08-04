@@ -185,6 +185,7 @@ AKUM_CANDLE_LIMIT         = max(500, AKUM_SIDEWAYS_CANDLES * 3)  # buffer 3x jen
 AKUM_RANGE_PCT            = 0.18        # P1: range sideways ≤18% dari close
 AKUM_EMA_GAP_PCT          = 0.06        # P2: gap EMA20 vs EMA200 ≤6%
 AKUM_ATR_DROP_PCT         = 0.25        # P4: ATR sekarang ≤ (1 - 0.25) * ATR puncak = turun ≥25%
+AKUM_EMA_SLOPE_MAX        = 0.04        # P5: EMA20 awal vs akhir jendela, turun >4% = downtrend, BUKAN sideways
 AKUM_ATR_LOOKBACK         = 100         # candle lookback untuk cari ATR puncak
 AKUM_MACD_FLAT_PCT        = 0.005       # S3: |MACD hist| < 0.5% × close → flat
 AKUM_BODY_RATIO_MAX       = 0.42        # S4: rata-rata body/range < 0.42 → konsolidasi
@@ -3939,6 +3940,7 @@ DASHBOARD_HTML = '''
       <span style="color:var(--yellow)">S2 RSI 30-55 (5)</span>
       <span style="color:var(--yellow)">S3 MACD flat (5)</span>
       <span style="color:var(--yellow)">S4 Body ratio kecil (5)</span>
+      <span style="color:#f85149;margin-left:8px">P5 Slope EMA20≤4% (filter)</span>
     </div>
     <table style="width:100%;border-collapse:collapse">
       <thead>
@@ -4054,7 +4056,7 @@ DASHBOARD_HTML = '''
   </div>
 </div>
 
-<script src="/dash.js?v=1785831543"></script>
+<script src="/dash.js?v=1785855306"></script>
 </body>
 </html>
 '''
@@ -4161,8 +4163,19 @@ def score_akumulasi(df, sym: str) -> dict:
             p4_ok  = atr_drop >= AKUM_ATR_DROP_PCT
             p4_val = f"turun {atr_drop*100:.0f}%"
 
-        primary_ok    = p1_ok and p2_ok and p3_ok and p4_ok
-        primary_score = sum([p1_ok, p2_ok, p3_ok, p4_ok])
+        # P5: EMA20 slope filter — pastikan EMA20 tidak turun signifikan (bukan downtrend)
+        ema20_start = float(win['ema20'].iloc[0]) if not pd.isna(win['ema20'].iloc[0]) else None
+        ema20_end   = float(win['ema20'].iloc[-1]) if not pd.isna(win['ema20'].iloc[-1]) else None
+        if ema20_start is not None and ema20_end is not None and ema20_start > 0:
+            ema_slope_drop = (ema20_start - ema20_end) / ema20_start  # positif = turun
+            p5_ok  = ema_slope_drop <= AKUM_EMA_SLOPE_MAX
+            p5_val = f"EMA20 {'turun' if ema_slope_drop > 0 else 'naik'} {abs(ema_slope_drop)*100:.1f}%"
+        else:
+            p5_ok  = True   # data tidak cukup, tidak di-disqualify
+            p5_val = "n/a"
+
+        primary_ok    = p1_ok and p2_ok and p3_ok and p4_ok and p5_ok
+        primary_score = sum([p1_ok, p2_ok, p3_ok, p4_ok])  # P5 hanya sebagai filter, tidak masuk skor
 
         # ── SECONDARY ──────────────────────────────────────────────────────────
         # S1: volume candle hijau > merah (asimetri)
@@ -4211,6 +4224,7 @@ def score_akumulasi(df, sym: str) -> dict:
         if not p2_ok: fails.append(f"EMAGap {p2_val} >6%")
         if not p3_ok: fails.append(f"OBV {p3_val} ↓")
         if not p4_ok: fails.append(f"ATR {p4_val} <25%")
+        if not p5_ok: fails.append(f"Slope: {p5_val} >4% (downtrend)")
         if not s1_ok: fails.append(f"Vol asimetri {s1_val}")
         if not s2_ok: fails.append(f"RSI {s2_val} OOB")
         if not s3_ok: fails.append(f"MACD {s3_val} tdk flat")
@@ -4252,7 +4266,7 @@ def score_akumulasi(df, sym: str) -> dict:
             "rsi":            s2_val,
             "macd_flat":      s3_val,
             "body_ratio":     s4_val,
-            "p1_ok": p1_ok, "p2_ok": p2_ok, "p3_ok": p3_ok, "p4_ok": p4_ok,
+            "p1_ok": p1_ok, "p2_ok": p2_ok, "p3_ok": p3_ok, "p4_ok": p4_ok, "p5_ok": p5_ok,
             "s1_ok": s1_ok, "s2_ok": s2_ok, "s3_ok": s3_ok, "s4_ok": s4_ok,
             "support":        round(float(lo_min), 8),
             "resistance":     round(float(hi_max), 8),
@@ -5449,7 +5463,7 @@ def run_web_dashboard():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  BUILD: 20260805-A (akum weighted score + dropdown simplified + entry status)")
+    log("  BUILD: 20260805-B (slope filter P5 EMA20 downtrend guard)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
