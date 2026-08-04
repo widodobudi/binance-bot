@@ -4060,7 +4060,7 @@ DASHBOARD_HTML = '''
   </div>
 </div>
 
-<script src="/dash.js?v=1785855983"></script>
+<script src="/dash.js?v=1785857559"></script>
 </body>
 </html>
 '''
@@ -4269,12 +4269,13 @@ def score_akumulasi(df, sym: str) -> dict:
         if not s3_ok: fails.append(f"MACD {s3_val} tdk flat")
         if not s4_ok: fails.append(f"Body {s4_val} >0.42")
 
-        # Cari kapan harga mulai bergerak dalam range ini (scan mundur)
+        # Cari kapan harga mulai bergerak dalam range ini (scan mundur, dibatasi ke jendela win)
         _ts_col2 = 'ot' if 'ot' in df.columns else ('ts' if 'ts' in df.columns else None)
         _lo_tol = float(lo_min) * 0.98
         _hi_tol = float(hi_max) * 1.02
+        _win_start_idx = len(df) - AKUM_SIDEWAYS_CANDLES  # batas awal jendela win
         _sw_start_ts = None
-        for _i in range(len(df) - 1, -1, -1):
+        for _i in range(len(df) - 1, _win_start_idx - 1, -1):
             _r = df.iloc[_i]
             if float(_r['high']) > _hi_tol or float(_r['low']) < _lo_tol:
                 if _i + 1 < len(df) and _ts_col2:
@@ -5503,7 +5504,7 @@ def run_web_dashboard():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  BUILD: 20260805-C (P6 close drift + P7 range distribution filter)")
+    log("  BUILD: 20260805-D (fix sideways_start scan mundur dibatasi ke jendela win)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
