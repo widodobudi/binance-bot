@@ -4060,7 +4060,7 @@ DASHBOARD_HTML = '''
   </div>
 </div>
 
-<script src="/dash.js?v=1785857559"></script>
+<script src="/dash.js?v=1785860689"></script>
 </body>
 </html>
 '''
@@ -4560,6 +4560,7 @@ def thread_akum_entry_scan():
         return
 
     # Pass 1: Update status Entry A/B untuk semua kandidat (tanpa guard slot)
+    log(f"[T_AKUM_ENTRY] Pass 1: update status {len(kandidat)} kandidat")
     for item in kandidat:
         sym        = item.get('sym', '')
         support    = item.get('support')
@@ -4568,7 +4569,9 @@ def thread_akum_entry_scan():
         if sym in SYMBOL_BLACKLIST: continue
         try:
             df = get_ohlcv_4h(sym, limit=AKUM_CANDLE_LIMIT)
-            if df is None or len(df) < AKUM_SIDEWAYS_CANDLES + 50: continue
+            if df is None or len(df) < AKUM_SIDEWAYS_CANDLES + 50:
+                log(f"[T_AKUM_ENTRY] {sym}: data kurang ({len(df) if df is not None else 'None'}), skip status")
+                continue
             if df['ct'].iloc[-1] >= int(time.time() * 1000):
                 df = df.iloc[:-1]
             if len(df) < AKUM_SIDEWAYS_CANDLES + 10: continue
@@ -4581,6 +4584,7 @@ def thread_akum_entry_scan():
                     "entry_b": sig_b is not None,
                     "ts": ts_entry,
                 }
+            log(f"[T_AKUM_ENTRY] {sym}: A={'✓' if sig_a else '✗'} B={'✓' if sig_b else '✗'}")
         except Exception as e:
             log(f"[T_AKUM_ENTRY] error status {sym}: {e}")
 
@@ -5504,7 +5508,7 @@ def run_web_dashboard():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  BUILD: 20260805-D (fix sideways_start scan mundur dibatasi ke jendela win)")
+    log("  BUILD: 20260805-E (verbose log Pass 1 entry status debug)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
