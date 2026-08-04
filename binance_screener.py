@@ -4671,6 +4671,7 @@ def thread_akum_entry_scan():
 def run_thread_akum_entry():
     """Thread T_AKUM_ENTRY: scan entry A/B tiap AKUM_ENTRY_SCAN_INTERVAL detik."""
     log("[T_AKUM_ENTRY] Thread entry akumulasi dimulai.")
+    time.sleep(120)  # tunggu 2 menit agar T_AKUM sempat selesai scan pertama
     while True:
         try:
             thread_akum_entry_scan()
@@ -5508,7 +5509,7 @@ def run_web_dashboard():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  BUILD: 20260805-E (verbose log Pass 1 entry status debug)")
+    log("  BUILD: 20260805-F (T_AKUM_ENTRY sleep 2 menit awal agar T_AKUM selesai scan pertama)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
