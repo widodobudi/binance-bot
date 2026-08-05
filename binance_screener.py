@@ -297,7 +297,7 @@ HTF_MACD_SIGNAL     = 9
 HTF_CANDLE_LIMIT    = 120      # candle 3D yang diambil (~1 tahun)
 # HTF filter baru brkX2-12h: vol 3D > HTF_VOL_MULT * MA20 volume 3D
 # (backtest_htf_vol_sweep_12h.py, 29/07/2026): avg +6.552% vs lama +4.975%, WR 82.8%, wf6 OK
-HTF_VOL_MULT        = 0.8  # diubah dari 1.2 → 0.8 (backtest_htf_vol_sweep_12h.py, 30/07/2026): avg +4.628% WR=79.0% n=2261/bln 126 wf6 OK
+HTF_VOL_MULT        = 0.7  # diubah dari 0.8 → 0.7 (backtest_brkx2_sweep2.py, 06/08/2026): 3bull_htf0.7 dipilih Budi
 HTF_VOL_MA_PERIOD   = 20
 
 # ---- STRATEGI 2: REVERSAL DOJI + HEIKIN ASHI (8h) ----
@@ -1102,6 +1102,12 @@ def compute_indicators(df):
         stoch=ta.stoch(high,low,close,k=14,d=3,smooth_k=3)
         kcol=[c for c in stoch.columns if 'STOCHk' in c][0]
         df['stoch_k']=stoch[kcol]
+    # 3 bar bullish: 3 candle terakhir close > open (06/08/2026)
+    df['bull3'] = (
+        (df['close'] > df['open']) &
+        (df['close'].shift(1) > df['open'].shift(1)) &
+        (df['close'].shift(2) > df['open'].shift(2))
+    )
     return df
 
 # ===================== FILTER CHOPPY/WHIPPY =====================
@@ -1228,12 +1234,12 @@ def check_entry(df) -> bool:
     """
     if is_choppy(df): return False
     row = df.iloc[-1]
-    if pd.isna(row['ema_fast']) or pd.isna(row['ema_slow']) or pd.isna(row['hh']) or pd.isna(row['vol_ma']):
+    if pd.isna(row['ema_fast']) or pd.isna(row['ema_slow']) or pd.isna(row['vol_ma']):
         return False
     if row['st_dir'] != 1: return False
     if not (row['close'] > row['ema_fast']): return False
-    # EMA20>EMA50 dihapus (30/07/2026)
-    if not (row['close'] > row['hh']): return False
+    # HH3 diganti 3 bar bullish (06/08/2026)
+    if not row.get('bull3', False): return False
     if row['vol'] < VOLUME_MULT * row['vol_ma']: return False
     if row['vol_ma'] > 0 and (row['vol'] / row['vol_ma']) > VOL_MAX_MULT: return False  # batas atas vol (01/08/2026)
     if pd.isna(row['rsi']) or row['rsi'] > RSI_MAX: return False
@@ -1256,8 +1262,9 @@ def entry_detail(df):
     checks = []  # (lolos?, label_gagal)
     checks.append((row['st_dir']==1, "Supertrend (masih Downtrend)"))
     checks.append((row['close']>row['ema_fast'], f"close>EMA20 (close {_fmt_price(row['close'])} vs EMA20 {_fmt_price(row['ema_fast'])})"))
-    # EMA20>EMA50 dihapus 30/07/2026
-    checks.append((row['close']>row['hh'], f"breakout{BREAKOUT_LOOKBACK} (close {_fmt_price(row['close'])} vs HH {_fmt_price(row['hh'])})"))
+    # HH3 breakout diganti 3 bar bullish (06/08/2026, backtest_brkx2_sweep2.py, keputusan Budi)
+    bull3_ok = (row.get('bull3', False) == True)
+    checks.append((bull3_ok, "3 bar bullish (3 candle terakhir close>open)"))
     vx = (row['vol']/row['vol_ma']) if row['vol_ma'] else 0
     vol_ok = row['vol']>=VOLUME_MULT*row['vol_ma'] and (row['vol_ma']<=0 or vx<=VOL_MAX_MULT)
     checks.append((vol_ok, f"vol>={VOLUME_MULT}x dan <={VOL_MAX_MULT}xMA (skrg {vx:.2f}x)"))
@@ -4116,7 +4123,7 @@ DASHBOARD_HTML = '''
   </div>
 </div>
 
-<script src="/dash.js?v=1785865200"></script>
+<script src="/dash.js?v=1785926290"></script>
 </body>
 </html>
 '''
@@ -5569,7 +5576,7 @@ def run_web_dashboard():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  BUILD: 20260805-I (Opsi B: bStocks masuk scan, NYSE filter jaga eksekusi)")
+    log("  BUILD: 20260806-A (3bull_htf0.7: ganti HH3→3bar bullish, HTF 0.8→0.7)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
