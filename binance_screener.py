@@ -84,6 +84,52 @@ RSI_MAX           = 75
 STOCH_MAX         = 70      # syarat ke-7: Stoch %K < 70 (hindari entry terlalu overbought). None = matikan.
 MIN_VOLUME_USD    = 3_000_000   # dinaikkan dari 1jt ke 3jt (backtest_entry_filter2)
 SYMBOL_BLACKLIST  = {'GIGGLEUSDT', 'SOXLBUSDT'}  # pair blacklist — tidak akan di-scan sama sekali
+
+# bStocks Binance (tokenized US stocks) — referensi untuk is_bstock_symbol()
+# TIDAK diblacklist dari scan — NYSE filter yang menjaga di level eksekusi
+# bStocks boleh open long HANYA saat NYSE buka (21:30–04:00 WIB, Senin–Jumat)
+BSTOCKS_KNOWN = {
+    'NVDABUSDT', 'AAPLBUSDT', 'TSLABUSDT', 'GOOGLBUSDT', 'MSFTBUSDT',
+    'AMZNBUSDT', 'METABUSDT', 'PLTRBUSDT', 'QQQBUSDT', 'SPYBUSDT',
+    'SOXLBUSDT', 'SOXSBUSDT', 'COINBUSDT', 'MSTRBUSDT', 'NFLXBUSDT',
+    'BRKBBUSDT', 'JPMBBUSDT', 'VISABUSDT', 'JNJBUSDT', 'V2XBUSDT',
+}
+
+def is_bstock_symbol(sym: str) -> bool:
+    """Return True jika symbol adalah tokenized stock (bStock Binance)."""
+    if sym in BSTOCKS_KNOWN: return True
+    base = sym.replace('USDT', '')
+    return base.endswith('B') and len(base) > 3 and base[:-1].isalpha()
+
+# NYSE trading hours (WIB = UTC+7)
+# NYSE buka: Senin–Jumat 21:30–04:00 WIB (16:30–23:00 UTC)
+# NYSE tutup: weekend + hari libur US (tidak ditrack detail, cukup jam + hari)
+NYSE_OPEN_HOUR_WIB  = (21, 30)   # 21:30 WIB
+NYSE_CLOSE_HOUR_WIB = (4,  0)    # 04:00 WIB (hari berikutnya)
+
+def is_nyse_open() -> bool:
+    """Return True jika NYSE sedang buka (Senin–Jumat, 21:30–04:00 WIB).
+    Tidak memperhitungkan hari libur US — cukup untuk proteksi dasar."""
+    now = now_wib()
+    wd  = now.weekday()   # 0=Senin, 6=Minggu
+    h, m = now.hour, now.minute
+    t = h * 60 + m       # menit dari tengah malam
+
+    # NYSE tutup Sabtu (5) dan Minggu (6)
+    # Sabtu setelah 04:00 → tutup seharian
+    # Minggu → tutup seharian
+    # Senin sebelum 21:30 → tutup
+    if wd == 6: return False   # Minggu
+    if wd == 5 and t >= 4*60:  return False   # Sabtu setelah 04:00
+
+    # Sesi buka: 21:30–23:59 (hari yang sama) ATAU 00:00–04:00 (hari berikutnya)
+    after_open  = t >= 21*60 + 30   # >= 21:30
+    before_close = t < 4*60          # < 04:00
+    if after_open or before_close:
+        # Pastikan bukan Minggu malam (Minggu 21:30 bukan NYSE)
+        if wd == 6: return False
+        return True
+    return False
 REVERSAL_MIN_VOL_USD = 1_500_000  # min vol24h khusus reversal (lebih rendah untuk perluas universe)
 
 TRAIL_ARM_PCT     = 2.0
@@ -961,13 +1007,17 @@ def score_to_target_usd(score: int) -> int:
 def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
     """Buka deal + simpan add_usd di active_deals untuk dikirim T2 setelah deal confirmed.
     Return (ok, target_usd, add_usd)."""
+    # Guard: bStocks hanya boleh open saat NYSE buka
+    if is_bstock_symbol(symbol) and not is_nyse_open():
+        log(f"[SIZING] {symbol} adalah bStock, NYSE tutup — open long DIBATALKAN")
+        return False, BASE_ORDER_VOLUME, 0
+    if is_bstock_symbol(symbol):
+        log(f"[SIZING] {symbol} adalah bStock, NYSE BUKA — open long DIIZINKAN")
     target  = score_to_target_usd(score)
     add_usd = target - BASE_ORDER_VOLUME
     ok = send_open_long(symbol, strategy)
     if not ok:
         return False, target, 0
-    # add_usd disimpan ke active_deals, T2 yang akan kirim setelah deal confirmed aktif
-    # (menghindari race condition: add fund ke deal yang cancelled)
     return True, target, add_usd
 
 def send_start_trailing(symbol: str, strategy: str = 'brkX2') -> bool:
@@ -988,11 +1038,15 @@ def get_usdt_spot_pairs():
             if s.get('quoteAsset')!='USDT': continue
             if s.get('status')!='TRADING': continue
             if s.get('baseAsset') in EXCLUDED_BASE_ASSETS: continue
-            # Exclude tokenized stocks: hanya ambil symbol yang punya permission SPOT murni
-            # Crypto murni: permissionSets mengandung "SPOT"
-            # Tokenized stocks (bStocks): hanya punya TRD_GRP_* tanpa SPOT
+            # Exclude tokenized stocks (bStocks Binance):
+            # Hanya exclude kalau tidak punya permission SPOT sama sekali
+            # bStocks yang punya SPOT diizinkan masuk universe — NYSE filter yang jaga di level eksekusi
             psets = s.get('permissionSets', [])
-            has_spot = any('SPOT' in pset for pset in psets)
+            flat_perms = set()
+            for pset in psets:
+                if isinstance(pset, list): flat_perms.update(pset)
+                else: flat_perms.add(pset)
+            has_spot = 'SPOT' in flat_perms
             if not has_spot: continue
             out.append(s['symbol'])
         return out
@@ -2319,6 +2373,8 @@ def thread2_monitor():
         if add_usd > 0 and not add_fund_sent:
             if not get_deal_override(sym, 'auto_add_fund', True):
                 log(f"[T2] {sym} add fund di-skip (auto_add_fund=OFF via dashboard)")
+            elif is_bstock_symbol(sym) and not is_nyse_open():
+                log(f"[T2] {sym} add fund di-skip (bStock + NYSE tutup)")
             else:
                 strat = d.get('strategy', 'brkX2')
                 log(f"[T2] {sym} kirim add fund ${add_usd} (deal confirmed aktif)")
@@ -4060,7 +4116,7 @@ DASHBOARD_HTML = '''
   </div>
 </div>
 
-<script src="/dash.js?v=1785860689"></script>
+<script src="/dash.js?v=1785865200"></script>
 </body>
 </html>
 '''
@@ -5466,6 +5522,10 @@ def run_web_dashboard():
             log(f"  SECONDARY: vol={vol_ratio:.2f}x(thr{VOLUME_MULT}) RSI={rsi}(thr{RSI_MAX}) Stoch={stoch_k}(thr{STOCH_MAX}) ATR={atr_pct}%(thr{ATR_MAX_PCT}) HTF={htf_ratio:.2f}x(thr{HTF_VOL_MULT}) Perf={perf_score}(thr{PERF_SCORE_MIN})")
             log(f"  FILTER ON: {[k for k,v in filters.items() if v]}")
 
+            # Guard bStocks: cek NYSE open
+            if is_bstock_symbol(sym) and not is_nyse_open():
+                return jsonify({"ok": False, "error": f"{sym} adalah tokenized stock (bStock). NYSE sedang tutup — open long tidak diizinkan. NYSE buka 21:30–04:00 WIB (Senin–Jumat)."})
+
             ok, target_usd, add_usd = open_deal_with_sizing(sym, sc, strat_key)
             if ok:
                 entry_price = get_price_now(sym)
@@ -5509,7 +5569,7 @@ def run_web_dashboard():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  BUILD: 20260805-F (T_AKUM_ENTRY sleep 2 menit awal agar T_AKUM selesai scan pertama)")
+    log("  BUILD: 20260805-I (Opsi B: bStocks masuk scan, NYSE filter jaga eksekusi)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
