@@ -1894,7 +1894,7 @@ def heartbeat_general_tick():
     send_telegram(
         f"{header}\n"
         f"\n---\n"
-        f"brkX2-12h  : ST-up + >EMA20 + close>EMA50 + breakout{BREAKOUT_LOOKBACK} + vol>={VOLUME_MULT}xMA + RSI<{RSI_MAX} + ATR<{ATR_MAX_PCT}%\n"
+        f"brkX2-12h  : ST-up + >EMA20 + 3bar-bullish + vol>={VOLUME_MULT}xMA + RSI<{RSI_MAX} + ATR<{ATR_MAX_PCT}% + HTF3D>{HTF_VOL_MULT}xMA\n"
         f"Reversal-8h: 3 merah+turun>=5% + doji + HA bull + cross-up EMA20\n"
         f"brkX2-4h   : ST-up + MACD>0 + ATR>=2% + vol>={STRAT4H_VOLUME_MULT}xMA + HTF 3D\n"
         f"CrossEMA-4h: ST-1 + cross-up EMA20 intrabar menit 12-36\n"
@@ -4123,7 +4123,7 @@ DASHBOARD_HTML = '''
   </div>
 </div>
 
-<script src="/dash.js?v=1785926290"></script>
+<script src="/dash.js?v=1785927742"></script>
 </body>
 </html>
 '''
@@ -5576,11 +5576,11 @@ def run_web_dashboard():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  BUILD: 20260806-A (3bull_htf0.7: ganti HH3→3bar bullish, HTF 0.8→0.7)")
+    log("  BUILD: 20260806-B (update banner startup entry syarat brkX2-12h)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
-    log(f"  Entry syarat     : ST-up, >EMA20, >EMA50, breakout{BREAKOUT_LOOKBACK}, vol>={VOLUME_MULT}xMA, RSI<{RSI_MAX}" + (f", Stoch<{STOCH_MAX}" if STOCH_MAX is not None else "") + (f", ATR<{ATR_MAX_PCT}%" if ATR_MAX_PCT is not None else ""))
+    log(f"  Entry syarat     : ST-up, >EMA20, 3bar-bullish, vol>={VOLUME_MULT}xMA, RSI<{RSI_MAX}" + (f", Stoch<{STOCH_MAX}" if STOCH_MAX is not None else "") + (f", ATR<{ATR_MAX_PCT}%" if ATR_MAX_PCT is not None else "") + f", HTF3D>{HTF_VOL_MULT}xMA")
     log(f"  Exit             : trailing adaptif (arm +{TRAIL_ARM_PCT}%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)")
     log(f"  Trailing FAKTOR  : {TRAILING_FAKTOR*100:.0f}% (jarak trailing = tabel ATR% x {TRAILING_FAKTOR})")
     log(f"  Base order       : ${BASE_ORDER_VOLUME} | Max deal total: {COMMAS_MAX_ACTIVE_DEALS}")
