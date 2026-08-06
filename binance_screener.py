@@ -4130,7 +4130,7 @@ DASHBOARD_HTML = '''
   </div>
 </div>
 
-<script src="/dash.js?v=1786011496"></script>
+<script src="/dash.js?v=1786015482"></script>
 </body>
 </html>
 '''
@@ -4582,6 +4582,13 @@ def thread_akum_scan():
         ]
         update_dashboard_near_miss("Akumulasi-4h", nm_items)
 
+        # Log near_miss ke file (sama dengan strategi lain)
+        akum_near_miss_log = [
+            (res['primary_score'], res['sym'], res['fails'], 4)
+            for res in top
+        ]
+        log_near_miss("Akumulasi-4h", akum_near_miss_log, 4)
+
         n_full = sum(1 for r in top if r['primary_ok'] and r['secondary_ok'])
         log(f"[T_AKUM] {len(universe)} pair discan → {len(results)} kandidat, "
             f"{n_full} lolos penuh. Top {len(top)} ditampilkan.")
@@ -4657,6 +4664,19 @@ def thread_akum_entry_scan():
             log(f"[T_AKUM_ENTRY] {sym}: A={'✓' if sig_a else '✗'} B={'✓' if sig_b else '✗'}")
         except Exception as e:
             log(f"[T_AKUM_ENTRY] error status {sym}: {e}")
+
+    # Log near_miss Entry A/B ke file
+    entry_near_miss_log = []
+    with _akum_lock:
+        status_now = dict(_akum_entry_status)
+    for sym, es in status_now.items():
+        fails = []
+        if not es.get('entry_a'): fails.append("Entry A (Spring): belum terpenuhi")
+        if not es.get('entry_b'): fails.append("Entry B (Breakout): belum terpenuhi")
+        if fails:
+            entry_near_miss_log.append(("A=✗B=✗" if not es.get('entry_a') and not es.get('entry_b') else "partial", sym, fails, 2))
+    if entry_near_miss_log:
+        log_near_miss("Akumulasi-4h Entry", entry_near_miss_log, 2)
 
     # Pass 2: Open deal (dengan guard slot dan active_deals)
     n_akum = active_deal_count_akum()
@@ -5583,7 +5603,7 @@ def run_web_dashboard():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  BUILD: 20260807-E (RSI<60 untuk brkX2-12h dan brkX2-4h)")
+    log("  BUILD: 20260807-F (log_near_miss Akumulasi-4h + Entry A/B ke file)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
