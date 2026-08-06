@@ -1550,13 +1550,13 @@ def compute_indicators_4h(df):
 def htf_filter_4h_ok(symbol: str, for_crossema: bool = False) -> bool:
     """
     HTF filter untuk strategi 4h:
-    - brkX2-4h   : candle 12h terakhir BULLISH (close > open) — 06/08/2026, keputusan Budi
+    - brkX2-4h   : 3 candle 12h terakhir BERTURUTAN BULLISH (close > open) — 07/08/2026, keputusan Budi
     - CrossEMA-4h: vol 12h > STRAT_CROSSEMA_HTF_VOL_MULT (1.5) * MA20 volume 12h (tidak berubah)
     Fail-open kalau data tidak cukup.
     """
     try:
         df = get_ohlcv_htf(symbol, interval=STRAT4H_HTF_TF, limit=10)
-        if df is None or len(df) < 2:
+        if df is None or len(df) < 4:
             return True  # fail-open
         if for_crossema:
             # CrossEMA-4h: tetap pakai vol threshold
@@ -1567,9 +1567,11 @@ def htf_filter_4h_ok(symbol: str, for_crossema: bool = False) -> bool:
                 return True
             return float(df['volume'].iloc[-1]) > STRAT_CROSSEMA_HTF_VOL_MULT * vol_ma
         else:
-            # brkX2-4h: candle 12h terakhir bullish
-            last = df.iloc[-1]
-            return float(last['close']) > float(last['open'])
+            # brkX2-4h: 3 candle 12h terakhir berturutan bullish (07/08/2026)
+            c1 = df.iloc[-1]; c2 = df.iloc[-2]; c3 = df.iloc[-3]
+            return (float(c1['close']) > float(c1['open']) and
+                    float(c2['close']) > float(c2['open']) and
+                    float(c3['close']) > float(c3['open']))
     except Exception as e:
         log(f"  [HTF4h] error cek {symbol}: {e} → skip filter")
         return True  # fail-open
@@ -4124,7 +4126,7 @@ DASHBOARD_HTML = '''
   </div>
 </div>
 
-<script src="/dash.js?v=1786003200"></script>
+<script src="/dash.js?v=1786005062"></script>
 </body>
 </html>
 '''
@@ -5577,7 +5579,7 @@ def run_web_dashboard():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  BUILD: 20260807-C (fix banner startup brkX2-4h HTF label)")
+    log("  BUILD: 20260807-D (brkX2-4h HTF: 3 candle 12h berturutan bullish)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
@@ -5623,7 +5625,7 @@ if __name__ == '__main__':
     if STRAT4H_ENABLED:
         log("  " + "-"*51)
         log(f"  STRATEGI 3 brkX2-4h: ON | TF {STRAT4H_TIMEFRAME}")
-        log(f"  Entry: ST+1 + MACD>0 + ATR>={STRAT4H_ATR_MIN_PCT}% + Vol>={STRAT4H_VOLUME_MULT}xMA + HTF {STRAT4H_HTF_TF} candle bullish")
+        log(f"  Entry: ST+1 + MACD>0 + ATR>={STRAT4H_ATR_MIN_PCT}% + Vol>={STRAT4H_VOLUME_MULT}xMA + HTF {STRAT4H_HTF_TF} 3x candle bullish berturutan")
         log(f"  Intrabar: menit ke 5-60 (25% elapsed), scan tiap {STRAT4H_SCAN_INTERVAL}s")
         log(f"  Slot: {STRAT4H_MAX_DEALS} | Target forward-test: {STRAT4H_FWDTEST_TARGET} deal")
         log(f"  Bot : #{COMMAS_BOT_ID_4H}")
