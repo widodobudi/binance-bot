@@ -4124,7 +4124,7 @@ DASHBOARD_HTML = '''
   </div>
 </div>
 
-<script src="/dash.js?v=1786001200"></script>
+<script src="/dash.js?v=1786003200"></script>
 </body>
 </html>
 '''
@@ -5577,7 +5577,7 @@ def run_web_dashboard():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  BUILD: 20260807-B (hapus close>EMA50 dari brkX2-12h)")
+    log("  BUILD: 20260807-C (fix banner startup brkX2-4h HTF label)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
@@ -5623,7 +5623,7 @@ if __name__ == '__main__':
     if STRAT4H_ENABLED:
         log("  " + "-"*51)
         log(f"  STRATEGI 3 brkX2-4h: ON | TF {STRAT4H_TIMEFRAME}")
-        log(f"  Entry: ST+1 + MACD>0 + ATR>={STRAT4H_ATR_MIN_PCT}% + Vol>={STRAT4H_VOLUME_MULT}xMA + HTF {STRAT4H_HTF_TF} (PRICE_EMA50+MACD+RSI50)")
+        log(f"  Entry: ST+1 + MACD>0 + ATR>={STRAT4H_ATR_MIN_PCT}% + Vol>={STRAT4H_VOLUME_MULT}xMA + HTF {STRAT4H_HTF_TF} candle bullish")
         log(f"  Intrabar: menit ke 5-60 (25% elapsed), scan tiap {STRAT4H_SCAN_INTERVAL}s")
         log(f"  Slot: {STRAT4H_MAX_DEALS} | Target forward-test: {STRAT4H_FWDTEST_TARGET} deal")
         log(f"  Bot : #{COMMAS_BOT_ID_4H}")
