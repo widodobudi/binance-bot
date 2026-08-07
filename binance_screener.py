@@ -171,7 +171,8 @@ STRAT4H_ATR_MIN_PCT     = 2.0
 STRAT4H_VOLUME_MULT     = 0.25  # diubah dari 0.4 → 0.25 (backtest_4h_vol_sweep.py, 27/07/2026): delta avg -0.008% (dalam noise), frekuensi naik
 STRAT4H_VOLUME_MA       = 20
 STRAT4H_MIN_VOL_USD     = 3_000_000
-STRAT4H_STOCH_MAX       = 80    # Stoch%K < 80 (backtest_4h_rsi_stoch_sweep.py, 31/07/2026): worst -48.39% vs -63.96%, delta avg -0.121%, wf6 OK
+STRAT4H_STOCH_MAX       = 80
+STRAT4H_PERF_MIN        = 0.5    # Perf Grade minimum (sama dengan brkX2-12h)    # Stoch%K < 80 (backtest_4h_rsi_stoch_sweep.py, 31/07/2026): worst -48.39% vs -63.96%, delta avg -0.121%, wf6 OK
 # HTF filter baru untuk 4h: vol 12h > X * MA20 volume 12h
 # brkX2-4h: vol12h>2.0xMA (backtest_htf_vol_sweep_4h.py, 29/07/2026): avg +5.352% vs lama +1.989%, WR 84.6%, wf6 OK
 # CrossEMA-4h: vol12h>1.5xMA (backtest_htf_vol_sweep_4h.py, 29/07/2026): avg +2.587% vs lama +0.787%, wf6 neg=1/6 OK
@@ -276,7 +277,7 @@ AKUM_B_VOL_BREAKOUT_MULT  = 1.5         # volume breakout > 1.5x vol MA
 AKUM_B_RETEST_TOL_PCT     = 0.02        # retest dalam ±2% dari resistance
 AKUM_B_RETEST_VOL_MAX     = 0.8         # volume retest < 80% volume breakout
 
-PERF_FILTER_ENABLED = True
+PERF_FILTER_ENABLED = False   # Perf Grade: info saja, tidak memblokir open deal (07/08/2026)
 PERF_SCORE_MIN      = 0.5    # EQUAL_thr0.5: cukup 3 dari 6 TF positif
 PERF_TF_CONFIG      = [      # (label, hari_ke_belakang, weight) — equal weight
     ("1D",   1,   1/6),
@@ -1606,6 +1607,7 @@ def check_entry_4h(df) -> bool:
     # RSI < 60 filter (07/08/2026)
     rsi = r.get("rsi")
     if rsi is not None and not pd.isna(rsi) and rsi >= 60: return False
+    # Perf Grade: ditampilkan di dashboard sebagai info, tidak memblokir open deal (07/08/2026)
     return True
 
 def active_deal_count_4h() -> int:
@@ -4130,7 +4132,7 @@ DASHBOARD_HTML = '''
   </div>
 </div>
 
-<script src="/dash.js?v=1786015482"></script>
+<script src="/dash.js?v=1786097338"></script>
 </body>
 </html>
 '''
@@ -5603,7 +5605,7 @@ def run_web_dashboard():
 if __name__ == '__main__':
     log("="*55)
     log("  BINANCE SCREENER -> 3COMMAS + TELEGRAM")
-    log("  BUILD: 20260807-F (log_near_miss Akumulasi-4h + Entry A/B ke file)")
+    log("  BUILD: 20260807-G (PerfGrade jadi info saja, tidak blokir open deal)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
     log(f"  Timeframe        : {TIMEFRAME}")
