@@ -4443,8 +4443,20 @@ def score_akumulasi(df, sym: str) -> dict:
                 if _i + 1 < len(df) and _ts_col2:
                     _sw_start_ts = int(df.iloc[_i + 1][_ts_col2])
                 break
-        if _sw_start_ts is None and _ts0 is not None:
-            _sw_start_ts = int(_ts0)
+        
+        if _sw_start_ts is None:
+            # Tidak ada candle yang break range → gunakan candle terlama di window
+            # sebagai estimasi: scan mundur dari win_start untuk cari candle pertama
+            # yang masih dalam toleransi (atau pakai _ts0 yang sudah per-symbol)
+            _sw_start_ts = int(_ts0) if _ts0 is not None else None
+            # Scan maju dari win_start_idx untuk cari candle pertama yang konsisten dalam range
+            for _j in range(_win_start_idx, len(df)):
+                _r = df.iloc[_j]
+                if float(_r['high']) <= _hi_tol and float(_r['low']) >= _lo_tol:
+                    if _ts_col2:
+                        _sw_start_ts = int(_r[_ts_col2])
+                    break
+        
         _sideways_start_str = (
             (pd.Timestamp(_sw_start_ts, unit='ms') + pd.Timedelta(hours=7)).strftime("%d/%m %H:%M")
             if _sw_start_ts and _sw_start_ts > 0 else "-"
