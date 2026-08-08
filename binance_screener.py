@@ -857,7 +857,7 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
     )
     send_telegram(tg_msg, parse_mode="Markdown")
 
-    def to_commas_pair(symbol: str) -> str:
+def to_commas_pair(symbol: str) -> str:
     
     return f"USDT_{symbol.replace('USDT','')}"
 
