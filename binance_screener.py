@@ -4445,8 +4445,33 @@ def score_akumulasi(df, sym: str) -> dict:
                 break
 
         if _sw_start_ts is None:
-            # Tidak ada candle yang break range → pakai timestamp candle pertama window (per-symbol)
-            _sw_start_ts = int(_ts0) if _ts0 is not None else None
+            # Seluruh window 180 candle stabil dalam range akumulasi.
+            # Cari candle pertama (dari awal window) di mana indikator koin ini
+            # masuk zona konsolidasi: ATR% sudah di bawah ATR puncak * (1-AKUM_ATR_DROP_PCT)
+            # dan EMA20 slope tidak terlalu curam (abs slope < AKUM_EMA_SLOPE_MAX * close).
+            # Ini menghasilkan timestamp unik per-koin, bukan nilai seragam.
+            try:
+                _atr_col = 'atr_pct' if 'atr_pct' in df.columns else None
+                _ema_col = 'ema20' if 'ema20' in df.columns else None
+                _atr_peak = float(df['atr_pct'].iloc[max(0, _win_start_idx - AKUM_ATR_LOOKBACK):_win_start_idx + 1].max()) if _atr_col else None
+                _consol_start = None
+                for _j in range(_win_start_idx, len(df)):
+                    _rj = df.iloc[_j]
+                    _atr_ok = True
+                    _slope_ok = True
+                    if _atr_col and _atr_peak and _atr_peak > 0:
+                        _atr_ok = float(_rj['atr_pct']) <= _atr_peak * (1 - AKUM_ATR_DROP_PCT)
+                    if _ema_col and _j > 0:
+                        _ema_prev = df.iloc[_j - 1].get('ema20')
+                        _ema_now2 = _rj.get('ema20')
+                        if _ema_prev and _ema_now2 and float(_ema_prev) > 0:
+                            _slope_ok = abs(float(_ema_now2) / float(_ema_prev) - 1) < AKUM_EMA_SLOPE_MAX / len(win)
+                    if _atr_ok and _slope_ok and _ts_col2:
+                        _consol_start = int(_rj[_ts_col2])
+                        break
+                _sw_start_ts = _consol_start if _consol_start else (int(_ts0) if _ts0 is not None else None)
+            except Exception:
+                _sw_start_ts = int(_ts0) if _ts0 is not None else None
         
         _sideways_start_str = (
             (pd.Timestamp(_sw_start_ts, unit='ms') + pd.Timedelta(hours=7)).strftime("%d/%m %H:%M")
