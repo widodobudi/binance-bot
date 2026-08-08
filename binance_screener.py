@@ -172,6 +172,8 @@ STRAT4H_VOLUME_MULT     = 0.25  # diubah dari 0.4 → 0.25 (backtest_4h_vol_swee
 STRAT4H_VOLUME_MA       = 20
 STRAT4H_MIN_VOL_USD     = 3_000_000
 STRAT4H_STOCH_MAX       = 80
+STRAT4H_ATR_MAX_PCT     = 7.0   # batas atas ATR% brkX2-4h (08/08/2026): hindari entry puncak pump
+STRAT4H_VOL_MAX_MULT    = 5.0   # batas atas volume brkX2-4h (08/08/2026): simetris dengan brkX2-12h
 STRAT4H_PERF_MIN        = 0.5    # Perf Grade minimum (sama dengan brkX2-12h)    # Stoch%K < 80 (backtest_4h_rsi_stoch_sweep.py, 31/07/2026): worst -48.39% vs -63.96%, delta avg -0.121%, wf6 OK
 # HTF filter baru untuk 4h: vol 12h > X * MA20 volume 12h
 # brkX2-4h: vol12h>2.0xMA (backtest_htf_vol_sweep_4h.py, 29/07/2026): avg +5.352% vs lama +1.989%, WR 84.6%, wf6 OK
@@ -831,7 +833,32 @@ def send_telegram(message: str, parse_mode: str = None):
     except Exception as e:
         log(f"WARN gagal kirim Telegram: {e}")
 
-def to_commas_pair(symbol: str) -> str:
+def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
+    """Append event Open/Armed/Close + semua nilai indikator ke open-arm-close.txt
+    dan kirim notifikasi Telegram yang sama.
+    event: 'OPEN' | 'ARMED' | 'CLOSE'
+    indicators: dict bebas, misal {'atr_pct': 3.2, 'rsi': 55, 'profit_pct': +4.1}
+    """
+    ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+    ind_lines = "\n".join(f"  {k}: {v}" for k, v in indicators.items())
+    text = (
+        f"[{ts} WIB] {event} | {to_display_pair(symbol)} | {strategy}\n"
+        f"{ind_lines}\n"
+        f"{'─'*36}\n"
+    )
+    try:
+        oac_path = os.path.join(get_script_dir(), "open-arm-close.txt")
+        with open(oac_path, "a", encoding="utf-8") as f:
+            f.write(text)
+    except Exception as e:
+        log(f"WARN log_oac file error: {e}")
+    tg_msg = f"📋 *{event}* {to_display_pair(symbol)} `{strategy}`\n" + "\n".join(
+        f"  `{k}`: {v}" for k, v in indicators.items()
+    )
+    send_telegram(tg_msg, parse_mode="Markdown")
+
+    def to_commas_pair(symbol: str) -> str:
+    
     return f"USDT_{symbol.replace('USDT','')}"
 
 def to_display_pair(symbol: str) -> str:
@@ -1607,6 +1634,10 @@ def check_entry_4h(df) -> bool:
     # RSI < 60 filter (07/08/2026)
     rsi = r.get("rsi")
     if rsi is not None and not pd.isna(rsi) and rsi >= 60: return False
+    # ATR% < 7.0 (08/08/2026): hindari entry saat volatilitas ekstrem / puncak pump
+    if not pd.isna(atr) and atr >= STRAT4H_ATR_MAX_PCT: return False
+    # Volume <= 5x MA20 (08/08/2026): simetris dengan brkX2-12h
+    if r["vol"] > STRAT4H_VOL_MAX_MULT * vol_ma: return False
     # Perf Grade: ditampilkan di dashboard sebagai info, tidak memblokir open deal (07/08/2026)
     return True
 
@@ -2192,6 +2223,7 @@ def thread1_scan():
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
             ), daemon=True).start()
+            
             csv_log_open({
                 'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                 'symbol': to_display_pair(sym),
@@ -2204,6 +2236,20 @@ def thread1_scan():
                 'score': score,
                 'strategy': 'brkX2',
             })
+            _r12 = df.iloc[-1]
+            log_oac('OPEN', sym, 'brkX2-12h', {
+                'entry_price':  _fmt_price(entry_price),
+                'slip_pct':     f"{slip_pct:+.2f}%",
+                'atr_pct':      f"{atrp:.2f}%",
+                'rsi':          f"{_r12.get('rsi', float('nan')):.1f}",
+                'stoch_k':      f"{_r12.get('stoch_k', float('nan')):.1f}",
+                'vol_ratio':    f"{(_r12['vol']/_r12['vol_ma']):.2f}x" if _r12.get('vol_ma') else 'n/a',
+                'bull3':        str(_r12.get('bull3', False)),
+                'htf_vol':      str(_get_htf_values(sym).get('htf_vol_ratio', 'n/a')),
+                'score':        score,
+                'trail_dist':   f"{trailing_dist(atrp)}%",
+            })
+            
             # ── DEAL LOG lengkap ──────────────────────────────────────────
             _ind = _row_indicators(df.iloc[-1], vol_ma=float(df['vol_ma'].iloc[-1]) if 'vol_ma' in df.columns else None)
             _htf = _get_htf_values(sym)
@@ -2355,6 +2401,7 @@ def thread1b_scan_reversal():
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
                 f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
             ), daemon=True).start()
+            
             csv_log_open({
                 'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                 'symbol': to_display_pair(sym),
@@ -2367,7 +2414,14 @@ def thread1b_scan_reversal():
                 'score': 0,
                 'strategy': 'reversal',
             })
+            log_oac('OPEN', sym, 'Reversal-8h', {
+                'entry_price': _fmt_price(entry_price),
+                'slip_pct':    f"{slip_pct:+.2f}%",
+                'atr_pct':     f"{atrp:.2f}%",
+                'trail_dist':  f"{trailing_dist(atrp)}%",
+            })
             opened_any = True
+            
     last_rev_candle_ts = newest_rev
     return None if opened_any else f"{len(candidates)} kandidat reversal lolos tapi tak ada yg dibuka."
 def thread2_monitor():
@@ -2417,10 +2471,18 @@ def thread2_monitor():
         tdist = trailing_dist_progressive(atrp, prof_peak)
         armed = d.get('trailing_armed', False)
 
-        # arm trailing setelah profit >= +2% (pakai puncak)
+        # arm trailing setelah profit >= +2% (pakai puncak) 
         if (not armed) and prof_peak >= get_arm_pct(atrp):
             armed = True
             log(f"[T2] {sym} trailing ARMED (peak profit {prof_peak:.2f}%)")
+            log_oac('ARMED', sym, d.get('strategy', 'brkX2'), {
+                'peak_profit':  f"{prof_peak:.2f}%",
+                'arm_pct':      f"{get_arm_pct(atrp):.1f}%",
+                'atr_pct':      f"{atrp:.2f}%",
+                'trail_dist':   f"{trailing_dist_progressive(atrp, prof_peak):.2f}%",
+                'entry_price':  _fmt_price(d.get('entry_price', 0)),
+                'peak_price':   _fmt_price(peak),
+            })
 
         # deteksi pergerakan cepat (HANYA relevan saat armed) utk polling adaptif
         last_price = d.get('last_price', price)
@@ -2506,8 +2568,19 @@ def thread2_monitor():
                     'score':         d.get('score', ''),
                     'total_usd':     d.get('target_usd', ''),
                 })
+
+                log_oac('CLOSE', sym, strat, {
+                    'exit_price':   _fmt_price(price),
+                    'profit_pct':   f"{prof_from_entry:.2f}%",
+                    'exit_reason':  reason,
+                    'armed':        str(armed),
+                    'atr_pct':      f"{d.get('atr_pct', 0):.2f}%",
+                    'hold_candles': str(_hold_c),
+                    'entry_price':  _fmt_price(d.get('entry_price', 0)),
+                })
                 remove_from_active_deals(sym)
                 if strat == 'brkX2': record_closed(sym)
+                
                 # progress forward-test PER STRATEGI
                 if strat == 'reversal':
                     tgt = FWDTEST_TARGET_REVERSAL
@@ -3402,6 +3475,7 @@ def thread1d_scan_4h():
         # Deal log
         _htf = _get_htf_values(sym)
         # Catat ke trades_forwardtest.csv (wajib agar csv_progress bisa hitung #/7)
+        
         csv_log_open({
             'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
             'symbol':         to_display_pair(sym),
@@ -3414,6 +3488,22 @@ def thread1d_scan_4h():
             'score':          score,
             'strategy':       'brkX2_4h',
         })
+        _df4 = get_ohlcv_4h(sym, limit=50)
+        if _df4 is not None and len(_df4) > 0:
+            _df4 = compute_indicators_4h(_df4)
+            _r4 = _df4.iloc[-1]
+            log_oac('OPEN', sym, 'brkX2-4h', {
+                'entry_price': _fmt_price(entry_price),
+                'slip_pct':    f"{slip_pct:+.2f}%",
+                'atr_pct':     f"{atrp:.2f}%",
+                'rsi':         f"{_r4.get('rsi', float('nan')):.1f}" if hasattr(_r4.get('rsi', None), '__float__') else 'n/a',
+                'stoch_k':     f"{_r4.get('stoch_k', float('nan')):.1f}",
+                'macd_hist':   f"{_r4.get('macd_hist', 0):.4f}",
+                'vol_ratio':   f"{(_r4['vol']/_r4['vol_ma']):.2f}x" if _r4.get('vol_ma') else 'n/a',
+                'score':       score,
+                'trail_dist':  f"{trailing_dist(atrp)}%",
+            })
+        
         deal_log_write({
             "timestamp_wib":  now_wib().strftime("%Y-%m-%d %H:%M:%S"),
             "event_type":     "OPEN",
