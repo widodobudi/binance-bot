@@ -1108,12 +1108,67 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
         )
         send_telegram(tg_msg, parse_mode="Markdown")
 
+def normalize_binance_symbol(symbol: str) -> str:
+    """Standardize symbol ke raw Binance: ONDOUSDT.
+    Menerima ONDOUSDT, ONDO/USDT, USDT_ONDO.
+    """
+    if symbol is None:
+        return ""
+    s = str(symbol).strip().upper()
+    if not s:
+        return ""
+    s = s.replace("/", "").replace(" ", "")
+    if "_" in s and s.startswith("USDT_"):
+        return f"{s.split('_', 1)[1]}USDT"
+    if s.endswith("USDT"):
+        return s
+    return s
+
+
 def to_commas_pair(symbol: str) -> str:
-    
-    return f"USDT_{symbol.replace('USDT','')}"
+    s = normalize_binance_symbol(symbol)
+    if not s:
+        return ""
+    if s.endswith("USDT"):
+        return f"USDT_{s.replace('USDT', '')}"
+    return f"USDT_{s}"
+
 
 def to_display_pair(symbol: str) -> str:
-    return f"{symbol.replace('USDT','')}/USDT"
+    s = normalize_binance_symbol(symbol)
+    if not s:
+        return ""
+    if s.endswith("USDT"):
+        return f"{s.replace('USDT', '')}/USDT"
+    return s
+
+
+def estimate_deal_total_usd(deal: dict) -> float:
+    """Hitung total modal positip yang seharusnya ditampilkan di web.
+    Prioritas:
+    1) qty_coin * entry_price saat Binance direct mode (aktual fill / posisi real)
+    2) base_usd + add_usd jika data tersimpan
+    3) target_usd fallback
+    """
+    try:
+        qty = float(deal.get('qty_coin', 0) or 0)
+        entry = float(deal.get('entry_price', 0) or 0)
+        if USE_BINANCE_DIRECT and qty > 0 and entry > 0:
+            return max(qty * entry, 0.0)
+    except Exception:
+        pass
+
+    try:
+        base_usd = float(deal.get('base_usd', deal.get('target_usd', BASE_ORDER_VOLUME)) or 0)
+    except Exception:
+        base_usd = float(BASE_ORDER_VOLUME)
+    add_usd = 0.0
+    try:
+        if deal.get('add_fund_sent'):
+            add_usd = float(deal.get('add_usd', 0) or 0)
+    except Exception:
+        add_usd = 0.0
+    return base_usd + add_usd
 
 # ===================== PERSISTENSI =====================
 def _convert(obj):
@@ -6976,10 +7031,9 @@ def run_web_dashboard():
                 ep = dd.get("entry_price", 0)
                 lp = dd.get("last_price", ep)
                 dd["upnl_pct"] = (lp/ep - 1)*100 - FEE_ROUND_TRIP_PCT if ep > 0 else 0
-                # Hitung total modal (base + add fund jika sudah terkirim)
-                base_usd = float(dd.get("base_usd", dd.get("target_usd", BASE_ORDER_VOLUME)))
-                add_usd  = float(dd.get("add_usd", 0)) if dd.get("add_fund_sent") else 0.0
-                total_usd = base_usd + add_usd
+                # Modality real position: prefer actual qty * entry_price di Binance direct mode,
+                # karena beberapa deal punya sequence buy multipel yang tidak ditangkap oleh base_usd statis $8.
+                total_usd = estimate_deal_total_usd(dd)
                 dd["total_usd_display"] = total_usd
                 dd["upnl_usd"] = round(dd["upnl_pct"] / 100 * total_usd, 2)
                 deals_display[sym] = dd
