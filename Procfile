@@ -1,1 +1,1 @@
-web: python binance_screener.py
+web: gunicorn binance_screener:app
