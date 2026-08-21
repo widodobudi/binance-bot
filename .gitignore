@@ -1,0 +1,29 @@
+# ==========================================
+# BLOKIR FILE INDIKATOR & DOKUMEN (ABAIKAN)
+# ==========================================
+*.pine
+*.txt
+*.md
+*.pdf
+*.xlsm
+*.bas
+*.ini
+desktop.ini
+
+# Folder Cache & Sampah
+__pycache__/
+graphify-out/
+tradingview-3commas_with_python/
+ritika/
+Gig/
+ResTest/
+_cache_*/
+
+# ==========================================
+# KECUALIKAN FILE MESIN UTAMA (WAJIB MASUK)
+# ==========================================
+!binance_screener.py
+!requirements.txt
+!Procfile
+!.python-version
+!.gitignore
