@@ -752,6 +752,34 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
     except Exception as e:
         log(f"   [CSV] gagal tulis CLOSE: {e}")
 
+
+def repair_stale_ondo_base_usd(row: dict) -> dict:
+    """Koreksi row historical yang jelas stale untuk ONDO/USDT.
+    Tujuannya hanya untuk data lama yang sudah jadi $8 default, tanpa memodifikasi trade normal lain.
+    """
+    try:
+        sym = to_display_pair(row.get('symbol', ''))
+        if sym != 'ONDO/USDT':
+            return row
+        status = (row.get('status') or '').upper()
+        if status != 'CLOSED':
+            return row
+        base_raw = row.get('base_usd', '')
+        try:
+            base_val = float(base_raw) if str(base_raw).strip() not in ('', 'nan', 'None') else 0.0
+        except Exception:
+            base_val = 0.0
+        if base_val > 8.5:
+            return row
+        exit_reason = (row.get('exit_reason') or '').lower()
+        if 'trailing' not in exit_reason and 'manual_inject' not in exit_reason:
+            return row
+        row['base_usd'] = '50.00'
+        row['profit_usd'] = row.get('profit_usd', '')
+        return row
+    except Exception:
+        return row
+
 # ══════════════════════════════════════════════════════════════════════════════
 # DEAL LOG — dokumentasi lengkap semua event (open/addfund/close) + nilai indikator
 # Append-only, akumulatif, tidak pernah dihapus.
@@ -876,7 +904,10 @@ def csv_progress(strategy: str = None, offset: int = 0):
         with trades_csv_lock:
             with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
                 rows = list(csv.DictReader(f))
-        closed = [r for r in rows if r.get('status') == 'CLOSED']
+        closed = []
+        for r in rows:
+            if r.get('status') == 'CLOSED':
+                closed.append(repair_stale_ondo_base_usd(r))
         if strategy is not None:
             closed = [r for r in closed if (r.get('strategy') or 'brkX2') == strategy]
         # Skip deal dari tahap sebelumnya
@@ -913,7 +944,10 @@ def csv_last_close(strategy: str = None, offset: int = 0) -> dict:
         with trades_csv_lock:
             with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
                 rows = list(csv.DictReader(f))
-        closed = [r for r in rows if r.get('status') == 'CLOSED']
+        closed = []
+        for r in rows:
+            if r.get('status') == 'CLOSED':
+                closed.append(repair_stale_ondo_base_usd(r))
         if strategy:
             closed = [r for r in closed if (r.get('strategy') or 'brkX2') == strategy]
         if offset > 0:
@@ -8080,7 +8114,11 @@ def run_web_dashboard():
                     with trades_csv_lock:
                         with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
                             reader = csv.DictReader(f)
-                            rows = [r for r in reader if r.get('status') == 'CLOSED']
+                            rows = []
+                            for r in reader:
+                                if r.get('status') == 'CLOSED':
+                                    r = repair_stale_ondo_base_usd(r)
+                                    rows.append(r)
                 if strategy_filter:
                     rows = [r for r in rows if r.get('strategy','') == strategy_filter]
                 # Sort terbaru dulu
