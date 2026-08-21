@@ -1,29 +1,39 @@
 # ==========================================
-# BLOKIR FILE INDIKATOR & DOKUMEN (ABAIKAN)
+# 🛑 HANYA BLOKIR FILE INDIKATOR TRADINGVIEW & EXCEL
 # ==========================================
 *.pine
-*.txt
-*.md
-*.pdf
 *.xlsm
 *.bas
 *.ini
+*.pdf
 desktop.ini
 
-# Folder Cache & Sampah
-__pycache__/
+# Blokir file teks/catatan tambahan (Bukan requirements/Procfile)
+chat.txt
+kesalahan.txt
+log.txt
+aturan*.txt
+json_validator.txt
+open-arm-close.txt
+tes6.txt
+to_notice.txt
+
+# Folder Sampah & Cache Lokal
+_pycache_/
 graphify-out/
 tradingview-3commas_with_python/
 ritika/
 Gig/
 ResTest/
-_cache_*/
+cache*/
 
 # ==========================================
-# KECUALIKAN FILE MESIN UTAMA (WAJIB MASUK)
+# 📦 IJINKAN SISTEM UTAMA PYTHON (WAJIB MASUK)
 # ==========================================
 !binance_screener.py
 !requirements.txt
 !Procfile
 !.python-version
 !.gitignore
+!templates/
+!*.md
