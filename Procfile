@@ -1,0 +1,1 @@
+web: python binance_screener.py
