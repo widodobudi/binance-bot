@@ -1,0 +1,3 @@
+tiap ada revisi, langsung tulis ulang semuanya biar saya tinggal copy paste 
+
+jangan sampai ada line break pada suatu instruksi/ command, mesti dalam satu baris saja 

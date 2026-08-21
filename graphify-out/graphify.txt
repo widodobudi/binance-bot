@@ -1,0 +1,2 @@
+L:\My Drive\tradingview>graphify extract . --code-only --force
+L:\My Drive\tradingview>graphify cluster-only . --no-label

@@ -1,0 +1,184 @@
+jadi sekarang sudah bisa akses ke web dashboard bot (worker-production-e111.up.railway.app) — bukan ke Railway langsung kan. 
+
+
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Windows\system32> Invoke-WebRequest -Uri "https://worker-production-e111.up.railway.app/fix_deal_usd" -Method POST -Body "symbol=NEARUSDT&base_usd=45"
+
+Security Warning: Script Execution Risk
+Invoke-WebRequest parses the content of the web page. Script code in the web page might be run when the page is
+parsed.
+      RECOMMENDED ACTION:
+      Use the -UseBasicParsing switch to avoid script code execution.                                                                                                                                                                                 Do you want to continue?                                                                                                                                                                                                                  [Y] Yes  [A] Yes to All  [N] No  [L] No to All  [S] Suspend  [?] Help (default is "N"):
+Invoke-WebRequest : Operation cancelled due to security concerns. Use -UseBasicParsing parameter for safe HTML parsing
+without script execution.
+At line:1 char:1
++ Invoke-WebRequest -Uri "https://worker-production-e111.up.railway.app ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : SecurityError: (https://worker-...pp/fix_deal_usd:Uri) [Invoke-WebRequest], InvalidOpera
+   tionException
+    + FullyQualifiedErrorId : WebCmdletIEParsingDeclined,Microsoft.PowerShell.Commands.InvokeWebRequestCommand
+
+PS C:\Windows\system32>
+PS C:\Windows\system32> Invoke-WebRequest -Uri "https://worker-production-e111.up.railway.app/fix_deal_usd" -Method POST -Body "symbol=BNTUSDT&base_usd=20"
+
+Security Warning: Script Execution Risk
+Invoke-WebRequest parses the content of the web page. Script code in the web page might be run when the page is
+parsed.
+      RECOMMENDED ACTION:
+      Use the -UseBasicParsing switch to avoid script code execution.
+
+      Do you want to continue?                                                                                                                                                                                                                        [Y] Yes  [A] Yes to All  [N] No  [L] No to All  [S] Suspend  [?] Help (default is "N"): A                                                                                                                                                             
+StatusCode        : 200
+StatusDescription : OK
+Content           : OK: BNTUSDT base_usd=20.0 — locked akan terhitung ulang otomatis
+RawContent        : HTTP/1.1 200 OK
+                    x-railway-request-id: Jvv65ogqTq2E3B7PYqVb7A
+                    x-hikari-trace: sin1.98a6
+                    x-railway-edge: sin1
+                    Connection: keep-alive
+                    Content-Length: 66
+                    Content-Type: text/html; charset=utf-8
+                    Date...                                                                                                Forms             : {}                                                                                                     Headers           : {[x-railway-request-id, Jvv65ogqTq2E3B7PYqVb7A], [x-hikari-trace, sin1.98a6], [x-railway-edge,                             sin1], [Connection, keep-alive]...}                                                                    Images            : {}
+InputFields       : {}
+Links             : {}
+ParsedHtml        : mshtml.HTMLDocumentClass
+RawContentLength  : 66
+
+
+
+PS C:\Windows\system32> Invoke-WebRequest -Uri "https://worker-production-e111.up.railway.app/fix_deal_usd" -Method POST -Body "symbol=NEARUSDT&base_usd=45" -UseBasicParsing
+
+
+StatusCode        : 200
+StatusDescription : OK
+Content           : OK: NEARUSDT base_usd=45.0 — locked akan terhitung ulang otomatis
+RawContent        : HTTP/1.1 200 OK
+                    x-railway-request-id: EKdEehTZQVW-AnBRpHNmDw
+                    x-hikari-trace: sin1.98a6
+                    x-railway-edge: sin1
+                    Connection: keep-alive
+                    Content-Length: 67
+                    Content-Type: text/html; charset=utf-8
+                    Date...
+Forms             :                                                                                                        Headers           : {[x-railway-request-id, EKdEehTZQVW-AnBRpHNmDw], [x-hikari-trace, sin1.98a6], [x-railway-edge, sin1],                      [Connection, keep-alive]...}                                                                           Images            : {}                                                                                                     InputFields       : {}
+Links             : {}
+ParsedHtml        :
+RawContentLength  : 67
+
+
+
+PS C:\Windows\system32> Invoke-WebRequest -Uri "https://worker-production-e111.up.railway.app/admin/remove_deal" -Method POST -Body '{"symbol":"QUICKUSDT"}' -ContentType "application/json" -UseBasicParsing
+
+
+StatusCode        : 200
+StatusDescription : OK
+Content           : {"ok":true,"remaining":["NEARUSDT","BNTUSDT"],"removed":["QUICKUSDT"]}
+
+RawContent        : HTTP/1.1 200 OK
+                    x-railway-request-id: WVY5vcJzQeaBlPVq-_9nXA
+                    x-hikari-trace: sin1.nzn2
+                    x-railway-edge: sin1
+                    Connection: keep-alive
+                    Content-Length: 71
+                    Content-Type: application/json
+                    Date: Sat, 1...
+Forms             :                                                                                                        Headers           : {[x-railway-request-id, WVY5vcJzQeaBlPVq-_9nXA], [x-hikari-trace, sin1.nzn2], [x-railway-edge, sin1],                      [Connection, keep-alive]...}                                                                           Images            : {}                                                                                                     InputFields       : {}
+Links             : {}
+ParsedHtml        :
+RawContentLength  : 71
+
+
+
+PS C:\Windows\system32> Invoke-WebRequest -Uri "https://worker-production-e111.up.railway.app/admin/remove_deal" -Method POST -Body '{"symbol":"QUICKUSDT"}' -ContentType "application/json" -UseBasicParsing
+
+
+StatusCode        : 200
+StatusDescription : OK
+Content           : {"ok":true,"remaining":["NEARUSDT","BNTUSDT"],"removed":["QUICKUSDT"]}
+
+RawContent        : HTTP/1.1 200 OK
+                    x-railway-request-id: Pb0LEXaQQwm6ZzQ6ljLL4A
+                    x-hikari-trace: sin1.98a6
+                    x-railway-edge: sin1
+                    Connection: keep-alive
+                    Content-Length: 71
+                    Content-Type: application/json
+                    Date: Sat, 1...
+Forms             :                                                                                                        Headers           : {[x-railway-request-id, Pb0LEXaQQwm6ZzQ6ljLL4A], [x-hikari-trace, sin1.98a6], [x-railway-edge, sin1],                      [Connection, keep-alive]...}                                                                           Images            : {}                                                                                                     InputFields       : {}
+Links             : {}
+ParsedHtml        :
+RawContentLength  : 71
+
+
+
+PS C:\Windows\system32> Invoke-WebRequest -Uri "https://worker-production-e111.up.railway.app/fix_deal_usd" -Method POST -Body "symbol=NEARUSDT&base_usd=45" -UseBasicParsing
+
+
+StatusCode        : 200
+StatusDescription : OK
+Content           : OK: NEARUSDT base_usd=45.0 — locked akan terhitung ulang otomatis
+RawContent        : HTTP/1.1 200 OK
+                    x-railway-request-id: lq2rnxcvTlON9Nw-xtoGcA
+                    x-hikari-trace: sin1.98a6
+                    x-railway-edge: sin1
+                    Connection: keep-alive
+                    Content-Length: 67
+                    Content-Type: text/html; charset=utf-8
+                    Date...
+Forms             :                                                                                                        Headers           : {[x-railway-request-id, lq2rnxcvTlON9Nw-xtoGcA], [x-hikari-trace, sin1.98a6], [x-railway-edge, sin1],                      [Connection, keep-alive]...}                                                                           Images            : {}                                                                                                     InputFields       : {}
+Links             : {}
+ParsedHtml        :
+RawContentLength  : 67
+
+
+
+PS C:\Windows\system32>
+PS C:\Windows\system32> Invoke-WebRequest -Uri "https://worker-production-e111.up.railway.app/fix_deal_usd" -Method POST -Body "symbol=BNTUSDT&base_usd=20" -UseBasicParsing
+
+
+StatusCode        : 200
+StatusDescription : OK
+Content           : OK: BNTUSDT base_usd=20.0 — locked akan terhitung ulang otomatis
+RawContent        : HTTP/1.1 200 OK
+                    x-railway-request-id: cUXDF1mmQiObwShHwUFZXw
+                    x-hikari-trace: sin1.98a6
+                    x-railway-edge: sin1
+                    Connection: keep-alive
+                    Content-Length: 66
+                    Content-Type: text/html; charset=utf-8
+                    Date...
+Forms             :
+Headers           : {[x-railway-request-id, cUXDF1mmQiObwShHwUFZXw], [x-hikari-trace, sin1.98a6], [x-railway-edge, sin1],
+                    [Connection, keep-alive]...}
+Images            : {}
+InputFields       : {}
+Links             : {}
+ParsedHtml        :
+RawContentLength  : 66
+
+
+
+PS C:\Windows\system32> Invoke-WebRequest -Uri "https://worker-production-e111.up.railway.app/fix_deal_usd" -Method POST -Body "symbol=NEARUSDT&base_usd=45" -UseBasicParsing
+
+
+StatusCode        : 200
+StatusDescription : OK
+Content           : OK: NEARUSDT base_usd=45.0 — locked akan terhitung ulang otomatis
+RawContent        : HTTP/1.1 200 OK
+                    x-railway-request-id: HAtARAdrQDaxc0bV0_TJvA
+                    x-hikari-trace: sin1.98a6
+                    x-railway-edge: sin1
+                    Connection: keep-alive
+                    Content-Length: 67
+                    Content-Type: text/html; charset=utf-8
+                    Date...
+Forms             :
+Headers           : {[x-railway-request-id, HAtARAdrQDaxc0bV0_TJvA], [x-hikari-trace, sin1.98a6], [x-railway-edge, sin1],
+                    [Connection, keep-alive]...}
+Images            : {}
+InputFields       : {}
+Links             : {}
+ParsedHtml        :
+RawContentLength  : 67

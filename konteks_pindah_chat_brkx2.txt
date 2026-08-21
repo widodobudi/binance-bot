@@ -1,0 +1,229 @@
+================================================================================
+KONTEKS PINDAH CHAT — TRADING BOT brkX2
+Dibuat: 31/07/2026
+================================================================================
+
+## BOT & INFRASTRUKTUR
+
+**Bot:** brkX2 trading bot Binance Spot → 3Commas
+**Script live:** `binance_screener.py` di repo `widodobudi/isshdesk-dashboard`
+**Railway service:** `worker` (pacific-grace, US West)
+**Web dashboard:** `worker-production-e111.up.railway.app` (Flask, port 8080)
+**Volume data:** `/data/` (active_deals.json, trades_forwardtest.csv, near_miss_log.txt, deal_overrides.json)
+
+---
+
+## STATUS FORWARD-TEST (31/07/2026)
+
+| Strategi | Progress | W/L | Total% |
+|----------|----------|-----|--------|
+| brkX2-12h | #6/15 | 6W/0L | +17.4% |
+| Reversal-8h | #7/8 | 7W/0L | +32.6% |
+| brkX2-4h | #1/7 | 1W/1L (GIGGLE -11%) | +2.2% → negatif |
+| CrossEMA-4h | #0/7 | belum ada |
+
+---
+
+## PARAMETER LIVE (kondisi akhir sesi ini)
+
+### brkX2-12h (T1 candle close + T3-EARLY 5%-59% + T3-BASE 60%-75%):
+1. ST=+1 (Supertrend uptrend)
+2. close > EMA20
+3. close > EMA50 *(baru, ganti EMA20>EMA50 yang dihapus)*
+4. breakout3 (HH3) *(dari HH7→HH5→HH3)*
+5. vol >= 0.6x MA20
+6. RSI < 75
+7. Stoch%K < 70
+8. ~~MACD hist>0~~ → OFF (dihapus 31/07/2026)
+9. ATR% < 9% *(dari <10%)*
+10. HTF 3D: vol 3D > 0.8x MA20 *(dari EMA50+MACD → volume-based)*
+11. Perf Grade >= B (score >= 0.5)
+
+**T3-EARLY window:** 5%-59% elapsed (menit 36-424) *(dari 5%-10%)*
+**T3-BASE window:** 60%-75% elapsed
+
+### Reversal-8h:
+**T1 (candle close):**
+1. 3 candle merah berturut + turun >= 5%
+2. c0 doji (body < 20%) + harga < EMA20 dan EMA50
+3. c+1 tutup: HA bullish + close > EMA20
+4. Perf Grade >= B
+5. Vol 24h >= $1,500,000
+
+**T3-REV (intrabar):**
+1. 3 candle merah berturut + turun >= 5%
+2. c0 doji + harga < EMA20 dan EMA50
+3. c+1 SEDANG BERJALAN di elapsed 5%-50% (menit 24-240)
+4. price_now > EMA20
+- Syarat HA bull di c+1 DIHAPUS untuk T3-REV
+- HTF: tidak ada filter
+- Add fund: OFF
+- Timeout: 30 candle 8h
+
+### brkX2-4h:
+1. ST=+1
+2. MACD hist > 0
+3. ATR% >= 2%
+4. vol >= 0.25x MA20
+5. Stoch%K < 80 *(baru, 31/07/2026)*
+6. HTF 12h: vol 12h > 2.0x MA20
+7. Perf Grade >= B
+- Entry: intrabar menit ke 5-10
+- Timeout: 15 candle 4h
+
+### CrossEMA-4h:
+1. ST=-1 (downtrend)
+2. close < EMA20
+3. vol >= 0.4x MA20
+4. HTF 12h: vol 12h > 1.5x MA20
+5. cross EMA20 intrabar menit 5-15
+6. Min vol 24h: $1,000,000
+- Perf filter: OFF
+
+---
+
+## HTF FILTER SEMUA STRATEGI
+
+| Strategi | HTF TF | Syarat |
+|----------|--------|--------|
+| brkX2-12h | 3D | vol 3D > 0.8x MA20 |
+| Reversal-8h | - | tidak ada HTF |
+| brkX2-4h | 12h | vol 12h > 2.0x MA20 |
+| CrossEMA-4h | 12h | vol 12h > 1.5x MA20 |
+
+---
+
+## KEPUTUSAN BACKTEST SESI INI (31/07/2026)
+
+### brkX2-12h:
+- [DECISION] HH3: avg=+4.099% (vs HH5 +4.057%, HH7 +3.934%) → deploy HH3
+- [DECISION] ATR<9%: filter volatilitas, worst -29.49% vs baseline -49.23%
+- [DECISION] Hapus EMA20>EMA50 + hapus MACD: backtest no_ema_no_macd → ganti close>EMA50+ATR<9% → avg=+3.074% worst=-29.10% wf6 OK
+- [DECISION] HTF 3D vol sweep: 0.8xMA dipilih (dari sweep 0.5x-2.5x) → avg=+4.628% WR=79.0%
+- [DECISION] T3-EARLY window: 5%-59% (dari 5%-10%), tidak perlu backtest karena tidak mengubah kualitas trade
+
+### Reversal-8h:
+- [DECISION] T3-REV intrabar elapsed 5%-50%: avg=+4.133% WR=94.7% worst=-8.55% vs baseline +3.238%
+- [DECISION] Syarat HA bull di c+1 dihapus untuk T3-REV (backtest: identik dengan baseline)
+
+### brkX2-4h:
+- [DECISION] Vol 0.25xMA: backtest delta -0.008% dalam noise, frekuensi naik
+- [DECISION] HTF 12h vol>2.0xMA: avg +5.352% vs HTF lama +1.989%
+- [DECISION] Stoch<80: worst -48.39% vs -63.96%, delta avg -0.121%, wf6 OK
+
+### CrossEMA-4h:
+- [DECISION] HTF 12h vol>1.5xMA: avg +2.587% vs lama +0.787%, wf6 neg=1/6 OK
+- [DECISION] Min vol 24h $1jt (dari $3jt): WR 57.6% vs 50.1%
+
+---
+
+## BACKTEST FILES (L:\My Drive\tradingview\)
+
+- `backtest_hh34567_sweep.py` — HH3-7 sweep brkX2-12h
+- `backtest_hh3_filter_sweep.py` — ATR% filter untuk HH3
+- `backtest_hh3_macd_sweep.py` — MACD sweep HH3+ATR<10%
+- `backtest_hh3_ema_sweep.py` — EMA20>EMA50 variants
+- `backtest_hh3_ema_gap_sweep.py` — gap EMA20 di bawah EMA50
+- `backtest_hh3_ema_above_gap_sweep.py` — gap EMA20 di atas EMA50
+- `backtest_hh3_rsi_sweep.py` — RSI max sweep
+- `backtest_no_ema_no_macd_filter_sweep.py` — gabungan hapus EMA+MACD
+- `backtest_htf_vol_sweep_12h.py` — HTF vol 3D sweep brkX2-12h (0.5x-2.5x)
+- `backtest_htf_vol_sweep_reversal.py` — HTF Reversal-8h
+- `backtest_htf_vol_sweep_4h.py` — HTF brkX2-4h dan CrossEMA-4h
+- `backtest_crossema_vol24h_sweep.py` — CrossEMA min vol 24h
+- `backtest_reversal_intrabar_tfpct_sweep.py` — Reversal c+1 elapsed window
+- `backtest_4h_vol_sweep.py` — brkX2-4h vol 0.25x-0.40x
+- `backtest_4h_rsi_stoch_sweep.py` — brkX2-4h RSI/Stoch filter sweep
+
+---
+
+## WEB DASHBOARD
+
+**URL:** `worker-production-e111.up.railway.app`
+**Framework:** Flask (development server, OK untuk personal)
+**Port:** 8080 (env var PORT)
+
+**Fitur:**
+- Active deals: pair, strategi, entry, harga skrg, profit%, status ARMED/WAIT, toggle auto add fund, toggle auto close
+- Near miss per 4 strategi: pair, score lolos, syarat yang belum
+- Auto-refresh 30 detik + countdown timer
+- Toggle tersimpan di `/data/deal_overrides.json`
+- API endpoint: `/api/state`
+
+**Toggle override:**
+- Auto Add Fund: kalau unchecked → bot skip add fund otomatis
+- Auto Close: kalau unchecked → bot skip close otomatis, harus manual di 3Commas
+
+---
+
+## PROSEDUR HAPUS DEAL MANUAL
+
+Kalau close manual di 3Commas tapi masih muncul di dashboard:
+1. Railway → worker → Variables → `RESET_DEAL_SYMBOL` = `GIGGLEUSDT`
+2. Restart bot
+3. Bot hapus simbol dari active_deals saat startup
+4. Ubah value `RESET_DEAL_SYMBOL` jadi kosong (jangan hapus variable-nya)
+
+---
+
+## BUG FIXES SESI INI
+
+- **Perf score nan:** `_get_perf_data_1d` tidak memanggil `.json()` → fixed
+- **near_miss Reversal false positive:** indeks `entry_detail_reversal` salah (n-6 harusnya n-5) → fixed
+- **Web dashboard crash:** `run_web_dashboard` harus didefinisikan sebelum `if __name__` block → fixed
+- **Checkbox HTML bug:** atribut `name` terpotong di form auto_close → fixed
+- **HTF near_miss text:** `HTF 3D: bearish` → `HTF 3D: vol<0.8xMA (skrg X.XXxMA)` → fixed
+
+---
+
+## 3COMMAS BOT CONFIG
+
+| Bot | ID | Strategi |
+|-----|----|----------|
+| brkX2-12h | #16380123 | brkX2-12h |
+| reversal-8h | #16921019 | Reversal-8h |
+| brkX2-4h & CrossEMA | #16935970 | brkX2-4h + CrossEMA-4h |
+
+- Base order: $50 semua strategi
+- Reinvest Profit: 30% (terakumulasi $40.32)
+- Add fund: OFF untuk semua strategi
+
+---
+
+## GMAIL NOTIFICATION
+
+- Email: `widodobudi@gmail.com`
+- App password di Railway: `GMAIL_APP_PASSWORD`
+- Kirim saat: open long deal semua 7 titik (T1, T3-EARLY, T3-BASE, T3-REV, T1d, CrossEMA, Reversal intrabar)
+- Bug: email sempat tidak terkirim → sudah OK setelah fix perf score
+
+---
+
+## PROSEDUR MODIFIKASI SCRIPT (WAJIB)
+
+1. Copy existing script sebagai backup: `cp binance_screener.py binance_screener_backup.py`
+2. Modifikasi working copy
+3. Diff verifikasi: `diff backup.py modified.py | grep "^<" | wc -l` — harus 0 atau hanya yang dimaksud
+4. Kalau ada yang tidak sengaja terhapus → restore dari backup
+
+---
+
+## PENDING / TO DO
+
+- [ ] **Selesaikan GIGGLEUSDT** — deal masih di active_deals, perlu hapus via RESET_DEAL_SYMBOL
+- [ ] **Reversal-8h #8/8** — tinggal 1 deal lagi untuk selesai forward-test
+- [ ] **brkX2-12h #15/15** — masih jalan, pertimbangkan binance_screener_sizing18.py setelah selesai
+- [ ] **Login/password dashboard** — untuk masa depan bila dibuka ke user lain
+- [ ] **Ritika India scanner** — offer $190, tunggu konfirmasi, JANGAN kerja sebelum M1 paid
+- [ ] **Review jadwal:** Senin, Rabu, Jumat, Minggu jam 10:00 WIB → analisis near_miss_log.txt + tfpct_blocked_log.txt
+
+---
+
+## CATATAN PENTING
+
+- Railway auto-deploy via GitHub webhook bisa putus → re-authorize via GitHub Settings → Installed GitHub Apps
+- Stoch<80 baru ditambahkan ke brkX2-4h — GIGGLE entry di Stoch 87 harusnya sudah terblokir
+- near_miss diurutkan berdasarkan n_pass descending (terbanyak lolos di atas)
+- Flask web server tulis access log ke stderr → merah di Railway logs tapi bukan error
+- `RESET_DEAL_SYMBOL` env var untuk hapus deal dari active_deals saat restart
+

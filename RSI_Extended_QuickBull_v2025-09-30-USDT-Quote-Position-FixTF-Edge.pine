@@ -1,0 +1,209 @@
+//@version=6
+indicator("rsi_extended_QuickBull and Profit %", overlay=false, max_labels_count=500, max_lines_count=500)
+// REMARK: Tag=RSI_Extended_QuickBull • Version=v2025-09-30-USDT-Quote-Position-FixTF-Edge • Notes=Original logic as provided (no changes).
+
+// ===== Version =====
+string __ver__ = "v2025-09-30-USDT-Quote-Position-FixTF-Edge"
+
+// ===== PRICE FILTER (BB basis) =====
+groupPFILT = "===PRICE FILTER==="
+usePriceBelowBB = input.bool(true, "Require price ≤ BB basis?", group=groupPFILT)
+bbBasis = ta.sma(close, 20)
+priceOK = (not usePriceBelowBB) or (close <= bbBasis)
+
+// ===== RSI_extended (opsional visual) =====
+groupRSI = "===RSI_EXTENDED==="
+useRsiLvl = input.bool(true, "Require RSI ≤ level?", group=groupRSI)
+rsiLevel = input.float(60.00, "RSI level", step=0.10, group=groupRSI)
+overPct = input.float(1.25, "X% above RSI-MA", step=0.01, group=groupRSI)
+rsiVal = ta.rsi(close, 14)
+rsiMA = ta.sma(rsiVal, 14)
+thresh = rsiMA * (1 + overPct/100.0)
+rsiCond = not useRsiLvl or (rsiVal <= rsiLevel)
+rsiTrig = (rsiVal >= thresh) and rsiCond and priceOK
+rsiXUp = ta.crossover(rsiVal, thresh)
+plot(rsiVal, title="RSI", color=color.new(color.aqua, 0))
+plot(rsiMA, title="RSI-MA", color=color.new(color.orange, 0))
+var line xupLine = na
+if rsiXUp
+    xupLine := line.new(bar_index-1, thresh, bar_index, thresh, xloc=xloc.bar_index, extend=extend.none, color=color.new(color.lime, 0), style=line.style_solid, width=3)
+
+// ===== MANUAL AVG (WAJIB) =====
+groupMAN = "===MANUAL AVG (WAJIB)==="
+manAvgIn = input.float(999999.0, "Avg price:", step=0.0001, group=groupMAN)
+manAvg4d = math.round(manAvgIn * 10000.0) / 10000.0
+avgPrice_alert = manAvg4d
+hasAvg = manAvg4d > 0
+
+// ===== QuickBull Settings (Sederhana) =====
+groupQB = "===QuickBull Settings==="
+lowerTF_sel = input.string("15S", "Lower Timeframe", options=["10S","15S","30S","45S","1m","2m","3m","5m","10m","15m","30m","45m","1H","2H","3H","4H"], group=groupQB)
+f_resolveTF(tf) =>
+    tf=="1m"?"1":tf=="2m"?"2":tf=="3m"?"3":tf=="5m"?"5":tf=="10m"?"10":tf=="15m"?"15":tf=="30m"?"30":tf=="45m"?"45":tf=="1H"?"60":tf=="2H"?"120":tf=="3H"?"180":tf=="4H"?"240":tf
+lowerTF = f_resolveTF(lowerTF_sel)
+tolerance = input.float(1.05, "Upper Shadow Tolerance %", step=0.1, group=groupQB)
+minFat = input.int(4, "Min Fat Bull Bars", minval=1, group=groupQB)
+startBelow = input.float(2.50, "Start if price within X% below Avg", step=0.01, group=groupQB)
+disableStartBelow = input.bool(false, "Nonaktifkan Start-below? (tidak dicentang = AKTIF)", group=groupQB)
+
+// ===== Data lowerTF (untuk QuickBull) =====
+lowHigh_rt = request.security(syminfo.tickerid, lowerTF, high, lookahead=barmerge.lookahead_on)
+lowOpen_rt = request.security(syminfo.tickerid, lowerTF, open, lookahead=barmerge.lookahead_on)
+lowClose_rt = request.security(syminfo.tickerid, lowerTF, close, lookahead=barmerge.lookahead_on)
+rtPrice = close
+
+// ===== Status line: tol & minFat =====
+plot(tolerance, title="QB tolUse", display=display.status_line, format=format.percent, precision=4)
+plot(minFat, title="QB minFatUse", display=display.status_line, precision=0)
+
+// ===== Helper: streak lowerTF — Bull =====
+f_streak_ltf() =>
+    bool cond = (close > open) and ((high - close) <= high * tolerance / 100.0)
+    varip int st = 0
+    st := cond ? nz(st[1]) + 1 : 0
+    st
+int _streak_ltf = request.security(syminfo.tickerid, lowerTF, f_streak_ltf(), lookahead=barmerge.lookahead_on)
+var int streak_rt = 0
+streak_rt := _streak_ltf
+
+// ===== Peak & QuickBull signal =====
+var float peakHigh_rt = na
+prevPeak_rt = peakHigh_rt
+peakHigh_rt := (na(peakHigh_rt) or bar_index != bar_index[1]) ? lowHigh_rt : math.max(peakHigh_rt, lowHigh_rt)
+durOK_rt = streak_rt >= minFat
+startLvl_rt = hasAvg ? avgPrice_alert * (1 - startBelow/100.0) : na
+startOK_rt = disableStartBelow ? true : (hasAvg and rtPrice >= startLvl_rt)
+spike_rt = (lowHigh_rt > nz(prevPeak_rt, lowHigh_rt)) and durOK_rt
+qbSignal = spike_rt and startOK_rt
+qbSignalAL = hasAvg and qbSignal
+
+// ===== QuickBull • Visual =====
+groupQBVis = "===QuickBull • Visual==="
+showQBar = input.bool(true, "Show QuickBull arrow", group=groupQBVis)
+qColor = color.green
+showQBCount = input.bool(true, "Show QuickBull count label", group=groupQBVis)
+qbLblRight = input.int(0, "QB label right offset", minval=0, maxval=50, group=groupQBVis)
+qbLblVOff = input.float(-15.0, "QB label vertical offset (RSI units)", step=0.1, group=groupQBVis)
+qbLblBg = color.new(color.green, 10)
+qbLblTxtCol = color.black
+plotshape(showQBar and qbSignal, title="QuickBull Arrow tiny", location=location.top, style=shape.triangleup, color=qColor, size=size.tiny, text="QBull")
+var label qbLbl = na
+if showQBCount and streak_rt > 0
+    if not na(qbLbl)
+        label.delete(qbLbl)
+    _y2 = rsiVal + qbLblVOff
+    _t2 = "QBull fat=" + str.tostring(streak_rt) + "/" + str.tostring(minFat)
+    qbLbl := label.new(bar_index+qbLblRight, _y2, _t2, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, textcolor=qbLblTxtCol, color=qbLblBg, size=size.normal)
+
+// ===== QuickBear Settings =====
+groupQBear = "===QuickBear Settings==="
+bearLowerTF_sel = input.string("15S", "Lower Timeframe", options=["10S","15S","30S","45S","1m","2m","3m","5m","10m","15m","30m","45m","1H","2H","3H","4H"], group=groupQBear)
+bearLowerTF = f_resolveTF(bearLowerTF_sel)
+bearTol = input.float(1.05, "Lower Shadow Tolerance %", step=0.1, group=groupQBear)
+bearMinFat = input.int(4, "Min Fat Bear Bars", minval=1, group=groupQBear)
+bearStartAbove = input.float(2.50, "Start if price ≥ X% above Avg", step=0.01, group=groupQBear)
+disableStartAbove = input.bool(false, "Nonaktifkan Start-above? (tidak dicentang = AKTIF)", group=groupQBear)
+
+// ===== Helper: streak lowerTF — Bear =====
+f_streak_bear_ltf() =>
+    bool condB = (close < open) and ((close - low) <= close * bearTol / 100.0)
+    varip int stB = 0
+    stB := condB ? nz(stB[1]) + 1 : 0
+    stB
+int _streak_bear_ltf = request.security(syminfo.tickerid, bearLowerTF, f_streak_bear_ltf(), lookahead=barmerge.lookahead_on)
+var int streakBear_rt = 0
+streakBear_rt := _streak_bear_ltf
+durOKBear_rt = streakBear_rt >= bearMinFat
+bearLow_rt = request.security(syminfo.tickerid, bearLowerTF, low, lookahead=barmerge.lookahead_on)
+
+// ===== Start-above check (pakai harga realtime utama) =====
+startLvlBear = hasAvg ? avgPrice_alert * (1 + bearStartAbove/100.0) : na
+startOKBear = disableStartAbove ? true : (hasAvg and rtPrice >= startLvlBear)
+qBearSignal = durOKBear_rt and startOKBear
+qBearSignalAL = hasAvg and qBearSignal
+
+// ===== QuickBear • Visual =====
+groupQBearVis = "===QuickBear • Visual (Follow QuickBull)==="
+showQBearArrow = input.bool(true, "Show QuickBear arrow", group=groupQBearVis)
+showQBearCount = input.bool(true, "Show QuickBear count label", group=groupQBearVis)
+bearColor = color.red
+float qBearVOff = math.abs(qbLblVOff)
+plotshape(showQBearArrow and qBearSignal, title="QuickBear Arrow tiny", location=location.bottom, style=shape.triangledown, color=bearColor, size=size.tiny, text="QBear")
+var label qBearLbl = na
+if showQBearCount and streakBear_rt > 0
+    if not na(qBearLbl)
+        label.delete(qBearLbl)
+    _yB = rsiVal + qBearVOff
+    _tB = "QBear fat=" + str.tostring(streakBear_rt) + "/" + str.tostring(bearMinFat)
+    qBearLbl := label.new(bar_index+qbLblRight, _yB, _tB, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, textcolor=color.white, color=color.new(color.red, 10), size=size.normal)
+
+// ===== PROFIT % =====
+groupPF = "===PROFIT %==="
+pfThresh = input.float(3.00, "Trigger Alert if Profit % >", step=0.01, group=groupPF)
+showPLbl = input.bool(false, "Show Profit label", group=groupPF)
+plRight = input.int(46, "Profit label right offset", minval=1, maxval=50, group=groupPF)
+plVOff = input.float(0.0, "Profit label vertical offset", step=0.1, group=groupPF)
+plBg = color.rgb(204,232,255)
+plTxtCol = color.black
+posQuote = input.float(0.0, "Position size (USDT quote)", step=0.01, group=groupPF, tooltip="Masukkan total nominal USDT yang dibelanjakan di posisi ini (contoh 250.00).")
+profitPct = hasAvg ? (close - avgPrice_alert) / avgPrice_alert * 100.0 : na
+profit2d = na(profitPct) ? na : math.round(profitPct * 100) / 100
+profitHit = profitPct > pfThresh
+profitHitAL = hasAvg and profitHit
+profitEdge = ta.crossover(profitPct, pfThresh)
+profitHitEDGE = hasAvg and profitEdge
+
+// ===== PnL USDT berbasis QUOTE =====
+pnlUsdt = hasAvg and posQuote > 0 ? posQuote * (close/avgPrice_alert - 1.0) : na
+pnl2d = na(pnlUsdt) ? na : math.round(pnlUsdt * 100) / 100
+plot(avgPrice_alert, title="Avg (effective)", display=display.status_line)
+plot(profitPct, title="Profit %", display=display.status_line)
+plot(pnlUsdt, title="USDT P/L", display=display.status_line, precision=2)
+
+// Profit% label (single-line)
+var label plbl = na
+if showPLbl and not na(profit2d)
+    if not na(plbl)
+        label.delete(plbl)
+    _y = rsiVal + plVOff
+    _t = "Profit " + str.tostring(profit2d) + "% @Avg " + str.tostring(avgPrice_alert, "#.####") + (na(pnl2d) ? "" : " | PnL " + str.tostring(pnl2d, "#.##") + " USDT") + " | Target " + str.tostring(pfThresh) + "%"
+    plbl := label.new(bar_index+plRight, _y, _t, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_right, textcolor=plTxtCol, color=plBg, size=size.normal)
+
+// ===== USDT P/L (Unrealized) =====
+groupPNL = "===USDT P/L (UNREALIZED)==="
+showPnLLbl = input.bool(false, "Show USDT P/L label", group=groupPNL)
+pnlRight = input.int(46, "USDT P/L label right offset", minval=1, maxval=50, group=groupPNL)
+pnlVOff = input.float(-7.5, "USDT P/L label vertical offset (RSI units)", step=0.1, group=groupPNL)
+pnlBg = color.new(color.yellow, 15)
+pnlTxtCol = color.black
+var label pnlLbl = na
+if showPnLLbl and not na(pnl2d)
+    if not na(pnlLbl)
+        label.delete(pnlLbl)
+    _yP = rsiVal + pnlVOff
+    _tP = "Unrealized P/L " + str.tostring(pnl2d, "#.##") + " USDT @PosQ " + str.tostring(posQuote, "#.##") + " | Avg " + str.tostring(avgPrice_alert, "#.####")
+    pnlLbl := label.new(bar_index+pnlRight, _yP, _tP, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_right, textcolor=pnlTxtCol, color=pnlBg, size=size.normal)
+
+// ===== Alerts =====
+groupAL = "===ALERTS==="
+enableAlerts = input.bool(true, "Enable alerts", group=groupAL)
+alertcondition((rsiXUp and rsiCond and priceOK) and enableAlerts, title="RSI(1+x%)MA Realtime", message=" ")
+alertcondition(qbSignalAL and enableAlerts, title="QuickBull Realtime [TF 1–30m, OPB]", message=" ")
+alertcondition(profitHitEDGE and enableAlerts, title="Profit % [TF 5–15m, OPB]", message=" ")
+alertcondition(qBearSignalAL and enableAlerts, title="QuickBear Realtime [TF 1–30m, OPB]", message=" ")
+
+// ===== USDT P/L Alert (berbasis QUOTE) =====
+groupPNLAL = "===USDT P/L ALERT==="
+pnlMode = input.string(">=", "Trigger mode", options=[">=","<=","abs≥"], group=groupPNLAL, tooltip=">= : trigger saat P/L naik melewati ambang positif; <= : trigger saat P/L turun melewati ambang negatif; abs≥ : trigger saat |P/L| melewati ambang.")
+pnlThresh = input.float(10.00, "USDT threshold", step=0.01, group=groupPNLAL)
+// hitung edges SELALU (hindari warning 'might not execute on every bar')
+pnlEdgeUpRaw = ta.crossover(pnlUsdt, pnlThresh)
+pnlEdgeDnRaw = ta.crossunder(pnlUsdt, -pnlThresh)
+pnlEdgeAbsRaw = ta.crossover(math.abs(pnlUsdt), pnlThresh)
+// seleksi & guard
+pnlEdgeUp = not na(pnlUsdt) and pnlEdgeUpRaw
+pnlEdgeDn = not na(pnlUsdt) and pnlEdgeDnRaw
+pnlEdgeAbs = not na(pnlUsdt) and pnlEdgeAbsRaw
+pnlEdgeSel = pnlMode == ">=" ? pnlEdgeUp : pnlMode == "<=" ? pnlEdgeDn : pnlEdgeAbs
+pnlEdgeAL = enableAlerts and hasAvg and (posQuote > 0) and pnlEdgeSel
+alertcondition(pnlEdgeAL, title="USDT P/L Threshold [OPB]", message=" ")

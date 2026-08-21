@@ -1,0 +1,109 @@
+//@version=5
+// =============================================================
+//  brkX2 Verifikasi 8 Syarat  (+ filter choppy, sinkron bot live)
+//  Pasang di chart timeframe 12 JAM (12h) — sesuai bot live terkini (vol 1.2x).
+//  7 syarat entry teknikal + filter likuiditas Vol USD 24h + filter choppy.
+//  LABEL DISELARASKAN dgn format heartbeat bot (Telegram): tiap syarat tampil NILAI AKTUAL.
+//  Alat bantu VISUAL; bot tetap yg eksekusi.
+//
+//  PENTING: pasang chart pakai CANDLESTICK BIASA (bukan Heikin Ashi).
+//  PERUBAHAN vs versi lama:
+//   - TAMBAH filter choppy (body/range < 0.40 avg 10 candle -> SKIP), meniru is_choppy() bot.
+//     Bot MENOLAK entry di pair choppy walau 7/7 lolos; tanpa ini Pine bisa "kelihatan ENTRY"
+//     padahal bot diam.
+// =============================================================
+indicator(title="brkX2 Verifikasi 8 Syarat", overlay=true)
+
+// -- Parameter (samakan dengan bot & screener) --
+st_len   = input.int(10,   title="Supertrend length")
+st_mult  = input.float(3.0, title="Supertrend multiplier", step=0.1)
+ema_fast_len = input.int(20, title="EMA fast")
+ema_slow_len = input.int(50, title="EMA slow")
+brk_look = input.int(10,   title="Breakout lookback (candle)")
+vol_mult = input.float(1.2, title="Volume >= x MA (Rel Vol)", step=0.1)
+vol_ma_len = input.int(20, title="Volume MA period")
+rsi_len  = input.int(14,   title="RSI length")
+rsi_max  = input.float(75, title="RSI maksimum", step=1)
+stoch_max = input.float(70, title="Stoch %K maksimum", step=1)
+min_vol_usd = input.float(1000000, title="Min Vol USD 24h (filter likuiditas)", step=100000)
+
+// -- Filter choppy (meniru is_choppy() bot) --
+choppy_on      = input.bool(true, title="Filter choppy ON")
+choppy_min     = input.float(0.40, title="Min rata-rata body/range (choppy)", step=0.05)
+choppy_look    = input.int(10, title="Choppy lookback (candle)")
+
+// -- Pengatur posisi label menggantung --
+lbl_offset_x = input.int(8, title="Geser label (kiri-/kanan+) bar", minval=-50, maxval=50)
+lbl_offset_y = input.float(0, title="Geser label vertikal (% harga)", step=0.5)
+
+// -- Indikator --
+emaFast = ta.ema(close, ema_fast_len)
+emaSlow = ta.ema(close, ema_slow_len)
+[stLine, stDir] = ta.supertrend(st_mult, st_len)
+// ta.supertrend: direction = -1 saat uptrend (terverifikasi dari docs Pine)
+isUp = stDir < 0
+hh   = ta.highest(high, brk_look)[1]
+volMa = ta.sma(volume, vol_ma_len)
+rsiVal = ta.rsi(close, rsi_len)
+stochK = ta.sma(ta.stoch(close, high, low, 14), 3)   // Stoch %K (14,1,3): smooth_k=3
+
+// Perkiraan Vol USD 24h: jumlah (close*volume) selama jendela 24 jam.
+// Di TF 12h, 24 jam = 2 candle. Perkiraan kasar utk meniru filter quoteVolume 24h bot.
+bars_24h = math.max(1, math.round(24.0 / 12.0))       // = 2 candle utk TF 12h
+volUsd24 = math.sum(close * volume, bars_24h)
+
+// -- Filter choppy: rata-rata body/range pd N candle TERTUTUP < ambang -> choppy --
+// Bot pakai candle tertutup; di sini pakai bar [1]..[choppy_look] agar tidak ikut bar berjalan.
+bodyRatioBar(int i) =>
+    r = high[i] - low[i]
+    r > 0 ? math.abs(close[i] - open[i]) / r : 0.0
+sumRatio = 0.0
+for i = 1 to choppy_look
+    sumRatio := sumRatio + bodyRatioBar(i)
+avgBodyRatio = choppy_look > 0 ? sumRatio / choppy_look : 1.0
+isChoppy = choppy_on and (bar_index >= choppy_look) and (avgBodyRatio < choppy_min)
+
+// -- 7 Syarat entry --
+c1 = isUp                       // 1 Supertrend uptrend
+c2 = close > emaFast            // 2 close > EMA20
+c3 = emaFast > emaSlow          // 3 EMA20 > EMA50
+c4 = close > hh                 // 4 breakout 10-candle
+c5 = volume >= vol_mult * volMa // 5 volume >= 1.2x MA20 (Rel Vol)
+c6 = rsiVal < rsi_max           // 6 RSI < 75
+c7 = stochK < stoch_max         // 7 Stoch %K < 70
+cVol = volUsd24 >= min_vol_usd  // 8 filter likuiditas (universe)
+// entry hanya sah bila 7 syarat + likuiditas lolos DAN pair tidak choppy (spt bot)
+entryOK = c1 and c2 and c3 and c4 and c5 and c6 and c7 and cVol and not isChoppy
+
+// -- Plot EMA & Supertrend --
+plot(emaFast, color=color.orange, linewidth=2, title="EMA20")
+plot(emaSlow, color=color.blue,   linewidth=1, title="EMA50")
+plot(stLine, color=isUp ? color.green : color.red, linewidth=1, title="Supertrend")
+
+// -- Tanda sinyal entry --
+plotshape(entryOK, title="ENTRY", style=shape.triangleup, location=location.belowbar,
+          color=color.lime, size=size.small, text="ENTRY")
+bgcolor(entryOK ? color.new(color.green, 85) : na)
+
+// -- Panel status: LABEL MENGGANTUNG di candle terakhir --
+// Format DISELARASKAN dgn heartbeat bot: tiap syarat tampil "lolos/belum" + NILAI AKTUAL.
+chk(b) => b ? "✅ lolos" : "❌ belum"
+volX = volMa > 0 ? volume / volMa : 0.0
+var label lbl = na
+if barstate.islast
+    label.delete(lbl)
+    nPass = (c1?1:0)+(c2?1:0)+(c3?1:0)+(c4?1:0)+(c5?1:0)+(c6?1:0)+(c7?1:0)
+    txt = "brkX2 — lolos " + str.tostring(nPass) + "/7 (12h):\n" +
+          "1 Supertrend up — " + chk(c1) + "\n" +
+          "2 close>EMA20 (" + str.tostring(close, "#.######") + " vs " + str.tostring(emaFast, "#.######") + ") — " + chk(c2) + "\n" +
+          "3 EMA20>EMA50 (" + str.tostring(emaFast, "#.######") + " vs " + str.tostring(emaSlow, "#.######") + ") — " + chk(c3) + "\n" +
+          "4 breakout" + str.tostring(brk_look) + " (close " + str.tostring(close, "#.######") + " vs HH " + str.tostring(hh, "#.######") + ") — " + chk(c4) + "\n" +
+          "5 vol>=" + str.tostring(vol_mult, "#.#") + "xMA (skrg " + str.tostring(volX, "#.##") + "x) — " + chk(c5) + "\n" +
+          "6 RSI<" + str.tostring(rsi_max, "#") + " (skrg " + str.tostring(rsiVal, "#.#") + ") — " + chk(c6) + "\n" +
+          "7 Stoch%K<" + str.tostring(stoch_max, "#") + " (skrg " + str.tostring(stochK, "#.#") + ") — " + chk(c7) + "\n" +
+          "8 VolUSD24h>=" + str.tostring(min_vol_usd/1000000, "#.#") + "jt — " + chk(cVol) + "\n" +
+          "9 choppy body/range avg " + str.tostring(avgBodyRatio, "#.##") + " (min " + str.tostring(choppy_min, "#.##") + ") — " + (isChoppy ? "❌ CHOPPY (skip)" : "✅ ok") + "\n" +
+          (entryOK ? "-> ✅ ENTRY (LOLOS 7/7)" : (isChoppy ? "-> ❌ SKIP (choppy) — bot menolak" : "-> ❌ belum lolos"))
+    lbl := label.new(bar_index + lbl_offset_x, high * (1 + lbl_offset_y/100), text=txt, yloc=yloc.price,
+         color=color.white, textcolor=color.black,
+         style=label.style_label_left, size=size.normal)
