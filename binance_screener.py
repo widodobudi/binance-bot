@@ -703,23 +703,28 @@ def csv_log_open(row: dict):
     except Exception as e:
         log(f"   [CSV] gagal tulis OPEN: {e}")
 
-def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit_reason: str, strategy: str = ''):
+def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit_reason: str,
+                 strategy: str = '', base_usd: float | None = None):
     """Lengkapi baris OPEN terakhir untuk symbol ini dengan data exit (rewrite seluruh file).
-    Jika tidak ada baris OPEN (deal dibuka sebelum CSV), tambah baris CLOSED baru."""
+    Jika tidak ada baris OPEN (deal dibuka sebelum CSV), tambah baris CLOSED baru.
+    base_usd diisi dari kapital real posisi jika tersedia; ini mencegah default $8 di pasangan multi-buy seperti ONDO/USDT.
+    """
     try:
+        symbol = to_display_pair(symbol)
+        if base_usd is None:
+            base_usd = 0.0
         with trades_csv_lock:
             _csv_ensure_header()
             with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
                 rows = list(csv.DictReader(f))
-            # cari baris OPEN paling akhir utk symbol ini yg belum punya exit
             target = None
             for r in reversed(rows):
+                r['symbol'] = to_display_pair(r.get('symbol', ''))
                 if r.get('symbol') == symbol and r.get('status') == 'OPEN':
                     target = r; break
             ep_str  = f"{_fmt_price(exit_price)}" if isinstance(exit_price,(int,float)) else str(exit_price)
             pct_str = f"{profit_pct:.2f}"         if isinstance(profit_pct,(int,float)) else str(profit_pct)
             if target is None:
-                # Tidak ada baris OPEN — tambah baris CLOSED baru agar terhitung di counter
                 log(f"   [CSV] tidak ketemu baris OPEN utk {symbol} — tambah baris CLOSED baru")
                 new_row = {f: '' for f in CSV_FIELDS}
                 new_row['open_time_wib']  = ''
@@ -730,6 +735,7 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
                 new_row['close_time_wib'] = close_time_wib
                 new_row['exit_price']     = ep_str
                 new_row['profit_pct']     = pct_str
+                new_row['base_usd']       = f"{float(base_usd):.2f}" if base_usd else ''
                 new_row['exit_reason']    = exit_reason
                 new_row['status']         = 'CLOSED'
                 rows.append(new_row)
@@ -737,11 +743,12 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
                 target['close_time_wib'] = close_time_wib
                 target['exit_price']     = ep_str
                 target['profit_pct']     = pct_str
+                target['base_usd']       = f"{float(base_usd):.2f}" if base_usd else target.get('base_usd', '')
                 target['exit_reason']    = exit_reason
                 target['status']         = 'CLOSED'
             with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
                 w = csv.DictWriter(f, fieldnames=CSV_FIELDS); w.writeheader(); w.writerows(rows)
-        log(f"   [CSV] CLOSE dicatat: {symbol}")
+        log(f"   [CSV] CLOSE dicatat: {symbol} | base_usd={base_usd}")
     except Exception as e:
         log(f"   [CSV] gagal tulis CLOSE: {e}")
 
@@ -3478,11 +3485,13 @@ def thread2_monitor():
                 strat_label = "Momentum brkX2 (12h)"
             if send_close_long(sym, strat):
                 # catat ke CSV DULU supaya trade ini ikut terhitung di progress
+                total_usd = estimate_deal_total_usd(d)
                 csv_log_close(
                     to_display_pair(sym),
                     now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                     price, prof_from_entry, reason,
-                    strategy=strat
+                    strategy=strat,
+                    base_usd=total_usd
                 )
                 # ── DEAL LOG lengkap CLOSE ────────────────────────────────
                 _opened_ts = d.get('opened_candle_ts', 0)
@@ -7182,7 +7191,8 @@ def run_web_dashboard():
                 reason = "manual_close (dashboard)"
                 if send_close_long(sym, strat):
                     ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
-                    csv_log_close(to_display_pair(sym), ts, price_now, prof, reason)
+                    total_usd = estimate_deal_total_usd(d)
+                    csv_log_close(to_display_pair(sym), ts, price_now, prof, reason, strategy=strat, base_usd=total_usd)
                     _opened_ts = d.get('opened_candle_ts', 0)
                     _hold_c = round((time.time() - _opened_ts) / SECONDS_PER_CANDLE) if _opened_ts > 0 else ''
                     deal_log_write({
