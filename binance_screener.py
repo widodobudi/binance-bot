@@ -6099,134 +6099,154 @@ refreshHuntingSignals();
 
 <script src="/dash.js?v=1786097338"></script>
 <script>
-// Inject Hunting-4h ke STRAT_SECONDARY setelah dash.js selesai load
-// dash.js mendefinisikan STRAT_SECONDARY sebagai var global sehingga sudah tersedia di sini
-// ── Strategy Control ──
-const SC_LABELS = {
-  brkX2:'brkX2-12h', reversal:'Reversal-8h', brkX2_4h:'brkX2-4h',
-  brkX2_crossema:'CrossEMA-4h', akum_entry_a:'Akumulasi-4h', hunting_4h:'Hunting-4h'
+// Inject Hunting-4h ke STRAT_SECONDARY setelah dash.js selesai load.
+// Guard ini penting supaya modal tidak crash jika script dipanggil sebelum DOM siap.
+var SC_LABELS = {
+    brkX2: 'brkX2-12h',
+    reversal: 'Reversal-8h',
+    brkX2_4h: 'brkX2-4h',
+    brkX2_crossema: 'CrossEMA-4h',
+    akum_entry_a: 'Akumulasi-4h',
+    hunting_4h: 'Hunting-4h'
 };
-const SC_HAS_ADDFUND = {brkX2:true, brkX2_4h:true};
-const SC_ADDFUND_LABEL = {brkX2:'auto (score-based)'};
+var SC_HAS_ADDFUND = {brkX2: true, brkX2_4h: true};
+var SC_ADDFUND_LABEL = {brkX2: 'auto (score-based)'};
 var _scData = {};
 
 function buildStrategySelect() {
-  var keys = Object.keys(SC_LABELS);
-  var select = document.getElementById('sc-strategy-select');
-  if (!select) return;
-  select.innerHTML = '';
-  for (var i = 0; i < keys.length; i++) {
-    var k = keys[i];
-    var opt = document.createElement('option');
-    opt.value = k;
-    opt.textContent = SC_LABELS[k];
-    select.appendChild(opt);
-  }
-  select.onchange = function() {
-    fillStrategyForm(select.value);
-  };
+    var keys = Object.keys(SC_LABELS);
+    var select = document.getElementById('sc-strategy-select');
+    if (!select) return;
+    select.innerHTML = '';
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var opt = document.createElement('option');
+        opt.value = k;
+        opt.textContent = SC_LABELS[k];
+        select.appendChild(opt);
+    }
+    select.onchange = function() {
+        fillStrategyForm(select.value);
+    };
 }
 
 function fillStrategyForm(strategyKey) {
-  var cfg = _scData[strategyKey] || {enabled:true, base_usd:8, add_usd:0};
-  var form = document.getElementById('sc-form');
-  if (!form) return;
-  form.style.display = 'flex';
-  var enabled = document.getElementById('sc-form-enabled');
-  var base = document.getElementById('sc-form-base');
-  var add = document.getElementById('sc-form-add');
-  if (enabled) enabled.checked = cfg.enabled !== false;
-  if (base) base.value = cfg.base_usd || 8;
-  var hasAdd = SC_HAS_ADDFUND[strategyKey];
-  if (add) {
-    add.disabled = !hasAdd;
-    add.value = hasAdd ? (cfg.add_usd || 0) : 0;
-    add.style.opacity = hasAdd ? '1' : '0.4';
-  }
+    var cfg = _scData[strategyKey] || {enabled: true, base_usd: 8, add_usd: 0};
+    var form = document.getElementById('sc-form');
+    if (!form) return;
+    form.style.display = 'flex';
+    var enabled = document.getElementById('sc-form-enabled');
+    var base = document.getElementById('sc-form-base');
+    var add = document.getElementById('sc-form-add');
+    if (enabled) enabled.checked = cfg.enabled !== false;
+    if (base) base.value = cfg.base_usd || 8;
+    var hasAdd = !!SC_HAS_ADDFUND[strategyKey];
+    if (add) {
+        add.disabled = !hasAdd;
+        add.value = hasAdd ? (cfg.add_usd || 0) : 0;
+        add.style.opacity = hasAdd ? '1' : '0.4';
+    }
 }
 
 function loadStrategyConfig() {
-  fetch('/api/strategy_config').then(function(r){ return r.json(); }).then(function(d) {
-    _scData = d || {};
-    buildStrategySelect();
-    var select = document.getElementById('sc-strategy-select');
-    if (select && select.options.length) {
-      select.value = select.options[0].value;
-      fillStrategyForm(select.value);
-    }
-    var rows = '';
-    var keys = Object.keys(SC_LABELS);
-    if (!keys.length || !Object.keys(d || {}).length) {
-      document.getElementById('sc-body').innerHTML = '<tr><td colspan="4" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
-      return;
-    }
-    for (var i = 0; i < keys.length; i++) {
-      var k = keys[i];
-      var cfg = d[k] || {enabled:true, base_usd:8, add_usd:null};
-      var en = cfg.enabled !== false;
-      var dim = en ? '' : 'opacity:0.35;pointer-events:none';
-      var addFundCell = '';
-      if (SC_HAS_ADDFUND[k]) {
-        if (SC_ADDFUND_LABEL[k]) {
-          addFundCell = '<td style="text-align:center;padding:5px 8px"><span style="' + dim + ';color:var(--muted);font-style:italic">' + SC_ADDFUND_LABEL[k] + '</span></td>';
-        } else {
-          addFundCell = '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-add-' + k + '" value="' + (cfg.add_usd || 0) + '" min="0" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>';
-        }
-      } else {
-        addFundCell = '<td style="text-align:center;padding:5px 8px;color:var(--muted)">—</td>';
-      }
-      rows += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">'
-        + '<td style="padding:5px 8px;font-weight:600">' + SC_LABELS[k] + '</td>'
-        + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-en-' + k + '" ' + (en ? 'checked' : '') + ' onchange="onScToggle(\'' + k + '\')" style="width:16px;height:16px;cursor:pointer"></td>'
-        + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>'
-        + addFundCell
-        + '</tr>';
-    }
-    document.getElementById('sc-body').innerHTML = rows;
-  }).catch(function(e){
-    document.getElementById('sc-body').innerHTML = '<tr><td colspan="4" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
-  });
+    fetch('/api/strategy_config')
+        .then(function(r){ return r.json(); })
+        .then(function(d) {
+            _scData = d || {};
+            buildStrategySelect();
+            var select = document.getElementById('sc-strategy-select');
+            if (select && select.options.length) {
+                select.value = select.options[0].value;
+                fillStrategyForm(select.value);
+            }
+            var rows = '';
+            var keys = Object.keys(SC_LABELS);
+            var tbody = document.getElementById('sc-body');
+            if (!tbody) return;
+            if (!keys.length || !Object.keys(d || {}).length) {
+                tbody.innerHTML = '<tr><td colspan="4" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
+                return;
+            }
+            for (var i = 0; i < keys.length; i++) {
+                var k = keys[i];
+                var cfg = d[k] || {enabled: true, base_usd: 8, add_usd: null};
+                var en = cfg.enabled !== false;
+                var dim = en ? '' : 'opacity:0.35;pointer-events:none';
+                var addFundCell = '';
+                if (SC_HAS_ADDFUND[k]) {
+                    if (SC_ADDFUND_LABEL[k]) {
+                        addFundCell = '<td style="text-align:center;padding:5px 8px"><span style="' + dim + ';color:var(--muted);font-style:italic">' + SC_ADDFUND_LABEL[k] + '</span></td>';
+                    } else {
+                        addFundCell = '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-add-' + k + '" value="' + (cfg.add_usd || 0) + '" min="0" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>';
+                    }
+                } else {
+                    addFundCell = '<td style="text-align:center;padding:5px 8px;color:var(--muted)">—</td>';
+                }
+                rows += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">'
+                    + '<td style="padding:5px 8px;font-weight:600">' + SC_LABELS[k] + '</td>'
+                    + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-en-' + k + '" ' + (en ? 'checked' : '') + ' onchange="onScToggle(\'' + k + '\')" style="width:16px;height:16px;cursor:pointer"></td>'
+                    + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>'
+                    + addFundCell
+                    + '</tr>';
+            }
+            tbody.innerHTML = rows;
+        })
+        .catch(function(e) {
+            var tbody = document.getElementById('sc-body');
+            if (tbody) {
+                tbody.innerHTML = '<tr><td colspan="4" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
+            }
+        });
 }
 
 function onScToggle(k) {
-  var en = document.getElementById('sc-en-' + k).checked;
-  var baseEl = document.getElementById('sc-base-' + k);
-  if (baseEl) { baseEl.style.opacity = en ? '1' : '0.35'; baseEl.style.pointerEvents = en ? '' : 'none'; }
-  var addEl = document.getElementById('sc-add-' + k);
-  if (addEl) { addEl.style.opacity = en ? '1' : '0.35'; addEl.style.pointerEvents = en ? '' : 'none'; }
+    var en = document.getElementById('sc-en-' + k).checked;
+    var baseEl = document.getElementById('sc-base-' + k);
+    if (baseEl) { baseEl.style.opacity = en ? '1' : '0.35'; baseEl.style.pointerEvents = en ? '' : 'none'; }
+    var addEl = document.getElementById('sc-add-' + k);
+    if (addEl) { addEl.style.opacity = en ? '1' : '0.35'; addEl.style.pointerEvents = en ? '' : 'none'; }
 }
 
 function saveStrategyConfig() {
-  if (document.getElementById('sc-reset-all').checked) {
-    fetch('/api/strategy_config/reset', {method:'POST'})
-      .then(function(r){ return r.json(); })
-      .then(function(){ loadStrategyConfig(); });
-    return;
-  }
-  var select = document.getElementById('sc-strategy-select');
-  var key = select ? select.value : 'brkX2';
-  var data = {};
-  data[key] = {
-    enabled: document.getElementById('sc-form-enabled').checked,
-    base_usd: parseFloat(document.getElementById('sc-form-base').value) || 8,
-  };
-  if (SC_HAS_ADDFUND[key]) {
-    data[key].add_usd = parseFloat(document.getElementById('sc-form-add').value) || 0;
-  }
-  fetch('/api/strategy_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)})
-    .then(function(r){ return r.json(); })
-    .then(function(d){ if (d && d.ok) loadStrategyConfig(); });
+    var resetBox = document.getElementById('sc-reset-all');
+    if (resetBox && resetBox.checked) {
+        fetch('/api/strategy_config/reset', {method: 'POST'})
+            .then(function(r){ return r.json(); })
+            .then(function(){ loadStrategyConfig(); });
+        return;
+    }
+    var select = document.getElementById('sc-strategy-select');
+    var key = select ? select.value : 'brkX2';
+    var data = {};
+    var enabledEl = document.getElementById('sc-form-enabled');
+    var baseEl = document.getElementById('sc-form-base');
+    var addEl = document.getElementById('sc-form-add');
+    data[key] = {
+        enabled: enabledEl ? enabledEl.checked : true,
+        base_usd: parseFloat(baseEl ? baseEl.value : 8) || 8,
+    };
+    if (SC_HAS_ADDFUND[key]) {
+        data[key].add_usd = parseFloat(addEl ? addEl.value : 0) || 0;
+    }
+    fetch('/api/strategy_config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)})
+        .then(function(r){ return r.json(); })
+        .then(function(d){ if (d && d.ok) loadStrategyConfig(); });
 }
 
 function resetStrategyConfig() {
-  if (!confirm('Reset semua nilai ke default?')) return;
-  fetch('/api/strategy_config/reset', {method:'POST'})
-    .then(function(r){ return r.json(); })
-    .then(function(){ loadStrategyConfig(); });
+    if (!confirm('Reset semua nilai ke default?')) return;
+    fetch('/api/strategy_config/reset', {method: 'POST'})
+        .then(function(r){ return r.json(); })
+        .then(function(){ loadStrategyConfig(); });
 }
-document.addEventListener('DOMContentLoaded', function(){ setTimeout(loadStrategyConfig, 300); });
 
-STRAT_SECONDARY['Hunting-4h'] = [{key:'rsi',label:'RSI<60'}];
+document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(loadStrategyConfig, 300);
+});
+
+if (typeof STRAT_SECONDARY !== 'undefined') {
+    STRAT_SECONDARY['Hunting-4h'] = [{key: 'rsi', label: 'RSI<60'}];
+}
 </script>
 
 <!-- ═══════════════ CLOSED TRADES ═══════════════ -->
