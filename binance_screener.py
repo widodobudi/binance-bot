@@ -8213,8 +8213,24 @@ def run_web_dashboard():
                                 if r.get('status') == 'CLOSED':
                                     r = repair_stale_ondo_base_usd(r)
                                     rows.append(r)
+                phase_offsets = {
+                    'brkX2': FWDTEST_BRKX2_PHASE_OFFSET,
+                    'hunting_4h': HUNTING_FWDTEST_PHASE_OFFSET,
+                }
                 if strategy_filter:
-                    rows = [r for r in rows if r.get('strategy','') == strategy_filter]
+                    rows = [r for r in rows if (r.get('strategy') or 'brkX2') == strategy_filter]
+                    offset = phase_offsets.get(strategy_filter, 0)
+                    if offset:
+                        rows = rows[offset:]
+                else:
+                    rows_by_strategy = {}
+                    for row in rows:
+                        key = row.get('strategy') or 'brkX2'
+                        rows_by_strategy.setdefault(key, []).append(row)
+                    rows = []
+                    for key, strategy_rows in rows_by_strategy.items():
+                        offset = phase_offsets.get(key, 0)
+                        rows.extend(strategy_rows[offset:] if offset else strategy_rows)
                 # Sort terbaru dulu
                 rows.sort(key=lambda r: r.get('close_time_wib',''), reverse=True)
                 # Hitung stats dan profit$
