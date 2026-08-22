@@ -7739,6 +7739,9 @@ def run_web_dashboard():
             peak = float(deal.get("peak", entry_price) or entry_price)
             price = float(deal.get("last_price", entry_price) or entry_price)
             profit_pct = (price / entry_price - 1) * 100 - FEE_ROUND_TRIP_PCT if entry_price > 0 else 0
+            fmt_indicator = lambda key, digits: (f"{float(deal[key]):.{digits}f}" if deal.get(key) is not None else "—")
+            atr_pct = float(deal.get("atr_pct", 0) or 0)
+            hold_candles = deal.get("hold_candle_count", "—")
             message = (
                 f"OPEN LONG REPORT TERLAMBAT / RESEND\n"
                 f"Waktu open: {opened_at}\n"
@@ -7748,6 +7751,17 @@ def run_web_dashboard():
                 f"Harga terakhir: {_fmt_price(price)}\n"
                 f"Peak: {_fmt_price(peak)}\n"
                 f"Profit estimasi: {profit_pct:+.2f}%\n"
+                f"Armed: {bool(deal.get('trailing_armed', False))}\n"
+                f"ATR%: {atr_pct:.2f}%\n"
+                f"Hold candles: {hold_candles}\n"
+                f"RSI: {fmt_indicator('rsi_open', 1)}\n"
+                f"Stoch K: {fmt_indicator('stoch_k_open', 1)}\n"
+                f"Stoch D: {fmt_indicator('stoch_d_open', 1)}\n"
+                f"MACD hist: {fmt_indicator('macd_hist_open', 5)}\n"
+                f"BB%: {fmt_indicator('bb_pct_open', 3)}\n"
+                f"Williams R: {fmt_indicator('williams_r_open', 1)}\n"
+                f"CCI: {fmt_indicator('cci_open', 1)}\n"
+                f"OBV: {fmt_indicator('obv_open', 0)}\n"
                 f"Modal: ${estimate_deal_total_usd(deal):.2f}\n"
                 "Catatan: laporan dikirim ulang; tidak membuka deal baru."
             )
