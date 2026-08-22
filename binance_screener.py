@@ -2832,7 +2832,7 @@ def heartbeat_general_tick():
                      f"  - brkX2-4h   : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET,    lc_4h)}\n"
                      f"  - crossema-4h: {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST,    lc_cx)}\n"
                      f"  - hunting-4h : {_fmt_hunting_live(prog_hunt, lc_hunt)}\n"
-                     f"    hunting-4h: #{hunt_since_live} since LIVE\n"
+                     f"    hunting-4h: Close #{hunt_since_live} since LIVE\n"
                      f"  - akumulasi-4h: {_fmt_strat(prog_akum, AKUM_ENTRY_FWDTEST_TARGET, lc_akum)}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
@@ -3797,7 +3797,7 @@ def thread2_monitor():
                         since_live = max(0, done_n - HUNTING_LIVE_BASELINE)
                         prog_close = (f"\n{strat_label} LIVE: {done_n} closed"
                                       f"\n  {wl}, total {pstrat['total_pct']:+.1f}%"
-                                      f"\n{strat_label}: #{since_live} since LIVE")
+                                      f"\n{strat_label}: Close #{since_live} since LIVE")
                     else:
                         prog_close = (f"\nForward-test {strat_label}: #{done_n}/{tgt} ({status})"
                                       f"\n  {wl}, total {pstrat['total_pct']:+.1f}%")
@@ -3896,7 +3896,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
                      f"  - 4h       : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET)}\n"
                      f"  - crossema : {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST)}\n"
                      f"  - hunting  : {_fmt_hunting_live(prog_hunt)}\n"
-                     f"    hunting  : #{hunt_since_live} since LIVE")
+                     f"    hunting  : Close #{hunt_since_live} since LIVE")
 
     # Status T3 intrabar
     t3_str = ""
