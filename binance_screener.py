@@ -5669,9 +5669,11 @@ DASHBOARD_HTML = '''
   .header .status{font-size:11px;color:var(--muted)}
   .dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;margin-right:6px;animation:pulse 2s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-  .container{max-width:1200px;margin:0 auto;padding:20px}
+    .container{max-width:1200px;margin:0 auto;padding:12px 20px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px}
+    .container > .card:last-child{margin-bottom:0}
+    .container + .card{margin-top:0 !important}
   .card-header{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none}
   .card-header:hover{background:rgba(255,255,255,0.03)}
   .card-toggle{font-size:12px;color:var(--muted);margin-left:8px;transition:transform 0.2s}
