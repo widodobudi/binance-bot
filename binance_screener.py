@@ -6566,6 +6566,7 @@ function loadAutoSellConfig() {
                 });
                 if (d.asset) asset.value = d.asset;
                 if (status) status.textContent = d.enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif';
+                refreshAutoSellPrice();
             });
         }).catch(function(e){
             var asset = document.getElementById('auto-sell-asset');
@@ -6586,6 +6587,21 @@ function saveAutoSellConfig() {
                 if (status) status.textContent = d.ok ? (enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif') : 'Error: ' + d.error;
             });
     }
+
+function refreshAutoSellPrice() {
+    var asset = document.getElementById('auto-sell-asset').value;
+    var priceEl = document.getElementById('auto-sell-current-price');
+    var gapEl = document.getElementById('auto-sell-price-gap');
+    if (!asset || !priceEl) return;
+    fetch('/api/auto_sell_price?asset=' + encodeURIComponent(asset))
+        .then(function(r){ return r.json(); })
+        .then(function(d) {
+            if (!d.ok) { priceEl.textContent = 'Current price: tidak tersedia'; if (gapEl) gapEl.textContent = ''; return; }
+            priceEl.textContent = 'Current price: ' + d.price + ' USDT';
+            if (gapEl) gapEl.textContent = 'Target: ' + d.threshold + ' USDT | Jarak: ' + d.gap_pct + '%';
+        })
+        .catch(function(){ priceEl.textContent = 'Current price: tidak tersedia'; if (gapEl) gapEl.textContent = ''; });
+}
 if (typeof STRAT_SECONDARY !== 'undefined') {
     STRAT_SECONDARY['Hunting-4h'] = [{key: 'rsi', label: 'RSI<60'}];
 }
@@ -6662,6 +6678,8 @@ function renderClosedTradesRows() {
             if (av > bv) return 1 * closedTradesSortDirection;
             return 0;
             loadAutoSellConfig();
+    setInterval(refreshAutoSellPrice, 30000);
+    document.getElementById('auto-sell-asset').addEventListener('change', refreshAutoSellPrice);
         });
     }
     document.querySelectorAll('#ct-table th[data-sort-key]').forEach(function(th) {
@@ -6722,6 +6740,10 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
                 <label>Harga trigger (USDT) <input id="auto-sell-threshold" type="number" min="0" step="0.00000001" value="0" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
                 <button type="button" onclick="saveAutoSellConfig()" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
                 <button type="button" onclick="loadAutoSellConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh saldo</button>
+            </div>
+            <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;color:var(--muted)">
+                <span id="auto-sell-current-price">Current price: memuat...</span>
+                <span id="auto-sell-price-gap"></span>
             </div>
             <div id="auto-sell-status" style="margin-top:10px;color:var(--muted)">Nonaktif. Saat aktif, seluruh saldo bebas asset dijual sekali ketika harga crossing naik.</div>
         </div>
@@ -8726,6 +8748,25 @@ def run_web_dashboard():
                 return jsonify({"ok": True, "assets": get_binance_spot_assets()})
             except Exception as error:
                 return jsonify({"ok": False, "assets": [], "error": str(error)}), 500
+
+        @app.route("/api/auto_sell_price")
+        def api_auto_sell_price():
+            asset = str(request.args.get("asset", "")).upper().strip()
+            if not asset.isalnum():
+                return jsonify({"ok": False, "error": "Asset tidak valid"}), 400
+            symbol = asset + "USDT"
+            try:
+                price = get_price_now(symbol)
+                if price <= 0:
+                    return jsonify({"ok": False, "error": "Harga tidak tersedia"}), 404
+                config = load_auto_sell_config()
+                threshold = float(config.get("threshold_usdt", 0) or 0)
+                gap_pct = ((threshold / price) - 1) * 100 if threshold > 0 else 0
+                return jsonify({"ok": True, "asset": asset, "symbol": symbol,
+                                "price": _fmt_price(price), "threshold": _fmt_price(threshold),
+                                "gap_pct": f"{gap_pct:+.2f}"})
+            except Exception as error:
+                return jsonify({"ok": False, "error": str(error)}), 500
 
         @app.route("/api/auto_sell_config", methods=["GET", "POST"])
         def api_auto_sell_config():
