@@ -7338,6 +7338,12 @@ def run_web_dashboard():
                     f"Scan tiap 30 menit. Deteksi fase akumulasi (sideways post-downtrend) TF 4h. "
                     f"Scan terakhir: {_akum_last_scan_ts or 'belum ada'}."
                 ),
+                "Hunting-4h": (
+                    f"Scan Hunting terakhir: {_hunting_scan_ts}. "
+                    "Belum ada kandidat yang memenuhi seluruh syarat saat scan terakhir."
+                    if _hunting_scan_ts != "-" else
+                    "Belum ada scan Hunting-4h."
+                ),
             }
             with _akum_lock:
                 akum_entry_status = dict(_akum_entry_status)
