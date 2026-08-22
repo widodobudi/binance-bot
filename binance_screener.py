@@ -8370,7 +8370,7 @@ def run_web_dashboard():
 # ============================================================
 # AI DECISION ENGINE
 # Dipanggil saat ai_call=True di deal_overrides untuk suatu pair.
-# Menggunakan Anthropic API (claude-haiku-4-5) untuk keputusan:
+# Menggunakan Anthropic API terlebih dahulu, lalu Gemini sebagai fallback:
 #   - OPEN: buka deal atau skip (T1/T1b/T1d)
 #   - ARMED: arm trailing sekarang atau tahan (T2)
 #   - CLOSE: close deal sekarang atau hold (T2)
@@ -8379,16 +8379,17 @@ import urllib.request as _urllib_req
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AI_DECISION_MODEL  = "claude-haiku-4-5-20251001"
+GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_AI_MODEL    = os.environ.get("GEMINI_AI_MODEL", "gemini-2.5-flash")
 AI_DECISION_TIMEOUT = 10  # detik
 
 _ai_quota_notif_sent = False  # flag agar notif quota habis tidak berulang
 
-def _ai_call(prompt: str) -> str:
-    """Kirim prompt ke Anthropic API, return teks respons atau '' kalau gagal."""
+def _anthropic_ai_call(prompt: str) -> str:
+    """Panggil Anthropic sebagai provider utama."""
     global _ai_quota_notif_sent
     if not ANTHROPIC_API_KEY:
-        log("WARN [AI] ANTHROPIC_API_KEY belum di-set, skip AI decision.")
-        return ""
+        raise RuntimeError("ANTHROPIC_API_KEY belum di-set")
     try:
         import json as _json
         payload = _json.dumps({
@@ -8419,26 +8420,62 @@ def _ai_call(prompt: str) -> str:
                     daemon=True
                 ).start()
             return body["content"][0]["text"].strip()
-    except Exception as e:
-        err_str = str(e)
-        log(f"WARN [AI] API error: {err_str}")
-        # Deteksi quota habis atau billing issue
-        is_quota = any(code in err_str for code in ["429", "402", "529", "quota", "billing", "credit"])
-        if is_quota and not _ai_quota_notif_sent:
-            _ai_quota_notif_sent = True
-            _msg = (
-                "⚠️ AI Decision OFF\n"
-                f"Anthropic API error: {err_str[:80]}\n"
-                "Bot berjalan tanpa AI — semua keputusan kembali ke rule-based.\n"
-                "Cek billing/quota di console.anthropic.com"
-            )
-            send_telegram(_msg, parse_mode=None)
-            threading.Thread(
-                target=send_email_open_long,
-                args=("⚠️ AI Decision OFF — Anthropic quota habis", _msg),
-                daemon=True
-            ).start()
-        return ""
+    except Exception:
+        raise
+
+
+def _gemini_ai_call(prompt: str) -> str:
+    """Panggil Gemini sebagai fallback provider."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY belum di-set")
+    import json as _json
+    payload = _json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": 200},
+    }).encode()
+    endpoint = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        + GEMINI_AI_MODEL + ":generateContent?key=" + GEMINI_API_KEY
+    )
+    req = _urllib_req.Request(
+        endpoint,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with _urllib_req.urlopen(req, timeout=AI_DECISION_TIMEOUT) as resp:
+        body = _json.loads(resp.read())
+    return body["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
+def _ai_call(prompt: str) -> str:
+    """Anthropic -> Gemini -> rule-based Python jika kedua API gagal."""
+    global _ai_quota_notif_sent
+    anthropic_error = ""
+    try:
+        result = _anthropic_ai_call(prompt)
+        if result:
+            return result
+    except Exception as error:
+        anthropic_error = str(error)
+        log(f"WARN [AI] Anthropic gagal, mencoba Gemini fallback: {anthropic_error[:160]}")
+    try:
+        result = _gemini_ai_call(prompt)
+        if result:
+            log("[AI] Keputusan memakai Gemini fallback")
+            return result
+    except Exception as error:
+        log(f"WARN [AI] Gemini fallback gagal: {str(error)[:160]}")
+    if not _ai_quota_notif_sent:
+        _ai_quota_notif_sent = True
+        _msg = (
+            "AI Decision provider tidak tersedia.\n"
+            "Anthropic dan Gemini gagal atau credit/billing habis.\n"
+            "Bot memakai rule-based Python sebagai fallback terakhir."
+        )
+        send_telegram(_msg, parse_mode=None)
+        log(f"WARN [AI] fallback terakhir rule-based aktif; Anthropic={anthropic_error[:80]}")
+    return ""
 
 
 def fetch_htf_context_for_ai(symbol: str) -> str:
