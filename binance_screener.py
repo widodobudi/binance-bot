@@ -5898,7 +5898,8 @@ DASHBOARD_HTML = '''
       <span style="color:#f85149">P6 Drift close≤6% (filter)</span>
       <span style="color:#f85149">P7 DistRatio≤2.5x (filter)</span>
     </div>
-    <table style="width:100%;border-collapse:collapse">
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+    <table style="width:100%;min-width:1400px;border-collapse:collapse">
       <thead>
         <tr>
           <th>Pair</th>
@@ -5969,6 +5970,7 @@ DASHBOARD_HTML = '''
       {% endfor %}
       </tbody>
     </table>
+    </div>
     <div style="margin-top:10px;font-size:10px;color:var(--muted)">
       Scan otomatis tiap 30 menit. Gating wajib: OBV↑ + ATR↓≥25%. Urut skor tertinggi. Skor maks = 100.
     </div>
@@ -5980,7 +5982,8 @@ DASHBOARD_HTML = '''
         <span style="color:var(--accent);margin-left:8px">A = Spring/Fakeout</span>
         <span style="color:var(--yellow);margin-left:8px">B = Breakout+Retest</span>
       </div>
-      <table style="width:100%;border-collapse:collapse">
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+    <table style="width:100%;min-width:520px;border-collapse:collapse">
         <thead>
           <tr>
             <th>Pair</th>
@@ -6016,7 +6019,8 @@ DASHBOARD_HTML = '''
         </tr>
         {% endfor %}
         </tbody>
-      </table>
+    </table>
+    </div>
     </div>
 
     {% else %}
