@@ -5740,7 +5740,7 @@ DASHBOARD_HTML = '''
 <style>
   :root{--bg:#0f1117;--surface:#1a1d2e;--border:#2a2d3e;--accent:#4f9eff;--green:#00c896;--red:#ff4f6a;--yellow:#ffb84f;--text:#e2e8f0;--muted:#8892a4;--font:'SF Mono','Fira Code',monospace}
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px}
+    body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;overflow-x:hidden}
   .header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:16px}
   .header h1{font-size:15px;color:var(--accent);letter-spacing:.05em}
   .header .status{font-size:11px;color:var(--muted)}
@@ -5789,6 +5789,20 @@ DASHBOARD_HTML = '''
 </div>
 
 <!-- ═══════════════ STRATEGY CONTROL ═══════════════ -->
+<div class="container" style="margin-bottom:16px">
+    <div class="card">
+        <div class="card-header" onclick="toggleCard(this)"><h2>AI DECISION PROVIDER <span class="card-toggle">&#9660;</span></h2></div>
+        <div class="card-body" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:11px">
+            <label style="display:flex;align-items:center;gap:6px;color:var(--muted)">
+                <span>Mode:</span>
+                <select id="ai-provider-mode" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px">
+                    <option value="anthropic_gemini">Anthropic → Gemini otomatis</option>
+                    <option value="anthropic_only">Anthropic saja</option>
+                    <option value="gemini_only">Gemini AI Studio saja</option>
+                    <option value="rule_based">Rule-based Python saja</option>
+                </select>
+            </label>
+            <button type="button" onclick="event.stopPropagation();saveAIProviderConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
             <span id="ai-provider-status" style="color:var(--muted)">Loading...</span>
         </div>
     </div>
