@@ -2799,14 +2799,14 @@ def heartbeat_general_tick():
             sym = last_close.get('symbol','?')
             t   = last_close.get('time','?')
             pct = last_close.get('profit_pct','?')
-            base += f"\n    ↳ Close terakhir: {sym} {t} WIB {pct}%"
+            base += f"\n    ↳ Last Close: {sym} {t} WIB {pct}%"
         return base
     def _fmt_hunting_live(p, last_close=None):
         if p is None or p['n'] == 0:
             return "LIVE (belum ada close fase aktif)"
         base = f"LIVE: {p['n']} closed ({p['win']}W/{p['loss']}L, total {p['total_pct']:+.1f}%)"
         if last_close and last_close.get('time'):
-            base += f"\n    ↳ Close terakhir: {last_close.get('symbol','?')} {last_close.get('time','?')} WIB {last_close.get('profit_pct','?')}%"
+            base += f"\n    ↳ Last Close: {last_close.get('symbol','?')} {last_close.get('time','?')} WIB {last_close.get('profit_pct','?')}%"
         return base
     prog_all  = csv_progress_active()
     prog_brk  = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)
