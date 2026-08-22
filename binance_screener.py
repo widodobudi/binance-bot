@@ -6435,10 +6435,18 @@ function simulateBalanceConversion() {
             var status = document.getElementById('auto-sell-status');
             if (enabled) enabled.checked = !!d.enabled;
             if (threshold) threshold.value = d.threshold_usdt || 0;
-            return fetch('/api/binance_spot_assets').then(function(r){ return r.json(); }).then(function(a) {
+            return fetch('/api/binance_spot_assets').then(function(r){
+                return r.json().then(function(a){ if (!r.ok || !a.ok) throw new Error(a.error || 'Gagal membaca aset Binance'); return a; });
+            }).then(function(a) {
                 if (!asset) return;
                 asset.innerHTML = '';
-                (a.assets || []).forEach(function(item) {
+                var assets = a.assets || [];
+                if (!assets.length) {
+                    asset.innerHTML = '<option value="">Tidak ada aset bebas</option>';
+                    if (status) status.textContent = 'Tidak ada aset bebas yang dapat dijual';
+                    return;
+                }
+                assets.forEach(function(item) {
                     var option = document.createElement('option');
                     option.value = item.asset;
                     option.textContent = item.asset + ' (' + item.free + ')';
@@ -6448,6 +6456,8 @@ function simulateBalanceConversion() {
                 if (status) status.textContent = d.enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif';
             });
         }).catch(function(e){
+            var asset = document.getElementById('auto-sell-asset');
+            if (asset) asset.innerHTML = '<option value="">Gagal memuat aset</option>';
             var status = document.getElementById('auto-sell-status');
             if (status) status.textContent = 'Tidak dapat membaca saldo: ' + e;
         });
