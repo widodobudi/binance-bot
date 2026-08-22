@@ -5642,10 +5642,6 @@ DASHBOARD_HTML = '''
           <span>Strategy:</span>
           <select id="sc-strategy-select" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;min-width:160px"></select>
         </label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
-          <input type="checkbox" id="sc-reset-all" style="cursor:pointer">
-          <span>Reset BO semua strategi</span>
-        </label>
         <button onclick="saveStrategyConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
         <button onclick="resetStrategyConfig()" style="background:rgba(255,100,100,.15);color:var(--red);border:1px solid var(--red);border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer">RESET</button>
       </div>
@@ -6226,13 +6222,6 @@ function onScToggle(k) {
 }
 
 function saveStrategyConfig() {
-    var resetBox = document.getElementById('sc-reset-all');
-    if (resetBox && resetBox.checked) {
-        fetch('/api/strategy_config/reset', {method: 'POST'})
-            .then(function(r){ return r.json(); })
-            .then(function(){ loadStrategyConfig(); });
-        return;
-    }
     var select = document.getElementById('sc-strategy-select');
     var key = select ? select.value : 'brkX2';
     var data = {};
