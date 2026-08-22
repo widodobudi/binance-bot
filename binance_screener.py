@@ -6465,7 +6465,8 @@ if (typeof STRAT_SECONDARY !== 'undefined') {
 </script>
 
 <!-- ═══════════════ CLOSED TRADES ═══════════════ -->
-<div class="card" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 22px;margin-top:20px">
+<div class="container" style="margin-top:12px">
+<div class="card" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 22px;margin-top:0">
     <div class="card-header" onclick="toggleCard(this)" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">CLOSED TRADES <span class="card-toggle">&#9660;</span></h2>
     <div style="display:flex;gap:8px;align-items:center">
@@ -6499,6 +6500,7 @@ if (typeof STRAT_SECONDARY !== 'undefined') {
       <tbody id="ct-body"><tr><td colspan="10" style="color:var(--muted);padding:12px 8px;text-align:center">Klik Refresh untuk muat data</td></tr></tbody>
     </table>
   </div>
+</div>
 </div>
 <script>
 var closedTradesRows = [];
