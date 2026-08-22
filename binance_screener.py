@@ -6398,17 +6398,17 @@ if (typeof STRAT_SECONDARY !== 'undefined') {
   </div>
   <div id="ct-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:11px"></div>
   <div style="overflow-x:auto">
-    <table style="width:100%;border-collapse:collapse;font-size:11px">
+    <table id="ct-table" style="width:100%;border-collapse:collapse;font-size:11px">
       <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
-        <th style="text-align:left;padding:5px 8px">Close</th>
-        <th style="text-align:left;padding:5px 8px">Pair</th>
-        <th style="text-align:left;padding:5px 8px">Strategi</th>
+        <th data-sort-key="close_time" onclick="sortClosedTrades('close_time')" style="text-align:left;padding:5px 8px;cursor:pointer">Close</th>
+        <th data-sort-key="symbol" onclick="sortClosedTrades('symbol')" style="text-align:left;padding:5px 8px;cursor:pointer">Pair</th>
+        <th data-sort-key="strategy" onclick="sortClosedTrades('strategy')" style="text-align:left;padding:5px 8px;cursor:pointer">Strategi</th>
         <th style="text-align:right;padding:5px 8px">Entry</th>
         <th style="text-align:right;padding:5px 8px">Exit</th>
-        <th style="text-align:right;padding:5px 8px">Profit%</th>
-        <th style="text-align:right;padding:5px 8px">Profit$</th>
+        <th data-sort-key="profit_pct" onclick="sortClosedTrades('profit_pct')" style="text-align:right;padding:5px 8px;cursor:pointer">Profit%</th>
+        <th data-sort-key="profit_usd" onclick="sortClosedTrades('profit_usd')" style="text-align:right;padding:5px 8px;cursor:pointer">Profit$</th>
         <th style="text-align:right;padding:5px 8px">Modal</th>
-        <th style="text-align:right;padding:5px 8px">Durasi</th>
+        <th data-sort-key="duration" onclick="sortClosedTrades('duration')" style="text-align:right;padding:5px 8px;cursor:pointer">Durasi</th>
         <th style="text-align:left;padding:5px 8px">Alasan</th>
       </tr></thead>
       <tbody id="ct-body"><tr><td colspan="10" style="color:var(--muted);padding:12px 8px;text-align:center">Klik Refresh untuk muat data</td></tr></tbody>
@@ -6416,6 +6416,65 @@ if (typeof STRAT_SECONDARY !== 'undefined') {
   </div>
 </div>
 <script>
+var closedTradesRows = [];
+var closedTradesSortKey = '';
+var closedTradesSortDirection = 1;
+
+function sortClosedTrades(key) {
+    if (closedTradesSortKey === key) closedTradesSortDirection *= -1;
+    else { closedTradesSortKey = key; closedTradesSortDirection = 1; }
+    renderClosedTradesRows();
+}
+
+function renderClosedTradesRows() {
+    var rows = closedTradesRows.slice();
+    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi',akum_entry_b:'Akumulasi'};
+    if (closedTradesSortKey) {
+        rows.sort(function(a,b) {
+            var av = a[closedTradesSortKey] || '';
+            var bv = b[closedTradesSortKey] || '';
+            if (closedTradesSortKey === 'profit_pct' || closedTradesSortKey === 'profit_usd') {
+                av = parseFloat(av || 0); bv = parseFloat(bv || 0);
+            } else if (closedTradesSortKey === 'strategy') {
+                av = strat_map[av] || av; bv = strat_map[bv] || bv;
+            } else if (closedTradesSortKey === 'duration') {
+                var durationMinutes = function(value) {
+                    var match = String(value).match(/(\d+)j\s*(\d+)m|^(\d+)m$/);
+                    return match ? (match[1] ? parseInt(match[1]) * 1440 + parseInt(match[2]) : parseInt(match[3])) : -1;
+                };
+                av = durationMinutes(av); bv = durationMinutes(bv);
+            }
+            if (av < bv) return -1 * closedTradesSortDirection;
+            if (av > bv) return 1 * closedTradesSortDirection;
+            return 0;
+        });
+    }
+    document.querySelectorAll('#ct-table th[data-sort-key]').forEach(function(th) {
+        var label = th.getAttribute('data-sort-key');
+        var text = {close_time:'Close',symbol:'Pair',strategy:'Strategi',profit_pct:'Profit%',profit_usd:'Profit$',duration:'Durasi'}[label];
+        th.textContent = text + (closedTradesSortKey === label ? (closedTradesSortDirection === 1 ? ' ▲' : ' ▼') : '');
+    });
+    var tbody = document.getElementById('ct-body');
+    if (!rows.length) { tbody.innerHTML = '<tr><td colspan="10" style="color:var(--muted);padding:12px 8px;text-align:center">Belum ada data closed trades</td></tr>'; return; }
+    tbody.innerHTML = rows.map(function(r) {
+            var pct = parseFloat(r.profit_pct||0);
+            var usd = parseFloat(r.profit_usd||0);
+            var clr = pct>=0?'var(--green)':'var(--red)';
+            return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">' +
+                '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.close_time||'').substring(0,16) + '</td>' +
+                '<td style="padding:5px 8px;font-weight:600">' + (r.symbol||'-') + '</td>' +
+                '<td style="padding:5px 8px;color:var(--muted)">' + (strat_map[r.strategy]||r.strategy||'-') + '</td>' +
+                '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.entry_price||'-') + '</td>' +
+                '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.exit_price||'-') + '</td>' +
+                '<td style="padding:5px 8px;text-align:right;color:' + clr + '">' + (pct>=0?'+':'') + pct.toFixed(2) + '%</td>' +
+                '<td style="padding:5px 8px;text-align:right;color:' + clr + '">' + (usd>=0?'+':'') + usd.toFixed(2) + '</td>' +
+                '<td style="padding:5px 8px;text-align:right;color:var(--muted)">$' + (r.base_usd||'-') + '</td>' +
+                '<td style="padding:5px 8px;text-align:right;color:var(--muted)">' + (r.duration||'-') + '</td>' +
+                '<td style="padding:5px 8px;color:var(--muted);font-size:10px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (r.exit_reason||'') + '">' + (r.exit_reason||'-') + '</td>' +
+            '</tr>';
+    }).join('');
+}
+
 function loadClosedTrades() {
   var strat = document.getElementById('ct-filter-strat').value;
   var url = '/api/closed_trades' + (strat ? '?strategy=' + strat : '');
@@ -6432,27 +6491,8 @@ function loadClosedTrades() {
       'PnL%: <b style="color:' + (pnl_pct>=0?'var(--green)':'var(--red)') + '">' + (pnl_pct>=0?'+':'') + pnl_pct.toFixed(1) + '%</b>',
       'PnL$: <b style="color:' + (pnl_usd>=0?'var(--green)':'var(--red)') + '">' + (pnl_usd>=0?'+':'') + pnl_usd.toFixed(2) + ' USD</b>',
     ].join('<span style="color:var(--border);margin:0 4px">|</span>');
-    var rows = d.trades || [];
-    var tbody = document.getElementById('ct-body');
-    if (!rows.length) { tbody.innerHTML = '<tr><td colspan="10" style="color:var(--muted);padding:12px 8px;text-align:center">Belum ada data closed trades</td></tr>'; return; }
-    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi',akum_entry_b:'Akumulasi'};
-    tbody.innerHTML = rows.map(function(r) {
-      var pct = parseFloat(r.profit_pct||0);
-      var usd = parseFloat(r.profit_usd||0);
-      var clr = pct>=0?'var(--green)':'var(--red)';
-      return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">' +
-        '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.close_time||'').substring(0,16) + '</td>' +
-        '<td style="padding:5px 8px;font-weight:600">' + (r.symbol||'-') + '</td>' +
-        '<td style="padding:5px 8px;color:var(--muted)">' + (strat_map[r.strategy]||r.strategy||'-') + '</td>' +
-        '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.entry_price||'-') + '</td>' +
-        '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.exit_price||'-') + '</td>' +
-        '<td style="padding:5px 8px;text-align:right;color:' + clr + '">' + (pct>=0?'+':'') + pct.toFixed(2) + '%</td>' +
-        '<td style="padding:5px 8px;text-align:right;color:' + clr + '">' + (usd>=0?'+':'') + usd.toFixed(2) + '</td>' +
-        '<td style="padding:5px 8px;text-align:right;color:var(--muted)">$' + (r.base_usd||'-') + '</td>' +
-        '<td style="padding:5px 8px;text-align:right;color:var(--muted)">' + (r.duration||'-') + '</td>' +
-        '<td style="padding:5px 8px;color:var(--muted);font-size:10px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (r.exit_reason||'') + '">' + (r.exit_reason||'-') + '</td>' +
-      '</tr>';
-    }).join('');
+        closedTradesRows = d.trades || [];
+        renderClosedTradesRows();
   }).catch(function(e){ document.getElementById('ct-body').innerHTML = '<tr><td colspan="10" style="color:var(--red);padding:8px">Error: ' + e + '</td></tr>'; });
 }
 window.addEventListener('load', function(){ loadClosedTrades(); });
