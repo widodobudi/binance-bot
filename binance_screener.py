@@ -5741,7 +5741,7 @@ DASHBOARD_HTML = '''
   :root{--bg:#0f1117;--surface:#1a1d2e;--border:#2a2d3e;--accent:#4f9eff;--green:#00c896;--red:#ff4f6a;--yellow:#ffb84f;--text:#e2e8f0;--muted:#8892a4;--font:'SF Mono','Fira Code',monospace}
   *{box-sizing:border-box;margin:0;padding:0}
     body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;overflow-x:hidden}
-  .header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:16px}
+    .header{max-width:1200px;width:calc(100% - 40px);margin:0 auto;background:var(--surface);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;padding:12px 20px;display:flex;align-items:center;gap:16px}
   .header h1{font-size:15px;color:var(--accent);letter-spacing:.05em}
   .header .status{font-size:11px;color:var(--muted)}
   .dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;margin-right:6px;animation:pulse 2s infinite}
