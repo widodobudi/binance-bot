@@ -5746,8 +5746,9 @@ DASHBOARD_HTML = '''
           <th style="text-align:center;padding:5px 8px">Gunakan Setting Modal</th>
           <th style="text-align:center;padding:5px 8px">Base Order (USDT)</th>
           <th style="text-align:center;padding:5px 8px">Add Fund (USDT)</th>
+                    <th style="text-align:center;padding:5px 8px">Action</th>
         </tr></thead>
-        <tbody id="sc-body"><tr><td colspan="5" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
+                <tbody id="sc-body"><tr><td colspan="6" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
     </table>
     </div>
     </div>
@@ -6261,16 +6262,16 @@ function loadStrategyConfig() {
                 var strategyEnabled = cfg.strategy_enabled !== false;
                 var sizingEnabled = cfg.sizing_enabled !== false;
                 var dim = sizingEnabled ? '' : 'opacity:0.35;pointer-events:none';
-                var saveButton = '<button type="button" onclick="saveStrategyConfig(this)" style="margin-left:8px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>';
+                var saveButton = '<button type="button" onclick="saveStrategyConfig(this)" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>';
                 var addFundCell = '';
                 if (SC_HAS_ADDFUND[k]) {
                     if (SC_ADDFUND_LABEL[k]) {
-                        addFundCell = '<td style="text-align:center;padding:5px 8px;white-space:nowrap"><span style="' + dim + ';color:var(--muted);font-style:italic">' + SC_ADDFUND_LABEL[k] + '</span>' + saveButton + '</td>';
+                        addFundCell = '<td style="text-align:center;padding:5px 8px;white-space:nowrap"><span style="' + dim + ';color:var(--muted);font-style:italic">' + SC_ADDFUND_LABEL[k] + '</span></td>';
                     } else {
-                        addFundCell = '<td style="text-align:center;padding:5px 8px;white-space:nowrap"><input type="number" id="sc-add-' + k + '" value="' + (cfg.add_usd || 0) + '" min="0" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '">' + saveButton + '</td>';
+                        addFundCell = '<td style="text-align:center;padding:5px 8px;white-space:nowrap"><input type="number" id="sc-add-' + k + '" value="' + (cfg.add_usd || 0) + '" min="0" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>';
                     }
                 } else {
-                    addFundCell = '<td style="text-align:center;padding:5px 8px;color:var(--muted);white-space:nowrap">—' + saveButton + '</td>';
+                    addFundCell = '<td style="text-align:center;padding:5px 8px;color:var(--muted);white-space:nowrap">—</td>';
                 }
                 rows += '<tr data-strategy="' + k + '" style="border-bottom:1px solid rgba(255,255,255,0.04)">'
                     + '<td style="padding:5px 8px;font-weight:600">' + SC_LABELS[k] + '</td>'
@@ -6278,6 +6279,7 @@ function loadStrategyConfig() {
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-size-' + k + '" ' + (sizingEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>'
                     + addFundCell
+                    + '<td style="text-align:center;padding:5px 8px">' + saveButton + '</td>'
                     + '</tr>';
             }
             tbody.innerHTML = rows;
@@ -6290,7 +6292,7 @@ function loadStrategyConfig() {
         .catch(function(e) {
             var tbody = document.getElementById('sc-body');
             if (tbody) {
-                tbody.innerHTML = '<tr><td colspan="5" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
             }
         });
 }
