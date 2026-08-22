@@ -5710,6 +5710,22 @@ DASHBOARD_HTML = '''
 
 <!-- ═══════════════ STRATEGY CONTROL ═══════════════ -->
 <div class="container" style="margin-bottom:16px">
+    <div class="card">
+        <div class="card-header"><h2>AI DECISION PROVIDER</h2></div>
+        <div class="card-body" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:11px">
+            <label style="display:flex;align-items:center;gap:6px;color:var(--muted)">
+                <span>Mode:</span>
+                <select id="ai-provider-mode" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px">
+                    <option value="anthropic_gemini">Anthropic → Gemini otomatis</option>
+                    <option value="anthropic_only">Anthropic saja</option>
+                    <option value="gemini_only">Gemini AI Studio saja</option>
+                    <option value="rule_based">Rule-based Python saja</option>
+                </select>
+            </label>
+            <button type="button" onclick="saveAIProviderConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
+            <span id="ai-provider-status" style="color:var(--muted)">Loading...</span>
+        </div>
+    </div>
   <div class="card">
     <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
       <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">STRATEGY CONTROL</h2>
@@ -6316,7 +6332,23 @@ document.addEventListener('DOMContentLoaded', function() {
     if (pauseBox) pauseBox.checked = true;
     pauseRefresh();
     setTimeout(loadStrategyConfig, 300);
+    loadAIProviderConfig();
 });
+
+function loadAIProviderConfig() {
+    fetch('/api/ai_provider_config').then(function(r){ return r.json(); }).then(function(d) {
+        var mode = document.getElementById('ai-provider-mode');
+        var status = document.getElementById('ai-provider-status');
+        if (mode) mode.value = d.mode || 'anthropic_gemini';
+        if (status) status.textContent = 'Anthropic: ' + (d.anthropic_configured ? 'siap' : 'belum') + ' | Gemini: ' + (d.gemini_configured ? 'siap' : 'belum') + ' | Terakhir: ' + (d.last_provider || 'rule-based Python');
+    });
+}
+
+function saveAIProviderConfig() {
+    var mode = document.getElementById('ai-provider-mode').value;
+    fetch('/api/ai_provider_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:mode})})
+        .then(function(){ loadAIProviderConfig(); });
+}
 
 if (typeof STRAT_SECONDARY !== 'undefined') {
     STRAT_SECONDARY['Hunting-4h'] = [{key: 'rsi', label: 'RSI<60'}];
@@ -8259,6 +8291,15 @@ def run_web_dashboard():
             log("[STRATEGY_CONFIG] Reset ke default")
             return jsonify({"ok": True})
 
+        @app.route("/api/ai_provider_config", methods=["GET", "POST"])
+        def api_ai_provider_config():
+            if request.method == "POST":
+                try:
+                    save_ai_provider_config((request.json or {}).get("mode", "anthropic_gemini"))
+                except ValueError as error:
+                    return jsonify({"ok": False, "error": str(error)}), 400
+            return jsonify({"ok": True, **load_ai_provider_config()})
+
         @app.route("/api/hunting_config", methods=["POST"])
         def api_hunting_config():
             with _hunting_lock:
@@ -8382,6 +8423,10 @@ AI_DECISION_MODEL  = "claude-haiku-4-5-20251001"
 GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_AI_MODEL    = os.environ.get("GEMINI_AI_MODEL", "gemini-2.5-flash")
 AI_DECISION_TIMEOUT = 10  # detik
+AI_PROVIDER_CONFIG_FILE = os.path.join(DATA_DIR, "ai_provider_config.json")
+AI_PRIMARY_PROVIDER = os.environ.get("AI_PRIMARY_PROVIDER", "anthropic").lower()
+AI_FALLBACK_PROVIDER = os.environ.get("AI_FALLBACK_PROVIDER", "gemini").lower()
+AI_LAST_PROVIDER = "rule-based Python"
 
 _ai_quota_notif_sent = False  # flag agar notif quota habis tidak berulang
 
@@ -8449,23 +8494,35 @@ def _gemini_ai_call(prompt: str) -> str:
 
 
 def _ai_call(prompt: str) -> str:
-    """Anthropic -> Gemini -> rule-based Python jika kedua API gagal."""
-    global _ai_quota_notif_sent
+    """Panggil provider terpilih lalu fallback provider dan rule-based."""
+    global _ai_quota_notif_sent, AI_LAST_PROVIDER
+    mode = load_ai_provider_config().get("mode", "anthropic_gemini")
+    if mode == "rule_based":
+        AI_LAST_PROVIDER = "rule-based Python"
+        return ""
+    if mode == "anthropic_only":
+        providers = ["anthropic"]
+    elif mode == "gemini_only":
+        providers = ["gemini"]
+    else:
+        providers = [AI_PRIMARY_PROVIDER, AI_FALLBACK_PROVIDER]
+        providers = [provider for provider in providers if provider in {"anthropic", "gemini"}]
+        if not providers:
+            providers = ["anthropic", "gemini"]
+        providers = list(dict.fromkeys(providers))
     anthropic_error = ""
-    try:
-        result = _anthropic_ai_call(prompt)
-        if result:
-            return result
-    except Exception as error:
-        anthropic_error = str(error)
-        log(f"WARN [AI] Anthropic gagal, mencoba Gemini fallback: {anthropic_error[:160]}")
-    try:
-        result = _gemini_ai_call(prompt)
-        if result:
-            log("[AI] Keputusan memakai Gemini fallback")
-            return result
-    except Exception as error:
-        log(f"WARN [AI] Gemini fallback gagal: {str(error)[:160]}")
+    for provider in providers:
+        try:
+            result = _anthropic_ai_call(prompt) if provider == "anthropic" else _gemini_ai_call(prompt)
+            if result:
+                AI_LAST_PROVIDER = "Anthropic" if provider == "anthropic" else "Gemini AI Studio"
+                if provider == "gemini": log("[AI] Keputusan memakai Gemini fallback")
+                return result
+        except Exception as error:
+            error_text = str(error)
+            if provider == "anthropic": anthropic_error = error_text
+            log(f"WARN [AI] {provider} gagal: {error_text[:160]}")
+    AI_LAST_PROVIDER = "rule-based Python"
     if not _ai_quota_notif_sent:
         _ai_quota_notif_sent = True
         _msg = (
@@ -8476,6 +8533,34 @@ def _ai_call(prompt: str) -> str:
         send_telegram(_msg, parse_mode=None)
         log(f"WARN [AI] fallback terakhir rule-based aktif; Anthropic={anthropic_error[:80]}")
     return ""
+
+
+def load_ai_provider_config() -> dict:
+    """Muat mode provider dari file; environment variables menjadi default."""
+    default = {"mode": "anthropic_gemini"}
+    try:
+        if os.path.exists(AI_PROVIDER_CONFIG_FILE):
+            with open(AI_PROVIDER_CONFIG_FILE, encoding="utf-8") as file:
+                mode = json.load(file).get("mode", default["mode"])
+                if mode in {"anthropic_gemini", "anthropic_only", "gemini_only", "rule_based"}:
+                    default["mode"] = mode
+    except Exception as error:
+        log(f"WARN load_ai_provider_config: {error}")
+    return {**default, "primary": AI_PRIMARY_PROVIDER, "fallback": AI_FALLBACK_PROVIDER,
+            "last_provider": AI_LAST_PROVIDER,
+            "anthropic_configured": bool(ANTHROPIC_API_KEY),
+            "gemini_configured": bool(GEMINI_API_KEY)}
+
+
+def save_ai_provider_config(mode: str) -> None:
+    if mode not in {"anthropic_gemini", "anthropic_only", "gemini_only", "rule_based"}:
+        raise ValueError("mode provider tidak valid")
+    with open(AI_PROVIDER_CONFIG_FILE, "w", encoding="utf-8") as file:
+        json.dump({"mode": mode}, file, indent=2)
+
+
+def ai_provider_note() -> str:
+    return f"Provider: {AI_LAST_PROVIDER}"
 
 
 def fetch_htf_context_for_ai(symbol: str) -> str:
@@ -8649,6 +8734,7 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
         send_telegram(
             f"🤖 AI Decision | {to_display_pair(symbol)}\n"
             f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"{ai_provider_note()}\n"
             f"Strategi : {strategy}\n"
             f"Event    : OPEN LONG\n"
             f"Keputusan: ❌ SKIP\n"
@@ -8660,6 +8746,7 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
             send_telegram(
                 f"🤖 AI Analysis | {to_display_pair(symbol)}\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                f"{ai_provider_note()}\n"
                 f"Keputusan: ✅ OPEN\n"
                 f"{reasoning}",
                 parse_mode=None
@@ -8710,6 +8797,7 @@ def ai_decision_armed(symbol: str, strategy: str, d: dict, price: float, peak: f
         send_telegram(
             f"🤖 AI Decision | {to_display_pair(symbol)}\n"
             f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"{ai_provider_note()}\n"
             f"Strategi : {strategy}\n"
             f"Event    : ARMED trailing\n"
             f"Profit pk: {profit_peak:+.2f}%\n"
@@ -8722,6 +8810,7 @@ def ai_decision_armed(symbol: str, strategy: str, d: dict, price: float, peak: f
             send_telegram(
                 f"🤖 AI Analysis | {to_display_pair(symbol)}\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                f"{ai_provider_note()}\n"
                 f"Keputusan: ✅ ARM\n"
                 f"{reasoning}",
                 parse_mode=None
@@ -8844,6 +8933,7 @@ def ai_decision_near_timeout(symbol: str, strategy: str, d: dict, price: float, 
     send_telegram(
         f"🤖 AI Decision | {to_display_pair(symbol)}\n"
         f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+        f"{ai_provider_note()}\n"
         f"Strategi : {strategy}\n"
         f"Event    : NEAR TIMEOUT (candle {hold_now}/{max_candle})\n"
         f"Profit   : {profit_after_fee:+.2f}% (setelah fee)\n"
@@ -8895,6 +8985,7 @@ def ai_decision_close(symbol: str, strategy: str, d: dict, price: float, peak: f
         send_telegram(
             f"🤖 AI Decision | {to_display_pair(symbol)}\n"
             f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"{ai_provider_note()}\n"
             f"Strategi : {strategy}\n"
             f"Event    : CLOSE ({reason[:40]})\n"
             f"Profit   : {profit_after_fee:+.2f}% (setelah fee)\n"
@@ -8936,6 +9027,7 @@ def ai_decision_close(symbol: str, strategy: str, d: dict, price: float, peak: f
         send_telegram(
             f"🤖 AI Decision | {to_display_pair(symbol)}\n"
             f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"{ai_provider_note()}\n"
             f"Strategi : {strategy}\n"
             f"Event    : CLOSE ({reason[:40]})\n"
             f"Profit   : {profit_now:+.2f}%\n"
