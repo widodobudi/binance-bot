@@ -6135,7 +6135,7 @@ function buildStrategySelect() {
         select.appendChild(opt);
     }
     select.onchange = function() {
-        fillStrategyForm(select.value);
+        loadStrategyConfig();
     };
 }
 
@@ -6160,14 +6160,19 @@ function loadStrategyConfig() {
         .then(function(r){ return r.json(); })
         .then(function(d) {
             _scData = d || {};
-            buildStrategySelect();
             var select = document.getElementById('sc-strategy-select');
+            var selectedKey = select ? select.value : '';
+            buildStrategySelect();
             if (select && select.options.length) {
-                select.value = select.options[0].value;
+                if (selectedKey && SC_LABELS[selectedKey]) {
+                    select.value = selectedKey;
+                } else {
+                    selectedKey = select.options[0].value;
+                }
                 fillStrategyForm(select.value);
             }
             var rows = '';
-            var keys = Object.keys(SC_LABELS);
+            var keys = selectedKey ? [selectedKey] : Object.keys(SC_LABELS);
             var tbody = document.getElementById('sc-body');
             if (!tbody) return;
             if (!keys.length || !Object.keys(d || {}).length) {
