@@ -6261,7 +6261,7 @@ function loadStrategyConfig() {
                 var strategyEnabled = cfg.strategy_enabled !== false;
                 var sizingEnabled = cfg.sizing_enabled !== false;
                 var dim = sizingEnabled ? '' : 'opacity:0.35;pointer-events:none';
-                var saveButton = '<button type="button" onclick="saveStrategyConfig(this.closest(\'tr\').getAttribute(\'data-strategy\'))" style="margin-left:8px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>';
+                var saveButton = '<button type="button" onclick="saveStrategyConfig(this)" style="margin-left:8px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>';
                 var addFundCell = '';
                 if (SC_HAS_ADDFUND[k]) {
                     if (SC_ADDFUND_LABEL[k]) {
@@ -6303,9 +6303,10 @@ function onScToggle(k) {
     if (addEl) { addEl.style.opacity = sizingEnabled ? '1' : '0.35'; addEl.style.pointerEvents = sizingEnabled ? '' : 'none'; }
 }
 
-function saveStrategyConfig(rowKey) {
+function saveStrategyConfig(button) {
     var select = document.getElementById('sc-strategy-select');
-    var key = rowKey || (select ? select.value : 'brkX2');
+    var row = button && button.closest ? button.closest('tr') : null;
+    var key = row ? row.getAttribute('data-strategy') : (select ? select.value : 'brkX2');
     if (key === '__all__') return;
     var data = {};
     var baseEl = document.getElementById('sc-base-' + key);
