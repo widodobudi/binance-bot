@@ -5642,7 +5642,6 @@ DASHBOARD_HTML = '''
           <span>Strategy:</span>
           <select id="sc-strategy-select" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;min-width:160px"></select>
         </label>
-        <button onclick="saveStrategyConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
         <button onclick="resetStrategyConfig()" style="background:rgba(255,100,100,.15);color:var(--red);border:1px solid var(--red);border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer">RESET</button>
       </div>
     </div>
@@ -6158,15 +6157,16 @@ function loadStrategyConfig() {
                 var strategyEnabled = cfg.strategy_enabled !== false;
                 var sizingEnabled = cfg.sizing_enabled !== false;
                 var dim = sizingEnabled ? '' : 'opacity:0.35;pointer-events:none';
+                var saveButton = '<button type="button" onclick="saveStrategyConfig()" style="margin-left:8px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>';
                 var addFundCell = '';
                 if (SC_HAS_ADDFUND[k]) {
                     if (SC_ADDFUND_LABEL[k]) {
-                        addFundCell = '<td style="text-align:center;padding:5px 8px"><span style="' + dim + ';color:var(--muted);font-style:italic">' + SC_ADDFUND_LABEL[k] + '</span></td>';
+                        addFundCell = '<td style="text-align:center;padding:5px 8px;white-space:nowrap"><span style="' + dim + ';color:var(--muted);font-style:italic">' + SC_ADDFUND_LABEL[k] + '</span>' + saveButton + '</td>';
                     } else {
-                        addFundCell = '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-add-' + k + '" value="' + (cfg.add_usd || 0) + '" min="0" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>';
+                        addFundCell = '<td style="text-align:center;padding:5px 8px;white-space:nowrap"><input type="number" id="sc-add-' + k + '" value="' + (cfg.add_usd || 0) + '" min="0" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '">' + saveButton + '</td>';
                     }
                 } else {
-                    addFundCell = '<td style="text-align:center;padding:5px 8px;color:var(--muted)">—</td>';
+                    addFundCell = '<td style="text-align:center;padding:5px 8px;color:var(--muted);white-space:nowrap">—' + saveButton + '</td>';
                 }
                 rows += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">'
                     + '<td style="padding:5px 8px;font-weight:600">' + SC_LABELS[k] + '</td>'
