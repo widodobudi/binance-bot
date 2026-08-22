@@ -5647,16 +5647,6 @@ DASHBOARD_HTML = '''
       </div>
     </div>
     <div class="card-body">
-      <div id="sc-form" style="display:none;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 0 4px">
-        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
-          <span>Base Order (USDT)</span>
-          <input type="number" id="sc-form-base" min="1" step="1" style="width:80px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
-        </label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
-          <span>Add Fund (USDT)</span>
-          <input type="number" id="sc-form-add" min="0" step="1" style="width:80px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
-        </label>
-      </div>
       <table style="width:100%;border-collapse:collapse;font-size:11px" id="sc-table">
         <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
           <th style="text-align:left;padding:5px 8px">Strategi</th>
@@ -6139,22 +6129,6 @@ function buildStrategySelect() {
     };
 }
 
-function fillStrategyForm(strategyKey) {
-    var cfg = _scData[strategyKey] || {strategy_enabled: true, sizing_enabled: true, base_usd: 8, add_usd: 0};
-    var form = document.getElementById('sc-form');
-    if (!form) return;
-    form.style.display = 'flex';
-    var base = document.getElementById('sc-form-base');
-    var add = document.getElementById('sc-form-add');
-    if (base) base.value = cfg.base_usd || 8;
-    var hasAdd = !!SC_HAS_ADDFUND[strategyKey];
-    if (add) {
-        add.disabled = !hasAdd;
-        add.value = hasAdd ? (cfg.add_usd || 0) : 0;
-        add.style.opacity = hasAdd ? '1' : '0.4';
-    }
-}
-
 function loadStrategyConfig() {
     fetch('/api/strategy_config')
         .then(function(r){ return r.json(); })
@@ -6169,7 +6143,6 @@ function loadStrategyConfig() {
                 } else {
                     selectedKey = select.options[0].value;
                 }
-                fillStrategyForm(select.value);
             }
             var rows = '';
             var keys = selectedKey ? [selectedKey] : Object.keys(SC_LABELS);
@@ -6230,8 +6203,8 @@ function saveStrategyConfig() {
     var select = document.getElementById('sc-strategy-select');
     var key = select ? select.value : 'brkX2';
     var data = {};
-    var baseEl = document.getElementById('sc-form-base');
-    var addEl = document.getElementById('sc-form-add');
+    var baseEl = document.getElementById('sc-base-' + key);
+    var addEl = document.getElementById('sc-add-' + key);
     var strategyEnabledEl = document.getElementById('sc-run-' + key);
     var sizingEnabledEl = document.getElementById('sc-size-' + key);
     data[key] = {
