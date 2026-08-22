@@ -584,12 +584,12 @@ TRADES_CSV = os.path.join(DATA_DIR, "trades_forwardtest.csv")
 STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # Default values — edit hard-coded di sini untuk ubah nilai RESET
 STRATEGY_CONFIG_DEFAULTS = {
-    "brkX2":         {"enabled": True, "base_usd": 8,  "add_usd": None},    # None = auto score-based
-    "reversal":      {"enabled": True, "base_usd": 8,  "add_usd": None},
-    "brkX2_4h":      {"enabled": True, "base_usd": 8,  "add_usd": 0},
-    "brkX2_crossema":{"enabled": True, "base_usd": 8,  "add_usd": None},
-    "akum_entry_a":  {"enabled": True, "base_usd": 8,  "add_usd": None},
-    "hunting_4h":    {"enabled": True, "base_usd": 20, "add_usd": None},
+    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None},
+    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None},
+    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": 0},
+    "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None},
+    "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None},
+    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 20, "add_usd": None},
 }
 
 def load_strategy_config() -> dict:
@@ -600,7 +600,11 @@ def load_strategy_config() -> dict:
             # Merge dengan defaults agar key baru tidak hilang
             result = {}
             for k, v in STRATEGY_CONFIG_DEFAULTS.items():
-                result[k] = {**v, **saved.get(k, {})}
+                saved_cfg = saved.get(k, {})
+                # Migrate the old single ``enabled`` flag to the execution flag.
+                if "enabled" in saved_cfg and "strategy_enabled" not in saved_cfg:
+                    saved_cfg = {**saved_cfg, "strategy_enabled": saved_cfg["enabled"]}
+                result[k] = {**v, **saved_cfg}
             return result
     except Exception as e:
         log(f"WARN load_strategy_config: {e}")
@@ -612,6 +616,8 @@ def save_strategy_config(cfg: dict):
         incoming = cfg or {}
         for key, value in incoming.items():
             if isinstance(value, dict):
+                if "enabled" in value and "strategy_enabled" not in value:
+                    value = {**value, "strategy_enabled": value["enabled"]}
                 base[key] = {**base.get(key, {}), **value}
             else:
                 base[key] = value
@@ -622,10 +628,17 @@ def save_strategy_config(cfg: dict):
 
 def is_strategy_enabled(strategy: str) -> bool:
     cfg = load_strategy_config()
-    return cfg.get(strategy, {}).get("enabled", True)
+    item = cfg.get(strategy, {})
+    return item.get("strategy_enabled", item.get("enabled", True))
+
+def is_sizing_enabled(strategy: str) -> bool:
+    cfg = load_strategy_config()
+    return cfg.get(strategy, {}).get("sizing_enabled", True)
 
 def get_strategy_base_usd(strategy: str) -> float:
     cfg = load_strategy_config()
+    if not is_sizing_enabled(strategy):
+        return float(STRATEGY_CONFIG_DEFAULTS.get(strategy, {}).get("base_usd", BASE_ORDER_VOLUME))
     return float(cfg.get(strategy, {}).get("base_usd", BASE_ORDER_VOLUME))
 
 # ===================== COOLDOWN INTERNAL (cegah DEAL HANTU, brkX2) =====================
@@ -1601,6 +1614,9 @@ def has_enough_balance_for_hunting(target_usd: float,
 
 def send_open_long(symbol: str, strategy: str = 'brkX2') -> bool:
     """Buka long position. Kalau USE_BINANCE_DIRECT=True → langsung ke Binance market buy."""
+    if not is_strategy_enabled(strategy):
+        log(f"[OPEN] {symbol} skip — strategi {strategy} di-disable via Strategy Control")
+        return False
     if USE_BINANCE_DIRECT:
         try:
             usd = BASE_ORDER_VOLUME
@@ -5637,8 +5653,12 @@ DASHBOARD_HTML = '''
     <div class="card-body">
       <div id="sc-form" style="display:none;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 0 4px">
         <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
-          <span>Enable</span>
-          <input type="checkbox" id="sc-form-enabled" style="cursor:pointer">
+                    <span>Izinkan Open Long</span>
+                    <input type="checkbox" id="sc-form-strategy-enabled" style="cursor:pointer">
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
+                    <span>Gunakan Setting Modal</span>
+                    <input type="checkbox" id="sc-form-sizing-enabled" style="cursor:pointer">
         </label>
         <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
           <span>Base Order (USDT)</span>
@@ -5652,11 +5672,12 @@ DASHBOARD_HTML = '''
       <table style="width:100%;border-collapse:collapse;font-size:11px" id="sc-table">
         <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
           <th style="text-align:left;padding:5px 8px">Strategi</th>
-          <th style="text-align:center;padding:5px 8px">Enable</th>
+          <th style="text-align:center;padding:5px 8px">Izinkan Open Long</th>
+          <th style="text-align:center;padding:5px 8px">Gunakan Setting Modal</th>
           <th style="text-align:center;padding:5px 8px">Base Order (USDT)</th>
           <th style="text-align:center;padding:5px 8px">Add Fund (USDT)</th>
         </tr></thead>
-        <tbody id="sc-body"><tr><td colspan="4" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
+        <tbody id="sc-body"><tr><td colspan="5" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -6131,14 +6152,16 @@ function buildStrategySelect() {
 }
 
 function fillStrategyForm(strategyKey) {
-    var cfg = _scData[strategyKey] || {enabled: true, base_usd: 8, add_usd: 0};
+    var cfg = _scData[strategyKey] || {strategy_enabled: true, sizing_enabled: true, base_usd: 8, add_usd: 0};
     var form = document.getElementById('sc-form');
     if (!form) return;
     form.style.display = 'flex';
-    var enabled = document.getElementById('sc-form-enabled');
+    var strategyEnabled = document.getElementById('sc-form-strategy-enabled');
+    var sizingEnabled = document.getElementById('sc-form-sizing-enabled');
     var base = document.getElementById('sc-form-base');
     var add = document.getElementById('sc-form-add');
-    if (enabled) enabled.checked = cfg.enabled !== false;
+    if (strategyEnabled) strategyEnabled.checked = cfg.strategy_enabled !== false;
+    if (sizingEnabled) sizingEnabled.checked = cfg.sizing_enabled !== false;
     if (base) base.value = cfg.base_usd || 8;
     var hasAdd = !!SC_HAS_ADDFUND[strategyKey];
     if (add) {
@@ -6164,14 +6187,15 @@ function loadStrategyConfig() {
             var tbody = document.getElementById('sc-body');
             if (!tbody) return;
             if (!keys.length || !Object.keys(d || {}).length) {
-                tbody.innerHTML = '<tr><td colspan="4" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
                 return;
             }
             for (var i = 0; i < keys.length; i++) {
                 var k = keys[i];
-                var cfg = d[k] || {enabled: true, base_usd: 8, add_usd: null};
-                var en = cfg.enabled !== false;
-                var dim = en ? '' : 'opacity:0.35;pointer-events:none';
+                var cfg = d[k] || {strategy_enabled: true, sizing_enabled: true, base_usd: 8, add_usd: null};
+                var strategyEnabled = cfg.strategy_enabled !== false;
+                var sizingEnabled = cfg.sizing_enabled !== false;
+                var dim = sizingEnabled ? '' : 'opacity:0.35;pointer-events:none';
                 var addFundCell = '';
                 if (SC_HAS_ADDFUND[k]) {
                     if (SC_ADDFUND_LABEL[k]) {
@@ -6184,32 +6208,33 @@ function loadStrategyConfig() {
                 }
                 rows += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">'
                     + '<td style="padding:5px 8px;font-weight:600">' + SC_LABELS[k] + '</td>'
-                      + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-en-' + k + '" ' + (en ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
+                    + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-run-' + k + '" ' + (strategyEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
+                    + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-size-' + k + '" ' + (sizingEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>'
                     + addFundCell
                     + '</tr>';
             }
             tbody.innerHTML = rows;
-            tbody.querySelectorAll('[id^="sc-en-"]').forEach(function(el) {
+            tbody.querySelectorAll('[id^="sc-run-"], [id^="sc-size-"]').forEach(function(el) {
                 el.addEventListener('change', function() {
-                    onScToggle(this.id.slice(6));
+                    onScToggle(this.id.slice(7));
                 });
             });
         })
         .catch(function(e) {
             var tbody = document.getElementById('sc-body');
             if (tbody) {
-                tbody.innerHTML = '<tr><td colspan="4" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
             }
         });
 }
 
 function onScToggle(k) {
-    var en = document.getElementById('sc-en-' + k).checked;
+    var sizingEnabled = document.getElementById('sc-size-' + k).checked;
     var baseEl = document.getElementById('sc-base-' + k);
-    if (baseEl) { baseEl.style.opacity = en ? '1' : '0.35'; baseEl.style.pointerEvents = en ? '' : 'none'; }
+    if (baseEl) { baseEl.style.opacity = sizingEnabled ? '1' : '0.35'; baseEl.style.pointerEvents = sizingEnabled ? '' : 'none'; }
     var addEl = document.getElementById('sc-add-' + k);
-    if (addEl) { addEl.style.opacity = en ? '1' : '0.35'; addEl.style.pointerEvents = en ? '' : 'none'; }
+    if (addEl) { addEl.style.opacity = sizingEnabled ? '1' : '0.35'; addEl.style.pointerEvents = sizingEnabled ? '' : 'none'; }
 }
 
 function saveStrategyConfig() {
@@ -6223,11 +6248,13 @@ function saveStrategyConfig() {
     var select = document.getElementById('sc-strategy-select');
     var key = select ? select.value : 'brkX2';
     var data = {};
-    var enabledEl = document.getElementById('sc-form-enabled');
+    var strategyEnabledEl = document.getElementById('sc-form-strategy-enabled');
+    var sizingEnabledEl = document.getElementById('sc-form-sizing-enabled');
     var baseEl = document.getElementById('sc-form-base');
     var addEl = document.getElementById('sc-form-add');
     data[key] = {
-        enabled: enabledEl ? enabledEl.checked : true,
+        strategy_enabled: strategyEnabledEl ? strategyEnabledEl.checked : true,
+        sizing_enabled: sizingEnabledEl ? sizingEnabledEl.checked : true,
         base_usd: parseFloat(baseEl ? baseEl.value : 8) || 8,
     };
     if (SC_HAS_ADDFUND[key]) {
