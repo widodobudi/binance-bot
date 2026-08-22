@@ -1495,6 +1495,7 @@ def get_binance_open_orders_value(symbol: str) -> float:
 BINANCE_TRADING_BASE = "https://api.binance.com"
 AUTO_SELL_CONFIG_FILE = os.path.join(DATA_DIR, "auto_sell_config.json")
 _auto_sell_last_prices = {}
+_auto_sell_filter_cache = {}
 
 def _binance_trading_request(method: str, path: str, params: dict) -> dict:
     """Helper HMAC-signed request ke Binance trading API menggunakan BINANCE_TRADING_KEY."""
@@ -1618,13 +1619,45 @@ def check_auto_sell_crossing() -> None:
     quantity = binance_get_asset_qty(asset)
     if quantity <= 0:
         return
-    result = binance_sell_market(symbol, quantity)
+    sell_quantity = quantity * 0.95
+    try:
+        info = _auto_sell_filter_cache.get(symbol)
+        if info is None:
+            response = session.get(
+                f"{BINANCE_TRADING_BASE}/api/v3/exchangeInfo?symbol={symbol}",
+                timeout=10,
+            )
+            response.raise_for_status()
+            symbols = response.json().get("symbols", [])
+            if not symbols or symbols[0].get("status") != "TRADING":
+                log(f"[AUTO-SELL] {symbol} tidak tersedia/aktif di Binance — order dibatalkan")
+                return
+            filters = {item.get("filterType"): item for item in symbols[0].get("filters", [])}
+            lot = filters.get("LOT_SIZE", {})
+            min_notional = filters.get("NOTIONAL", filters.get("MIN_NOTIONAL", {}))
+            info = {
+                "step_size": float(lot.get("stepSize", 1)),
+                "min_qty": float(lot.get("minQty", 0)),
+                "min_notional": float(min_notional.get("minNotional", 0)),
+            }
+            _auto_sell_filter_cache[symbol] = info
+        step_size = info["step_size"]
+        if step_size > 0:
+            sell_quantity = (sell_quantity // step_size) * step_size
+        if sell_quantity < info["min_qty"] or sell_quantity * price < info["min_notional"]:
+            log(f"[AUTO-SELL] {symbol} 95% saldo di bawah filter Binance — order dibatalkan")
+            return
+    except Exception as error:
+        log(f"[AUTO-SELL] {symbol} preflight gagal — order dibatalkan: {error}")
+        return
+    result = binance_sell_market(symbol, sell_quantity)
     save_auto_sell_config({**config, "enabled": False})
     send_telegram(
         f"AUTO SELL {asset}/USDT\n"
         f"Harga crossing: {_fmt_price(price)} USDT\n"
         f"Threshold: {_fmt_price(threshold)} USDT\n"
-        f"Qty dijual: {quantity}\n"
+        f"Saldo bebas: {quantity}\n"
+        f"Qty dijual (95%): {sell_quantity}\n"
         f"Hasil: {result.get('proceeds_usdt', 0):.2f} USDT\n"
         "Auto-sell dinonaktifkan setelah satu eksekusi."
     )
