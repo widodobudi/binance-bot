@@ -6417,8 +6417,8 @@ if (typeof STRAT_SECONDARY !== 'undefined') {
 </div>
 <script>
 var closedTradesRows = [];
-var closedTradesSortKey = '';
-var closedTradesSortDirection = 1;
+var closedTradesSortKey = 'close_time';
+var closedTradesSortDirection = -1;
 
 function sortClosedTrades(key) {
     if (closedTradesSortKey === key) closedTradesSortDirection *= -1;
