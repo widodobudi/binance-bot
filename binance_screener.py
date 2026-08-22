@@ -7594,7 +7594,7 @@ def run_web_dashboard():
                 return None
             if session.get("dashboard_authenticated"):
                 return None
-            if request.path in {"/login", "/logout", "/dash.js"} or request.method == "OPTIONS":
+            if request.path in {"/login", "/logout", "/dash.js", "/tradingview_webhook"} or request.method == "OPTIONS":
                 return None
             if request.path.startswith("/api/") or request.is_json:
                 return jsonify({"ok": False, "error": "login diperlukan"}), 401
@@ -8702,6 +8702,63 @@ def run_web_dashboard():
             else:
                 log(f"[MANUAL-OPEN] {sym} GAGAL — 3Commas tidak menerima")
                 return jsonify({"ok": False, "error": "3Commas menolak open long"})
+
+        @app.route("/tradingview_webhook", methods=["POST"])
+        def tradingview_webhook():
+            """Terima JSON TradingView; eksekusi hanya jika diaktifkan eksplisit."""
+            webhook_secret = os.environ.get("TRADINGVIEW_WEBHOOK_SECRET", "")
+            payload = request.json or {}
+            supplied_secret = payload.get("secret", "") or request.headers.get("X-Webhook-Secret", "")
+            if not webhook_secret or supplied_secret != webhook_secret:
+                return jsonify({"ok": False, "error": "webhook tidak terautentikasi"}), 401
+            if os.environ.get("TRADINGVIEW_WEBHOOK_ENABLED", "false").lower() != "true":
+                return jsonify({"ok": False, "error": "webhook masih nonaktif"}), 403
+            action = str(payload.get("action", "")).lower().strip()
+            symbol = normalize_binance_symbol(payload.get("symbol", ""))
+            strategy = str(payload.get("strategy", "brkX2")).lower().strip()
+            strategy = {
+                "brkx2-12h": "brkX2", "brkx2": "brkX2", "reversal-8h": "reversal",
+                "brkx2-4h": "brkX2_4h", "crossema-4h": "brkX2_crossema",
+                "hunting-4h": "hunting_4h",
+            }.get(strategy, strategy)
+            if action not in {"open_long", "add_fund", "start_trailing", "close_deal"} or not symbol.endswith("USDT"):
+                return jsonify({"ok": False, "error": "action atau symbol tidak valid"}), 400
+            if action == "open_long":
+                with active_deals_lock:
+                    if symbol in active_deals:
+                        return jsonify({"ok": False, "error": "deal sudah ada di active_deals"}), 409
+                score = int(payload.get("score", 0) or 0)
+                ok, target_usd, add_usd = open_deal_with_sizing(symbol, score, strategy)
+                if ok:
+                    entry_price = get_price_now(symbol)
+                    if entry_price <= 0:
+                        return jsonify({"ok": False, "error": "order berhasil tetapi harga entry tidak terbaca"}), 502
+                    add_to_active_deals(symbol, {
+                        "strategy": strategy, "entry_price": entry_price, "peak": entry_price,
+                        "signal_price": entry_price, "atr_pct": 3.0,
+                        "opened_candle_ts": int(time.time() * 1000), "trailing_armed": False,
+                        "opened_at": now_wib().strftime("%Y-%m-%d %H:%M:%S"),
+                        "target_usd": target_usd, "add_usd": add_usd, "source": "tradingview_webhook",
+                    })
+                    send_telegram(f"OPEN LONG TradingView\nPair: {to_display_pair(symbol)}\nStrategi: {strategy}\nEntry: {_fmt_price(entry_price)}\nModal: ${target_usd:.2f}")
+                return jsonify({"ok": ok, "action": action, "symbol": symbol, "target_usd": target_usd, "add_usd": add_usd})
+            with active_deals_lock:
+                deal = dict(active_deals.get(symbol, {}))
+            if not deal:
+                return jsonify({"ok": False, "error": f"{symbol} tidak ada di active deals"}), 404
+            if action == "add_fund":
+                amount = float(payload.get("amount", deal.get("add_usd", 0)) or 0)
+                ok = amount > 0 and send_add_funds(symbol, amount, strategy, delay=0)
+            elif action == "start_trailing":
+                ok = send_start_trailing(symbol, strategy)
+            else:
+                ok = send_close_long(symbol, strategy)
+            if ok and action == "start_trailing":
+                with active_deals_lock:
+                    if symbol in active_deals:
+                        active_deals[symbol]["trailing_armed"] = True
+                save_active_deals()
+            return jsonify({"ok": ok, "action": action, "symbol": symbol})
 
         # ── Hunting-4h API endpoints ──────────────────────────────────────
         @app.route("/api/strategy_config/reset", methods=["POST"])
