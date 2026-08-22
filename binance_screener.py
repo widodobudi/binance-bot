@@ -8982,36 +8982,52 @@ def fetch_htf_context_for_ai(symbol: str) -> str:
     try:
         import pandas_ta as _pta
         lines_out = []
-        for tf_label, tf_binance, limit in [("3D", "3d", 60), ("1W", "1w", 30)]:
+        for tf_label, tf_binance, limit in [("3D", "3d", 250), ("1W", "1w", 250)]:
             try:
                 df_htf = get_ohlcv_htf(symbol, tf=tf_binance, limit=limit)
                 if df_htf is None or len(df_htf) < 14:
                     continue
                 c = df_htf["close"]; h = df_htf["high"]; l = df_htf["low"]
-                ema20  = _pta.ema(c, length=20).iloc[-1]
-                ema50  = _pta.ema(c, length=50).iloc[-1]
-                ema200 = _pta.ema(c, length=200).iloc[-1] if len(c) >= 200 else None
-                rsi    = _pta.rsi(c, length=14).iloc[-1]
-                atr_pct = _pta.atr(h, l, c, length=14).iloc[-1] / c.iloc[-1] * 100
-                st      = _pta.supertrend(h, l, c, length=7, multiplier=3.0)
+                ema20 = _pta.ema(c, length=20).iloc[-1]
+                ema50 = _pta.ema(c, length=50).iloc[-1]
+                ema200 = _pta.ema(c, length=200).iloc[-1]
+                rsi = _pta.rsi(c, length=14).iloc[-1]
+                atr = _pta.atr(h, l, c, length=14).iloc[-1]
+                atr_pct = atr / c.iloc[-1] * 100 if c.iloc[-1] > 0 else None
+                st = _pta.supertrend(h, l, c, length=7, multiplier=3.0)
                 std_col = [col for col in st.columns if "SUPERTd" in col]
-                st_dir  = int(st[std_col[0]].iloc[-1]) if std_col else 0
-                adx_df  = _pta.adx(h, l, c, length=14)
+                st_dir = int(st[std_col[0]].iloc[-1]) if std_col else 0
+                adx_df = _pta.adx(h, l, c, length=14)
                 adx_col = [col for col in adx_df.columns if col.startswith("ADX_")]
-                adx_val = float(adx_df[adx_col[0]].iloc[-1]) if adx_col else None
-                vol_now = df_htf["volume"].iloc[-1]
-                vol_ma  = df_htf["volume"].rolling(20).mean().iloc[-1]
-                vol_ratio = vol_now / vol_ma if vol_ma > 0 else 0
-                p20  = (c.iloc[-1] / ema20 - 1) * 100 if ema20 > 0 else 0
-                p50  = (c.iloc[-1] / ema50 - 1) * 100 if ema50 > 0 else 0
-                p200 = (c.iloc[-1] / ema200 - 1) * 100 if ema200 and ema200 > 0 else None
-                parts = [
-                    f"HTF {tf_label}: ST={'Uptrend' if st_dir==1 else 'Downtrend'}",
-                    f"RSI={rsi:.1f}", f"ATR%={atr_pct:.2f}",
-                    f"vs EMA20={p20:+.2f}%", f"vs EMA50={p50:+.2f}%", f"Vol={vol_ratio:.2f}x",
-                ]
-                if p200 is not None: parts.append(f"vs EMA200={p200:+.2f}%")
-                if adx_val is not None: parts.append(f"ADX={adx_val:.1f}")
+                adx = adx_df[adx_col[0]].iloc[-1] if adx_col else None
+                stoch = _pta.stoch(h, l, c, k=14, d=3, smooth_k=3)
+                stoch_k_col = [col for col in stoch.columns if "STOCHk" in col]
+                stoch_d_col = [col for col in stoch.columns if "STOCHd" in col]
+                stoch_k = stoch[stoch_k_col[0]].iloc[-1] if stoch_k_col else None
+                stoch_d = stoch[stoch_d_col[0]].iloc[-1] if stoch_d_col else None
+                macd = _pta.macd(c, fast=12, slow=26, signal=9)
+                macd_col = [col for col in macd.columns if "MACDh" in col]
+                macd_hist = macd[macd_col[0]].iloc[-1] if macd_col else None
+                bb = _pta.bbands(c, length=20, std=2)
+                bb_col = [col for col in bb.columns if "BBP" in col]
+                bb_pct = bb[bb_col[0]].iloc[-1] if bb_col else None
+                willr = _pta.willr(h, l, c, length=14).iloc[-1]
+                cci = _pta.cci(h, l, c, length=20).iloc[-1]
+                obv = _pta.obv(c, df_htf["vol"]).iloc[-1]
+                vol_ma = df_htf["vol"].rolling(20).mean().iloc[-1]
+                vol_ratio = df_htf["vol"].iloc[-1] / vol_ma if vol_ma > 0 else None
+                p20 = (c.iloc[-1] / ema20 - 1) * 100 if ema20 > 0 else None
+                p50 = (c.iloc[-1] / ema50 - 1) * 100 if ema50 > 0 else None
+                p200 = (c.iloc[-1] / ema200 - 1) * 100 if ema200 > 0 else None
+                def fmt(label, value, spec):
+                    return f"{label}=" + (format(float(value), spec) if value is not None and not pd.isna(value) else "n/a")
+                parts = [f"HTF {tf_label}: ST={'Uptrend' if st_dir == 1 else 'Downtrend' if st_dir == -1 else 'Neutral'}",
+                         fmt("RSI", rsi, ".1f"), fmt("ATR%", atr_pct, ".2f"), fmt("vs EMA20", p20, "+.2f"),
+                         fmt("vs EMA50", p50, "+.2f"), fmt("vs EMA200", p200, "+.2f"), fmt("Stoch%K", stoch_k, ".1f"),
+                         fmt("Stoch%D", stoch_d, ".1f"), fmt("MACD hist", macd_hist, "+.6f"), fmt("BB%b", bb_pct, ".2f"),
+                         fmt("Williams%R", willr, ".1f"), fmt("CCI", cci, ".1f"), fmt("ADX", adx, ".1f"),
+                         fmt("Vol", vol_ratio, ".2f"), fmt("OBV", obv, ".0f"),
+                         f"Candle={'bullish' if c.iloc[-1] > df_htf['open'].iloc[-1] else 'bearish'}"]
                 lines_out.append(" | ".join(parts))
             except Exception:
                 continue
