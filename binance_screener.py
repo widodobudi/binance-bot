@@ -1175,7 +1175,39 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
     indicators: dict bebas, misal {'atr_pct': 3.2, 'rsi': 55, 'profit_pct': +4.1}
     """
     ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
-    ind_lines = "\n".join(f"  {k}: {v}" for k, v in indicators.items())
+    merged = dict(indicators)
+    if event.upper() == "OPEN":
+        try:
+            frame = get_ohlcv_4h(symbol, limit=120) if strategy.lower() in {
+                "brkx2-4h", "crossema-4h", "hunting-4h", "akumulasi-4h"
+            } else get_ohlcv(symbol, interval=REVERSAL_TIMEFRAME if "reversal" in strategy.lower() else "12h", limit=120)
+            if frame is not None and len(frame):
+                frame = compute_indicators_4h(frame) if "4h" in strategy.lower() else compute_indicators(frame)
+                row = frame.iloc[-1]
+                def read_value(column):
+                    value = row.get(column)
+                    return None if value is None or pd.isna(value) else value
+                inferred = {
+                    "rsi": read_value("rsi"), "stoch_k": read_value("stoch_k"),
+                    "stoch_d": read_value("stoch_d"), "macd_hist": read_value("macd_hist"),
+                    "bb_pct": read_value("bb_pct"), "williams_r": read_value("williams_r"),
+                    "cci": read_value("cci"), "obv": read_value("obv"),
+                    "ema20": read_value("ema20") or read_value("ema_fast"),
+                    "st_dir": read_value("st_dir"),
+                }
+                for key, value in inferred.items():
+                    if key not in merged and value is not None:
+                        merged[key] = value
+        except Exception as error:
+            log(f"WARN log_oac indicator enrichment {symbol}: {error}")
+    standard_fields = (
+        "entry_price", "peak_price", "peak_profit", "arm_pct", "atr_pct", "trail_dist",
+        "rsi", "stoch_k", "stoch_d", "macd_hist", "bb_pct", "williams_r", "cci", "obv",
+        "ema20", "st_dir", "add_usd", "total_usd", "profit_pct", "exit_reason",
+    )
+    for field in standard_fields:
+        merged.setdefault(field, "—")
+    ind_lines = "\n".join(f"  {k}: {merged[k]}" for k in standard_fields)
     text = (
         f"[{ts} WIB] {event} | {to_display_pair(symbol)} | {strategy}\n"
         f"{ind_lines}\n"
@@ -1188,12 +1220,8 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
     except Exception as e:
         log(f"WARN log_oac file error: {e}")
     threading.Thread(target=drive_append, args=("open-arm-close.txt", text), daemon=True).start()
-    # Telegram hanya untuk ARMED dan CLOSE — OPEN sudah ada notif tersendiri yang lebih detail
-    if event.upper() != "OPEN":
-        tg_msg = f"📋 *{event}* {to_display_pair(symbol)} `{strategy}`\n" + "\n".join(
-            f"  `{k}`: {v}" for k, v in indicators.items()
-        )
-        send_telegram(tg_msg, parse_mode="Markdown")
+    tg_msg = f"📋 *{event}* {to_display_pair(symbol)} `{strategy}`\n" + ind_lines
+    send_telegram(tg_msg, parse_mode="Markdown")
 
 def normalize_binance_symbol(symbol: str) -> str:
     """Standardize symbol ke raw Binance: ONDOUSDT.
