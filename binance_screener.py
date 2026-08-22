@@ -2792,6 +2792,13 @@ def heartbeat_general_tick():
             pct = last_close.get('profit_pct','?')
             base += f"\n    ↳ Close terakhir: {sym} {t} WIB {pct}%"
         return base
+    def _fmt_hunting_live(p, last_close=None):
+        if p is None or p['n'] == 0:
+            return "LIVE (belum ada close fase aktif)"
+        base = f"LIVE: {p['n']} closed ({p['win']}W/{p['loss']}L, total {p['total_pct']:+.1f}%)"
+        if last_close and last_close.get('time'):
+            base += f"\n    ↳ Close terakhir: {last_close.get('symbol','?')} {last_close.get('time','?')} WIB {last_close.get('profit_pct','?')}%"
+        return base
     prog_all  = csv_progress_active()
     prog_brk  = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)
     prog_rev  = csv_progress('reversal')
@@ -2814,7 +2821,7 @@ def heartbeat_general_tick():
                      f"  - reversal-8h: {_fmt_strat(prog_rev,  FWDTEST_TARGET_REVERSAL,    lc_rev)}\n"
                      f"  - brkX2-4h   : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET,    lc_4h)}\n"
                      f"  - crossema-4h: {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST,    lc_cx)}\n"
-                     f"  - hunting-4h : {_fmt_strat(prog_hunt, HUNTING_FWDTEST_TARGET,    lc_hunt)}\n"
+                     f"  - hunting-4h : {_fmt_hunting_live(prog_hunt, lc_hunt)}\n"
                      f"  - akumulasi-4h: {_fmt_strat(prog_akum, AKUM_ENTRY_FWDTEST_TARGET, lc_akum)}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
@@ -3775,8 +3782,12 @@ def thread2_monitor():
                 if pstrat and pstrat['n']>0:
                     done_n = pstrat['n']; wl = f"{pstrat['win']}W/{pstrat['loss']}L"
                     status = "TERCAPAI - waktunya evaluasi!" if done_n>=tgt else f"menuju {tgt}"
-                    prog_close = (f"\nForward-test {strat_label}: #{done_n}/{tgt} ({status})"
-                                  f"\n  {wl}, total {pstrat['total_pct']:+.1f}%")
+                    if strat == 'hunting_4h':
+                        prog_close = (f"\n{strat_label} LIVE: {done_n} closed"
+                                      f"\n  {wl}, total {pstrat['total_pct']:+.1f}%")
+                    else:
+                        prog_close = (f"\nForward-test {strat_label}: #{done_n}/{tgt} ({status})"
+                                      f"\n  {wl}, total {pstrat['total_pct']:+.1f}%")
                 else:
                     prog_close = f"\nForward-test {strat_label}: #?/{tgt} (CSV belum terbaca)"
                 _base_usd_cl = float(d.get('base_usd', d.get('target_usd', BASE_ORDER_VOLUME)))
@@ -3849,6 +3860,10 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
         nn=p['n']; wl=f"{p['win']}W/{p['loss']}L"
         tag=" TERCAPAI!" if nn>=tgt else ""
         return f"#{nn}/{tgt} ({wl}, total {p['total_pct']:+.1f}%){tag}"
+    def _fmt_hunting_live(p):
+        if p is None or p['n'] == 0:
+            return "LIVE (belum ada close fase aktif)"
+        return f"LIVE: {p['n']} closed ({p['win']}W/{p['loss']}L, total {p['total_pct']:+.1f}%)"
 
     prog_all  = csv_progress_active()
     prog_brk  = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)
@@ -3866,7 +3881,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
                      f"  - reversal : {_fmt_strat(prog_rev,  FWDTEST_TARGET_REVERSAL)}\n"
                      f"  - 4h       : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET)}\n"
                      f"  - crossema : {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST)}\n"
-                     f"  - hunting  : {_fmt_strat(prog_hunt, HUNTING_FWDTEST_TARGET)}")
+                     f"  - hunting  : {_fmt_hunting_live(prog_hunt)}")
 
     # Status T3 intrabar
     t3_str = ""
