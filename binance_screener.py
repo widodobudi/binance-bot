@@ -5845,8 +5845,8 @@ DASHBOARD_HTML = '''
     <div class="card-body">
     {% if active_deals %}
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-    <table style="min-width:1080px">
-      <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th></tr></thead>
+        <table style="min-width:1160px">
+            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr>
@@ -5892,6 +5892,7 @@ DASHBOARD_HTML = '''
             <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("ai_call",False) else "" }}>
           </form>
         </td>
+                <td><button type="button" onclick="resendOpenNotification('{{ sym }}')" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 7px;font-size:10px;cursor:pointer">Resend OPEN</button></td>
       </tr>
       {% endfor %}
       </tbody>
@@ -6435,6 +6436,16 @@ function saveAIProviderConfig() {
     var mode = document.getElementById('ai-provider-mode').value;
     fetch('/api/ai_provider_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:mode})})
         .then(function(){ loadAIProviderConfig(); });
+}
+
+function resendOpenNotification(sym) {
+    if (!confirm('Kirim ulang laporan OPEN LONG untuk ' + sym + '?')) return;
+    fetch('/resend_open_notification', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({symbol: sym})
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        alert(d.ok ? 'Laporan OPEN LONG sudah dikirim ke Telegram.' : 'Gagal: ' + d.error);
+    }).catch(function(e){ alert('Gagal mengirim laporan: ' + e); });
 }
 
 function loadAutoSellConfig() {
@@ -7714,6 +7725,35 @@ def run_web_dashboard():
                     return jsonify({"ok": False, "error": "3Commas menolak close"})
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)})
+
+        @app.route("/resend_open_notification", methods=["POST"])
+        def resend_open_notification():
+            symbol = str((request.json or {}).get("symbol", "")).upper().replace("/", "")
+            with active_deals_lock:
+                deal = dict(active_deals.get(symbol, {}))
+            if not deal:
+                return jsonify({"ok": False, "error": f"{symbol} tidak ada di active deals"}), 404
+            strategy = deal.get("strategy", "brkX2")
+            opened_at = deal.get("opened_at") or deal.get("opened_at_wib") or "-"
+            entry_price = float(deal.get("entry_price", 0) or 0)
+            peak = float(deal.get("peak", entry_price) or entry_price)
+            price = float(deal.get("last_price", entry_price) or entry_price)
+            profit_pct = (price / entry_price - 1) * 100 - FEE_ROUND_TRIP_PCT if entry_price > 0 else 0
+            message = (
+                f"OPEN LONG REPORT TERLAMBAT / RESEND\n"
+                f"Waktu open: {opened_at}\n"
+                f"Pair: {to_display_pair(symbol)}\n"
+                f"Strategi: {strategy}\n"
+                f"Entry: {_fmt_price(entry_price)}\n"
+                f"Harga terakhir: {_fmt_price(price)}\n"
+                f"Peak: {_fmt_price(peak)}\n"
+                f"Profit estimasi: {profit_pct:+.2f}%\n"
+                f"Modal: ${estimate_deal_total_usd(deal):.2f}\n"
+                "Catatan: laporan dikirim ulang; tidak membuka deal baru."
+            )
+            send_telegram(message, parse_mode=None)
+            log(f"[REPORT] resend OPEN notification {symbol} ({strategy})")
+            return jsonify({"ok": True, "symbol": symbol, "strategy": strategy})
 
         @app.route("/edit_deal", methods=["POST"])
         def edit_deal():
