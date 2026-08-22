@@ -5676,6 +5676,7 @@ DASHBOARD_HTML = '''
   .card-header:hover{background:rgba(255,255,255,0.03)}
   .card-toggle{font-size:12px;color:var(--muted);margin-left:8px;transition:transform 0.2s}
   .card.collapsed .card-body{display:none}
+    .card.collapsed > :not(.card-header){display:none}
   .card.collapsed .card-toggle{transform:rotate(-90deg)}
   .card.collapsed .card-header{border-bottom:none}
   .card-header h2{font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.08em}
@@ -5711,7 +5712,7 @@ DASHBOARD_HTML = '''
 <!-- ═══════════════ STRATEGY CONTROL ═══════════════ -->
 <div class="container" style="margin-bottom:16px">
     <div class="card">
-        <div class="card-header"><h2>AI DECISION PROVIDER</h2></div>
+        <div class="card-header" onclick="toggleCard(this)"><h2>AI DECISION PROVIDER <span class="card-toggle">&#9660;</span></h2></div>
         <div class="card-body" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:11px">
             <label style="display:flex;align-items:center;gap:6px;color:var(--muted)">
                 <span>Mode:</span>
@@ -5722,19 +5723,19 @@ DASHBOARD_HTML = '''
                     <option value="rule_based">Rule-based Python saja</option>
                 </select>
             </label>
-            <button type="button" onclick="saveAIProviderConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
+            <button type="button" onclick="event.stopPropagation();saveAIProviderConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
             <span id="ai-provider-status" style="color:var(--muted)">Loading...</span>
         </div>
     </div>
   <div class="card">
-    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+    <div class="card-header" onclick="toggleCard(this)" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
       <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">STRATEGY CONTROL</h2>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
           <span>Strategy:</span>
-          <select id="sc-strategy-select" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;min-width:160px"></select>
+          <select id="sc-strategy-select" onclick="event.stopPropagation()" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;min-width:160px"></select>
         </label>
-        <button onclick="resetStrategyConfig()" style="background:rgba(255,100,100,.15);color:var(--red);border:1px solid var(--red);border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer">RESET</button>
+        <button onclick="event.stopPropagation();resetStrategyConfig()" style="background:rgba(255,100,100,.15);color:var(--red);border:1px solid var(--red);border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer">RESET</button>
       </div>
     </div>
     <div class="card-body">
@@ -5758,8 +5759,8 @@ DASHBOARD_HTML = '''
 
 <div class="container">
   <div class="card">
-    <div class="card-header">
-      <h2>Active Deals ({{ active_count }})</h2>
+        <div class="card-header" onclick="toggleCard(this)">
+            <h2>Active Deals ({{ active_count }}) <span class="card-toggle">&#9660;</span></h2>
     </div>
     <div class="card-body">
     {% if active_deals %}
@@ -6361,11 +6362,11 @@ if (typeof STRAT_SECONDARY !== 'undefined') {
 </script>
 
 <!-- ═══════════════ CLOSED TRADES ═══════════════ -->
-<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 22px;margin-top:20px">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-    <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">CLOSED TRADES</h2>
+<div class="card" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 22px;margin-top:20px">
+    <div class="card-header" onclick="toggleCard(this)" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">CLOSED TRADES <span class="card-toggle">&#9660;</span></h2>
     <div style="display:flex;gap:8px;align-items:center">
-      <select id="ct-filter-strat" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+    <select id="ct-filter-strat" onclick="event.stopPropagation()" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua strategi</option>
         <option value="brkX2">brkX2-12h</option>
         <option value="brkX2_4h">brkX2-4h</option>
@@ -6374,7 +6375,7 @@ if (typeof STRAT_SECONDARY !== 'undefined') {
         <option value="brkX2_crossema">CrossEMA-4h</option>
         <option value="akumulasi">Akumulasi-4h</option>
       </select>
-      <button onclick="loadClosedTrades()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh</button>
+    <button onclick="event.stopPropagation();loadClosedTrades()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh</button>
     </div>
   </div>
   <div id="ct-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:11px"></div>
