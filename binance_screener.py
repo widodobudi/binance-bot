@@ -6340,7 +6340,7 @@ function loadAIProviderConfig() {
         var mode = document.getElementById('ai-provider-mode');
         var status = document.getElementById('ai-provider-status');
         if (mode) mode.value = d.mode || 'anthropic_gemini';
-        if (status) status.textContent = 'Anthropic: ' + (d.anthropic_configured ? 'siap' : 'belum') + ' | Gemini: ' + (d.gemini_configured ? 'siap' : 'belum') + ' | Terakhir: ' + (d.last_provider || 'rule-based Python');
+        if (status) status.textContent = 'Mode aktif: ' + (mode && mode.options[mode.selectedIndex] ? mode.options[mode.selectedIndex].text : 'Anthropic → Gemini otomatis') + ' | Anthropic: ' + (d.anthropic_configured ? 'siap' : 'belum') + ' | Gemini: ' + (d.gemini_configured ? 'siap' : 'belum') + ' | Terakhir: ' + (d.last_provider || 'Belum ada keputusan AI');
     });
 }
 
@@ -8426,7 +8426,7 @@ AI_DECISION_TIMEOUT = 10  # detik
 AI_PROVIDER_CONFIG_FILE = os.path.join(DATA_DIR, "ai_provider_config.json")
 AI_PRIMARY_PROVIDER = os.environ.get("AI_PRIMARY_PROVIDER", "anthropic").lower()
 AI_FALLBACK_PROVIDER = os.environ.get("AI_FALLBACK_PROVIDER", "gemini").lower()
-AI_LAST_PROVIDER = "rule-based Python"
+AI_LAST_PROVIDER = "Belum ada keputusan AI"
 
 _ai_quota_notif_sent = False  # flag agar notif quota habis tidak berulang
 
