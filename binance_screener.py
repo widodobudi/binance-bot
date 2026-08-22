@@ -608,8 +608,15 @@ def load_strategy_config() -> dict:
 
 def save_strategy_config(cfg: dict):
     try:
+        base = {k: dict(v) for k, v in STRATEGY_CONFIG_DEFAULTS.items()}
+        incoming = cfg or {}
+        for key, value in incoming.items():
+            if isinstance(value, dict):
+                base[key] = {**base.get(key, {}), **value}
+            else:
+                base[key] = value
         with open(STRATEGY_CONFIG_FILE, "w") as f:
-            json.dump(cfg, f, indent=2)
+            json.dump(base, f, indent=2)
     except Exception as e:
         log(f"WARN save_strategy_config: {e}")
 
@@ -5612,14 +5619,36 @@ DASHBOARD_HTML = '''
 <!-- ═══════════════ STRATEGY CONTROL ═══════════════ -->
 <div class="container" style="margin-bottom:16px">
   <div class="card">
-    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
       <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">STRATEGY CONTROL</h2>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
+          <span>Strategy:</span>
+          <select id="sc-strategy-select" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;min-width:160px"></select>
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
+          <input type="checkbox" id="sc-reset-all" style="cursor:pointer">
+          <span>Reset BO semua strategi</span>
+        </label>
         <button onclick="saveStrategyConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
         <button onclick="resetStrategyConfig()" style="background:rgba(255,100,100,.15);color:var(--red);border:1px solid var(--red);border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer">RESET</button>
       </div>
     </div>
     <div class="card-body">
+      <div id="sc-form" style="display:none;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 0 4px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
+          <span>Enable</span>
+          <input type="checkbox" id="sc-form-enabled" style="cursor:pointer">
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
+          <span>Base Order (USDT)</span>
+          <input type="number" id="sc-form-base" min="1" step="1" style="width:80px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
+          <span>Add Fund (USDT)</span>
+          <input type="number" id="sc-form-add" min="0" step="1" style="width:80px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+        </label>
+      </div>
       <table style="width:100%;border-collapse:collapse;font-size:11px" id="sc-table">
         <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
           <th style="text-align:left;padding:5px 8px">Strategi</th>
@@ -6081,34 +6110,75 @@ const SC_HAS_ADDFUND = {brkX2:true, brkX2_4h:true};
 const SC_ADDFUND_LABEL = {brkX2:'auto (score-based)'};
 var _scData = {};
 
+function buildStrategySelect() {
+  var keys = Object.keys(SC_LABELS);
+  var select = document.getElementById('sc-strategy-select');
+  if (!select) return;
+  select.innerHTML = '';
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    var opt = document.createElement('option');
+    opt.value = k;
+    opt.textContent = SC_LABELS[k];
+    select.appendChild(opt);
+  }
+  select.onchange = function() {
+    fillStrategyForm(select.value);
+  };
+}
+
+function fillStrategyForm(strategyKey) {
+  var cfg = _scData[strategyKey] || {enabled:true, base_usd:8, add_usd:0};
+  var form = document.getElementById('sc-form');
+  if (!form) return;
+  form.style.display = 'flex';
+  var enabled = document.getElementById('sc-form-enabled');
+  var base = document.getElementById('sc-form-base');
+  var add = document.getElementById('sc-form-add');
+  if (enabled) enabled.checked = cfg.enabled !== false;
+  if (base) base.value = cfg.base_usd || 8;
+  var hasAdd = SC_HAS_ADDFUND[strategyKey];
+  if (add) {
+    add.disabled = !hasAdd;
+    add.value = hasAdd ? (cfg.add_usd || 0) : 0;
+    add.style.opacity = hasAdd ? '1' : '0.4';
+  }
+}
+
 function loadStrategyConfig() {
-  fetch('/api/strategy_config').then(r=>r.json()).then(function(d) {
-    _scData = d;
+  fetch('/api/strategy_config').then(function(r){ return r.json(); }).then(function(d) {
+    _scData = d || {};
+    buildStrategySelect();
+    var select = document.getElementById('sc-strategy-select');
+    if (select && select.options.length) {
+      select.value = select.options[0].value;
+      fillStrategyForm(select.value);
+    }
     var rows = '';
     var keys = Object.keys(SC_LABELS);
-    if (!keys.length || !Object.keys(d).length) {
+    if (!keys.length || !Object.keys(d || {}).length) {
       document.getElementById('sc-body').innerHTML = '<tr><td colspan="4" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
       return;
     }
-    for (var i=0; i<keys.length; i++) {
+    for (var i = 0; i < keys.length; i++) {
       var k = keys[i];
-      var cfg  = d[k] || {enabled:true, base_usd:8, add_usd:null};
-      var en   = cfg.enabled !== false;
-      var dim  = en ? '' : 'opacity:0.35;pointer-events:none';
+      var cfg = d[k] || {enabled:true, base_usd:8, add_usd:null};
+      var en = cfg.enabled !== false;
+      var dim = en ? '' : 'opacity:0.35;pointer-events:none';
       var addFundCell = '';
       if (SC_HAS_ADDFUND[k]) {
         if (SC_ADDFUND_LABEL[k]) {
           addFundCell = '<td style="text-align:center;padding:5px 8px"><span style="' + dim + ';color:var(--muted);font-style:italic">' + SC_ADDFUND_LABEL[k] + '</span></td>';
         } else {
-          addFundCell = '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-add-' + k + '" value="' + (cfg.add_usd||0) + '" min="0" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>';
+          addFundCell = '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-add-' + k + '" value="' + (cfg.add_usd || 0) + '" min="0" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>';
         }
       } else {
         addFundCell = '<td style="text-align:center;padding:5px 8px;color:var(--muted)">—</td>';
       }
       rows += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">'
         + '<td style="padding:5px 8px;font-weight:600">' + SC_LABELS[k] + '</td>'
-        + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-en-' + k + '" ' + (en?'checked':'') + ' onchange="onScToggle(\'' + k + '\')" style="width:16px;height:16px;cursor:pointer"></td>'
-        + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + cfg.base_usd + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>'
+        + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-en-' + k + '" ' + (en ? 'checked' : '') + ' onchange="onScToggle(\'' + k + '\')" style="width:16px;height:16px;cursor:pointer"></td>'
+        + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>'
         + addFundCell
         + '</tr>';
     }
@@ -6120,33 +6190,39 @@ function loadStrategyConfig() {
 
 function onScToggle(k) {
   var en = document.getElementById('sc-en-' + k).checked;
-  var dim = en ? '' : 'opacity:0.35;pointer-events:none';
   var baseEl = document.getElementById('sc-base-' + k);
-  if (baseEl) { baseEl.style.opacity = en?'1':'0.35'; baseEl.style.pointerEvents = en?'':'none'; }
+  if (baseEl) { baseEl.style.opacity = en ? '1' : '0.35'; baseEl.style.pointerEvents = en ? '' : 'none'; }
   var addEl = document.getElementById('sc-add-' + k);
-  if (addEl) { addEl.style.opacity = en?'1':'0.35'; addEl.style.pointerEvents = en?'':'none'; }
+  if (addEl) { addEl.style.opacity = en ? '1' : '0.35'; addEl.style.pointerEvents = en ? '' : 'none'; }
 }
 
 function saveStrategyConfig() {
+  if (document.getElementById('sc-reset-all').checked) {
+    fetch('/api/strategy_config/reset', {method:'POST'})
+      .then(function(r){ return r.json(); })
+      .then(function(){ loadStrategyConfig(); });
+    return;
+  }
+  var select = document.getElementById('sc-strategy-select');
+  var key = select ? select.value : 'brkX2';
   var data = {};
-  for (var k in SC_LABELS) {
-    var enEl = document.getElementById('sc-en-' + k);
-    var baseEl = document.getElementById('sc-base-' + k);
-    var addEl = document.getElementById('sc-add-' + k);
-    data[k] = {
-      enabled:  enEl ? enEl.checked : true,
-      base_usd: baseEl ? parseFloat(baseEl.value)||8 : 8,
-    };
-    if (addEl) data[k].add_usd = parseFloat(addEl.value)||0;
+  data[key] = {
+    enabled: document.getElementById('sc-form-enabled').checked,
+    base_usd: parseFloat(document.getElementById('sc-form-base').value) || 8,
+  };
+  if (SC_HAS_ADDFUND[key]) {
+    data[key].add_usd = parseFloat(document.getElementById('sc-form-add').value) || 0;
   }
   fetch('/api/strategy_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)})
-    .then(r=>r.json()).then(function(d){ if(d.ok) loadStrategyConfig(); });
+    .then(function(r){ return r.json(); })
+    .then(function(d){ if (d && d.ok) loadStrategyConfig(); });
 }
 
 function resetStrategyConfig() {
   if (!confirm('Reset semua nilai ke default?')) return;
   fetch('/api/strategy_config/reset', {method:'POST'})
-    .then(r=>r.json()).then(function(){ loadStrategyConfig(); });
+    .then(function(r){ return r.json(); })
+    .then(function(){ loadStrategyConfig(); });
 }
 document.addEventListener('DOMContentLoaded', function(){ setTimeout(loadStrategyConfig, 300); });
 
