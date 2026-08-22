@@ -5714,6 +5714,18 @@ DASHBOARD_HTML = '''
 <!-- ═══════════════ STRATEGY CONTROL ═══════════════ -->
 <div class="container" style="margin-bottom:16px">
     <div class="card">
+        <div class="card-header" onclick="toggleCard(this)"><h2>SIMULASI KONVERSI SALDO</h2></div>
+        <div class="card-body" style="font-size:11px">
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                <label>Target saldo USDT <input id="sim-threshold" type="number" min="0" step="0.01" value="100" style="width:90px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
+                <label>Konversi ke <select id="sim-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option value="BIDR">BIDR</option><option value="IDRT">IDRT</option></select></label>
+                <label>Jumlah USDT <input id="sim-amount" type="number" min="0" step="0.01" value="0" style="width:90px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
+                <button type="button" onclick="simulateBalanceConversion()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SIMULATE</button>
+            </div>
+            <div id="sim-conversion-result" style="margin-top:10px;color:var(--muted)">Belum ada simulasi. Tidak ada order Binance yang akan dikirim.</div>
+        </div>
+    </div>
+    <div class="card">
         <div class="card-header" onclick="toggleCard(this)"><h2>AI DECISION PROVIDER <span class="card-toggle">&#9660;</span></h2></div>
         <div class="card-body" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:11px">
             <label style="display:flex;align-items:center;gap:6px;color:var(--muted)">
@@ -6356,6 +6368,22 @@ function saveAIProviderConfig() {
     var mode = document.getElementById('ai-provider-mode').value;
     fetch('/api/ai_provider_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:mode})})
         .then(function(){ loadAIProviderConfig(); });
+}
+
+function simulateBalanceConversion() {
+    var result = document.getElementById('sim-conversion-result');
+    result.textContent = 'Mengambil saldo live Binance...';
+    fetch('/api/simulate_balance_conversion', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            threshold: parseFloat(document.getElementById('sim-threshold').value) || 0,
+            amount: parseFloat(document.getElementById('sim-amount').value) || 0,
+            asset: document.getElementById('sim-asset').value
+        })
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        if (!d.ok) { result.textContent = 'Error: ' + d.error; return; }
+        result.textContent = 'Saldo: ' + d.usdt_balance + ' USDT | Terkunci: ' + d.locked_usdt + ' USDT | Tersedia: ' + d.available_usdt + ' USDT | Trigger: ' + (d.would_trigger ? 'YA' : 'TIDAK') + ' | Estimasi konversi ke ' + d.asset + ': ' + d.estimated_convert_usdt + ' USDT. ' + d.message;
+    }).catch(function(e){ result.textContent = 'Error simulasi: ' + e; });
 }
 
 if (typeof STRAT_SECONDARY !== 'undefined') {
@@ -8313,6 +8341,29 @@ def run_web_dashboard():
                 except ValueError as error:
                     return jsonify({"ok": False, "error": str(error)}), 400
             return jsonify({"ok": True, **load_ai_provider_config()})
+
+        @app.route("/api/simulate_balance_conversion", methods=["POST"])
+        def api_simulate_balance_conversion():
+            try:
+                payload = request.json or {}
+                threshold = float(payload.get("threshold", 0))
+                requested = float(payload.get("amount", 0))
+                asset = str(payload.get("asset", "BIDR")).upper()
+                if threshold < 0 or requested < 0 or asset not in {"BIDR", "IDRT"}:
+                    return jsonify({"ok": False, "error": "Parameter simulasi tidak valid"}), 400
+                balance = get_binance_usdt_balance()
+                locked = get_estimated_locked_usd()
+                available = max(0.0, balance - locked)
+                amount = min(requested, available) if requested > 0 else max(0.0, available - threshold)
+                return jsonify({
+                    "ok": True, "simulation_only": True, "asset": asset,
+                    "usdt_balance": round(balance, 8), "locked_usdt": round(locked, 8),
+                    "available_usdt": round(available, 8), "threshold_usdt": round(threshold, 8),
+                    "would_trigger": balance >= threshold, "estimated_convert_usdt": round(amount, 8),
+                    "message": "Simulasi saja; tidak ada order Binance yang dikirim.",
+                })
+            except Exception as error:
+                return jsonify({"ok": False, "error": str(error)}), 500
 
         @app.route("/api/hunting_config", methods=["POST"])
         def api_hunting_config():
