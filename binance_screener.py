@@ -5702,7 +5702,7 @@ DASHBOARD_HTML = '''
 <div class="header">
   <span class="dot"></span>
   <h1>TRADING BOT DASHBOARD</h1>
-    <span class="status">Refresh dalam <span id="cd">30</span>s &nbsp;|&nbsp; <label style="font-size:11px;cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="cb-pause-refresh" checked onchange="onPauseRefreshToggle(this.checked)" style="cursor:pointer"> Pause</label> &nbsp;|&nbsp; {{ now }}</span>
+    <span class="status">Refresh dalam <span id="cd">30</span>s &nbsp;|&nbsp; <label style="font-size:11px;cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="cb-pause-refresh" onchange="onPauseRefreshToggle(this.checked)" style="cursor:pointer"> Pause</label> &nbsp;|&nbsp; {{ now }}</span>
 <script>
   var s=30;setInterval(function(){if(typeof _refreshTimer!=='undefined'&&_refreshTimer){s--;if(s<0)s=30;}document.getElementById('cd').textContent=s;},1000);
 </script>
@@ -6333,9 +6333,6 @@ function resetStrategyConfig() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-    var pauseBox = document.getElementById('cb-pause-refresh');
-    if (pauseBox) pauseBox.checked = true;
-    pauseRefresh();
     setTimeout(loadStrategyConfig, 300);
     loadAIProviderConfig();
 });
