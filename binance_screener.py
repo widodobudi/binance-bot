@@ -6230,7 +6230,15 @@ function loadStrategyConfig() {
 }
 
 function onScToggle(k) {
+    var runEl = document.getElementById('sc-run-' + k);
     var sizingEnabled = document.getElementById('sc-size-' + k).checked;
+    var select = document.getElementById('sc-strategy-select');
+    if (select && select.value === k) {
+        var strategyFormEl = document.getElementById('sc-form-strategy-enabled');
+        var sizingFormEl = document.getElementById('sc-form-sizing-enabled');
+        if (strategyFormEl && runEl) strategyFormEl.checked = runEl.checked;
+        if (sizingFormEl) sizingFormEl.checked = sizingEnabled;
+    }
     var baseEl = document.getElementById('sc-base-' + k);
     if (baseEl) { baseEl.style.opacity = sizingEnabled ? '1' : '0.35'; baseEl.style.pointerEvents = sizingEnabled ? '' : 'none'; }
     var addEl = document.getElementById('sc-add-' + k);
