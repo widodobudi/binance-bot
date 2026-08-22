@@ -929,7 +929,10 @@ def csv_progress(strategy: str = None, offset: int = 0):
             if r.get('status') == 'CLOSED':
                 closed.append(repair_stale_ondo_base_usd(r))
         if strategy is not None:
-            closed = [r for r in closed if (r.get('strategy') or 'brkX2') == strategy]
+            if strategy == 'akumulasi':
+                closed = [r for r in closed if r.get('strategy') in ('akum_entry_a', 'akum_entry_b')]
+            else:
+                closed = [r for r in closed if (r.get('strategy') or 'brkX2') == strategy]
         # Skip deal dari tahap sebelumnya
         if offset > 0:
             closed = closed[offset:]
@@ -955,6 +958,26 @@ def csv_progress(strategy: str = None, offset: int = 0):
         return None
 
 
+def csv_progress_active() -> dict:
+    """Gabungkan hanya trade fase aktif yang dipakai heartbeat Telegram."""
+    parts = (
+        csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET),
+        csv_progress('reversal'),
+        csv_progress('brkX2_4h'),
+        csv_progress('brkX2_crossema'),
+        csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET),
+        csv_progress('akumulasi'),
+    )
+    if all(part is None for part in parts):
+        return None
+    return {
+        'n': sum(part['n'] for part in parts if part),
+        'win': sum(part['win'] for part in parts if part),
+        'loss': sum(part['loss'] for part in parts if part),
+        'total_pct': sum(part['total_pct'] for part in parts if part),
+    }
+
+
 def csv_last_close(strategy: str = None, offset: int = 0) -> dict:
     """Return info deal CLOSED terakhir: symbol, close_time_wib, profit_pct.
     Dipakai untuk heartbeat 'close deal terakhir'."""
@@ -969,7 +992,10 @@ def csv_last_close(strategy: str = None, offset: int = 0) -> dict:
             if r.get('status') == 'CLOSED':
                 closed.append(repair_stale_ondo_base_usd(r))
         if strategy:
-            closed = [r for r in closed if (r.get('strategy') or 'brkX2') == strategy]
+            if strategy == 'akumulasi':
+                closed = [r for r in closed if r.get('strategy') in ('akum_entry_a', 'akum_entry_b')]
+            else:
+                closed = [r for r in closed if (r.get('strategy') or 'brkX2') == strategy]
         if offset > 0:
             closed = closed[offset:]
         if not closed:
@@ -2675,17 +2701,19 @@ def heartbeat_general_tick():
             pct = last_close.get('profit_pct','?')
             base += f"\n    ↳ Close terakhir: {sym} {t} WIB {pct}%"
         return base
-    prog_all  = csv_progress()
+    prog_all  = csv_progress_active()
     prog_brk  = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)
     prog_rev  = csv_progress('reversal')
     prog_4h   = csv_progress('brkX2_4h')
     prog_cx   = csv_progress('brkX2_crossema')
     prog_hunt = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
+    prog_akum = csv_progress('akumulasi')
     lc_brk    = csv_last_close('brkX2',        offset=FWDTEST_BRKX2_PHASE_OFFSET)
     lc_rev    = csv_last_close('reversal')
     lc_4h     = csv_last_close('brkX2_4h')
     lc_cx     = csv_last_close('brkX2_crossema')
     lc_hunt   = csv_last_close('hunting_4h',   offset=HUNTING_FWDTEST_PHASE_OFFSET)
+    lc_akum   = csv_last_close('akumulasi')
     if prog_all is None:
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
     else:
@@ -2695,7 +2723,8 @@ def heartbeat_general_tick():
                      f"  - reversal-8h: {_fmt_strat(prog_rev,  FWDTEST_TARGET_REVERSAL,    lc_rev)}\n"
                      f"  - brkX2-4h   : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET,    lc_4h)}\n"
                      f"  - crossema-4h: {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST,    lc_cx)}\n"
-                     f"  - hunting-4h : {_fmt_strat(prog_hunt, HUNTING_FWDTEST_TARGET,    lc_hunt)}")
+                     f"  - hunting-4h : {_fmt_strat(prog_hunt, HUNTING_FWDTEST_TARGET,    lc_hunt)}\n"
+                     f"  - akumulasi-4h: {_fmt_strat(prog_akum, AKUM_ENTRY_FWDTEST_TARGET, lc_akum)}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
     slot_line = (f"Slot brkX2-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2} | "
@@ -3679,7 +3708,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
         tag=" TERCAPAI!" if nn>=tgt else ""
         return f"#{nn}/{tgt} ({wl}, total {p['total_pct']:+.1f}%){tag}"
 
-    prog_all  = csv_progress()
+    prog_all  = csv_progress_active()
     prog_brk  = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)
     prog_rev  = csv_progress('reversal')
     prog_4h   = csv_progress('brkX2_4h')
@@ -6259,7 +6288,7 @@ if (typeof STRAT_SECONDARY !== 'undefined') {
         <option value="reversal">Reversal-8h</option>
         <option value="hunting_4h">Hunting-4h</option>
         <option value="brkX2_crossema">CrossEMA-4h</option>
-        <option value="akum_entry_a">Akumulasi</option>
+        <option value="akumulasi">Akumulasi-4h</option>
       </select>
       <button onclick="loadClosedTrades()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh</button>
     </div>
