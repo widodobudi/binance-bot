@@ -6408,6 +6408,7 @@ function resetStrategyConfig() {
 document.addEventListener('DOMContentLoaded', function() {
     setTimeout(loadStrategyConfig, 300);
     loadAIProviderConfig();
+    loadAutoSellConfig();
 });
 
 function loadAIProviderConfig() {
