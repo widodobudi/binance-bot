@@ -5714,18 +5714,6 @@ DASHBOARD_HTML = '''
 <!-- ═══════════════ STRATEGY CONTROL ═══════════════ -->
 <div class="container" style="margin-bottom:16px">
     <div class="card">
-        <div class="card-header" onclick="toggleCard(this)"><h2>SIMULASI KONVERSI SALDO</h2></div>
-        <div class="card-body" style="font-size:11px">
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-                <label>Target saldo USDT <input id="sim-threshold" type="number" min="0" step="0.01" value="100" style="width:90px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
-                <label>Konversi ke <select id="sim-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option value="BIDR">BIDR</option><option value="IDRT">IDRT</option></select></label>
-                <label>Jumlah USDT <input id="sim-amount" type="number" min="0" step="0.01" value="0" style="width:90px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
-                <button type="button" onclick="simulateBalanceConversion()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SIMULATE</button>
-            </div>
-            <div id="sim-conversion-result" style="margin-top:10px;color:var(--muted)">Belum ada simulasi. Tidak ada order Binance yang akan dikirim.</div>
-        </div>
-    </div>
-    <div class="card">
         <div class="card-header" onclick="toggleCard(this)"><h2>AI DECISION PROVIDER <span class="card-toggle">&#9660;</span></h2></div>
         <div class="card-body" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:11px">
             <label style="display:flex;align-items:center;gap:6px;color:var(--muted)">
@@ -6469,6 +6457,20 @@ function loadClosedTrades() {
 }
 window.addEventListener('load', function(){ loadClosedTrades(); });
 </script>
+<div class="container" style="margin-top:12px">
+    <div class="card">
+        <div class="card-header" onclick="toggleCard(this)"><h2>SIMULASI KONVERSI SALDO <span class="card-toggle">&#9660;</span></h2></div>
+        <div class="card-body" style="font-size:11px">
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                <label>Target saldo USDT <input id="sim-threshold" type="number" min="0" step="0.01" value="100" style="width:90px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
+                <label>Konversi ke <select id="sim-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option value="BIDR">BIDR</option><option value="IDRT">IDRT</option></select></label>
+                <label>Jumlah USDT <input id="sim-amount" type="number" min="0" step="0.01" value="0" style="width:90px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
+                <button type="button" onclick="simulateBalanceConversion()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SIMULATE</button>
+            </div>
+            <div id="sim-conversion-result" style="margin-top:10px;color:var(--muted)">Belum ada simulasi. Tidak ada order Binance yang akan dikirim.</div>
+        </div>
+    </div>
+</div>
 </body>
 </html>
 '''
