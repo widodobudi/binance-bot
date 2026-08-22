@@ -6223,6 +6223,10 @@ function buildStrategySelect() {
         opt.textContent = SC_LABELS[k];
         select.appendChild(opt);
     }
+    var allOpt = document.createElement('option');
+    allOpt.value = '__all__';
+    allOpt.textContent = 'All';
+    select.appendChild(allOpt);
     select.onchange = function() {
         loadStrategyConfig();
     };
@@ -6237,14 +6241,14 @@ function loadStrategyConfig() {
             var selectedKey = select ? select.value : '';
             buildStrategySelect();
             if (select && select.options.length) {
-                if (selectedKey && SC_LABELS[selectedKey]) {
+                if (selectedKey === '__all__' || (selectedKey && SC_LABELS[selectedKey])) {
                     select.value = selectedKey;
                 } else {
                     selectedKey = select.options[0].value;
                 }
             }
             var rows = '';
-            var keys = selectedKey ? [selectedKey] : Object.keys(SC_LABELS);
+            var keys = selectedKey === '__all__' ? Object.keys(SC_LABELS) : (selectedKey ? [selectedKey] : Object.keys(SC_LABELS));
             var tbody = document.getElementById('sc-body');
             if (!tbody) return;
             if (!keys.length || !Object.keys(d || {}).length) {
@@ -6257,7 +6261,7 @@ function loadStrategyConfig() {
                 var strategyEnabled = cfg.strategy_enabled !== false;
                 var sizingEnabled = cfg.sizing_enabled !== false;
                 var dim = sizingEnabled ? '' : 'opacity:0.35;pointer-events:none';
-                var saveButton = '<button type="button" onclick="saveStrategyConfig()" style="margin-left:8px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>';
+                var saveButton = '<button type="button" onclick="saveStrategyConfig(this.closest(\'tr\').getAttribute(\'data-strategy\'))" style="margin-left:8px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>';
                 var addFundCell = '';
                 if (SC_HAS_ADDFUND[k]) {
                     if (SC_ADDFUND_LABEL[k]) {
@@ -6268,7 +6272,7 @@ function loadStrategyConfig() {
                 } else {
                     addFundCell = '<td style="text-align:center;padding:5px 8px;color:var(--muted);white-space:nowrap">—' + saveButton + '</td>';
                 }
-                rows += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">'
+                rows += '<tr data-strategy="' + k + '" style="border-bottom:1px solid rgba(255,255,255,0.04)">'
                     + '<td style="padding:5px 8px;font-weight:600">' + SC_LABELS[k] + '</td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-run-' + k + '" ' + (strategyEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-size-' + k + '" ' + (sizingEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
@@ -6299,9 +6303,10 @@ function onScToggle(k) {
     if (addEl) { addEl.style.opacity = sizingEnabled ? '1' : '0.35'; addEl.style.pointerEvents = sizingEnabled ? '' : 'none'; }
 }
 
-function saveStrategyConfig() {
+function saveStrategyConfig(rowKey) {
     var select = document.getElementById('sc-strategy-select');
-    var key = select ? select.value : 'brkX2';
+    var key = rowKey || (select ? select.value : 'brkX2');
+    if (key === '__all__') return;
     var data = {};
     var baseEl = document.getElementById('sc-base-' + key);
     var addEl = document.getElementById('sc-add-' + key);
