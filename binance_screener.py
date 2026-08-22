@@ -6238,7 +6238,7 @@ function loadStrategyConfig() {
         .then(function(d) {
             _scData = d || {};
             var select = document.getElementById('sc-strategy-select');
-            var selectedKey = select ? select.value : '';
+            var selectedKey = select && select.value ? select.value : '__all__';
             buildStrategySelect();
             if (select && select.options.length) {
                 if (selectedKey === '__all__' || (selectedKey && SC_LABELS[selectedKey])) {
