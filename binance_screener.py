@@ -3302,6 +3302,52 @@ def thread1b_scan_reversal():
             
     last_rev_candle_ts = newest_rev
     return None if opened_any else f"{len(candidates)} kandidat reversal lolos tapi tak ada yg dibuka."
+def enrich_deal_open_indicators(symbol: str, deal: dict) -> dict:
+    """Isi indikator report yang belum tersimpan dari candle timeframe strategi."""
+    indicator_keys = (
+        'rsi_open', 'stoch_k_open', 'stoch_d_open', 'macd_hist_open',
+        'bb_pct_open', 'williams_r_open', 'cci_open', 'obv_open', 'ema20_open',
+    )
+    if all(deal.get(key) is not None for key in indicator_keys):
+        return deal
+    try:
+        strategy = deal.get('strategy', 'brkX2')
+        if strategy in ('brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'akum_entry_a', 'akum_entry_b'):
+            frame = get_ohlcv_4h(symbol, limit=120)
+            frame = compute_indicators_4h(frame) if frame is not None else None
+        else:
+            interval = REVERSAL_TIMEFRAME if strategy == 'reversal' else '12h'
+            frame = get_ohlcv(symbol, interval=interval, limit=120)
+            frame = compute_indicators(frame) if frame is not None else None
+        if frame is None or len(frame) == 0:
+            return deal
+        row = frame.iloc[-1]
+        def value(column):
+            raw = row.get(column)
+            return None if raw is None or pd.isna(raw) else float(raw)
+        updates = {
+            'rsi_open': value('rsi'),
+            'stoch_k_open': value('stoch_k'),
+            'stoch_d_open': value('stoch_d'),
+            'macd_hist_open': value('macd_hist'),
+            'bb_pct_open': value('bb_pct'),
+            'williams_r_open': value('williams_r'),
+            'cci_open': value('cci'),
+            'obv_open': value('obv'),
+            'ema20_open': value('ema20') or value('ema_fast'),
+        }
+        for key, new_value in updates.items():
+            if deal.get(key) is None and new_value is not None:
+                deal[key] = new_value
+        with active_deals_lock:
+            if symbol in active_deals:
+                active_deals[symbol].update({k: v for k, v in updates.items() if v is not None})
+        save_active_deals()
+    except Exception as error:
+        log(f"[T2] {symbol} indicator report backfill gagal: {error}")
+    return deal
+
+
 def thread2_monitor():
     want_fast = False  # jadi True jika ada deal armed yg harganya bergerak cepat
     with active_deals_lock:
@@ -3314,6 +3360,7 @@ def thread2_monitor():
         if entry<=0: continue
         price = get_price_now(sym)
         if price<=0: continue
+        d = enrich_deal_open_indicators(sym, d)
 
         # Update stoch_k dan st_dir untuk trailing factor variatif hunting
         if d.get('strategy') == 'hunting_4h':
