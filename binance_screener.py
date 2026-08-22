@@ -6184,12 +6184,17 @@ function loadStrategyConfig() {
                 }
                 rows += '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">'
                     + '<td style="padding:5px 8px;font-weight:600">' + SC_LABELS[k] + '</td>'
-                    + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-en-' + k + '" ' + (en ? 'checked' : '') + ' onchange="onScToggle(\'' + k + '\')" style="width:16px;height:16px;cursor:pointer"></td>'
+                      + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-en-' + k + '" ' + (en ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>'
                     + addFundCell
                     + '</tr>';
             }
             tbody.innerHTML = rows;
+            tbody.querySelectorAll('[id^="sc-en-"]').forEach(function(el) {
+                el.addEventListener('change', function() {
+                    onScToggle(this.id.slice(6));
+                });
+            });
         })
         .catch(function(e) {
             var tbody = document.getElementById('sc-body');
