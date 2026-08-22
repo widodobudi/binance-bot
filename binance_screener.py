@@ -1456,6 +1456,8 @@ def get_binance_open_orders_value(symbol: str) -> float:
 
 # ── Binance Direct Trading (Railway Pro + static IP + BINANCE_TRADING_KEY) ──────────
 BINANCE_TRADING_BASE = "https://api.binance.com"
+AUTO_SELL_CONFIG_FILE = os.path.join(DATA_DIR, "auto_sell_config.json")
+_auto_sell_last_prices = {}
 
 def _binance_trading_request(method: str, path: str, params: dict) -> dict:
     """Helper HMAC-signed request ke Binance trading API menggunakan BINANCE_TRADING_KEY."""
@@ -1529,6 +1531,67 @@ def binance_sell_market(symbol: str, qty: float) -> dict:
     log(f"[BINANCE] SELL {symbol}: qty={qty_exec} avg={price_avg:.6f} proceeds={proceeds:.2f} USDT orderId={data.get('orderId')}")
     return {"symbol": symbol, "orderId": data.get("orderId"),
             "qty": qty_exec, "price_avg": price_avg, "proceeds_usdt": proceeds}
+
+
+def load_auto_sell_config() -> dict:
+    default = {"enabled": False, "asset": "", "threshold_usdt": 0.0}
+    try:
+        if os.path.exists(AUTO_SELL_CONFIG_FILE):
+            with open(AUTO_SELL_CONFIG_FILE, encoding="utf-8") as file:
+                default.update(json.load(file))
+    except Exception as error:
+        log(f"WARN [BINANCE] auto-sell config: {error}")
+    return default
+
+
+def save_auto_sell_config(config: dict) -> None:
+    with open(AUTO_SELL_CONFIG_FILE, "w", encoding="utf-8") as file:
+        json.dump({
+            "enabled": bool(config.get("enabled", False)),
+            "asset": str(config.get("asset", "")).upper(),
+            "threshold_usdt": float(config.get("threshold_usdt", 0)),
+        }, file, indent=2)
+
+
+def get_binance_spot_assets() -> list:
+    data = _binance_trading_request("GET", "/api/v3/account", {})
+    result = []
+    for item in data.get("balances", []):
+        asset = str(item.get("asset", "")).upper()
+        free = float(item.get("free", 0))
+        if asset and free > 0 and asset not in {"USDT", "BIDR", "IDRT"}:
+            result.append({"asset": asset, "free": free, "symbol": asset + "USDT"})
+    return sorted(result, key=lambda item: item["asset"])
+
+
+def check_auto_sell_crossing() -> None:
+    config = load_auto_sell_config()
+    if not config.get("enabled") or not config.get("asset"):
+        return
+    asset = str(config["asset"]).upper()
+    symbol = asset + "USDT"
+    threshold = float(config.get("threshold_usdt", 0))
+    if threshold <= 0:
+        return
+    price = get_price_now(symbol)
+    previous = _auto_sell_last_prices.get(symbol)
+    _auto_sell_last_prices[symbol] = price
+    if price <= 0 or previous is None or not (previous < threshold <= price):
+        return
+    quantity = binance_get_asset_qty(asset)
+    if quantity <= 0:
+        return
+    result = binance_sell_market(symbol, quantity)
+    save_auto_sell_config({**config, "enabled": False})
+    send_telegram(
+        f"AUTO SELL {asset}/USDT\n"
+        f"Harga crossing: {_fmt_price(price)} USDT\n"
+        f"Threshold: {_fmt_price(threshold)} USDT\n"
+        f"Qty dijual: {quantity}\n"
+        f"Hasil: {result.get('proceeds_usdt', 0):.2f} USDT\n"
+        "Auto-sell dinonaktifkan setelah satu eksekusi."
+    )
+    log(f"[AUTO-SELL] {symbol} crossing {threshold} -> sold {quantity}")
 
 
 # Cache LOT_SIZE stepSize per symbol agar tidak fetch berulang
@@ -3350,6 +3413,10 @@ def enrich_deal_open_indicators(symbol: str, deal: dict) -> dict:
 
 def thread2_monitor():
     want_fast = False  # jadi True jika ada deal armed yg harganya bergerak cepat
+    try:
+        check_auto_sell_crossing()
+    except Exception as error:
+        log(f"WARN [AUTO-SELL] monitor error: {error}")
     with active_deals_lock:
         syms = list(active_deals.keys())
     for sym in syms:
@@ -6359,6 +6426,44 @@ function saveAIProviderConfig() {
 }
 
 function simulateBalanceConversion() {
+
+    function loadAutoSellConfig() {
+        fetch('/api/auto_sell_config').then(function(r){ return r.json(); }).then(function(d) {
+            var enabled = document.getElementById('auto-sell-enabled');
+            var asset = document.getElementById('auto-sell-asset');
+            var threshold = document.getElementById('auto-sell-threshold');
+            var status = document.getElementById('auto-sell-status');
+            if (enabled) enabled.checked = !!d.enabled;
+            if (threshold) threshold.value = d.threshold_usdt || 0;
+            return fetch('/api/binance_spot_assets').then(function(r){ return r.json(); }).then(function(a) {
+                if (!asset) return;
+                asset.innerHTML = '';
+                (a.assets || []).forEach(function(item) {
+                    var option = document.createElement('option');
+                    option.value = item.asset;
+                    option.textContent = item.asset + ' (' + item.free + ')';
+                    asset.appendChild(option);
+                });
+                if (d.asset) asset.value = d.asset;
+                if (status) status.textContent = d.enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif';
+            });
+        }).catch(function(e){
+            var status = document.getElementById('auto-sell-status');
+            if (status) status.textContent = 'Tidak dapat membaca saldo: ' + e;
+        });
+    }
+
+    function saveAutoSellConfig() {
+        var enabled = document.getElementById('auto-sell-enabled').checked;
+        var asset = document.getElementById('auto-sell-asset').value;
+        var threshold = parseFloat(document.getElementById('auto-sell-threshold').value) || 0;
+        if (enabled && (!asset || threshold <= 0)) { alert('Isi aset dan threshold harga yang valid.'); return; }
+        fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:enabled, asset:asset, threshold_usdt:threshold})})
+            .then(function(r){ return r.json(); }).then(function(d){
+                var status = document.getElementById('auto-sell-status');
+                if (status) status.textContent = d.ok ? (enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif') : 'Error: ' + d.error;
+            });
+    }
     var result = document.getElementById('sim-conversion-result');
     result.textContent = 'Mengambil saldo live Binance...';
     fetch('/api/simulate_balance_conversion', {
@@ -6447,6 +6552,7 @@ function renderClosedTradesRows() {
             if (av < bv) return -1 * closedTradesSortDirection;
             if (av > bv) return 1 * closedTradesSortDirection;
             return 0;
+            loadAutoSellConfig();
         });
     }
     document.querySelectorAll('#ct-table th[data-sort-key]').forEach(function(th) {
@@ -6508,6 +6614,21 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
                 <button type="button" onclick="simulateBalanceConversion()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SIMULATE</button>
             </div>
             <div id="sim-conversion-result" style="margin-top:10px;color:var(--muted)">Belum ada simulasi. Tidak ada order Binance yang akan dikirim.</div>
+        </div>
+    </div>
+</div>
+<div class="container" style="margin-top:12px">
+    <div class="card">
+        <div class="card-header" onclick="toggleCard(this)"><h2>AUTO SELL ASSET <span class="card-toggle">&#9660;</span></h2></div>
+        <div class="card-body" style="font-size:11px">
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                <label><input id="auto-sell-enabled" type="checkbox"> Aktifkan jual otomatis</label>
+                <label>Asset <select id="auto-sell-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option>Memuat...</option></select></label>
+                <label>Harga trigger (USDT) <input id="auto-sell-threshold" type="number" min="0" step="0.00000001" value="0" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
+                <button type="button" onclick="saveAutoSellConfig()" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
+                <button type="button" onclick="loadAutoSellConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh saldo</button>
+            </div>
+            <div id="auto-sell-status" style="margin-top:10px;color:var(--muted)">Nonaktif. Saat aktif, seluruh saldo bebas asset dijual sekali ketika harga crossing naik.</div>
         </div>
     </div>
 </div>
@@ -8404,6 +8525,30 @@ def run_web_dashboard():
                     "would_trigger": balance >= threshold, "estimated_convert_usdt": round(amount, 8),
                     "message": "Simulasi saja; tidak ada order Binance yang dikirim.",
                 })
+            except Exception as error:
+                return jsonify({"ok": False, "error": str(error)}), 500
+
+        @app.route("/api/binance_spot_assets")
+        def api_binance_spot_assets():
+            try:
+                return jsonify({"ok": True, "assets": get_binance_spot_assets()})
+            except Exception as error:
+                return jsonify({"ok": False, "assets": [], "error": str(error)}), 500
+
+        @app.route("/api/auto_sell_config", methods=["GET", "POST"])
+        def api_auto_sell_config():
+            try:
+                if request.method == "POST":
+                    payload = request.json or {}
+                    config = {
+                        "enabled": bool(payload.get("enabled", False)),
+                        "asset": str(payload.get("asset", "")).upper(),
+                        "threshold_usdt": float(payload.get("threshold_usdt", 0)),
+                    }
+                    if config["enabled"] and (not config["asset"] or config["threshold_usdt"] <= 0):
+                        return jsonify({"ok": False, "error": "Asset dan threshold wajib diisi"}), 400
+                    save_auto_sell_config(config)
+                return jsonify({"ok": True, **load_auto_sell_config()})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
 
