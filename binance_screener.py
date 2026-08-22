@@ -6425,9 +6425,7 @@ function saveAIProviderConfig() {
         .then(function(){ loadAIProviderConfig(); });
 }
 
-function simulateBalanceConversion() {
-
-    function loadAutoSellConfig() {
+function loadAutoSellConfig() {
         fetch('/api/auto_sell_config').then(function(r){ return r.json(); }).then(function(d) {
             var enabled = document.getElementById('auto-sell-enabled');
             var asset = document.getElementById('auto-sell-asset');
@@ -6463,7 +6461,7 @@ function simulateBalanceConversion() {
         });
     }
 
-    function saveAutoSellConfig() {
+function saveAutoSellConfig() {
         var enabled = document.getElementById('auto-sell-enabled').checked;
         var asset = document.getElementById('auto-sell-asset').value;
         var threshold = parseFloat(document.getElementById('auto-sell-threshold').value) || 0;
@@ -6474,6 +6472,7 @@ function simulateBalanceConversion() {
                 if (status) status.textContent = d.ok ? (enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif') : 'Error: ' + d.error;
             });
     }
+function simulateBalanceConversion() {
     var result = document.getElementById('sim-conversion-result');
     result.textContent = 'Mengambil saldo live Binance...';
     fetch('/api/simulate_balance_conversion', {
