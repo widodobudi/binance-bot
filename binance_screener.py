@@ -7464,16 +7464,70 @@ def run_web_dashboard():
     """Thread web dashboard Flask."""
     try:
         try:
-            from flask import Flask, render_template_string, request, redirect, jsonify
+            from flask import Flask, render_template_string, request, redirect, jsonify, session
         except ImportError:
             import subprocess
             subprocess.run(["pip", "install", "flask", "--quiet", "--break-system-packages"],
                           capture_output=True)
-            from flask import Flask, render_template_string, request, redirect, jsonify
+            from flask import Flask, render_template_string, request, redirect, jsonify, session
 
         app = Flask(__name__)
+        app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
+        app.config.update(
+            SESSION_COOKIE_SECURE=True,
+            SESSION_COOKIE_HTTPONLY=True,
+            SESSION_COOKIE_SAMESITE="Lax",
+        )
+        dashboard_username = os.environ.get("DASHBOARD_USERNAME", "")
+        dashboard_password_hash = os.environ.get("DASHBOARD_PASSWORD_HASH", "")
+        dashboard_totp_secret = os.environ.get("DASHBOARD_TOTP_SECRET", "").replace(" ", "").upper()
 
-        app.secret_key = os.urandom(24)
+        def dashboard_login_required():
+            if not dashboard_username or not dashboard_password_hash:
+                return None
+            if session.get("dashboard_authenticated"):
+                return None
+            if request.path in {"/login", "/logout", "/dash.js"} or request.method == "OPTIONS":
+                return None
+            if request.path.startswith("/api/") or request.is_json:
+                return jsonify({"ok": False, "error": "login diperlukan"}), 401
+            return redirect("/login")
+
+        @app.before_request
+        def require_dashboard_login():
+            return dashboard_login_required()
+
+        @app.route("/login", methods=["GET", "POST"])
+        def dashboard_login():
+            error = ""
+            if request.method == "POST":
+                from werkzeug.security import check_password_hash
+                username = request.form.get("username", "")
+                password = request.form.get("password", "")
+                otp = request.form.get("otp", "").replace(" ", "")
+                password_ok = username == dashboard_username and check_password_hash(dashboard_password_hash, password)
+                totp_ok = True
+                if dashboard_totp_secret:
+                    try:
+                        import pyotp
+                        totp_ok = pyotp.TOTP(dashboard_totp_secret).verify(otp, valid_window=1)
+                    except Exception:
+                        totp_ok = False
+                if password_ok and totp_ok:
+                    session.clear()
+                    session["dashboard_authenticated"] = True
+                    return redirect("/")
+                error = "Username, password, atau kode authenticator salah."
+            return render_template_string("""
+<!doctype html><html lang="id"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard Login</title>
+<style>body{background:#0f1117;color:#e2e8f0;font:14px monospace;display:grid;place-items:center;min-height:100vh}form{background:#1a1d2e;border:1px solid #2a2d3e;border-radius:8px;padding:24px;width:min(340px,calc(100% - 40px))}h1{color:#4f9eff;font-size:16px}label{display:block;margin:14px 0 6px;color:#8892a4}input{width:100%;box-sizing:border-box;padding:9px;background:#0f1117;color:#e2e8f0;border:1px solid #2a2d3e;border-radius:4px}button{margin-top:18px;width:100%;padding:9px;background:#4f9eff;border:0;border-radius:4px;font-weight:bold}p{color:#ff4f6a}</style></head>
+<body><form method="post"><h1>TRADING BOT DASHBOARD</h1>{% if error %}<p>{{ error }}</p>{% endif %}<label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required>{% if totp_enabled %}<label>Authenticator code</label><input name="otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>{% endif %}<button type="submit">LOGIN</button></form></body></html>
+""", error=error, totp_enabled=bool(dashboard_totp_secret))
+
+        @app.route("/logout")
+        def dashboard_logout():
+            session.clear()
+            return redirect("/login")
 
         @app.route("/")
         def index():
