@@ -5646,7 +5646,8 @@ DASHBOARD_HTML = '''
       </div>
     </div>
     <div class="card-body">
-      <table style="width:100%;border-collapse:collapse;font-size:11px" id="sc-table">
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+    <table style="width:100%;min-width:760px;border-collapse:collapse;font-size:11px" id="sc-table">
         <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
           <th style="text-align:left;padding:5px 8px">Strategi</th>
           <th style="text-align:center;padding:5px 8px">Izinkan Open Long</th>
@@ -5655,7 +5656,8 @@ DASHBOARD_HTML = '''
           <th style="text-align:center;padding:5px 8px">Add Fund (USDT)</th>
         </tr></thead>
         <tbody id="sc-body"><tr><td colspan="5" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
-      </table>
+    </table>
+    </div>
     </div>
   </div>
 </div>
@@ -5668,7 +5670,8 @@ DASHBOARD_HTML = '''
     </div>
     <div class="card-body">
     {% if active_deals %}
-    <table>
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+    <table style="min-width:1080px">
       <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
@@ -5719,6 +5722,7 @@ DASHBOARD_HTML = '''
       {% endfor %}
       </tbody>
     </table>
+        </div>
     {% else %}
     <div class="empty">Tidak ada deal aktif saat ini</div>
     {% endif %}
