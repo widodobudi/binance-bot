@@ -6439,7 +6439,7 @@ function renderClosedTradesRows() {
                 av = strat_map[av] || av; bv = strat_map[bv] || bv;
             } else if (closedTradesSortKey === 'duration') {
                 var durationMinutes = function(value) {
-                    var match = String(value).match(/(\d+)j\s*(\d+)m|^(\d+)m$/);
+                      var match = String(value).match(/([0-9]+)j[ ]*([0-9]+)m|^([0-9]+)m$/);
                     return match ? (match[1] ? parseInt(match[1]) * 1440 + parseInt(match[2]) : parseInt(match[3])) : -1;
                 };
                 av = durationMinutes(av); bv = durationMinutes(bv);
