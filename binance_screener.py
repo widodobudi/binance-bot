@@ -5380,6 +5380,7 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
     # ── Data indikator ────────────────────────────────────────────────────────
     if df is None or len(df) < 51:
         return False
+    r = df.iloc[-1]
 
     # +1 bullish dan 0 transisi diterima; hanya -1 bearish yang ditolak.
     try:
