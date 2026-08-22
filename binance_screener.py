@@ -2896,8 +2896,8 @@ def heartbeat_general_tick():
 
     if HEARTBEAT_GENERAL_ENABLED: send_telegram(
         f"{header}\n"
-        f"\n---\n"
-        f"{prog_line}\n"
+        f"---\n"
+        f"{prog_line}\n\n"
         f"Bot HIDUP & terus memantau."
     )
     log(f"[HB-GEN] Heartbeat General terkirim")
@@ -3940,7 +3940,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
         f"{slot_4h} | {slot_cx} | {slot_total}\n"
         f"---\n"
         f"{prog_line}"
-        f"{t3_str}\n"
+        f"{t3_str}\n\n"
         f"Bot HIDUP & terus memantau."
     )
     send_telegram(msg)
