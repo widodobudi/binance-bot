@@ -5214,8 +5214,8 @@ def check_hunting_strategy(df, r, config):
     if dist_ema20 is None or not (0.0 <= dist_ema20 <= 0.75):
         return None
 
-    # --- Syarat WAJIB: Supertrend dir = +1 (backtest: filter terkuat) ---
-    if st_dir != 1:
+    # --- Tolak hanya Supertrend bearish; +1 bullish dan 0 transisi diterima ---
+    if st_dir == -1:
         return None
 
     # --- Syarat WAJIB: RSI < HUNTING_RSI_MAX (backtest: ST+1+RSI<60 = +0.714% vs baseline) ---
@@ -5380,6 +5380,16 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
     # ── Data indikator ────────────────────────────────────────────────────────
     if df is None or len(df) < 51:
         return False
+
+    # +1 bullish dan 0 transisi diterima; hanya -1 bearish yang ditolak.
+    try:
+        import pandas_ta as _pta
+        _st = _pta.supertrend(df["high"], df["low"], df["close"], length=10, multiplier=3)
+        _st_dir_col = [column for column in _st.columns if "SUPERTd" in column]
+        if _st_dir_col and int(_st[_st_dir_col[0]].iloc[-1]) == -1:
+            return False
+    except Exception:
+        pass
 
     close      = float(df["close"].iloc[-1])
     ema20      = float(df["close"].ewm(span=20, adjust=False).mean().iloc[-1])
