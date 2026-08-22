@@ -5653,14 +5653,6 @@ DASHBOARD_HTML = '''
     <div class="card-body">
       <div id="sc-form" style="display:none;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 0 4px">
         <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
-                    <span>Izinkan Open Long</span>
-                    <input type="checkbox" id="sc-form-strategy-enabled" style="cursor:pointer">
-                </label>
-                <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
-                    <span>Gunakan Setting Modal</span>
-                    <input type="checkbox" id="sc-form-sizing-enabled" style="cursor:pointer">
-        </label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
           <span>Base Order (USDT)</span>
           <input type="number" id="sc-form-base" min="1" step="1" style="width:80px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         </label>
@@ -6156,12 +6148,8 @@ function fillStrategyForm(strategyKey) {
     var form = document.getElementById('sc-form');
     if (!form) return;
     form.style.display = 'flex';
-    var strategyEnabled = document.getElementById('sc-form-strategy-enabled');
-    var sizingEnabled = document.getElementById('sc-form-sizing-enabled');
     var base = document.getElementById('sc-form-base');
     var add = document.getElementById('sc-form-add');
-    if (strategyEnabled) strategyEnabled.checked = cfg.strategy_enabled !== false;
-    if (sizingEnabled) sizingEnabled.checked = cfg.sizing_enabled !== false;
     if (base) base.value = cfg.base_usd || 8;
     var hasAdd = !!SC_HAS_ADDFUND[strategyKey];
     if (add) {
@@ -6230,15 +6218,7 @@ function loadStrategyConfig() {
 }
 
 function onScToggle(k) {
-    var runEl = document.getElementById('sc-run-' + k);
     var sizingEnabled = document.getElementById('sc-size-' + k).checked;
-    var select = document.getElementById('sc-strategy-select');
-    if (select && select.value === k) {
-        var strategyFormEl = document.getElementById('sc-form-strategy-enabled');
-        var sizingFormEl = document.getElementById('sc-form-sizing-enabled');
-        if (strategyFormEl && runEl) strategyFormEl.checked = runEl.checked;
-        if (sizingFormEl) sizingFormEl.checked = sizingEnabled;
-    }
     var baseEl = document.getElementById('sc-base-' + k);
     if (baseEl) { baseEl.style.opacity = sizingEnabled ? '1' : '0.35'; baseEl.style.pointerEvents = sizingEnabled ? '' : 'none'; }
     var addEl = document.getElementById('sc-add-' + k);
@@ -6256,10 +6236,10 @@ function saveStrategyConfig() {
     var select = document.getElementById('sc-strategy-select');
     var key = select ? select.value : 'brkX2';
     var data = {};
-    var strategyEnabledEl = document.getElementById('sc-form-strategy-enabled');
-    var sizingEnabledEl = document.getElementById('sc-form-sizing-enabled');
     var baseEl = document.getElementById('sc-form-base');
     var addEl = document.getElementById('sc-form-add');
+    var strategyEnabledEl = document.getElementById('sc-run-' + key);
+    var sizingEnabledEl = document.getElementById('sc-size-' + key);
     data[key] = {
         strategy_enabled: strategyEnabledEl ? strategyEnabledEl.checked : true,
         sizing_enabled: sizingEnabledEl ? sizingEnabledEl.checked : true,
