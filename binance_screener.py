@@ -196,6 +196,7 @@ STRAT4H_FWDTEST_TARGET  = 30      # target forward-test fase 2 (fase 1 selesai: 
 HUNTING_MAX_DEALS        = 3       # max deal hunting aktif bersamaan
 HUNTING_MAX_HOLD_CANDLES = 15      # timeout 15 candle 4h = 2.5 hari (sama brkX2-4h)
 HUNTING_FWDTEST_TARGET   = 7       # target forward-test
+HUNTING_LIVE_BASELINE    = 7       # closed deals saat Hunting dipromosikan ke LIVE
 HUNTING_MIN_ATR_PCT      = 0.5     # ATR% minimum — filter koin stagnan
 HUNTING_RSI_MAX          = 60      # RSI < 60 (backtest_hunting_filter_sweep: +0.714% vs baseline)
 HUNTING_CAPITAL_USD      = float(os.environ.get("HUNTING_CAPITAL_USD", "90.0"))  # estimasi total kapital bot (update manual kalau top-up)
@@ -976,6 +977,14 @@ def csv_progress_active() -> dict:
         'loss': sum(part['loss'] for part in parts if part),
         'total_pct': sum(part['total_pct'] for part in parts if part),
     }
+
+
+def hunting_live_progress() -> tuple:
+    """Return (completed-active-phase stats, number of closes since LIVE)."""
+    progress = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
+    if not progress:
+        return {'n': 0, 'win': 0, 'loss': 0, 'total_pct': 0.0}, 0
+    return progress, max(0, progress['n'] - HUNTING_LIVE_BASELINE)
 
 
 def csv_last_close(strategy: str = None, offset: int = 0) -> dict:
@@ -2806,6 +2815,7 @@ def heartbeat_general_tick():
     prog_cx   = csv_progress('brkX2_crossema')
     prog_hunt = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
     prog_akum = csv_progress('akumulasi')
+    hunt_since_live = max(0, (prog_hunt or {}).get('n', 0) - HUNTING_LIVE_BASELINE)
     lc_brk    = csv_last_close('brkX2',        offset=FWDTEST_BRKX2_PHASE_OFFSET)
     lc_rev    = csv_last_close('reversal')
     lc_4h     = csv_last_close('brkX2_4h')
@@ -2822,6 +2832,7 @@ def heartbeat_general_tick():
                      f"  - brkX2-4h   : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET,    lc_4h)}\n"
                      f"  - crossema-4h: {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST,    lc_cx)}\n"
                      f"  - hunting-4h : {_fmt_hunting_live(prog_hunt, lc_hunt)}\n"
+                     f"    hunting-4h: #{hunt_since_live} since LIVE\n"
                      f"  - akumulasi-4h: {_fmt_strat(prog_akum, AKUM_ENTRY_FWDTEST_TARGET, lc_akum)}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
@@ -3783,8 +3794,10 @@ def thread2_monitor():
                     done_n = pstrat['n']; wl = f"{pstrat['win']}W/{pstrat['loss']}L"
                     status = "TERCAPAI - waktunya evaluasi!" if done_n>=tgt else f"menuju {tgt}"
                     if strat == 'hunting_4h':
+                        since_live = max(0, done_n - HUNTING_LIVE_BASELINE)
                         prog_close = (f"\n{strat_label} LIVE: {done_n} closed"
-                                      f"\n  {wl}, total {pstrat['total_pct']:+.1f}%")
+                                      f"\n  {wl}, total {pstrat['total_pct']:+.1f}%"
+                                      f"\n{strat_label}: #{since_live} since LIVE")
                     else:
                         prog_close = (f"\nForward-test {strat_label}: #{done_n}/{tgt} ({status})"
                                       f"\n  {wl}, total {pstrat['total_pct']:+.1f}%")
@@ -3871,6 +3884,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
     prog_4h   = csv_progress('brkX2_4h')
     prog_cx   = csv_progress('brkX2_crossema')
     prog_hunt = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
+    hunt_since_live = max(0, (prog_hunt or {}).get('n', 0) - HUNTING_LIVE_BASELINE)
 
     if prog_all is None:
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
@@ -3881,7 +3895,8 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
                      f"  - reversal : {_fmt_strat(prog_rev,  FWDTEST_TARGET_REVERSAL)}\n"
                      f"  - 4h       : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET)}\n"
                      f"  - crossema : {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST)}\n"
-                     f"  - hunting  : {_fmt_hunting_live(prog_hunt)}")
+                     f"  - hunting  : {_fmt_hunting_live(prog_hunt)}\n"
+                     f"    hunting  : #{hunt_since_live} since LIVE")
 
     # Status T3 intrabar
     t3_str = ""
