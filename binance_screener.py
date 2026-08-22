@@ -5779,20 +5779,6 @@ DASHBOARD_HTML = '''
 </div>
 
 <!-- ═══════════════ STRATEGY CONTROL ═══════════════ -->
-<div class="container" style="margin-bottom:16px">
-    <div class="card">
-        <div class="card-header" onclick="toggleCard(this)"><h2>AI DECISION PROVIDER <span class="card-toggle">&#9660;</span></h2></div>
-        <div class="card-body" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:11px">
-            <label style="display:flex;align-items:center;gap:6px;color:var(--muted)">
-                <span>Mode:</span>
-                <select id="ai-provider-mode" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px">
-                    <option value="anthropic_gemini">Anthropic → Gemini otomatis</option>
-                    <option value="anthropic_only">Anthropic saja</option>
-                    <option value="gemini_only">Gemini AI Studio saja</option>
-                    <option value="rule_based">Rule-based Python saja</option>
-                </select>
-            </label>
-            <button type="button" onclick="event.stopPropagation();saveAIProviderConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
             <span id="ai-provider-status" style="color:var(--muted)">Loading...</span>
         </div>
     </div>
