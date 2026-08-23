@@ -2207,6 +2207,37 @@ def _cross_up(df, idx, ema_col):
     if pd.isna(p[ema_col]) or pd.isna(cur[ema_col]): return False
     return p['close'] < p[ema_col] and cur['close'] >= cur[ema_col]
 
+def reversal_blockers(df) -> list:
+    """Return all Reversal conditions that fail for the current closed-candle setup."""
+    failures = []
+    if len(df) < 6:
+        return ["Data candle kurang"]
+    if is_choppy(df):
+        failures.append("Choppy market")
+    n = len(df)
+    im3, im2, im1 = n-6, n-5, n-4
+    i0, i1, i2 = n-3, n-2, n-1
+    c0 = df.iloc[i0]
+    if any(pd.isna(c0[x]) for x in ['ema_fast', 'ema_slow', 'body_ratio']):
+        failures.append("Indikator tidak tersedia")
+        return failures
+    if any(not (df.iloc[idx]['close'] < df.iloc[idx]['open']) for idx in (im3, im2, im1)):
+        failures.append("3 candle bearish")
+    open_c5 = float(df.iloc[im3]['open'])
+    close_c1 = float(df.iloc[im1]['close'])
+    drop_pct = (close_c1 / open_c5 - 1) * 100 if open_c5 > 0 else 0
+    if not (open_c5 > 0 and drop_pct <= -5.0):
+        failures.append("Drop minimum 5%")
+    if not (c0['close'] < c0['ema_fast'] and c0['close'] < c0['ema_slow']):
+        failures.append("Close di bawah EMA20/50")
+    if not (c0['body_ratio'] < REVERSAL_DOJI_MAX):
+        failures.append("Doji body ratio")
+    if not bool(df['ha_bull'].iloc[i1]):
+        failures.append("HA bullish")
+    if not (_cross_up(df, i1, 'ema_fast') or _cross_up(df, i2, 'ema_fast')):
+        failures.append("Cross up EMA20")
+    return failures
+
 def check_entry_reversal(df) -> bool:
     """Setup reversal pada candle TERTUTUP terakhir sbg c+2 (titik entry).
     Pola: c-5,c-4,c-3,c-2,c-1 (sebelum doji), c0=doji, c+1 HA bull, c+2=entry.
@@ -2221,33 +2252,7 @@ def check_entry_reversal(df) -> bool:
       - c+1 HA bullish (1 candle konfirmasi)
       - c+1 ATAU c+2 crossing-up EMA20
     Entry di candle c+2 yg baru tutup (mode a)."""
-    if len(df) < 6: return False        # butuh c-3 (df[-6])
-    if is_choppy(df): return False
-    n = len(df)
-    im3, im2, im1 = n-6, n-5, n-4   # c-3..c-1 (3 candle merah)
-    i0 = n - 3           # c0
-    i1, i2 = n-2, n-1    # c+1, c+2(entry)
-    c0 = df.iloc[i0]
-    if any(pd.isna(c0[x]) for x in ['ema_fast','ema_slow','body_ratio']): return False
-    # syarat 1: 3 candle sebelum doji SEMUA merah
-    for idx in (im3, im2, im1):
-        cc = df.iloc[idx]
-        if not (cc['close'] < cc['open']): return False
-    # syarat 2: penurunan total open c-5 -> close c-1 <= -5%
-    open_c5 = float(df.iloc[im3]['open'])  # open candle pertama dari 3 merah
-    close_c1 = float(df.iloc[im1]['close'])
-    if open_c5 <= 0: return False
-    drop_pct = (close_c1 / open_c5 - 1) * 100
-    if not (drop_pct <= -5.0): return False
-    # kondisi awal: c0 di bawah EMA20 & EMA50
-    if not (c0['close'] < c0['ema_fast'] and c0['close'] < c0['ema_slow']): return False
-    # c0 doji
-    if not (c0['body_ratio'] < REVERSAL_DOJI_MAX): return False
-    # c+1 HA bullish (1 candle konfirmasi)
-    if not bool(df['ha_bull'].iloc[i1]): return False
-    # c+1 atau c+2 crossing-up EMA20
-    if not (_cross_up(df, i1, 'ema_fast') or _cross_up(df, i2, 'ema_fast')): return False
-    return True
+    return not reversal_blockers(df)
 
 def entry_detail_reversal(df):
     """Untuk heartbeat: (n_lolos, 5, list_gagal) tanpa mempengaruhi keputusan. None kalau choppy/data kurang.
@@ -2513,6 +2518,46 @@ def htf_filter_4h_ok(symbol: str, for_crossema: bool = False) -> bool:
         log(f"  [HTF4h] error cek {symbol}: {e} → skip filter")
         return True  # fail-open
 
+def blockers_entry_4h(df) -> list:
+    """Return every brkX2-4h condition that fails for the latest candle."""
+    failures = []
+    if len(df) < STRAT4H_MACD_SLOW + STRAT4H_MACD_SIGNAL + 5:
+        return ["Data candle kurang"]
+    r = df.iloc[-1]
+    sd = r.get("st_dir")
+    if pd.isna(sd) or sd != 1:
+        failures.append("Supertrend bullish")
+    mh = r.get("macd_hist")
+    if pd.isna(mh) or mh < 0:
+        failures.append("MACD histogram")
+    atr = r.get("atr_pct")
+    if pd.isna(atr) or atr < STRAT4H_ATR_MIN_PCT:
+        failures.append("ATR minimum")
+    vol_ma = r.get("vol_ma")
+    if pd.isna(vol_ma) or vol_ma <= 0:
+        failures.append("Volume MA tersedia")
+    elif r["vol"] < STRAT4H_VOLUME_MULT * vol_ma:
+        failures.append("Volume minimum")
+    v24 = r.get("vol24h_usd")
+    if not pd.isna(v24) and v24 < STRAT4H_MIN_VOL_USD:
+        failures.append("Volume 24h minimum")
+    sk = r.get("stoch_k")
+    if sk is not None and not pd.isna(sk) and sk >= STRAT4H_STOCH_MAX:
+        failures.append("Stoch oversold ceiling")
+    rsi = r.get("rsi")
+    if rsi is not None and not pd.isna(rsi) and rsi >= STRAT4H_RSI_MAX:
+        failures.append("RSI maximum")
+    if rsi is not None and not pd.isna(rsi) and rsi <= STRAT4H_RSI_MIN:
+        failures.append("RSI minimum")
+    if not pd.isna(atr) and atr >= STRAT4H_ATR_MAX_PCT:
+        failures.append("ATR maximum")
+    if pd.notna(vol_ma) and vol_ma > 0 and r["vol"] > STRAT4H_VOL_MAX_MULT * vol_ma:
+        failures.append("Volume maximum")
+    chg = r.get("chg_from_open")
+    if chg is not None and not pd.isna(chg) and chg > STRAT4H_CHG_MAX_PCT:
+        failures.append("Change from open maximum")
+    return failures
+
 def check_entry_4h(df) -> bool:
     """
     Entry 4h:
@@ -2524,37 +2569,7 @@ def check_entry_4h(df) -> bool:
       - Stoch%K < 80 (backtest_4h_rsi_stoch_sweep.py, 31/07/2026)
       - RSI < 60 (07/08/2026, keputusan Budi): hindari entry saat harga sudah terlalu tinggi
     """
-    if len(df) < STRAT4H_MACD_SLOW + STRAT4H_MACD_SIGNAL + 5: return False
-    r = df.iloc[-1]
-    sd = r.get("st_dir")
-    if pd.isna(sd) or sd != 1: return False
-    mh = r.get("macd_hist")
-    if pd.isna(mh) or mh < 0: return False  # diubah dari <=0 ke <0 (backtest_macd_threshold_sweep_4h.py, 14/08/2026): Δavg -0.070% tapi n +50%
-    atr = r.get("atr_pct")
-    if pd.isna(atr) or atr < STRAT4H_ATR_MIN_PCT: return False
-    vol_ma = r.get("vol_ma")
-    if pd.isna(vol_ma) or vol_ma <= 0: return False
-    if r["vol"] < STRAT4H_VOLUME_MULT * vol_ma: return False
-    v24 = r.get("vol24h_usd")
-    if not pd.isna(v24) and v24 < STRAT4H_MIN_VOL_USD: return False
-    # Stoch%K filter
-    sk = r.get("stoch_k")
-    if sk is not None and not pd.isna(sk) and sk >= STRAT4H_STOCH_MAX: return False
-    # RSI < 60 filter (07/08/2026)
-    rsi = r.get("rsi")
-    if rsi is not None and not pd.isna(rsi) and rsi >= STRAT4H_RSI_MAX: return False
-    # RSI > 40 filter (14/08/2026, backtest_brkx2_4h_comprehensive_sweep: sweet spot avg +3.785% WR 87%)
-    if rsi is not None and not pd.isna(rsi) and rsi <= STRAT4H_RSI_MIN: return False
-    # ATR% < 7.0 (08/08/2026): hindari entry saat volatilitas ekstrem / puncak pump
-    if not pd.isna(atr) and atr >= STRAT4H_ATR_MAX_PCT: return False
-    # Volume <= 5x MA20 (08/08/2026): simetris dengan brkX2-12h
-    if r["vol"] > STRAT4H_VOL_MAX_MULT * vol_ma: return False
-    # Price change dari open candle <= 3% (11/08/2026, backtest_elapsed_sweep_brkx2_4h):
-    # Cegah entry saat harga sudah terlalu jauh naik dari open candle = momentum terlambat
-    chg = r.get("chg_from_open")
-    if chg is not None and not pd.isna(chg) and chg > STRAT4H_CHG_MAX_PCT: return False
-    # Perf Grade: ditampilkan di dashboard sebagai info, tidak memblokir open deal (07/08/2026)
-    return True
+    return not blockers_entry_4h(df)
 
 def active_deal_count_4h() -> int:
     """Jumlah deal aktif strategi brkX2_4h."""
@@ -3367,23 +3382,36 @@ def thread1b_scan_reversal():
 
     candidates = []
     near_miss = []
+    scan_blockers = {}
     for sym in universe:
         with active_deals_lock:
-            if sym in active_deals: continue   # satu coin, satu deal (lintas strategi)
-        if sym in SYMBOL_BLACKLIST: continue
+            if sym in active_deals:
+                count_blocker(scan_blockers, "Deal aktif", True)
+                continue   # satu coin, satu deal (lintas strategi)
+        if sym in SYMBOL_BLACKLIST:
+            count_blocker(scan_blockers, "Blacklist", True)
+            continue
         df = get_ohlcv(sym, interval=REVERSAL_TIMEFRAME, limit=120)
-        if df is None or len(df) < 60: continue
+        if df is None or len(df) < 60:
+            count_blocker(scan_blockers, "Data OHLCV kurang", True)
+            continue
         # mode (a): pastikan candle terakhir SUDAH tutup
         if df['ct'].iloc[-1] >= int(time.time()*1000):
             df = df.iloc[:-1]
-            if len(df) < 60: continue
+            if len(df) < 60:
+                count_blocker(scan_blockers, "Data candle tertutup kurang", True)
+                continue
         df = compute_indicators_reversal(df)
-        if check_entry_reversal(df):
+        failures = reversal_blockers(df)
+        for failure in failures:
+            count_blocker(scan_blockers, failure, True)
+        if not failures:
             # Performance filter
             if PERF_FILTER_ENABLED:
                 candle_ts = int(df['ct'].iloc[-1])
                 pscore = calc_perf_score(sym, candle_ts)
                 if pd.isna(pscore) or pscore < PERF_SCORE_MIN:
+                    count_blocker(scan_blockers, "Performance score", True)
                     det = entry_detail_reversal(df)
                     if det is not None:
                         n_pass, total, fails = det
@@ -3398,6 +3426,7 @@ def thread1b_scan_reversal():
                 if n_pass >= 2:   # tampilkan hanya yg lolos >=2/4
                     near_miss.append((n_pass, sym, fails, 5))
 
+        record_scan_blockers("Reversal-8h", len(universe), len(candidates), scan_blockers)
     if not candidates:
         log(f"[T1b] {len(universe)} coin discan (reversal), tidak ada yg lolos setup.")
         log_near_miss("Reversal-8h", near_miss, 5)
@@ -4656,6 +4685,8 @@ def thread1d_scan_4h():
 
     candidates  = []
     near_miss_4h = []   # [(sym, [fails])] — kandidat yang hampir lolos
+    scan_blockers_4h = {}
+    scan_total_4h = 0
     with active_deals_lock:
         existing = set(active_deals.keys())
 
@@ -4670,35 +4701,26 @@ def thread1d_scan_4h():
             continue
 
         try:
+            scan_total_4h += 1
             df = get_ohlcv_4h(sym, limit=500)
-            if df is None or len(df) < 500: continue  # filter pair baru (<~83 hari listing)
+            if df is None or len(df) < 500:
+                count_blocker(scan_blockers_4h, "Data OHLCV kurang", True)
+                continue  # filter pair baru (<~83 hari listing)
             df = compute_indicators_4h(df)
 
-            if not check_entry_4h(df):
+            failures_4h = blockers_entry_4h(df)
+            for failure in failures_4h:
+                count_blocker(scan_blockers_4h, failure, True)
+            if failures_4h:
                 # Cek berapa syarat yang lolos untuk near_miss
                 r = df.iloc[-1]
-                fails = []
-                sd = r.get("st_dir")
-                if pd.isna(sd) or sd != 1: fails.append("Supertrend masih Downtrend")
-                mh = r.get("macd_hist")
-                if pd.isna(mh) or mh < 0: fails.append(f"MACD hist {(f'{mh:.4f}' if mh==mh else 'n/a')} (harus >=0)")
-                atr = r.get("atr_pct")
-                if pd.isna(atr) or atr < STRAT4H_ATR_MIN_PCT: fails.append(f"ATR% {(f'{atr:.2f}' if atr==atr else 'n/a')}% (min {STRAT4H_ATR_MIN_PCT}%)")
-                vol_ma = r.get("vol_ma")
-                if pd.isna(vol_ma) or vol_ma <= 0 or r["vol"] < STRAT4H_VOLUME_MULT * vol_ma:
-                    vol_ratio_now = (r["vol"] / vol_ma) if (vol_ma and vol_ma > 0) else 0
-                    fails.append(f"Vol rendah: {vol_ratio_now:.2f}x MA (min {STRAT4H_VOLUME_MULT}x)")
-                sk = r.get("stoch_k")
-                if sk is not None and not pd.isna(sk) and sk >= STRAT4H_STOCH_MAX:
-                    fails.append(f"Stoch%K {sk:.1f} (max {STRAT4H_STOCH_MAX})")
-                total_4h = 7  # ST + MACD + ATR + Vol + Stoch + HTF + Perf
-                n_pass_4h = total_4h - len(fails)
-                if len(fails) <= 1:  # hampir lolos (max 1 syarat gagal)
-                    near_miss_4h.append((n_pass_4h, sym, fails, total_4h))
+                if len(failures_4h) <= 1:
+                    near_miss_4h.append((max(0, 11 - len(failures_4h)), sym, failures_4h, 11))
                 continue
 
             # HTF 12h filter
             if not htf_filter_4h_ok(sym):
+                count_blocker(scan_blockers_4h, "HTF 12h", True)
                 log(f"  [T1d] {sym} lolos 4h tapi DITOLAK HTF 12h filter")
                 _rvol4h = htf_vol_ratio(sym, STRAT4H_HTF_TF, STRAT4H_HTF_LIMIT, STRAT4H_HTF_VOL_MA)
                 _rvol4h_str = f"{_rvol4h:.2f}xMA" if _rvol4h >= 0 else "?"
@@ -4710,6 +4732,7 @@ def thread1d_scan_4h():
                 candle_ts = int(df['ct'].iloc[-1])
                 pscore = calc_perf_score(sym, candle_ts)
                 if pd.isna(pscore) or pscore < PERF_SCORE_MIN:
+                    count_blocker(scan_blockers_4h, "Performance score", True)
                     near_miss_4h.append((6, sym, [f"Perf Grade masih <B (score {pscore:.2f})"], 7))
                     continue
 
@@ -4720,6 +4743,7 @@ def thread1d_scan_4h():
         except Exception as e:
             log(f"  [T1d] error {sym}: {e}")
 
+    record_scan_blockers("brkX2-4h", scan_total_4h, len(candidates), scan_blockers_4h)
     # Status line untuk heartbeat
     n4h_active = active_deal_count_4h()
     # Simpan near miss ke global untuk heartbeat T1
@@ -4912,15 +4936,20 @@ def scan_hunting_signals_only():
         if not ticker:
             return
         hunting_display = []
+        hunting_blockers = {}
+        hunting_scanned = 0
         with _hunting_lock:
             _cfg_hunt = dict(_hunting_config)
         for sym_info2 in ticker:
             sym2 = sym_info2.get("symbol", "")
             if not sym2.endswith("USDT"): continue
+            hunting_scanned += 1
             try:
                 df2 = get_ohlcv_4h(sym2, limit=100)
-                if df2 is None or len(df2) < 51: continue
-                hit = check_hunting_strategy(df2, sym_info2, _cfg_hunt)
+                if df2 is None or len(df2) < 51:
+                    count_blocker(hunting_blockers, "Data candle kurang", True)
+                    continue
+                hit = check_hunting_strategy(df2, sym_info2, _cfg_hunt, hunting_blockers)
                 if hit:
                     hunting_display.append(hit)
                     open_hunting_if_signal(sym_info2, df2, _cfg_hunt)
@@ -4931,6 +4960,7 @@ def scan_hunting_signals_only():
             _hunting_signals.clear()
             _hunting_signals.extend(hunting_display[:50])
             globals()["_hunting_scan_ts"] = ts_hunt
+        record_scan_blockers("Hunting-4h", hunting_scanned, len(hunting_display), hunting_blockers)
         log(f"[T1d-HUNT] scan selesai: {len(hunting_display)} kandidat | slot {active_deal_count_hunting()}/{HUNTING_MAX_DEALS}")
     except Exception as e:
         log(f"WARN scan_hunting_signals_only: {e}")
@@ -5005,6 +5035,8 @@ def thread_crossema_scan():
         existing = set(active_deals.keys())
 
     _crossema_near_miss.clear()  # reset tiap scan
+    scan_blockers_cx = {}
+    scan_total_cx = 0
 
     for sym_info in ticker:
         sym = sym_info.get("symbol", "")
@@ -5016,25 +5048,37 @@ def thread_crossema_scan():
         if vol24 < STRAT_CROSSEMA_MIN_VOL_USD: continue
 
         try:
+            scan_total_cx += 1
             df = get_ohlcv_4h(sym, limit=500)
-            if df is None or len(df) < 500: continue  # filter pair baru (<~83 hari listing)
+            if df is None or len(df) < 500:
+                count_blocker(scan_blockers_cx, "Data OHLCV kurang", True)
+                continue  # filter pair baru (<~83 hari listing)
             df = compute_indicators_4h(df)
 
             # Lapis 1: candle n-1 tertutup — ST=-1, close<EMA20, vol>=VOLUME_MULT×MA
             r = df.iloc[-1]
             sd = r.get("st_dir")
-            if pd.isna(sd) or sd != -1: continue
+            if pd.isna(sd) or sd != -1:
+                count_blocker(scan_blockers_cx, "Supertrend bearish", True)
+                continue
             ef = r.get("ema_fast")
-            if pd.isna(ef) or r["close"] >= ef: continue
+            if pd.isna(ef) or r["close"] >= ef:
+                count_blocker(scan_blockers_cx, "Close di bawah EMA20", True)
+                continue
             vm = r.get("vol_ma")
-            if pd.isna(vm) or vm <= 0 or r["vol"] < STRAT_CROSSEMA_VOLUME_MULT * vm: continue
+            if pd.isna(vm) or vm <= 0 or r["vol"] < STRAT_CROSSEMA_VOLUME_MULT * vm:
+                count_blocker(scan_blockers_cx, "Volume minimum", True)
+                continue
 
             # HTF 12h filter (CrossEMA: vol12h>1.5xMA)
-            if not htf_filter_4h_ok(sym, for_crossema=True): continue
+            if not htf_filter_4h_ok(sym, for_crossema=True):
+                count_blocker(scan_blockers_cx, "HTF 12h volume", True)
+                continue
 
             # Lapis 2: harga live (dari candle berjalan) harus > EMA20
             price_now = get_price_now(sym)
             if price_now <= 0 or price_now <= float(ef):
+                count_blocker(scan_blockers_cx, "Cross up EMA20 live", True)
                 # Lolos Lapis 1 tapi belum cross EMA20 → catat sebagai near_miss
                 if len(_crossema_near_miss) < 5:
                     gap_pct = (float(ef) / price_now - 1) * 100 if price_now > 0 else 0
@@ -5045,6 +5089,7 @@ def thread_crossema_scan():
             df_live = get_ohlcv(sym, interval="15m", limit=5)
             open_now = float(df_live.iloc[-1]["open"]) if df_live is not None and len(df_live) > 0 else price_now * 0.99
             if price_now <= open_now:
+                count_blocker(scan_blockers_cx, "Candle 15m bullish", True)
                 if len(_crossema_near_miss) < 5:
                     _crossema_near_miss.append((5, sym, [f"candle belum bullish (price {_fmt_price(price_now)} vs open {_fmt_price(open_now)})"], 6))
                 continue
@@ -5057,7 +5102,9 @@ def thread_crossema_scan():
                 f"EMA20={ef:.6g} atr%={atrp:.2f} elapsed={elapsed_pct*100:.1f}%")
 
             ok, target_usd, add_usd = open_deal_with_sizing(sym, 0, strategy="brkX2_crossema")
-            if not ok: continue
+            if not ok:
+                count_blocker(scan_blockers_cx, "Order open", True)
+                continue
 
             entry_price = get_price_now(sym)
             if entry_price <= 0: entry_price = price_now
@@ -5129,6 +5176,7 @@ def thread_crossema_scan():
         except Exception as e:
             log(f"  [T_CROSSEMA] error {sym}: {e}")
 
+    record_scan_blockers("CrossEMA-4h", scan_total_cx, n_crossema, scan_blockers_cx)
     if _crossema_near_miss:
         log_near_miss("CrossEMA-4h", _crossema_near_miss, 3)
         update_dashboard_near_miss("CrossEMA-4h", _crossema_near_miss)
@@ -5267,7 +5315,7 @@ def run_thread_strat6():
 # ══════════════════════════════════════════════════════════════════════════════
 # STRATEGI #7: Hunting 4h 
 # ══════════════════════════════════════════════════════════════════════════════
-def check_hunting_strategy(df, r, config):
+def check_hunting_strategy(df, r, config, blocker_counts=None):
     """
     Strategi Hunting-4h: cari koin yang baru saja breakout tipis di atas EMA zona kompresi.
     Syarat wajib:
@@ -5281,17 +5329,21 @@ def check_hunting_strategy(df, r, config):
     """
     symbol = r.get("symbol", "")
 
+    def reject(label):
+        count_blocker(blocker_counts, label, True)
+        return None
+
     # --- Syarat wajib 1: USDT pair, base bukan fiat ---
     FIAT_LIST = {"USDT", "BUSD", "USDC", "TUSD", "DAI", "EUR", "GBP", "BRL", "RUB", "TRY", "AUD"}
     if not symbol.endswith("USDT"):
-        return None
+        return reject("Pair bukan USDT")
     base = symbol[:-4]
     if base in FIAT_LIST:
-        return None
+        return reject("Base asset fiat")
 
     # --- Ambil nilai indikator dari df ---
     if df is None or len(df) < 51:
-        return None
+        return reject("Data candle kurang")
 
     close  = float(df["close"].iloc[-1])
     ema20  = float(df["close"].ewm(span=20, adjust=False).mean().iloc[-1])
@@ -5339,35 +5391,35 @@ def check_hunting_strategy(df, r, config):
 
     # --- Syarat WAJIB 4: price di atas EMA20, jarak 0-0.75% ---
     if dist_ema20 is None or not (0.0 <= dist_ema20 <= 0.75):
-        return None
+        return reject("Jarak harga ke EMA20")
 
     # --- Tolak hanya Supertrend bearish; +1 bullish dan 0 transisi diterima ---
     if st_dir == -1:
-        return None
+        return reject("Supertrend bearish")
 
     # --- Syarat WAJIB: RSI < HUNTING_RSI_MAX (backtest: ST+1+RSI<60 = +0.714% vs baseline) ---
     rsi_max = config.get("rsi_max_override", HUNTING_RSI_MAX)
     if not (isinstance(rsi, float) and not (rsi != rsi)) and rsi >= rsi_max:
-        return None
+        return reject("RSI maksimum")
 
     # --- Syarat WAJIB: ATR% minimum (filter koin stagnan seperti PAX 0.02%) ---
     if atr_pct < HUNTING_MIN_ATR_PCT:
-        return None
+        return reject("ATR minimum")
 
     # --- Syarat OPSIONAL 2: EMA20 < EMA50, jarak 0-1.5% ---
     if config.get("hunting_ema_gap", True):
         if ema_gap is None or not (0.0 <= ema_gap <= 1.5):
-            return None
+            return reject("EMA20-EMA50 gap")
 
     # --- Syarat OPSIONAL 3: price_change% antara 0%-2.0% ---
     if config.get("hunting_price_change", True):
         if not (0.0 < price_change_pct <= 2.0):
-            return None
+            return reject("Perubahan harga")
 
     # --- Syarat OPSIONAL 5: price di atas EMA50, jarak 0-3% ---
     if config.get("hunting_above_ema50", True):
         if dist_ema50 is None or not (0.0 <= dist_ema50 <= 3.0):
-            return None
+            return reject("Jarak harga ke EMA50")
 
     # --- Syarat OPSIONAL 6: bullish candlestick — Hammer OR Strong Bull ---
     if config.get("hunting_uptrend", True):
@@ -5390,7 +5442,7 @@ def check_hunting_strategy(df, r, config):
         # Pattern 4: Doji Bullish — body sangat kecil (<20% range), candle hijau
         doji_bullish = (_body / _range < 0.2) and (close > _open) if _range > 0 else False
         if not (strong_bull or hammer or bullish_engulfing or doji_bullish):
-            return None
+            return reject("Pola candle bullish")
 
     # --- Lolos semua syarat ---
     result = {
