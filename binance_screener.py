@@ -5990,7 +5990,17 @@ def update_dashboard_near_miss(strategi: str, items: list):
                 "gating_ok":      gating_ok,
             })
         if strategi == "Akumulasi-4h":
-            parsed.sort(key=lambda x: (-x["weighted_score"], -x["n_pass"]))
+            # Urutkan berdasarkan jarak persen absolut terkecil ke garis terdekat
+            # (support atau resistance), agar pair yang paling "nempel" tampil dulu.
+            def _nearest_line_pct(item):
+                dists = []
+                if item.get("pct_vs_support") is not None:
+                    dists.append(abs(item["pct_vs_support"]))
+                if item.get("pct_vs_resist") is not None:
+                    dists.append(abs(item["pct_vs_resist"]))
+                return min(dists) if dists else float('inf')
+
+            parsed.sort(key=lambda x: (_nearest_line_pct(x), -x["weighted_score"], -x["n_pass"]))
         else:
             parsed.sort(key=lambda x: -x["n_pass"])
         _dashboard_state["near_miss"][strategi] = parsed[:10]
