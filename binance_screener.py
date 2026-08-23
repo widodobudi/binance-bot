@@ -170,6 +170,9 @@ TRAIL_FACTOR_NORMAL    = 0.8   # kondisi normal
 FEE_ROUND_TRIP_PCT     = 0.2   # biaya Binance: 0.1% buy + 0.1% sell
 TRAIL_FACTOR_FOMO      = 1.3   # Uptrend + Stoch%K > 80 (momentum kuat)
 TRAIL_FACTOR_TIGHTENED = 0.5   # Stoch%K baru turun dari >80 (lock profit)
+TRAIL_HTF_GRACE_SECONDS = 300  # maksimal menahan trailing close sambil cek HTF
+TRAIL_HTF_CACHE_SECONDS = 60   # jangan request HTF pada setiap siklus monitor 15 detik
+TRAIL_HTF_HEALTH_MIN_VOTES = 3 # minimal indikator sehat per timeframe
 MAX_HOLD_DAYS     = 5
 # detik per candle sesuai timeframe (utk batas hold yg benar di TF apa pun).
 # 1d=86400, 12h=43200, 6h=21600, 4h=14400. Batas hold = MAX_HOLD_DAYS candle.
@@ -2386,6 +2389,49 @@ def compute_indicators_htf(df):
         df["htf_macd_hist"] = float("nan")
     return df
 
+_trail_htf_cache = {}
+_trail_htf_cache_lock = threading.Lock()
+
+def trailing_htf_is_healthy(symbol: str) -> bool:
+    """Return True only when both 3D and 1W have a majority of healthy votes."""
+    now = time.time()
+    with _trail_htf_cache_lock:
+        cached = _trail_htf_cache.get(symbol)
+        if cached and now - cached[0] < TRAIL_HTF_CACHE_SECONDS:
+            return cached[1]
+    healthy = False
+    try:
+        timeframe_results = []
+        for interval in ("3d", "1w"):
+            frame = get_ohlcv_htf(symbol, interval=interval, limit=120)
+            if frame is None or len(frame) < 60:
+                raise ValueError(f"data {interval} kurang")
+            if frame['ct'].iloc[-1] >= int(now * 1000):
+                frame = frame.iloc[:-1]
+            if len(frame) < 55:
+                raise ValueError(f"candle tertutup {interval} kurang")
+            frame = compute_indicators_htf(frame)
+            close = frame['close']
+            ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
+            row = frame.iloc[-1]
+            rsi = ta.rsi(close, length=14).iloc[-1]
+            macd_ok = not pd.isna(row.get('htf_macd_hist')) and float(row['htf_macd_hist']) > 0
+            votes = [
+                float(row['close']) > float(ema20),
+                float(row['close']) > float(row['htf_ema_slow']),
+                macd_ok,
+                not pd.isna(rsi) and 50 <= float(rsi) <= 70,
+                float(row['close']) > float(row['open']),
+            ]
+            timeframe_results.append(sum(votes) >= TRAIL_HTF_HEALTH_MIN_VOTES)
+        healthy = len(timeframe_results) == 2 and all(timeframe_results)
+    except Exception as error:
+        log(f"[T2] HTF trailing check {symbol} gagal: {error}")
+        healthy = False
+    with _trail_htf_cache_lock:
+        _trail_htf_cache[symbol] = (now, healthy)
+    return healthy
+
 def htf_vol_ratio(symbol: str, interval: str, limit: int, vol_ma_period: int) -> float:
     """Return rasio vol_last/vol_ma untuk display near_miss. Return -1 kalau gagal."""
     try:
@@ -3714,7 +3760,28 @@ def thread2_monitor():
         if armed and not _is_akum:
             stop = peak*(1 - tdist/100)
             if price <= stop:
-                do_close=True; reason=f"trailing (turun ke {_fmt_price(price)} dari puncak {_fmt_price(peak)}, dev {tdist}%)"
+                trail_reason = f"trailing (turun ke {_fmt_price(price)} dari puncak {_fmt_price(peak)}, dev {tdist}%)"
+                trail_grace_started = float(d.get('trail_htf_grace_started_at', 0) or 0)
+                trail_grace_age = time.time() - trail_grace_started if trail_grace_started > 0 else 0
+                grace_strategy = strat in ('brkX2', 'brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'reversal')
+                if (grace_strategy and prof_from_entry > 0
+                        and trail_grace_age < TRAIL_HTF_GRACE_SECONDS
+                        and trailing_htf_is_healthy(sym)):
+                    if trail_grace_started <= 0:
+                        trail_grace_started = time.time()
+                        with active_deals_lock:
+                            if sym in active_deals:
+                                active_deals[sym]['trail_htf_grace_started_at'] = trail_grace_started
+                        d['trail_htf_grace_started_at'] = trail_grace_started
+                    log(f"[T2] {sym} trailing ditahan: HTF sehat, grace tersisa "
+                        f"{max(0, TRAIL_HTF_GRACE_SECONDS - (time.time() - trail_grace_started)):.0f}s")
+                else:
+                    do_close=True; reason=trail_reason
+            elif d.get('trail_htf_grace_started_at'):
+                with active_deals_lock:
+                    if sym in active_deals:
+                        active_deals[sym].pop('trail_htf_grace_started_at', None)
+                d.pop('trail_htf_grace_started_at', None)
 
         # batas hold sadar-strategi:
         #  brkX2  : MAX_HOLD_DAYS candle 12h (5*12jam=2.5 hari)
