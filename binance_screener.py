@@ -6902,7 +6902,7 @@ function loadScanBlockers() {
         var body = document.getElementById('scan-blockers-body');
         if (!keys.length) { status.textContent = 'Belum ada snapshot scan. Jalankan scan strategi terlebih dahulu.'; return; }
         body.innerHTML = keys.map(function(k) {
-            var s = scans[k], b = s.blockers || {}, names = Object.keys(b);
+            var s = scans[k], b = s.blockers || {}, names = Object.keys(b).sort(function(a, z){ return (Number(b[z]) || 0) - (Number(b[a]) || 0); });
             var top = names.slice(0, 3).map(function(n){ return n + ': ' + b[n]; }).join(' | ') || 'Tidak ada blocker';
             return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)"><td style="padding:5px 8px;font-weight:600">' + k + '</td><td style="padding:5px 8px;text-align:right">' + s.total_scanned + '</td><td style="padding:5px 8px;text-align:right">' + s.candidates + '</td><td style="padding:5px 8px;color:var(--muted)">' + top + '<br><small>Scan: ' + s.scan_time + '</small></td></tr>';
         }).join('');
