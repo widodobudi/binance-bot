@@ -7422,7 +7422,7 @@ def get_akum_swing_high(df, n: int = 30) -> float:
         return 0.0
 
 
-def detect_entry_a_spring(df, support: float) -> dict | None:
+def detect_entry_a_spring(df, support: float, support_reentry: float | None = None) -> dict | None:
     """
     Deteksi Entry A — Spring/Fakeout Wyckoff (TF 4h).
     Kondisi:
@@ -7433,6 +7433,8 @@ def detect_entry_a_spring(df, support: float) -> dict | None:
     Return: dict info atau None kalau tidak ada sinyal.
     """
     if len(df) < 20: return None
+    if support_reentry is None:
+        support_reentry = support
     try:
         import pandas_ta as _pta
         df = df.copy()
@@ -7458,11 +7460,11 @@ def detect_entry_a_spring(df, support: float) -> dict | None:
             vol_ma = row_s.get('vol_ma', 0)
             if pd.isna(vol_ma) or vol_ma <= 0: continue
             if row_s['vol'] < AKUM_A_VOL_SPIKE_MULT * vol_ma: continue
-            # Cek re-entry ke atas support dalam 1-3 candle setelah spring
+            # Cek re-entry ke atas support_reentry dalam 1-3 candle setelah spring
             reentry_ok = False
             for k in range(1, AKUM_A_REENTRY_CANDLES + 1):
                 if spring_idx + k >= len(df): break
-                if df.iloc[spring_idx + k]['close'] > support:
+                if df.iloc[spring_idx + k]['close'] > support_reentry:
                     reentry_ok = True; break
             if not reentry_ok: continue
             # Cek RSI: sempat rendah
@@ -7477,12 +7479,14 @@ def detect_entry_a_spring(df, support: float) -> dict | None:
             if obv_slope <= 0: continue
             # Spring valid
             spring_low = float(row_s['low'])
-            sl_price   = round(spring_low * (1 - AKUM_ENTRY_SL_BUFFER), 8)
+            sl_anchor = min(spring_low, support)
+            sl_price   = round(sl_anchor * (1 - AKUM_ENTRY_SL_BUFFER), 8)
             return {
                 'type':       'A',
                 'spring_low': spring_low,
                 'sl_price':   sl_price,
                 'support':    support,
+                'support_reentry': support_reentry,
                 'rsi_now':    round(float(rsi_now), 1),
                 'vol_ratio':  round(float(row_s['vol']) / float(vol_ma), 2),
                 'obv_slope':  round(obv_slope, 2),
@@ -7492,7 +7496,7 @@ def detect_entry_a_spring(df, support: float) -> dict | None:
     return None
 
 
-def detect_entry_b_breakout(df, resistance: float, support: float) -> dict | None:
+def detect_entry_b_breakout(df, resistance: float, support: float, resistance_retest_low: float | None = None) -> dict | None:
     """
     Deteksi Entry B — Breakout + Retest Resistance Wyckoff (TF 4h).
     Kondisi:
@@ -7504,6 +7508,8 @@ def detect_entry_b_breakout(df, resistance: float, support: float) -> dict | Non
     Return: dict info atau None.
     """
     if len(df) < 20: return None
+    if resistance_retest_low is None:
+        resistance_retest_low = resistance
     try:
         import pandas_ta as _pta
         df = df.copy()
@@ -7531,21 +7537,23 @@ def detect_entry_b_breakout(df, resistance: float, support: float) -> dict | Non
         if breakout_idx is None: return None
 
         # Cari candle retest setelah breakout
-        retest_low = resistance * (1 - AKUM_B_RETEST_TOL_PCT)
+        retest_low = resistance_retest_low * (1 - AKUM_B_RETEST_TOL_PCT)
+        retest_high = resistance * (1 + AKUM_B_RETEST_TOL_PCT)
         for j in range(breakout_idx + 1, len(df)):
             r = df.iloc[j]
-            # Harga turun ke zona resistance
-            if r['low'] <= resistance * (1 + AKUM_B_RETEST_TOL_PCT) and r['low'] >= retest_low:
+            # Harga turun ke zona resistance (structural/exreme ref)
+            if r['low'] <= retest_high and r['low'] >= retest_low:
                 # Tidak tembus ke bawah (support tetap aman)
                 if r['low'] < retest_low: continue
                 # Volume retest lebih rendah dari breakout
                 if breakout_vol > 0 and r['vol'] >= AKUM_B_RETEST_VOL_MAX * breakout_vol: continue
                 # Retest valid — candle terakhir sudah kembali di atas resistance
                 if df.iloc[-1]['close'] < resistance: continue
-                sl_price = round(resistance * (1 - AKUM_ENTRY_SL_BUFFER), 8)
+                sl_price = round(resistance_retest_low * (1 - AKUM_ENTRY_SL_BUFFER), 8)
                 return {
                     'type':          'B',
                     'resistance':    resistance,
+                    'resistance_retest_low': resistance_retest_low,
                     'support':       support,
                     'sl_price':      sl_price,
                     'breakout_idx':  breakout_idx,
@@ -7703,6 +7711,10 @@ def thread_akum_entry_scan():
         sym        = item.get('sym', '')
         support    = item.get('support')
         resistance = item.get('resistance')
+        support_zone_low = item.get('support_zone_low')
+        support_zone_high = item.get('support_zone_high')
+        resistance_zone_low = item.get('resistance_zone_low')
+        resistance_zone_high = item.get('resistance_zone_high')
         if not sym or support is None or resistance is None: continue
         if sym in SYMBOL_BLACKLIST: continue
         try:
@@ -7713,8 +7725,20 @@ def thread_akum_entry_scan():
             if df['ct'].iloc[-1] >= int(time.time() * 1000):
                 df = df.iloc[:-1]
             if len(df) < AKUM_SIDEWAYS_CANDLES + 10: continue
-            sig_a = detect_entry_a_spring(df, support)
-            sig_b = detect_entry_b_breakout(df, resistance, support)
+            has_struct = (
+                support_zone_low is not None and support_zone_high is not None and
+                resistance_zone_low is not None and resistance_zone_high is not None and
+                float(support_zone_low) > 0 and float(support_zone_high) > 0 and
+                float(resistance_zone_low) > 0 and float(resistance_zone_high) > 0 and
+                float(support_zone_low) <= float(support_zone_high) <= float(resistance_zone_low) <= float(resistance_zone_high)
+            )
+            support_break_ref = float(support_zone_low) if has_struct else float(support)
+            support_reentry_ref = float(support_zone_high) if has_struct else float(support)
+            resistance_break_ref = float(resistance_zone_high) if has_struct else float(resistance)
+            resistance_retest_low_ref = float(resistance_zone_low) if has_struct else float(resistance)
+
+            sig_a = detect_entry_a_spring(df, support_break_ref, support_reentry_ref)
+            sig_b = detect_entry_b_breakout(df, resistance_break_ref, support_break_ref, resistance_retest_low_ref)
             ts_entry = now_wib().strftime("%H:%M")
             with _akum_lock:
                 _akum_entry_status[sym] = {
@@ -7750,6 +7774,10 @@ def thread_akum_entry_scan():
         score = item.get('weighted_score') or item.get('total_score') or item.get('score', 0)
         support    = item.get('support')
         resistance = item.get('resistance')
+        support_zone_low = item.get('support_zone_low')
+        support_zone_high = item.get('support_zone_high')
+        resistance_zone_low = item.get('resistance_zone_low')
+        resistance_zone_high = item.get('resistance_zone_high')
         if not sym or support is None or resistance is None: continue
 
         with active_deals_lock:
@@ -7763,11 +7791,23 @@ def thread_akum_entry_scan():
                 df = df.iloc[:-1]
             if len(df) < AKUM_SIDEWAYS_CANDLES + 10: continue
 
+            has_struct = (
+                support_zone_low is not None and support_zone_high is not None and
+                resistance_zone_low is not None and resistance_zone_high is not None and
+                float(support_zone_low) > 0 and float(support_zone_high) > 0 and
+                float(resistance_zone_low) > 0 and float(resistance_zone_high) > 0 and
+                float(support_zone_low) <= float(support_zone_high) <= float(resistance_zone_low) <= float(resistance_zone_high)
+            )
+            support_break_ref = float(support_zone_low) if has_struct else float(support)
+            support_reentry_ref = float(support_zone_high) if has_struct else float(support)
+            resistance_break_ref = float(resistance_zone_high) if has_struct else float(resistance)
+            resistance_retest_low_ref = float(resistance_zone_low) if has_struct else float(resistance)
+
             # Coba Entry A dulu untuk open deal
-            sig = detect_entry_a_spring(df, support)
+            sig = detect_entry_a_spring(df, support_break_ref, support_reentry_ref)
             entry_type = 'A'
             if sig is None:
-                sig = detect_entry_b_breakout(df, resistance, support)
+                sig = detect_entry_b_breakout(df, resistance_break_ref, support_break_ref, resistance_retest_low_ref)
                 entry_type = 'B'
             if sig is None: continue
 
@@ -7807,6 +7847,12 @@ def thread_akum_entry_scan():
                 'entry_type':      entry_type,
                 'support':         support,
                 'resistance':      resistance,
+                'support_zone_low': support_zone_low,
+                'support_zone_high': support_zone_high,
+                'resistance_zone_low': resistance_zone_low,
+                'resistance_zone_high': resistance_zone_high,
+                'support_ref':     support_reentry_ref,
+                'resistance_ref':  resistance_break_ref,
                 'timeout_candles': AKUM_ENTRY_TIMEOUT,
             })
             log(f"[T_AKUM_ENTRY] {sym} OPEN Entry {entry_type} @ {_fmt_price(price_now)} "
@@ -7819,13 +7865,18 @@ def thread_akum_entry_scan():
                 f"SL        : {_fmt_price(sig['sl_price'])}\n"
                 f"Support   : {_fmt_price(support)}\n"
                 f"Resistance: {_fmt_price(resistance)}\n"
-                f"Score     : {score} | Target: ${target_usd}"
+                f"Ref S/R   : {_fmt_price(support_reentry_ref)} / {_fmt_price(resistance_break_ref)}"
+                + (f" (struct zone)\n" if has_struct else " (extreme fallback)\n")
+                + f"Score     : {score} | Target: ${target_usd}"
             )
             log_oac('OPEN', sym, f'Akumulasi-4h Entry {entry_type}', {
                 'entry_price':  _fmt_price(price_now),
                 'sl_price':     _fmt_price(sig['sl_price']),
                 'support':      _fmt_price(support),
                 'resistance':   _fmt_price(resistance),
+                'support_ref':  _fmt_price(support_reentry_ref),
+                'resistance_ref': _fmt_price(resistance_break_ref),
+                'ref_basis':    'struct_zone' if has_struct else 'extreme_fallback',
                 'score':        score,
                 'target_usd':   f"${target_usd}",
             })
@@ -8581,6 +8632,19 @@ def run_web_dashboard():
                     window = df.iloc[-(AKUM_SIDEWAYS_CANDLES):]
                     support    = float(window['low'].min())
                     resistance = float(window['high'].max())
+                    support_zone_low = float(res.get('support_zone_low', 0) or 0)
+                    support_zone_high = float(res.get('support_zone_high', 0) or 0)
+                    resistance_zone_low = float(res.get('resistance_zone_low', 0) or 0)
+                    resistance_zone_high = float(res.get('resistance_zone_high', 0) or 0)
+                    has_struct = (
+                        support_zone_low > 0 and support_zone_high > 0 and
+                        resistance_zone_low > 0 and resistance_zone_high > 0 and
+                        support_zone_low <= support_zone_high <= resistance_zone_low <= resistance_zone_high
+                    )
+                    support_break_ref = support_zone_low if has_struct else support
+                    support_reentry_ref = support_zone_high if has_struct else support
+                    resistance_break_ref = resistance_zone_high if has_struct else resistance
+                    resistance_retest_low_ref = resistance_zone_low if has_struct else resistance
                     p = [
                         bool(res.get('p1_ok')),
                         bool(res.get('p2_ok')),
@@ -8610,7 +8674,7 @@ def run_web_dashboard():
                         ]
                         extra = {}
                     elif strat == "Akumulasi-4h Entry A":
-                        sig = detect_entry_a_spring(df, support)
+                        sig = detect_entry_a_spring(df, support_break_ref, support_reentry_ref)
                         row_last = df.iloc[-1]
                         vol_ma = float(row_last.get('vol_ma', 0)) if not pd.isna(row_last.get('vol_ma', 0)) else 0
                         vol_ratio = float(row_last['vol'])/vol_ma if vol_ma > 0 else 0
@@ -8624,27 +8688,30 @@ def run_web_dashboard():
                             {"key":"obv_div","label":"OBV divergensi",
                              "actual": "Terdeteksi" if sig and sig.get('obv_slope',0) > 0 else "Belum",
                              "ok": bool(sig and sig.get('obv_slope',0) > 0)},
-                            {"key":"reentry","label":"Close kembali>support",
+                            {"key":"reentry","label":"Close kembali>support ref",
                              "actual": "Ya" if sig else "Belum",
                              "ok": bool(sig)},
                         ]
                         extra = {
                             "support": _fmt_price(support),
                             "resistance": _fmt_price(resistance),
+                            "support_ref": _fmt_price(support_reentry_ref),
+                            "resistance_ref": _fmt_price(resistance_break_ref),
+                            "ref_basis": "struct_zone" if has_struct else "extreme_fallback",
                             "entry_signal": sig if sig else None,
                             "signal_detected": sig is not None,
                         }
                     elif strat == "Akumulasi-4h Entry B":
-                        sig = detect_entry_b_breakout(df, resistance, support)
+                        sig = detect_entry_b_breakout(df, resistance_break_ref, support_break_ref, resistance_retest_low_ref)
                         row_last = df.iloc[-1]
                         ema20 = float(row_last.get('ema20', 0)) if not pd.isna(row_last.get('ema20', 0)) else 0
                         ema50 = float(row_last.get('ema50', 0)) if not pd.isna(row_last.get('ema50', 0)) else 0
                         close_last = float(row_last['close'])
                         ema_cross = ema20 > ema50
                         secondary_labels = [
-                            {"key":"breakout","label":f"Close>resistance+vol",
-                             "actual": f"{_fmt_price(close_last)} vs {_fmt_price(resistance)}",
-                             "ok": close_last > resistance},
+                            {"key":"breakout","label":f"Close>resistance ref+vol",
+                             "actual": f"{_fmt_price(close_last)} vs {_fmt_price(resistance_break_ref)}",
+                             "ok": close_last > resistance_break_ref},
                             {"key":"retest","label":"Retest tdk jebol",
                              "actual": "Terdeteksi" if sig else "Belum",
                              "ok": bool(sig)},
@@ -8658,6 +8725,9 @@ def run_web_dashboard():
                         extra = {
                             "support": _fmt_price(support),
                             "resistance": _fmt_price(resistance),
+                            "support_ref": _fmt_price(support_reentry_ref),
+                            "resistance_ref": _fmt_price(resistance_break_ref),
+                            "ref_basis": "struct_zone" if has_struct else "extreme_fallback",
                             "entry_signal": sig if sig else None,
                             "signal_detected": sig is not None,
                         }
