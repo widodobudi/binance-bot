@@ -5955,6 +5955,12 @@ DASHBOARD_HTML = '''
   .badge-wait{background:rgba(255,184,79,.15);color:var(--yellow)}
   .empty{color:var(--muted);font-size:12px;padding:12px 0;text-align:center}
   .section-title{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+    .strategy-tabs{display:flex;gap:6px;overflow-x:auto;margin-bottom:10px;padding-bottom:2px}
+    .strategy-tab{flex:0 0 auto;background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font:inherit;font-size:11px;cursor:pointer;white-space:nowrap}
+    .strategy-tab:hover{color:var(--text);border-color:var(--accent)}
+    .strategy-tab.active{background:rgba(79,158,255,.14);color:var(--accent);border-color:var(--accent)}
+    .strategy-panel{display:none}
+    .strategy-panel.active{display:block}
   @media(max-width:768px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
@@ -6197,9 +6203,18 @@ DASHBOARD_HTML = '''
   </div>
 
   <div class="section-title">Kandidat Terdekat per Strategi</div>
-  <div class="grid">
-  {% for strategi, items in near_miss.items() %}{% if strategi != "Akumulasi-4h" %}
-  <div class="card">
+    <div class="strategy-tabs" role="tablist" aria-label="Kandidat strategi">
+    {% set strategy_tab_index = namespace(value=0) %}
+    {% for strategi, items in near_miss.items() %}{% if strategi != "Akumulasi-4h" %}
+    <button type="button" class="strategy-tab{% if strategy_tab_index.value == 0 %} active{% endif %}" role="tab" aria-selected="{{ 'true' if strategy_tab_index.value == 0 else 'false' }}" data-strategy-tab="strategy-panel-{{ strategy_tab_index.value }}" onclick="selectStrategyTab(this)">{{ strategi }}</button>
+    {% set strategy_tab_index.value = strategy_tab_index.value + 1 %}
+    {% endif %}{% endfor %}
+    </div>
+    <div>
+    {% set strategy_panel_index = namespace(value=0) %}
+    {% for strategi, items in near_miss.items() %}{% if strategi != "Akumulasi-4h" %}
+    <div id="strategy-panel-{{ strategy_panel_index.value }}" class="strategy-panel{% if strategy_panel_index.value == 0 %} active{% endif %}" role="tabpanel">
+    <div class="card">
     <div class="card-header" onclick="toggleCard(this)">
       <h2>{{ strategi }} <span class="card-toggle">&#9660;</span></h2>
       <span class="scan-time">Scan: {{ last_scan.get(strategi,"-") }}</span>
@@ -6223,8 +6238,22 @@ DASHBOARD_HTML = '''
     {% endif %}
     </div>
   </div>
-  {% endif %}{% endfor %}
+    </div>
+    {% set strategy_panel_index.value = strategy_panel_index.value + 1 %}
+    {% endif %}{% endfor %}
   </div>
+    <script>
+    function selectStrategyTab(tab) {
+        document.querySelectorAll('.strategy-tab').forEach(function(button) {
+            var active = button === tab;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        document.querySelectorAll('.strategy-panel').forEach(function(panel) {
+            panel.classList.toggle('active', panel.id === tab.getAttribute('data-strategy-tab'));
+        });
+    }
+    </script>
 
   <!-- ═══════════════ AKUMULASI DETECTOR ═══════════════ -->
   <div class="section-title">⭐ Strategi #5 — Akumulasi Detector (4h)</div>
