@@ -6249,7 +6249,8 @@ DASHBOARD_HTML = '''
             function openSelectedTradingViewChart() {
                 var pair = document.getElementById('pair-select').value;
                 if (!pair) { return; }
-                var strategy = document.getElementById('strategy-select').value;
+                var strategyElement = document.getElementById('strat-select');
+                var strategy = strategyElement ? strategyElement.value : '';
                 var interval = strategy.indexOf('12h') >= 0 ? '720' : strategy.indexOf('8h') >= 0 ? '480' : '240';
                 window.open('https://www.tradingview.com/chart/?symbol=BINANCE%3A' + encodeURIComponent(pair) + '&interval=' + interval, '_blank', 'noopener');
             }
