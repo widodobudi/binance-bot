@@ -7336,14 +7336,31 @@ def thread_akum_scan():
                     and p not in SYMBOL_BLACKLIST]
 
         results = []
+        akum_blockers = {}
         for sym in universe:
             try:
                 df = get_ohlcv(sym, interval=AKUM_TIMEFRAME, limit=AKUM_CANDLE_LIMIT)
                 if df is None or len(df) < AKUM_SIDEWAYS_CANDLES + 50:
+                    count_blocker(akum_blockers, "Data candle kurang", True)
                     continue
                 res = score_akumulasi(df, sym)
                 if res is None:
+                    count_blocker(akum_blockers, "Detector tidak dapat dinilai", True)
                     continue
+                for flag, label in (
+                    ("p1_ok", "Range sideways"),
+                    ("p2_ok", "EMA20-EMA200 gap"),
+                    ("p3_ok", "OBV slope positif"),
+                    ("p4_ok", "ATR turun"),
+                    ("p5_ok", "EMA20 slope"),
+                    ("p6_ok", "Close drift"),
+                    ("p7_ok", "Distribusi range"),
+                    ("s1_ok", "Volume asimetri"),
+                    ("s2_ok", "RSI 30-55"),
+                    ("s3_ok", "MACD flat"),
+                    ("s4_ok", "Body ratio"),
+                ):
+                    count_blocker(akum_blockers, label, not res.get(flag, True))
                 # Hanya simpan yang lolos minimal 3 dari 4 primary
                 if res['primary_score'] >= 3:
                     results.append(res)
@@ -7354,6 +7371,7 @@ def thread_akum_scan():
         results.sort(key=lambda x: (not x['gating_ok'], not x['primary_ok'], -x['weighted_score']))
         top = results[:AKUM_MAX_RESULTS]
 
+        record_scan_blockers("Akumulasi-4h", len(universe), len(results), akum_blockers)
         ts = now_wib().strftime("%H:%M:%S")
         with _akum_lock:
             _akum_near_miss    = top
