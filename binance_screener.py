@@ -1,3 +1,4 @@
+#   - EMA20 < EMA50, jarak 0-2.5%              (hunting_ema_gap)
 """
 =============================================================
   BINANCE SCREENER -> 3COMMAS + TELEGRAM
@@ -1996,11 +1997,16 @@ def compute_indicators(df):
         stoch=ta.stoch(high,low,close,k=14,d=3,smooth_k=3)
         kcol=[c for c in stoch.columns if 'STOCHk' in c][0]
         df['stoch_k']=stoch[kcol]
-    # 3 bar bullish: 3 candle terakhir close > open (06/08/2026)
+    # 2 dari 3 bar bullish: minimal 2 candle terakhir close > open
     df['bull3'] = (
         (df['close'] > df['open']) &
         (df['close'].shift(1) > df['open'].shift(1)) &
         (df['close'].shift(2) > df['open'].shift(2))
+    )
+    df['bull2of3'] = (
+        (df['close'] > df['open']).astype(int) +
+        (df['close'].shift(1) > df['open'].shift(1)).astype(int) +
+        (df['close'].shift(2) > df['open'].shift(2)).astype(int) >= 2
     )
     return df
 
@@ -2132,8 +2138,8 @@ def check_entry(df) -> bool:
         return False
     if row['st_dir'] != 1: return False
     if not (row['close'] > row['ema_fast']): return False
-    # HH3 diganti 3 bar bullish (06/08/2026)
-    if not row.get('bull3', False): return False
+    # HH3 diganti minimal 2 dari 3 bar bullish
+    if not row.get('bull2of3', False): return False
     if row['vol'] < VOLUME_MULT * row['vol_ma']: return False
     if row['vol_ma'] > 0 and (row['vol'] / row['vol_ma']) > VOL_MAX_MULT: return False
     if pd.isna(row['rsi']) or row['rsi'] > RSI_MAX: return False
@@ -2153,9 +2159,9 @@ def entry_detail(df):
     checks = []  # (lolos?, label_gagal)
     checks.append((row['st_dir']==1, "Supertrend (masih Downtrend)"))
     checks.append((row['close']>row['ema_fast'], f"close>EMA20 (close {_fmt_price(row['close'])} vs EMA20 {_fmt_price(row['ema_fast'])})"))
-    # HH3 breakout diganti 3 bar bullish (06/08/2026, backtest_brkx2_sweep2.py, keputusan Budi)
-    bull3_ok = (row.get('bull3', False) == True)
-    checks.append((bull3_ok, "3 bar bullish (3 candle terakhir close>open)"))
+    # Minimal 2 dari 3 bar bullish
+    bull_count = sum(bool(df['close'].iloc[idx] > df['open'].iloc[idx]) for idx in (-1, -2, -3))
+    checks.append((bull_count >= 2, f"minimal 2/3 bar bullish ({bull_count}/3)"))
     vx = (row['vol']/row['vol_ma']) if row['vol_ma'] else 0
     vol_ok = row['vol']>=VOLUME_MULT*row['vol_ma'] and (row['vol_ma']<=0 or vx<=VOL_MAX_MULT)
     checks.append((vol_ok, f"vol>={VOLUME_MULT}x dan <={VOL_MAX_MULT}xMA (skrg {vx:.2f}x)"))
@@ -2221,8 +2227,9 @@ def reversal_blockers(df) -> list:
     if any(pd.isna(c0[x]) for x in ['ema_fast', 'ema_slow', 'body_ratio']):
         failures.append("Indikator tidak tersedia")
         return failures
-    if any(not (df.iloc[idx]['close'] < df.iloc[idx]['open']) for idx in (im3, im2, im1)):
-        failures.append("3 candle bearish")
+    bearish_count = sum(df.iloc[idx]['close'] < df.iloc[idx]['open'] for idx in (im3, im2, im1))
+    if bearish_count < 2:
+        failures.append("Minimal 2/3 candle bearish")
     open_c5 = float(df.iloc[im3]['open'])
     close_c1 = float(df.iloc[im1]['close'])
     drop_pct = (close_c1 / open_c5 - 1) * 100 if open_c5 > 0 else 0
@@ -2271,12 +2278,11 @@ def entry_detail_reversal(df):
     if any(pd.isna(c0[x]) for x in ['ema_fast','ema_slow','body_ratio']): return None
     checks = []
     # syarat 1: 3 merah + turun >= -5%
-    all_red = all(df.iloc[idx]['close'] < df.iloc[idx]['open'] for idx in (im3,im2,im1))
+    n_red = sum(df.iloc[idx]['close'] < df.iloc[idx]['open'] for idx in (im3,im2,im1))
     open_c3 = float(df.iloc[im3]['open']); close_c1 = float(df.iloc[im1]['close'])
     drop = (close_c1/open_c3-1)*100 if open_c3>0 else 0
-    n_red = sum(1 for idx in (im3,im2,im1) if df.iloc[idx]['close']<df.iloc[idx]['open'])
-    s1 = all_red and drop <= -5.0
-    checks.append((s1, f"3 merah+turun>=5% ({n_red}/3 merah, turun {drop:.1f}%)"))
+    s1 = n_red >= 2 and drop <= -5.0
+    checks.append((s1, f"minimal 2/3 merah+turun>=5% ({n_red}/3 merah, turun {drop:.1f}%)"))
     # syarat 2: c0 doji + di bawah EMA20&50
     s2 = (c0['close']<c0['ema_fast'] and c0['close']<c0['ema_slow']) and (c0['body_ratio']<REVERSAL_DOJI_MAX)
     checks.append((s2, f"doji<{REVERSAL_DOJI_MAX}body & <EMA20/50 (body {c0['body_ratio']:.2f})"))
@@ -3109,7 +3115,7 @@ def thread1_scan():
         row = df.iloc[-1]
         count_blocker(scan_blockers, "Supertrend", row.get('st_dir') != 1)
         count_blocker(scan_blockers, "Close vs EMA20", not (row.get('close', 0) > row.get('ema_fast', 0)))
-        count_blocker(scan_blockers, "3 candle bullish", not bool(row.get('bull3', False)))
+        count_blocker(scan_blockers, "Minimal 2/3 candle bullish", not bool(row.get('bull2of3', False)))
         vol_ratio = (row.get('vol', 0) / row.get('vol_ma')) if row.get('vol_ma', 0) else 0
         count_blocker(scan_blockers, "Volume minimum", vol_ratio < VOLUME_MULT)
         count_blocker(scan_blockers, "Volume maksimum", vol_ratio > VOL_MAX_MULT)
@@ -4538,9 +4544,10 @@ def thread_rev_intrabar_scan():
         if is_choppy(df_closed):
             continue
 
-        # Syarat 1: 3 candle merah + turun >= 5%
-        if not all(df_closed.iloc[idx]['close'] < df_closed.iloc[idx]['open']
-                   for idx in (im3, im2, im1)):
+        # Syarat 1: minimal 2 dari 3 candle merah + turun >= 5%
+        n_red = sum(df_closed.iloc[idx]['close'] < df_closed.iloc[idx]['open']
+                for idx in (im3, im2, im1))
+        if n_red < 2:
             continue
         open_c3  = float(df_closed.iloc[im3]['open'])
         close_c1 = float(df_closed.iloc[im1]['close'])
@@ -5406,9 +5413,9 @@ def check_hunting_strategy(df, r, config, blocker_counts=None):
     if atr_pct < HUNTING_MIN_ATR_PCT:
         return reject("ATR minimum")
 
-    # --- Syarat OPSIONAL 2: EMA20 < EMA50, jarak 0-1.5% ---
+    # --- Syarat OPSIONAL 2: EMA20 < EMA50, jarak 0-2.5% ---
     if config.get("hunting_ema_gap", True):
-        if ema_gap is None or not (0.0 <= ema_gap <= 1.5):
+        if ema_gap is None or not (0.0 <= ema_gap <= 2.5):
             return reject("EMA20-EMA50 gap")
 
     # --- Syarat OPSIONAL 3: price_change% antara 0%-2.0% ---
@@ -5594,9 +5601,9 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
         return False
 
     # ── Syarat OPSIONAL — diabaikan jika cfg[key] = False ────────────────────
-    # 2. EMA20 < EMA50, gap 0-1.5% (dilonggarkan 18/08/2026)
+    # 2. EMA20 < EMA50, gap 0-2.5%
     if cfg.get("hunting_ema_gap", True):
-        if ema_gap is None or not (0.0 <= ema_gap <= 1.5):
+        if ema_gap is None or not (0.0 <= ema_gap <= 2.5):
             return False
 
     # 3. Price change 0%-2.0% (dilonggarkan 18/08/2026)
@@ -8246,13 +8253,12 @@ def run_web_dashboard():
                     # c0=doji, c-1,c-2,c-3=merah
                     im3,im2,im1 = n-5,n-4,n-3; i0=n-2; i1=n-1
                     c0 = df.iloc[i0]; c1 = df.iloc[i1]
-                    all_red = all(df.iloc[i]['close']<df.iloc[i]['open'] for i in (im3,im2,im1))
                     open_c3 = float(df.iloc[im3]['open']); close_c1 = float(df.iloc[im1]['close'])
                     drop = (close_c1/open_c3-1)*100 if open_c3>0 else 0
                     n_red = sum(1 for i in (im3,im2,im1) if df.iloc[i]['close']<df.iloc[i]['open'])
                     doji_ok = float(c0.get('body_ratio',1)) < REVERSAL_DOJI_MAX
                     below_ema = float(c0['close'])<float(c0['ema_fast']) and float(c0['close'])<float(c0['ema_slow'])
-                    p1_ok = all_red and drop<=-5.0
+                    p1_ok = n_red >= 2 and drop<=-5.0
                     p2_ok = doji_ok and below_ema
                     # secondary
                     ha_bull = bool(df['ha_bull'].iloc[i1]) if 'ha_bull' in df.columns else False
@@ -8279,7 +8285,7 @@ def run_web_dashboard():
                     p = [p1_ok, p2_ok]
                     return jsonify(_s({"strat": strat, "sym": sym,
                         "primary": [
-                            {"label":f"3 candle merah+turun>=5%","ok":p1_ok,"actual":f"{n_red}/3 merah, turun {drop:.1f}%"},
+                            {"label":f"minimal 2/3 candle merah+turun>=5%","ok":p1_ok,"actual":f"{n_red}/3 merah, turun {drop:.1f}%"},
                             {"label":f"c0 doji<{REVERSAL_DOJI_MAX} & <EMA20/50","ok":p2_ok,"actual":f"body {c0.get('body_ratio',0):.2f}"},
                         ],
                         "secondary": sec_extra + [
