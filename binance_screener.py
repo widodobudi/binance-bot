@@ -6243,7 +6243,22 @@ DASHBOARD_HTML = '''
         </select>
         <span id="nm-count" style="font-size:10px;color:var(--muted)"></span>
                 <span style="font-size:10px;color:var(--muted)">(daftar ringkas yang ditampilkan)</span>
+                <button type="button" id="btn-open-chart" onclick="openSelectedTradingViewChart()" disabled style="background:#2962ff;color:#fff;border:none;border-radius:4px;padding:6px 12px;font-size:11px;cursor:pointer;font-family:var(--font);opacity:.55">Open Chart</button>
       </div>
+            <script>
+            function openSelectedTradingViewChart() {
+                var pair = document.getElementById('pair-select').value;
+                if (!pair) { return; }
+                var strategy = document.getElementById('strategy-select').value;
+                var interval = strategy.indexOf('12h') >= 0 ? '720' : strategy.indexOf('8h') >= 0 ? '480' : '240';
+                window.open('https://www.tradingview.com/chart/?symbol=BINANCE%3A' + encodeURIComponent(pair) + '&interval=' + interval, '_blank', 'noopener');
+            }
+            document.getElementById('pair-select').addEventListener('change', function() {
+                var button = document.getElementById('btn-open-chart');
+                button.disabled = !this.value;
+                button.style.opacity = this.value ? '1' : '.55';
+            });
+            </script>
       <!-- Pair detail panel -->
       <div id="pair-detail" style="margin-bottom:12px;display:none;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:11px"></div>
       <!-- Primary conditions (always required) -->
