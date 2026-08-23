@@ -2239,7 +2239,7 @@ def reversal_blockers(df) -> list:
     close_c1 = float(df.iloc[im1]['close'])
     drop_pct = (close_c1 / open_c5 - 1) * 100 if open_c5 > 0 else 0
     if not (open_c5 > 0 and drop_pct <= -REVERSAL_DROP_MIN_PCT):
-        failures.append("Drop minimum 5%")
+        failures.append(f"Drop minimum {REVERSAL_DROP_MIN_PCT:.0f}%")
     if not (c0['close'] < c0['ema_fast'] and c0['close'] < c0['ema_slow']):
         failures.append("Close di bawah EMA20/50")
     if not (c0['body_ratio'] < REVERSAL_DOJI_MAX):
@@ -3414,7 +3414,7 @@ def thread1_scan():
 
 # ===================== THREAD 1b: SCAN REVERSAL (8h) + OPEN LONG =====================
 def thread1b_scan_reversal():
-    """Scan strategi reversal (5 merah+turun>=5% + doji + 1 HA bull + cross EMA20) di timeframe 8h.
+    """Scan strategi reversal (minimal 2/3 merah+turun>=3% + doji + 1 HA bull + cross EMA20) di timeframe 8h.
     Berbagi pool deal & bot 3Commas dgn brkX2, tapi slot terpisah (MAX_DEALS_REVERSAL)."""
     global last_rev_candle_ts
     if not REVERSAL_ENABLED:
@@ -8354,7 +8354,7 @@ def run_web_dashboard():
                     p = [p1_ok, p2_ok]
                     return jsonify(_s({"strat": strat, "sym": sym,
                         "primary": [
-                            {"label":f"minimal 2/3 candle merah+turun>=5%","ok":p1_ok,"actual":f"{n_red}/3 merah, turun {drop:.1f}%"},
+                            {"label":f"minimal 2/3 candle merah+turun>={REVERSAL_DROP_MIN_PCT:.0f}%","ok":p1_ok,"actual":f"{n_red}/3 merah, turun {drop:.1f}%"},
                             {"label":f"c0 doji<{REVERSAL_DOJI_MAX} & <EMA20/50","ok":p2_ok,"actual":f"body {c0.get('body_ratio',0):.2f}"},
                         ],
                         "secondary": sec_extra + [
@@ -9892,7 +9892,7 @@ if __name__ == '__main__':
     if REVERSAL_ENABLED:
         log("  " + "-"*51)
         log(f"  STRATEGI 2 REVERSAL: ON | TF {REVERSAL_TIMEFRAME}")
-        log(f"  Setup: 3 candle merah+turun>=5%, doji(<{int(REVERSAL_DOJI_MAX*100)}% body), 1 HA bull, cross-up EMA20")
+        log(f"  Setup: minimal 2/3 candle merah+turun>={REVERSAL_DROP_MIN_PCT:.0f}%, doji(<{int(REVERSAL_DOJI_MAX*100)}% body), 1 HA bull, cross-up EMA20")
         log(f"  Exit : trailing adaptif (sama brkX2) | add fund: {'ON' if REVERSAL_ADD_FUND else 'OFF'}")
         log(f"  Hold : maks {REVERSAL_MAX_HOLD_CANDLES} candle 8h")
         log(f"  Min vol reversal : ${REVERSAL_MIN_VOL_USD:,} (lebih luas dari brkX2 ${MIN_VOLUME_USD:,})")
