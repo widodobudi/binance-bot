@@ -6400,6 +6400,9 @@ DASHBOARD_HTML = '''
     <div class="card-body">
     {% set akum_items = near_miss.get("Akumulasi-4h", []) %}
     {% if akum_items %}
+        <div style="margin-bottom:8px;color:var(--muted);font-size:10px">
+            Jendela sideways dihitung dari 180 candle 4h terakhir (sekitar 30 hari).
+        </div>
     <!-- Legend indikator -->
     <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:10px;font-size:10px">
       <span style="color:var(--muted)">GATING (wajib): </span>
