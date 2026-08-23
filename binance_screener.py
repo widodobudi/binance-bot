@@ -2959,6 +2959,27 @@ def heartbeat_general_tick():
 
 NEAR_MISS_LOG    = "/data/near_miss_log.txt"
 TFPCT_BLOCKED_LOG = "/data/tfpct_blocked_log.txt"
+_scan_blockers = {}
+_scan_blockers_lock = threading.Lock()
+
+def record_scan_blockers(strategy: str, total: int, candidates: int, blockers: dict) -> None:
+    """Simpan ringkasan scan terakhir; satu pair boleh gagal di beberapa indikator."""
+    with _scan_blockers_lock:
+        _scan_blockers[strategy] = {
+            "strategy": strategy,
+            "scan_time": now_wib().strftime("%Y-%m-%d %H:%M:%S"),
+            "total_scanned": total,
+            "candidates": candidates,
+            "blockers": dict(sorted(blockers.items(), key=lambda item: item[1], reverse=True)),
+        }
+
+def get_scan_blockers() -> dict:
+    with _scan_blockers_lock:
+        return {key: dict(value, blockers=dict(value["blockers"])) for key, value in _scan_blockers.items()}
+
+def count_blocker(blockers: dict, label: str, failed: bool) -> None:
+    if failed:
+        blockers[label] = blockers.get(label, 0) + 1
 
 def log_tfpct_blocked(thread: str, strategi: str, elapsed_pct: float, limit_pct: float, keterangan: str):
     """Append ke tfpct_blocked_log.txt saat scan diblokir karena TF% sudah lewat window."""
@@ -3051,6 +3072,8 @@ def thread1_scan():
 
     candidates = []
     near_miss = []   # (n_pass, sym, fails) untuk heartbeat kandidat terdekat
+    scan_total = 0
+    scan_blockers = {}
     newest_ts = 0
     all_dfs   = {}   # sym -> df terakhir (untuk re-entry indicator comparison)
     for sym in universe:
@@ -3065,11 +3088,22 @@ def thread1_scan():
             df = df.iloc[:-1]  # buang candle berjalan, pakai yg sudah tutup
             if len(df) < 60: continue
         df = compute_indicators(df)
+        scan_total += 1
         newest_ts = max(newest_ts, int(df['ct'].iloc[-1]))
         all_dfs[sym] = df   # simpan untuk perbandingan indikator re-entry
+        row = df.iloc[-1]
+        count_blocker(scan_blockers, "Supertrend", row.get('st_dir') != 1)
+        count_blocker(scan_blockers, "Close vs EMA20", not (row.get('close', 0) > row.get('ema_fast', 0)))
+        count_blocker(scan_blockers, "3 candle bullish", not bool(row.get('bull3', False)))
+        vol_ratio = (row.get('vol', 0) / row.get('vol_ma')) if row.get('vol_ma', 0) else 0
+        count_blocker(scan_blockers, "Volume minimum", vol_ratio < VOLUME_MULT)
+        count_blocker(scan_blockers, "Volume maksimum", vol_ratio > VOL_MAX_MULT)
+        count_blocker(scan_blockers, "RSI", pd.isna(row.get('rsi')) or row.get('rsi') > RSI_MAX)
+        count_blocker(scan_blockers, "ATR maksimum", row.get('atr_pct') is not None and not pd.isna(row.get('atr_pct')) and row.get('atr_pct') >= ATR_MAX_PCT)
         if check_entry(df):
             # HTF 3D filter
             if HTF_FILTER_ENABLED and not htf_filter_ok(sym):
+                count_blocker(scan_blockers, "HTF 3D", True)
                 log(f"  [T1] {sym} lolos 12h tapi DITOLAK HTF 3D filter (price<EMA50 atau MACD<0)")
                 det = entry_detail(df)
                 if det is not None:
@@ -3084,6 +3118,7 @@ def thread1_scan():
                     candle_ts = int(df['ct'].iloc[-1])
                     pscore = calc_perf_score(sym, candle_ts)
                     if pd.isna(pscore) or pscore < PERF_SCORE_MIN:
+                        count_blocker(scan_blockers, "Performance score", True)
                         det = entry_detail(df)
                         if det is not None:
                             n_pass, total, fails = det
@@ -3100,6 +3135,7 @@ def thread1_scan():
                     _vr_nm = float(df["vol"].iloc[-1])/float(df["vol_ma"].iloc[-1]) if float(df["vol_ma"].iloc[-1])>0 else 0
                     near_miss.append((n_pass, sym, fails, 9, round(_vr_nm,2)))
 
+    record_scan_blockers("brkX2-12h", scan_total, len(candidates), scan_blockers)
     if not candidates:
         log(f"[T1] {len(universe)} coin discan, tidak ada yg lolos syarat entry.")
         last_processed_candle_ts = newest_ts
@@ -6749,6 +6785,45 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
         </div>
     </div>
 </div>
+<div class="container" style="margin-top:12px">
+    <div class="card">
+        <div class="card-header" onclick="toggleCard(this)"><h2>SCAN BLOCKERS <span class="card-toggle">&#9660;</span></h2></div>
+        <div class="card-body" style="font-size:11px">
+            <div id="scan-blockers-status" style="color:var(--muted)">Menunggu snapshot scan berikutnya...</div>
+            <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:10px">
+                <table id="scan-blockers-table" style="width:100%;min-width:620px;border-collapse:collapse;display:none">
+                    <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
+                        <th style="text-align:left;padding:5px 8px">Strategi</th>
+                        <th style="text-align:right;padding:5px 8px">Pair scan</th>
+                        <th style="text-align:right;padding:5px 8px">Kandidat</th>
+                        <th style="text-align:left;padding:5px 8px">Blocker terbanyak</th>
+                    </tr></thead>
+                    <tbody id="scan-blockers-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+function loadScanBlockers() {
+    fetch('/api/scan_blockers').then(function(r){ return r.json(); }).then(function(d) {
+        var scans = d.scans || {};
+        var keys = Object.keys(scans);
+        var status = document.getElementById('scan-blockers-status');
+        var table = document.getElementById('scan-blockers-table');
+        var body = document.getElementById('scan-blockers-body');
+        if (!keys.length) { status.textContent = 'Belum ada snapshot scan. Jalankan scan strategi terlebih dahulu.'; return; }
+        body.innerHTML = keys.map(function(k) {
+            var s = scans[k], b = s.blockers || {}, names = Object.keys(b);
+            var top = names.slice(0, 3).map(function(n){ return n + ': ' + b[n]; }).join(' | ') || 'Tidak ada blocker';
+            return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)"><td style="padding:5px 8px;font-weight:600">' + k + '</td><td style="padding:5px 8px;text-align:right">' + s.total_scanned + '</td><td style="padding:5px 8px;text-align:right">' + s.candidates + '</td><td style="padding:5px 8px;color:var(--muted)">' + top + '<br><small>Scan: ' + s.scan_time + '</small></td></tr>';
+        }).join('');
+        table.style.display = 'table';
+        status.textContent = 'Snapshot blocker per scan terakhir. Satu pair dapat gagal pada beberapa indikator.';
+    }).catch(function(e){ document.getElementById('scan-blockers-status').textContent = 'Gagal memuat blocker: ' + e; });
+}
+document.addEventListener('DOMContentLoaded', function(){ loadScanBlockers(); setInterval(loadScanBlockers, 30000); });
+</script>
 </body>
 </html>
 '''
@@ -8944,6 +9019,10 @@ def run_web_dashboard():
                 })
             except Exception as e:
                 return jsonify({"trades": [], "stats": {}, "error": str(e)})
+
+        @app.route("/api/scan_blockers")
+        def api_scan_blockers():
+            return jsonify({"ok": True, "scans": get_scan_blockers()})
 
         log(f"[WEB] Dashboard jalan di port {WEB_PORT}")
         app.run(host="0.0.0.0", port=WEB_PORT, debug=False, use_reloader=False)
