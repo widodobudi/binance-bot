@@ -6192,7 +6192,7 @@ DASHBOARD_HTML = '''
         "Hunting-4h": near_miss.get("Hunting-4h", [])
       } %}
       <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <label style="font-size:11px;color:var(--muted)">Pilih pair kandidat:</label>
+        <label style="font-size:11px;color:var(--muted)">Pilih item hasil scan:</label>
         <select id="pair-select" onchange="onPairSelect(this.value)" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 10px;font-size:12px;font-family:var(--font);cursor:pointer;min-width:160px">
           <option value="">-- pilih pair --</option>
           {% for stk, kandidat in all_nm.items() %}{% for item in kandidat %}
@@ -6200,6 +6200,7 @@ DASHBOARD_HTML = '''
           {% endfor %}{% endfor %}
         </select>
         <span id="nm-count" style="font-size:10px;color:var(--muted)"></span>
+                <span style="font-size:10px;color:var(--muted)">(daftar ringkas yang ditampilkan)</span>
       </div>
       <!-- Pair detail panel -->
       <div id="pair-detail" style="margin-bottom:12px;display:none;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:11px"></div>
@@ -6952,7 +6953,7 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
                     <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
                         <th style="text-align:left;padding:5px 8px">Strategi</th>
                         <th style="text-align:right;padding:5px 8px">Pair scan</th>
-                        <th style="text-align:right;padding:5px 8px">Kandidat</th>
+                        <th style="text-align:right;padding:5px 8px">Jumlah hasil</th>
                         <th style="text-align:left;padding:5px 8px">Blocker terbanyak</th>
                     </tr></thead>
                     <tbody id="scan-blockers-body"></tbody>
@@ -6973,7 +6974,8 @@ function loadScanBlockers() {
         body.innerHTML = keys.map(function(k) {
             var s = scans[k], b = s.blockers || {}, names = Object.keys(b).sort(function(a, z){ return (Number(b[z]) || 0) - (Number(b[a]) || 0); });
             var top = names.slice(0, 3).map(function(n){ return n + ': ' + b[n]; }).join(' | ') || 'Tidak ada blocker';
-            return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)"><td style="padding:5px 8px;font-weight:600">' + k + '</td><td style="padding:5px 8px;text-align:right">' + s.total_scanned + '</td><td style="padding:5px 8px;text-align:right">' + s.candidates + '</td><td style="padding:5px 8px;color:var(--muted)">' + top + '<br><small>Scan: ' + s.scan_time + '</small></td></tr>';
+            var resultLabel = k === 'Akumulasi-4h' ? 'hasil detector' : 'kandidat valid';
+            return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)"><td style="padding:5px 8px;font-weight:600">' + k + '</td><td style="padding:5px 8px;text-align:right">' + s.total_scanned + '</td><td style="padding:5px 8px;text-align:right">' + s.candidates + '<br><small style="color:var(--muted)">' + resultLabel + '</small></td><td style="padding:5px 8px;color:var(--muted)">' + top + '<br><small>Scan: ' + s.scan_time + '</small></td></tr>';
         }).join('');
         table.style.display = 'table';
         status.textContent = 'Snapshot blocker per scan terakhir. Satu pair dapat gagal pada beberapa indikator.';
