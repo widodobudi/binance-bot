@@ -106,7 +106,7 @@ MACD_FILTER_ENABLED = False   # dimatikan 30/07/2026 — backtest_no_ema_no_macd
 
 VOLUME_MA_PERIOD  = 20
 RSI_LENGTH        = 14
-RSI_MAX           = 60      # diubah dari 75 → 60 (07/08/2026, keputusan Budi): hindari entry saat harga sudah terlalu tinggi
+RSI_MAX           = 65      # dilonggarkan dari 60: tambah kandidat tanpa menghapus filter RSI
 STOCH_MAX         = 70      # syarat ke-7: Stoch %K < 70 (hindari entry terlalu overbought). None = matikan.
 MIN_VOLUME_USD    = 3_000_000   # dinaikkan dari 1jt ke 3jt (backtest_entry_filter2)
 SYMBOL_BLACKLIST  = {'GIGGLEUSDT', 'SOXLBUSDT', 'KLAYUSDT'}  # pair blacklist — tidak akan di-scan sama sekali
@@ -214,7 +214,7 @@ STRAT4H_MACD_FAST       = 12; STRAT4H_MACD_SLOW = 26; STRAT4H_MACD_SIGNAL = 9
 STRAT4H_ATR_MIN_PCT     = 2.0
 STRAT4H_VOLUME_MULT     = 0.25  # diubah dari 0.4 → 0.25 (backtest_4h_vol_sweep.py, 27/07/2026): delta avg -0.008% (dalam noise), frekuensi naik
 STRAT4H_VOLUME_MA       = 20
-STRAT4H_MIN_VOL_USD     = 3_000_000
+STRAT4H_MIN_VOL_USD     = 2_000_000  # dilonggarkan dari $3jt untuk menambah universe 4h
 STRAT4H_STOCH_MAX       = 89
 STRAT4H_ATR_MAX_PCT     = 7.0   # batas atas ATR% brkX2-4h (08/08/2026): hindari entry puncak pump
 STRAT4H_VOL_MAX_MULT    = 5.0   # batas atas volume brkX2-4h (08/08/2026): simetris dengan brkX2-12h
@@ -253,6 +253,7 @@ STRAT_CROSSEMA_VOLUME_MULT  = 0.25
 STRAT_CROSSEMA_VOLUME_MA    = 20
 STRAT_CROSSEMA_MIN_VOL_USD  = 1_000_000
 STRAT_CROSSEMA_HTF_VOL_MULT = 0.7     # dilonggarkan dari 1.0→0.7 (20/08/2026)
+STRAT_CROSSEMA_EMA20_TOL_PCT = 0.3    # close tertutup boleh sedikit di atas EMA20 sebelum cross live
 # PERF_ONLY lebih baik dari baseline: avg +2.711% vs +2.538%, worst -21.15% vs -25.79%, wf6 OK
 # Filter usia saja lebih buruk; usia+perf wf6 HATI-HATI → deploy PERF_ONLY saja
 # Update 25/07/2026: backtest_perf_weight_sweep → EQUAL_thr0.5 terbaik
@@ -379,6 +380,7 @@ REVERSAL_TIMEFRAME    = "8h"
 REVERSAL_EMA_FAST     = 20
 REVERSAL_EMA_SLOW     = 50
 REVERSAL_DOJI_MAX     = 0.20     # badan doji < 20% range
+REVERSAL_DROP_MIN_PCT = 3.0      # total drop minimum, dilonggarkan dari 5%
 REVERSAL_SECONDS_PER_CANDLE = _TF_SECONDS.get(REVERSAL_TIMEFRAME, 28800)
 REVERSAL_MAX_HOLD_CANDLES   = 30 # batas aman hold (8h*30=10 hari) supaya tdk gantung
 # add fund reversal OFF dulu (forward-test slippage; sesuai keputusan)
@@ -2236,7 +2238,7 @@ def reversal_blockers(df) -> list:
     open_c5 = float(df.iloc[im3]['open'])
     close_c1 = float(df.iloc[im1]['close'])
     drop_pct = (close_c1 / open_c5 - 1) * 100 if open_c5 > 0 else 0
-    if not (open_c5 > 0 and drop_pct <= -5.0):
+    if not (open_c5 > 0 and drop_pct <= -REVERSAL_DROP_MIN_PCT):
         failures.append("Drop minimum 5%")
     if not (c0['close'] < c0['ema_fast'] and c0['close'] < c0['ema_slow']):
         failures.append("Close di bawah EMA20/50")
@@ -2284,8 +2286,8 @@ def entry_detail_reversal(df):
     n_red = sum(df.iloc[idx]['close'] < df.iloc[idx]['open'] for idx in (im3,im2,im1))
     open_c3 = float(df.iloc[im3]['open']); close_c1 = float(df.iloc[im1]['close'])
     drop = (close_c1/open_c3-1)*100 if open_c3>0 else 0
-    s1 = n_red >= 2 and drop <= -5.0
-    checks.append((s1, f"minimal 2/3 merah+turun>=5% ({n_red}/3 merah, turun {drop:.1f}%)"))
+    s1 = n_red >= 2 and drop <= -REVERSAL_DROP_MIN_PCT
+    checks.append((s1, f"minimal 2/3 merah+turun>={REVERSAL_DROP_MIN_PCT:.0f}% ({n_red}/3 merah, turun {drop:.1f}%)"))
     # syarat 2: c0 doji + di bawah EMA20&50
     s2 = (c0['close']<c0['ema_fast'] and c0['close']<c0['ema_slow']) and (c0['body_ratio']<REVERSAL_DOJI_MAX)
     checks.append((s2, f"doji<{REVERSAL_DOJI_MAX}body & <EMA20/50 (body {c0['body_ratio']:.2f})"))
@@ -4618,7 +4620,7 @@ def thread_rev_intrabar_scan():
             continue
         open_c3  = float(df_closed.iloc[im3]['open'])
         close_c1 = float(df_closed.iloc[im1]['close'])
-        if open_c3 <= 0 or (close_c1 / open_c3 - 1) * 100 > -5.0:
+        if open_c3 <= 0 or (close_c1 / open_c3 - 1) * 100 > -REVERSAL_DROP_MIN_PCT:
             continue
 
         # Syarat 2: c0 doji + di bawah EMA20 & EMA50
@@ -5136,7 +5138,7 @@ def thread_crossema_scan():
                 count_blocker(scan_blockers_cx, "Supertrend bearish", True)
                 continue
             ef = r.get("ema_fast")
-            if pd.isna(ef) or r["close"] >= ef:
+            if pd.isna(ef) or r["close"] > ef * (1 + STRAT_CROSSEMA_EMA20_TOL_PCT / 100):
                 count_blocker(scan_blockers_cx, "Close di bawah EMA20", True)
                 continue
             vm = r.get("vol_ma")
