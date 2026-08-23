@@ -173,6 +173,9 @@ TRAIL_FACTOR_TIGHTENED = 0.5   # Stoch%K baru turun dari >80 (lock profit)
 TRAIL_HTF_GRACE_SECONDS = 300  # maksimal menahan trailing close sambil cek HTF
 TRAIL_HTF_CACHE_SECONDS = 60   # jangan request HTF pada setiap siklus monitor 15 detik
 TRAIL_HTF_HEALTH_MIN_VOTES = 3 # minimal indikator sehat per timeframe
+VOLATILITY_GUARD_ATR_PCT = 10.0  # ATR terbaru di atas ini: jangan add fund
+VOLATILITY_GUARD_ATR_MULT = 2.0   # ATR melonjak >=2x ATR saat open: jangan add fund
+HARD_STOP_LOSS_PCT = 8.0          # proteksi penurunan ekstrem dari harga entry
 MAX_HOLD_DAYS     = 5
 # detik per candle sesuai timeframe (utk batas hold yg benar di TF apa pun).
 # 1d=86400, 12h=43200, 6h=21600, 4h=14400. Batas hold = MAX_HOLD_DAYS candle.
@@ -2434,6 +2437,30 @@ def trailing_htf_is_healthy(symbol: str) -> bool:
         _trail_htf_cache[symbol] = (now, healthy)
     return healthy
 
+def current_volatility_guard(symbol: str, strategy: str, entry_atr: float) -> tuple:
+    """Return (allowed, atr_pct) for add-fund; unavailable data fails closed."""
+    try:
+        frame = (get_ohlcv_4h(symbol, limit=60)
+                 if strategy in ('brkX2_4h', 'brkX2_crossema', 'hunting_4h')
+                 else get_ohlcv(symbol, interval=TIMEFRAME, limit=60))
+        if frame is None or len(frame) < 20:
+            return False, None
+        if 'vol' not in frame.columns:
+            return False, None
+        frame = frame.copy()
+        frame['atr_pct'] = ta.atr(frame['high'], frame['low'], frame['close'], length=14) / frame['close'] * 100
+        atr_pct = frame['atr_pct'].iloc[-1]
+        if pd.isna(atr_pct):
+            return False, None
+        atr_pct = float(atr_pct)
+        allowed = atr_pct < VOLATILITY_GUARD_ATR_PCT
+        if entry_atr > 0 and atr_pct >= entry_atr * VOLATILITY_GUARD_ATR_MULT:
+            allowed = False
+        return allowed, atr_pct
+    except Exception as error:
+        log(f"[T2] volatility guard {symbol} gagal: {error}")
+        return False, None
+
 def htf_vol_ratio(symbol: str, interval: str, limit: int, vol_ma_period: int) -> float:
     """Return rasio vol_last/vol_ma untuk display near_miss. Return -1 kalau gagal."""
     try:
@@ -3652,8 +3679,16 @@ def thread2_monitor():
                 log(f"[T2] {sym} add fund di-skip (bStock + NYSE tutup)")
             else:
                 strat = d.get('strategy', 'brkX2')
-                log(f"[T2] {sym} kirim add fund ${add_usd} (deal confirmed aktif)")
-                send_add_funds(sym, add_usd, strat, delay=0)
+                vol_ok, current_atr = current_volatility_guard(sym, strat, float(d.get('atr_pct', 0) or 0))
+                if not vol_ok:
+                    log(f"[T2] {sym} add fund di-skip: volatilitas tinggi atau data ATR tidak tersedia "
+                        f"(ATR sekarang={current_atr if current_atr is not None else 'n/a'})")
+                    continue
+                log(f"[T2] {sym} kirim add fund ${add_usd} (deal confirmed aktif, ATR={current_atr:.2f}%)")
+                add_ok = send_add_funds(sym, add_usd, strat, delay=0)
+                if not add_ok:
+                    log(f"[T2] {sym} add fund gagal; akan dicoba lagi pada siklus berikutnya")
+                    continue
                 log_oac('ADD_FUND', sym, strat, {
                     'add_usd':      f"${add_usd:.0f}",
                     'total_usd':    f"${BASE_ORDER_VOLUME + add_usd:.0f}",
@@ -3759,7 +3794,10 @@ def thread2_monitor():
                 want_fast = True
 
         do_close=False; reason=""
-        if armed and not _is_akum:
+        if not _is_akum and price <= entry * (1 - HARD_STOP_LOSS_PCT / 100):
+            do_close = True
+            reason = f"hard stop volatilitas: price {_fmt_price(price)} turun >= {HARD_STOP_LOSS_PCT:.1f}% dari entry"
+        if not do_close and armed and not _is_akum:
             stop = peak*(1 - tdist/100)
             if price <= stop:
                 trail_reason = f"trailing (turun ke {_fmt_price(price)} dari puncak {_fmt_price(peak)}, dev {tdist}%)"
@@ -3795,9 +3833,11 @@ def thread2_monitor():
         elif d.get('strategy','brkX2') == 'brkX2_4h':
             hold_limit_sec = STRAT4H_MAX_HOLD_CANDLES * STRAT4H_SECONDS
             hold_label = f"batas {STRAT4H_MAX_HOLD_CANDLES} candle 4h"
-        elif d.get('strategy','brkX2') == 'hunting_4h':
+        elif d.get('strategy','brkX2') in ('brkX2_crossema', 'hunting_4h'):
             hold_limit_sec = HUNTING_MAX_HOLD_CANDLES * STRAT4H_SECONDS
-            hold_label = f"batas {HUNTING_MAX_HOLD_CANDLES} candle 4h (hunting)"
+            hold_label = (f"batas {HUNTING_MAX_HOLD_CANDLES} candle 4h (crossema)"
+                          if d.get('strategy') == 'brkX2_crossema'
+                          else f"batas {HUNTING_MAX_HOLD_CANDLES} candle 4h (hunting)")
         elif d.get('strategy','') in ('akum_entry_a', 'akum_entry_b'):
             timeout_c = d.get('timeout_candles', AKUM_ENTRY_TIMEOUT)
             hold_limit_sec = timeout_c * STRAT4H_SECONDS
@@ -3849,7 +3889,7 @@ def thread2_monitor():
             candle_sec  = hold_limit_sec / (
                 REVERSAL_MAX_HOLD_CANDLES if d.get('strategy') == 'reversal'
                 else STRAT4H_MAX_HOLD_CANDLES if d.get('strategy') == 'brkX2_4h'
-                else HUNTING_MAX_HOLD_CANDLES if d.get('strategy') == 'hunting_4h'
+                else HUNTING_MAX_HOLD_CANDLES if d.get('strategy') in ('brkX2_crossema', 'hunting_4h')
                 else d.get('timeout_candles', AKUM_ENTRY_TIMEOUT) if d.get('strategy','') in ('akum_entry_a','akum_entry_b')
                 else MAX_HOLD_DAYS
             )
@@ -3894,6 +3934,8 @@ def thread2_monitor():
                 strat_label = "Reversal Doji+HA (8h)"
             elif strat == 'brkX2_4h':
                 strat_label = "Momentum brkX2-4h (4h)"
+            elif strat == 'brkX2_crossema':
+                strat_label = "CrossEMA-4h"
             elif strat == 'hunting_4h':
                 strat_label = "Hunting-4h"
             elif strat == 'akum_entry_a':
