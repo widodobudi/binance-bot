@@ -5961,12 +5961,24 @@ def update_dashboard_near_miss(strategi: str, items: list):
                 weighted_score = item[7] if len(item) > 7 else 0
                 gating_ok      = item[8] if len(item) > 8 else False
                 close          = float(item[9]) if len(item) > 9 else 0.0
+                support_zone_low      = float(item[10]) if len(item) > 10 else 0.0
+                support_zone_high     = float(item[11]) if len(item) > 11 else 0.0
+                resistance_zone_low   = float(item[12]) if len(item) > 12 else 0.0
+                resistance_zone_high  = float(item[13]) if len(item) > 13 else 0.0
+                support_zone_touches  = int(item[14]) if len(item) > 14 else 0
+                resistance_zone_touches = int(item[15]) if len(item) > 15 else 0
             else:
                 vol_ratio      = extra4 if isinstance(extra4, (int, float)) else None
                 sideways_start = None
                 weighted_score = 0
                 gating_ok      = False
                 close          = 0.0
+                support_zone_low = 0.0
+                support_zone_high = 0.0
+                resistance_zone_low = 0.0
+                resistance_zone_high = 0.0
+                support_zone_touches = 0
+                resistance_zone_touches = 0
             sl_a = round(support * 0.995, 8) if support > 0 else 0
             sl_b = round(resistance * 0.995, 8) if resistance > 0 else 0
             parsed.append({
@@ -5984,6 +5996,16 @@ def update_dashboard_near_miss(strategi: str, items: list):
                 "posisi":         "Dekat Support" if (support > 0 and resistance > 0 and abs(close - support) <= abs(close - resistance)) else "Dekat Resist",
                 "support_fmt":    _fmt_price(support) if support > 0 else "-",
                 "resistance_fmt": _fmt_price(resistance) if resistance > 0 else "-",
+                "support_zone_fmt": (
+                    f"{_fmt_price(support_zone_low)} - {_fmt_price(support_zone_high)}"
+                    if support_zone_low > 0 and support_zone_high > 0 else "-"
+                ),
+                "resistance_zone_fmt": (
+                    f"{_fmt_price(resistance_zone_low)} - {_fmt_price(resistance_zone_high)}"
+                    if resistance_zone_low > 0 and resistance_zone_high > 0 else "-"
+                ),
+                "support_zone_touches": support_zone_touches,
+                "resistance_zone_touches": resistance_zone_touches,
                 "sl_a_fmt":       _fmt_price(sl_a) if sl_a > 0 else "-",
                 "sl_b_fmt":       _fmt_price(sl_b) if sl_b > 0 else "-",
                 "weighted_score": weighted_score,
@@ -6418,7 +6440,7 @@ DASHBOARD_HTML = '''
       <span style="color:var(--muted)">GATING (wajib): </span>
       <span style="color:var(--accent)">P3 OBV↑ (25)</span>
       <span style="color:var(--accent)">P4 ATR↓≥25% (20)</span>
-      <span style="color:var(--muted);margin-left:8px">BOBOT: </span>
+    <span style="color:var(--muted);margin-left:8px">BOBOT: </span>
       <span style="color:var(--accent)">P1 Range≤18% (15)</span>
       <span style="color:var(--yellow)">S1 Vol G>R (15)</span>
       <span style="color:var(--accent)">P2 EMAGap≤6% (10)</span>
@@ -6429,8 +6451,11 @@ DASHBOARD_HTML = '''
       <span style="color:#f85149">P6 Drift close≤6% (filter)</span>
       <span style="color:#f85149">P7 DistRatio≤2.5x (filter)</span>
     </div>
+        <div style="margin-bottom:10px;color:var(--muted);font-size:10px">
+            Level yang ditampilkan: Extreme line (wick min/max 180 candle) + Structural zone (cluster test berulang ala Wyckoff).
+        </div>
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-    <table style="width:100%;min-width:1400px;border-collapse:collapse">
+        <table style="width:100%;min-width:1780px;border-collapse:collapse">
       <thead>
         <tr>
           <th>Pair</th>
@@ -6444,8 +6469,11 @@ DASHBOARD_HTML = '''
           <th>Posisi</th>
           <th>% vs Support</th>
           <th>% vs Resist</th>
-          <th>Support</th>
-          <th>Resistance</th>
+                    <th>Support (extreme)</th>
+                    <th>Resistance (extreme)</th>
+                    <th>Support Zone (struct)</th>
+                    <th>Resistance Zone (struct)</th>
+                    <th>Touch S/R zone</th>
           <th style="color:#f85149">SL-A est.</th>
           <th style="color:#f85149">SL-B est.</th>
         </tr>
@@ -6495,6 +6523,9 @@ DASHBOARD_HTML = '''
         </td>
         <td style="font-size:10px;color:var(--green);white-space:nowrap">{{ item.get("support_fmt", "-") }}</td>
         <td style="font-size:10px;color:var(--yellow);white-space:nowrap">{{ item.get("resistance_fmt", "-") }}</td>
+                <td style="font-size:10px;color:var(--green);white-space:nowrap">{{ item.get("support_zone_fmt", "-") }}</td>
+                <td style="font-size:10px;color:var(--yellow);white-space:nowrap">{{ item.get("resistance_zone_fmt", "-") }}</td>
+                <td style="font-size:10px;color:var(--muted);white-space:nowrap">{{ item.get("support_zone_touches", 0) }}/{{ item.get("resistance_zone_touches", 0) }}</td>
         <td style="font-size:10px;color:#f85149;white-space:nowrap">{{ item.get("sl_a_fmt", "-") }}</td>
         <td style="font-size:10px;color:#f85149;white-space:nowrap">{{ item.get("sl_b_fmt", "-") }}</td>
       </tr>
@@ -7124,6 +7155,35 @@ def score_akumulasi(df, sym: str) -> dict:
         p1_ok = range_pct <= AKUM_RANGE_PCT
         p1_val = f"{range_pct*100:.1f}%"
 
+        # Structural zone (Wyckoff-like): area test berulang, bukan wick ekstrem tunggal.
+        zone_half_band = max((hi_max - lo_min) * 0.06, close_now * 0.004)
+        lows = win['low'].dropna().astype(float)
+        highs = win['high'].dropna().astype(float)
+
+        sup_seed = float(np.nanpercentile(lows, 18))
+        res_seed = float(np.nanpercentile(highs, 82))
+
+        sup_cluster = lows[(lows >= sup_seed - zone_half_band) & (lows <= sup_seed + zone_half_band)]
+        res_cluster = highs[(highs >= res_seed - zone_half_band) & (highs <= res_seed + zone_half_band)]
+
+        sup_center = float(np.median(sup_cluster)) if len(sup_cluster) >= 3 else sup_seed
+        res_center = float(np.median(res_cluster)) if len(res_cluster) >= 3 else res_seed
+
+        support_zone_low = max(lo_min, sup_center - zone_half_band)
+        support_zone_high = min(hi_max, sup_center + zone_half_band)
+        resistance_zone_low = max(lo_min, res_center - zone_half_band)
+        resistance_zone_high = min(hi_max, res_center + zone_half_band)
+
+        if support_zone_high >= resistance_zone_low:
+            mid = (sup_center + res_center) / 2.0
+            support_zone_high = min(support_zone_high, mid)
+            resistance_zone_low = max(resistance_zone_low, mid)
+
+        if support_zone_low > support_zone_high:
+            support_zone_low = support_zone_high = sup_center
+        if resistance_zone_low > resistance_zone_high:
+            resistance_zone_low = resistance_zone_high = res_center
+
         # P2: EMA20 vs EMA200 konvergen & datar
         ema20_now  = float(row['ema20'])  if not pd.isna(row.get('ema20'))  else None
         ema200_now = float(row['ema200']) if not pd.isna(row.get('ema200')) else None
@@ -7332,6 +7392,12 @@ def score_akumulasi(df, sym: str) -> dict:
             "s1_ok": s1_ok, "s2_ok": s2_ok, "s3_ok": s3_ok, "s4_ok": s4_ok,
             "support":        round(float(lo_min), 8),
             "resistance":     round(float(hi_max), 8),
+            "support_zone_low": round(float(support_zone_low), 8),
+            "support_zone_high": round(float(support_zone_high), 8),
+            "resistance_zone_low": round(float(resistance_zone_low), 8),
+            "resistance_zone_high": round(float(resistance_zone_high), 8),
+            "support_zone_touches": int(len(sup_cluster)),
+            "resistance_zone_touches": int(len(res_cluster)),
             "sideways_start": _sideways_start_str,
             "weighted_score": weighted_score,
             "gating_ok":      gating_ok,
@@ -7562,7 +7628,10 @@ def thread_akum_scan():
              res.get('sideways_start',''),
              res.get('support', 0), res.get('resistance', 0),
              res.get('weighted_score', 0), res.get('gating_ok', False),
-             res.get('close', 0))
+             res.get('close', 0),
+             res.get('support_zone_low', 0), res.get('support_zone_high', 0),
+             res.get('resistance_zone_low', 0), res.get('resistance_zone_high', 0),
+             res.get('support_zone_touches', 0), res.get('resistance_zone_touches', 0))
             for res in top
         ]
         update_dashboard_near_miss("Akumulasi-4h", nm_items)
