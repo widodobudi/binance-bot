@@ -3979,7 +3979,7 @@ def thread2_monitor():
             # Cek TP akumulasi: swing high lokal ATAU momentum overbought
             if not do_close:
                 try:
-                    _df4 = get_ohlcv_4h(sym, limit=AKUM_TP_SWING_LOOKBACK + 10)
+                    _df4 = get_ohlcv_4h(sym, limit=max(AKUM_TP_SWING_LOOKBACK + 10, 80))
                     if _df4 is not None and len(_df4) >= 10:
                         import pandas_ta as _pta
                         _swing_hi = get_akum_swing_high(_df4, AKUM_TP_SWING_LOOKBACK)
@@ -4005,6 +4005,25 @@ def thread2_monitor():
                                 do_close = True
                                 reason = (f"TP akumulasi momentum: RSI={_rsi_now:.1f} Stoch={_sk_now:.1f}→{_sk_prev:.1f} "
                                           f"MACD_hist={_macd_hist_now:.4f}→{_macd_hist_prev:.4f}")
+                        # TP3: upper wick menyentuh pivot high terdekat di atas price (strength N=4)
+                        if not do_close:
+                            _N4   = 4
+                            _hiArr = _df4['high'].values
+                            _cur_high = _hiArr[-1]  # high candle terkini (upper wick / spike)
+                            _pivots = []
+                            for _pi in range(_N4, len(_hiArr) - _N4):
+                                _ph = _hiArr[_pi]
+                                if (all(_ph > _hiArr[_pi - _j] for _j in range(1, _N4 + 1)) and
+                                        all(_ph > _hiArr[_pi + _j] for _j in range(1, _N4 + 1))):
+                                    _pivots.append(_ph)
+                            # resistance terdekat di atas current price
+                            _res_above = sorted(_ph for _ph in _pivots if _ph > price)
+                            if _res_above:
+                                _nearest_res = _res_above[0]
+                                if _cur_high >= _nearest_res:
+                                    do_close = True
+                                    reason = (f"TP3 akumulasi: upper_wick {_fmt_price(_cur_high)} "
+                                              f">= pivot_resistance {_fmt_price(_nearest_res)}")
                 except Exception as _e:
                     log(f"[T2] {sym} akum TP check error: {_e}")
         else:
