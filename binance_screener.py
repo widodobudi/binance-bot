@@ -6341,7 +6341,7 @@ DASHBOARD_HTML = '''
           {% endif %}
         </td>
         <td class="{{ "profit-pos" if d.get("upnl_pct",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_pct",0)) }}%</td>
-        <td>{% if d.get("trailing_armed") %}<span class="badge badge-armed">Yes</span>{% else %}<span class="badge badge-wait">Wait</span>{% endif %}</td>
+        <td>{% if d.get("strategy","") in ("akum_entry_a","akum_entry_b") %}<span class="badge" style="background:#444;color:#888">N/A</span>{% elif d.get("trailing_armed") %}<span class="badge badge-armed">Yes</span>{% else %}<span class="badge badge-wait">Wait</span>{% endif %}</td>
         <td>
           <form method="POST" action="/toggle" style="display:inline">
             <input type="hidden" name="sym" value="{{ sym }}">
