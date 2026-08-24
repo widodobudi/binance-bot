@@ -594,12 +594,12 @@ TRADES_CSV = os.path.join(DATA_DIR, "trades_forwardtest.csv")
 STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # Default values — edit hard-coded di sini untuk ubah nilai RESET
 STRATEGY_CONFIG_DEFAULTS = {
-    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None},
-    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None},
-    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": 0},
+    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 12, "add_usd": None},
+    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": None},
+    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": 0},
     "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None},
     "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None},
-    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 20, "add_usd": None},
+    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None},
 }
 
 def load_strategy_config() -> dict:
@@ -1870,8 +1870,7 @@ def send_open_long(symbol: str, strategy: str = 'brkX2') -> bool:
         return False
     if USE_BINANCE_DIRECT:
         try:
-            usd = BASE_ORDER_VOLUME
-            if strategy == 'hunting_4h': usd = HUNTING_ORDER_VOLUME
+            usd = get_strategy_base_usd(strategy)
             ensure_spot_usdt(float(usd))
             result = binance_buy_market(symbol, float(usd))
             if result.get("qty", 0) > 0:
@@ -1985,21 +1984,21 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
         return False, _cfg_base, 0
     if is_bstock_symbol(symbol):
         log(f"[SIZING] {symbol} adalah bStock, NYSE BUKA — open long DIIZINKAN")
-    # Hunting pakai volume flat HUNTING_ORDER_VOLUME, bukan sizing brkX2
+    # Hunting pakai base_usd dari Strategy Control (fallback HUNTING_ORDER_VOLUME), tanpa add fund
     if strategy == 'hunting_4h':
-        target  = float(HUNTING_ORDER_VOLUME)
+        target  = float(_cfg_base if _cfg_base else HUNTING_ORDER_VOLUME)
         add_usd = 0
     # Akumulasi pakai base_usd dari Strategy Control (fallback BASE_ORDER_VOLUME), tanpa add fund
     elif strategy in ('akum_entry_a', 'akum_entry_b'):
         target  = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
         add_usd = 0
-    # brkX2_4h di Binance direct: pakai BASE_ORDER_VOLUME flat, tidak pakai sizing
+    # brkX2_4h di Binance direct: pakai base_usd dari Strategy Control, tanpa sizing skor
     elif strategy == 'brkX2_4h' and USE_BINANCE_DIRECT:
-        target  = float(BASE_ORDER_VOLUME)
+        target  = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
         add_usd = 0
     else:
-        target  = score_to_target_usd(score)
-        add_usd = target - BASE_ORDER_VOLUME
+        target  = max(score_to_target_usd(score), _cfg_base)
+        add_usd = max(0, target - _cfg_base)
     ok = send_open_long(symbol, strategy)
     if not ok:
         return False, target, 0
@@ -3773,8 +3772,9 @@ def thread2_monitor():
         # brkX2 (12h): recompute add_usd pakai tier sizing TERKINI (bukan nilai lama saat open),
         # supaya perubahan score_to_target_usd langsung berlaku ke deal yg belum add-fund.
         if d.get('strategy', 'brkX2') == 'brkX2' and not add_fund_sent and 'score' in d:
-            _fresh_target = score_to_target_usd(d.get('score', 0))
-            _fresh_add    = _fresh_target - BASE_ORDER_VOLUME
+            _cur_base     = get_strategy_base_usd('brkX2')
+            _fresh_target = max(score_to_target_usd(d.get('score', 0)), _cur_base)
+            _fresh_add    = max(0, _fresh_target - _cur_base)
             if _fresh_add != add_usd:
                 log(f"[T2] {sym} add_usd disesuaikan ke tier terkini: ${add_usd} -> ${_fresh_add}")
                 add_usd = _fresh_add
@@ -10186,6 +10186,21 @@ if __name__ == '__main__':
     log("  BUILD: 20260821-F (+ pindah SC JS ke dash.js area (hapus Jinja raw block) + fix base_usd → target_usd semua lokasi)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
+    # Migrasi one-time: paksa base_usd strategi profitable ke nilai baru (24/08/2026),
+    # supaya tidak tertahan oleh override lama yg mungkin sudah tersimpan di strategy_config.json.
+    try:
+        _new_bases = {"brkX2": 12, "reversal": 15, "brkX2_4h": 15, "hunting_4h": 25}
+        _cfg_now = load_strategy_config()
+        _cfg_changed = False
+        for _strat_k, _new_base in _new_bases.items():
+            if _cfg_now.get(_strat_k, {}).get("base_usd") != _new_base:
+                _cfg_now.setdefault(_strat_k, {})["base_usd"] = _new_base
+                _cfg_changed = True
+        if _cfg_changed:
+            save_strategy_config(_cfg_now)
+            log(f"  Migrasi base_usd strategi profitable: {_new_bases}")
+    except Exception as _e:
+        log(f"WARN migrasi base_usd startup gagal: {_e}")
     if USE_BINANCE_DIRECT:
         try:
             _usdt_free, _usdt_locked = get_usdt_balance()
