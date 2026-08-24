@@ -1624,6 +1624,73 @@ def get_usdt_balance() -> tuple:
         log(f"WARN get_usdt_balance: {e}")
     return 0.0, 0.0
 
+
+def get_earn_flexible_usdt_positions() -> list:
+    """List posisi Simple Earn Flexible untuk asset USDT.
+    Return list of {"productId": str, "totalAmount": float}. Return [] kalau gagal/kosong."""
+    try:
+        data = _binance_trading_request("GET", "/sapi/v1/simple-earn/flexible/position", {"asset": "USDT"})
+        rows = data.get("rows", []) if isinstance(data, dict) else []
+        out = []
+        for r in rows:
+            amt = float(r.get("totalAmount", 0) or 0)
+            if amt > 0 and r.get("productId"):
+                out.append({"productId": r["productId"], "totalAmount": amt})
+        return out
+    except Exception as e:
+        log(f"WARN get_earn_flexible_usdt_positions: {e}")
+        return []
+
+
+def redeem_earn_flexible(product_id: str, amount: float = None, redeem_all: bool = False) -> bool:
+    """Redeem instant dari Simple Earn Flexible. Return True kalau request diterima."""
+    try:
+        params = {"productId": product_id, "type": "FAST"}
+        if redeem_all:
+            params["redeemAll"] = "true"
+        else:
+            params["amount"] = str(round(amount, 8))
+        data = _binance_trading_request("POST", "/sapi/v1/simple-earn/flexible/redeem", params)
+        log(f"[EARN] Redeem flexible productId={product_id} amount={amount if not redeem_all else 'ALL'} -> {data}")
+        return True
+    except Exception as e:
+        log(f"WARN redeem_earn_flexible {product_id}: {e}")
+        return False
+
+
+def ensure_spot_usdt(min_needed: float, wait_seconds: int = 12) -> bool:
+    """Pastikan saldo Spot USDT free >= min_needed. Kalau kurang, coba redeem otomatis
+    dari Simple Earn Flexible sejumlah selisihnya (+buffer kecil utk fee/slippage).
+    Return True kalau saldo sudah/berhasil dicukupkan, False kalau tetap kurang."""
+    free, _locked = get_usdt_balance()
+    if free >= min_needed:
+        return True
+    shortfall = min_needed - free
+    positions = get_earn_flexible_usdt_positions()
+    earn_total = sum(p["totalAmount"] for p in positions)
+    if earn_total <= 0:
+        log(f"[EARN] Saldo Spot USDT kurang (${free:.2f} < ${min_needed:.2f}) dan tidak ada dana di Earn Flexible.")
+        return False
+    log(f"[EARN] Saldo Spot USDT kurang (${free:.2f} < ${min_needed:.2f}), coba redeem ${shortfall:.2f} dari Earn Flexible (tersedia ${earn_total:.2f})")
+    remaining = shortfall * 1.02  # buffer 2% jaga-jaga fee/pembulatan
+    for p in positions:
+        if remaining <= 0:
+            break
+        take = min(p["totalAmount"], remaining)
+        redeem_all_this = take >= p["totalAmount"]
+        if redeem_earn_flexible(p["productId"], amount=take, redeem_all=redeem_all_this):
+            remaining -= take
+    # Tunggu dana settle ke Spot (redeem flexible FAST biasanya instant, tapi kasih jeda)
+    for _ in range(wait_seconds):
+        time.sleep(1)
+        free, _locked = get_usdt_balance()
+        if free >= min_needed:
+            log(f"[EARN] Redeem berhasil, saldo Spot USDT sekarang ${free:.2f}")
+            return True
+    log(f"WARN [EARN] Setelah redeem, saldo Spot USDT masih ${free:.2f} < ${min_needed:.2f}")
+    return False
+
+
 _last_balance_log_ts = 0.0
 
 
@@ -1805,6 +1872,7 @@ def send_open_long(symbol: str, strategy: str = 'brkX2') -> bool:
         try:
             usd = BASE_ORDER_VOLUME
             if strategy == 'hunting_4h': usd = HUNTING_ORDER_VOLUME
+            ensure_spot_usdt(float(usd))
             result = binance_buy_market(symbol, float(usd))
             if result.get("qty", 0) > 0:
                 # Simpan qty_coin aktual ke active_deals nanti di caller
@@ -1850,6 +1918,7 @@ def send_add_funds(symbol: str, volume, strategy: str = 'brkX2', delay: int = 15
     """Add fund. Kalau USE_BINANCE_DIRECT=True → tambahan buy Binance."""
     if USE_BINANCE_DIRECT:
         try:
+            ensure_spot_usdt(float(volume))
             result = binance_buy_market(symbol, float(volume))
             if result.get("qty", 0) > 0:
                 # Update qty_coin di active_deals
