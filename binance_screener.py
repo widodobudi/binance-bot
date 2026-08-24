@@ -3792,39 +3792,39 @@ def thread2_monitor():
                 if not vol_ok:
                     log(f"[T2] {sym} add fund di-skip: volatilitas tinggi atau data ATR tidak tersedia "
                         f"(ATR sekarang={current_atr if current_atr is not None else 'n/a'})")
-                    continue
-                log(f"[T2] {sym} kirim add fund ${add_usd} (deal confirmed aktif, ATR={current_atr:.2f}%)")
-                add_ok = send_add_funds(sym, add_usd, strat, delay=0)
-                if not add_ok:
-                    log(f"[T2] {sym} add fund gagal; akan dicoba lagi pada siklus berikutnya")
-                    continue
-                log_oac('ADD_FUND', sym, strat, {
-                    'add_usd':      f"${add_usd:.0f}",
-                    'total_usd':    f"${BASE_ORDER_VOLUME + add_usd:.0f}",
-                    'entry_price':  _fmt_price(d.get('entry_price', 0)),
-                    'atr_pct':      f"{d.get('atr_pct', 0):.2f}%",
-                    'rsi':          f"{d['rsi_open']:.1f}"        if d.get('rsi_open')        is not None else "—",
-                    'stoch_k':      f"{d['stoch_k_open']:.1f}"   if d.get('stoch_k_open')    is not None else "—",
-                    'stoch_d':      f"{d['stoch_d_open']:.1f}"   if d.get('stoch_d_open')    is not None else "—",
-                    'macd_hist':    f"{d['macd_hist_open']:.5f}" if d.get('macd_hist_open')  is not None else "—",
-                    'bb_pct':       f"{d['bb_pct_open']:.3f}"    if d.get('bb_pct_open')     is not None else "—",
-                    'williams_r':   f"{d['williams_r_open']:.1f}"if d.get('williams_r_open') is not None else "—",
-                    'cci':          f"{d['cci_open']:.1f}"        if d.get('cci_open')        is not None else "—",
-                    'obv':          f"{d['obv_open']:.0f}"        if d.get('obv_open')        is not None else "—",
-                })
-                deal_log_write({
-                    'timestamp_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
-                    'event_type':    'ADD_FUND',
-                    'strategy':      strat,
-                    'symbol':        to_display_pair(sym),
-                    'thread':        'T2',
-                    'add_usd':       add_usd,
-                    'total_usd':     BASE_ORDER_VOLUME + add_usd,
-                })
-                with active_deals_lock:
-                    if sym in active_deals:
-                        active_deals[sym]['add_fund_sent'] = True
-                save_active_deals()
+                else:
+                    log(f"[T2] {sym} kirim add fund ${add_usd} (deal confirmed aktif, ATR={current_atr:.2f}%)")
+                    add_ok = send_add_funds(sym, add_usd, strat, delay=0)
+                    if not add_ok:
+                        log(f"[T2] {sym} add fund gagal; akan dicoba lagi pada siklus berikutnya")
+                    else:
+                        log_oac('ADD_FUND', sym, strat, {
+                            'add_usd':      f"${add_usd:.0f}",
+                            'total_usd':    f"${BASE_ORDER_VOLUME + add_usd:.0f}",
+                            'entry_price':  _fmt_price(d.get('entry_price', 0)),
+                            'atr_pct':      f"{d.get('atr_pct', 0):.2f}%",
+                            'rsi':          f"{d['rsi_open']:.1f}"        if d.get('rsi_open')        is not None else "—",
+                            'stoch_k':      f"{d['stoch_k_open']:.1f}"   if d.get('stoch_k_open')    is not None else "—",
+                            'stoch_d':      f"{d['stoch_d_open']:.1f}"   if d.get('stoch_d_open')    is not None else "—",
+                            'macd_hist':    f"{d['macd_hist_open']:.5f}" if d.get('macd_hist_open')  is not None else "—",
+                            'bb_pct':       f"{d['bb_pct_open']:.3f}"    if d.get('bb_pct_open')     is not None else "—",
+                            'williams_r':   f"{d['williams_r_open']:.1f}"if d.get('williams_r_open') is not None else "—",
+                            'cci':          f"{d['cci_open']:.1f}"        if d.get('cci_open')        is not None else "—",
+                            'obv':          f"{d['obv_open']:.0f}"        if d.get('obv_open')        is not None else "—",
+                        })
+                        deal_log_write({
+                            'timestamp_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                            'event_type':    'ADD_FUND',
+                            'strategy':      strat,
+                            'symbol':        to_display_pair(sym),
+                            'thread':        'T2',
+                            'add_usd':       add_usd,
+                            'total_usd':     BASE_ORDER_VOLUME + add_usd,
+                        })
+                        with active_deals_lock:
+                            if sym in active_deals:
+                                active_deals[sym]['add_fund_sent'] = True
+                        save_active_deals()
 
         # update peak
         peak = max(d.get('peak',entry), price)
