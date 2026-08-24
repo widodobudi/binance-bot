@@ -1877,15 +1877,15 @@ def signal_score(row) -> int:
     return sc
 
 def score_to_target_usd(score: int) -> int:
-    """Sizing berdasarkan skor sinyal, disesuaikan dengan saldo $131.92 (22/07/2026).
-    Base order $50 (BASE_ORDER_VOLUME).
-    Skor 0-1 -> $50  (tanpa add fund, sisa saldo $81.92)
-    Skor 2-3 -> $100 (add $50, sisa saldo $31.92)
-    Skor 4-5 -> $120 (add $70, sisa saldo $11.92)
-    Basis: backtest_sizing_v2 (155 trade) — aggr lebih tinggi ROI lebih baik."""
-    if score >= 4: return 120
-    if score >= 2: return 100
-    return 50
+    """Sizing berdasarkan skor sinyal.
+    Base order $8 (BASE_ORDER_VOLUME).
+    Skor 0-1 -> $30 (add $22)
+    Skor 2-3 -> $45 (add $37)
+    Skor 4-5 -> $60 (add $52)
+    Basis: backtest_sizing_v2 (155 trade) — aggr lebih tinggi ROI lebih baik. Tier direvisi 24/08/2026."""
+    if score >= 4: return 60
+    if score >= 2: return 45
+    return 30
 
 def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
     """Buka deal + simpan add_usd di active_deals untuk dikirim T2 setelah deal confirmed.
