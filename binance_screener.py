@@ -4087,11 +4087,15 @@ def thread2_monitor():
                     'exit_price':   _fmt_price(price),
                     'profit_pct':   f"{prof_from_entry:.2f}%",
                     'exit_reason':  reason,
-                    'armed':        str(armed),
+                    'peak_price':   _fmt_price(peak),
+                    'peak_profit':  f"{prof_peak:.2f}%",
+                    'arm_pct':      f"{get_arm_pct(atrp):.1f}% ({'armed' if armed else 'belum armed'})",
+                    'trail_dist':   f"{tdist:.2f}%" if armed else "—",
                     'atr_pct':      f"{d.get('atr_pct', 0):.2f}%",
+                    'add_usd':      f"${d.get('add_usd', 0):.0f}" if d.get('add_usd') else "—",
+                    'total_usd':    f"${d.get('target_usd', BASE_ORDER_VOLUME):.0f}",
                     'hold_candles': str(_hold_c),
                     'entry_price':  _fmt_price(d.get('entry_price', 0)),
-                    'peak_profit':  f"{prof_peak:.2f}%",
                     'rsi':          f"{d['rsi_open']:.1f}"        if d.get('rsi_open')        is not None else "—",
                     'stoch_k':      f"{d['stoch_k_open']:.1f}"   if d.get('stoch_k_open')    is not None else "—",
                     'stoch_d':      f"{d['stoch_d_open']:.1f}"   if d.get('stoch_d_open')    is not None else "—",
@@ -4100,6 +4104,8 @@ def thread2_monitor():
                     'williams_r':   f"{d['williams_r_open']:.1f}"if d.get('williams_r_open') is not None else "—",
                     'cci':          f"{d['cci_open']:.1f}"        if d.get('cci_open')        is not None else "—",
                     'obv':          f"{d['obv_open']:.0f}"        if d.get('obv_open')        is not None else "—",
+                    'ema20':        f"{d['ema20_open']:.6f}"      if d.get('ema20_open')      is not None else "—",
+                    'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
                 })
                 remove_from_active_deals(sym)
                 if strat == 'brkX2': record_closed(sym)
