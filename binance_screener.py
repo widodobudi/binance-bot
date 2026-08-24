@@ -1912,10 +1912,13 @@ def send_close_long(symbol: str, strategy: str = 'brkX2') -> bool:
             with active_deals_lock:
                 d = active_deals.get(symbol, {})
             qty_coin = d.get("qty_coin", 0)
-            if qty_coin <= 0:
-                # Fallback: baca dari Binance wallet
-                asset = symbol.replace("USDT", "")
-                qty_coin = binance_get_asset_qty(asset)
+            asset = symbol.replace("USDT", "")
+            # Selalu cek saldo wallet aktual — pakai mana yang lebih besar
+            # agar SNX/aset lain yang sempat masuk Earn lalu di-redeem tetap ikut terjual.
+            wallet_qty = binance_get_asset_qty(asset)
+            if wallet_qty > qty_coin:
+                log(f"[BINANCE] CLOSE {symbol}: wallet {wallet_qty:.4f} > qty_coin {qty_coin:.4f} → pakai wallet balance")
+                qty_coin = wallet_qty
             if qty_coin <= 0:
                 log(f"WARN [BINANCE] send_close_long {symbol}: qty_coin=0, tidak ada posisi")
                 return False
