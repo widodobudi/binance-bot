@@ -3652,6 +3652,11 @@ def thread2_monitor():
         if entry<=0: continue
         price = get_price_now(sym)
         if price<=0: continue
+        # Simpan last_price sesegera mungkin agar dashboard tetap update walau
+        # langkah berikutnya (mis. add fund gagal) menyebabkan 'continue'.
+        with active_deals_lock:
+            if sym in active_deals: active_deals[sym]['last_price'] = price
+        d['last_price'] = price
         d = enrich_deal_open_indicators(sym, d)
 
         # Update stoch_k dan st_dir untuk trailing factor variatif hunting
@@ -6180,14 +6185,15 @@ DASHBOARD_HTML = '''
     <div class="card-body">
     {% if active_deals %}
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-        <table style="min-width:1160px">
-            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
+        <table style="min-width:1280px">
+            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr>
         <td class="sym">{{ sym.replace("USDT","/USDT") }}</td>
         <td>{% set _sm = {"brkX2":"brkX2-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h"} %}{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</td>
         <td style="font-size:10px;color:var(--muted);white-space:nowrap">{{ d.get("opened_at","")[:16] if d.get("opened_at") else "-" }}</td>
+        <td><button type="button" onclick="openTradingViewChart('{{ sym }}','{{ _sm.get(d.get('strategy',''),d.get('strategy','-')) }}')" style="background:#2962ff;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Open Chart</button></td>
         <td>
           <div style="font-size:9px;color:var(--muted);margin-bottom:2px">{{ "Average" if d.get("add_fund_sent") else "Entry" }}</div>
           <span id="ep-{{ sym }}" style="cursor:pointer;text-decoration:underline dotted" title="Klik untuk edit" onclick="editEntry('{{ sym }}','{{ fmt_price(d.get(\"entry_price\",0)) }}')">{{ fmt_price(d.get("entry_price",0)) }}</span>
@@ -6278,13 +6284,18 @@ DASHBOARD_HTML = '''
                 <button type="button" id="btn-open-chart" onclick="openSelectedTradingViewChart()" disabled style="background:#2962ff;color:#fff;border:none;border-radius:4px;padding:6px 12px;font-size:11px;cursor:pointer;font-family:var(--font);opacity:.55">Open Chart</button>
       </div>
             <script>
+            function openTradingViewChart(pair, strategy) {
+                if (!pair) { return; }
+                strategy = strategy || '';
+                var interval = strategy.indexOf('12h') >= 0 ? '720' : strategy.indexOf('8h') >= 0 ? '480' : '240';
+                window.open('https://www.tradingview.com/chart/?symbol=BINANCE%3A' + encodeURIComponent(pair) + '&interval=' + interval, '_blank', 'noopener');
+            }
             function openSelectedTradingViewChart() {
                 var pair = document.getElementById('pair-select').value;
                 if (!pair) { return; }
                 var strategyElement = document.getElementById('strat-select');
                 var strategy = strategyElement ? strategyElement.value : '';
-                var interval = strategy.indexOf('12h') >= 0 ? '720' : strategy.indexOf('8h') >= 0 ? '480' : '240';
-                window.open('https://www.tradingview.com/chart/?symbol=BINANCE%3A' + encodeURIComponent(pair) + '&interval=' + interval, '_blank', 'noopener');
+                openTradingViewChart(pair, strategy);
             }
             document.getElementById('pair-select').addEventListener('change', function() {
                 var button = document.getElementById('btn-open-chart');
