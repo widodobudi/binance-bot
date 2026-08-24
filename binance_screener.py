@@ -1614,7 +1614,7 @@ def get_binance_spot_assets() -> list:
 
 
 def get_usdt_balance() -> float:
-    """Saldo USDT free (spot) saat ini. Return 0.0 kalau gagal."""
+    """Saldo USDT free (Spot wallet saja, bukan Earn/Funding/Margin) saat ini. Return 0.0 kalau gagal."""
     try:
         data = _binance_trading_request("GET", "/api/v3/account", {})
         for item in data.get("balances", []):
@@ -1623,6 +1623,8 @@ def get_usdt_balance() -> float:
     except Exception as e:
         log(f"WARN get_usdt_balance: {e}")
     return 0.0
+
+_last_balance_log_ts = 0.0
 
 
 def check_auto_sell_crossing() -> None:
@@ -3651,7 +3653,14 @@ def enrich_deal_open_indicators(symbol: str, deal: dict) -> dict:
 
 
 def thread2_monitor():
+    global _last_balance_log_ts
     want_fast = False  # jadi True jika ada deal armed yg harganya bergerak cepat
+    if USE_BINANCE_DIRECT and (time.time() - _last_balance_log_ts) >= 300:
+        _last_balance_log_ts = time.time()
+        try:
+            log(f"[T2] Saldo USDT (free, Spot wallet): ${get_usdt_balance():.2f}")
+        except Exception as _e:
+            log(f"WARN [T2] gagal cek saldo USDT: {_e}")
     try:
         check_auto_sell_crossing()
     except Exception as error:
