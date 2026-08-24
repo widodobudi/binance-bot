@@ -1196,11 +1196,13 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
     merged = dict(indicators)
     if event.upper() == "OPEN":
         try:
-            frame = get_ohlcv_4h(symbol, limit=120) if strategy.lower() in {
-                "brkx2-4h", "crossema-4h", "hunting-4h", "akumulasi-4h"
-            } else get_ohlcv(symbol, interval=REVERSAL_TIMEFRAME if "reversal" in strategy.lower() else "12h", limit=120)
+            strat_key = strategy.lower()
+            # Substring match — strategy label bisa punya sufiks, mis. 'Akumulasi-4h Entry B'.
+            is_4h_strategy = any(tag in strat_key for tag in ("brkx2-4h", "crossema-4h", "hunting-4h", "akumulasi-4h"))
+            frame = get_ohlcv_4h(symbol, limit=120) if is_4h_strategy \
+                else get_ohlcv(symbol, interval=REVERSAL_TIMEFRAME if "reversal" in strat_key else "12h", limit=120)
             if frame is not None and len(frame):
-                frame = compute_indicators_4h(frame) if "4h" in strategy.lower() else compute_indicators(frame)
+                frame = compute_indicators_4h(frame) if is_4h_strategy else compute_indicators(frame)
                 row = frame.iloc[-1]
                 def read_value(column):
                     value = row.get(column)
@@ -5770,7 +5772,7 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
         return False
     ok, target_usd, add_usd = open_deal_with_sizing(symbol, score, strategy="hunting_4h")
     if not ok:
-        log(f"[T1d-HUNT] {symbol} 3Commas TOLAK open hunting")
+        log(f"[T1d-HUNT] {symbol} " + ("Binance order ditolak" if USE_BINANCE_DIRECT else "3Commas TOLAK") + " open hunting")
         return False
 
     try:
@@ -7828,14 +7830,15 @@ def thread_akum_entry_scan():
             strat_key = f'akum_entry_{entry_type.lower()}'
             ok, target_usd, add_usd = open_deal_with_sizing(sym, score, strat_key)
             if not ok:
-                log(f"[T_AKUM_ENTRY] {sym} Entry {entry_type}: 3Commas tolak")
+                reject_reason = "Binance order ditolak (cek saldo/lot size)" if USE_BINANCE_DIRECT else "3Commas tolak (cek saldo/slot)"
+                log(f"[T_AKUM_ENTRY] {sym} Entry {entry_type}: {reject_reason}")
                 send_telegram(
                     f"⚠️ Akumulasi-4h | GAGAL OPEN\n"
                     f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                     f"Pair  : {to_display_pair(sym)}\n"
                     f"Entry : {entry_type} | Score: {score}\n"
                     f"Harga : {_fmt_price(price_now)}\n"
-                    f"Alasan: 3Commas tolak (cek saldo/slot)",
+                    f"Alasan: {reject_reason}",
                     parse_mode=None
                 )
                 continue
