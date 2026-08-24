@@ -10192,6 +10192,19 @@ if __name__ == '__main__':
             log(f"  Saldo USDT Spot wallet : free=${_usdt_free:.2f} locked=${_usdt_locked:.2f}")
         except Exception as _e:
             log(f"WARN gagal cek saldo USDT saat startup: {_e}")
+    try:
+        if os.path.exists(TRADES_CSV):
+            with trades_csv_lock:
+                with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as _f:
+                    _akum_rows = [r for r in csv.DictReader(_f)
+                                  if r.get('status') == 'CLOSED'
+                                  and r.get('strategy') in ('akum_entry_a', 'akum_entry_b')]
+            log(f"  Histori CLOSED Akumulasi-4h: {len(_akum_rows)} deal")
+            for _r in _akum_rows:
+                log(f"    - {_r.get('symbol','?')} ({_r.get('strategy','?')}) "
+                    f"profit={_r.get('profit_pct','?')}% closed={_r.get('close_time_wib','?')}")
+    except Exception as _e:
+        log(f"WARN gagal baca histori Akumulasi-4h saat startup: {_e}")
     log(f"  Timeframe        : {TIMEFRAME}")
     log(f"  Entry syarat     : ST-up, >EMA20, 3bar-bullish, vol>={VOLUME_MULT}xMA, RSI<{RSI_MAX}" + (f", Stoch<{STOCH_MAX}" if STOCH_MAX is not None else "") + (f", ATR<{ATR_MAX_PCT}%" if ATR_MAX_PCT is not None else "") + f", HTF3D>{HTF_VOL_MULT}xMA")
     log(f"  Exit             : trailing adaptif (arm +{TRAIL_ARM_PCT}%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)")
