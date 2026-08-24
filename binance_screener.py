@@ -1613,6 +1613,18 @@ def get_binance_spot_assets() -> list:
     return sorted(result, key=lambda item: item["asset"])
 
 
+def get_usdt_balance() -> float:
+    """Saldo USDT free (spot) saat ini. Return 0.0 kalau gagal."""
+    try:
+        data = _binance_trading_request("GET", "/api/v3/account", {})
+        for item in data.get("balances", []):
+            if str(item.get("asset", "")).upper() == "USDT":
+                return float(item.get("free", 0))
+    except Exception as e:
+        log(f"WARN get_usdt_balance: {e}")
+    return 0.0
+
+
 def check_auto_sell_crossing() -> None:
     config = load_auto_sell_config()
     if not config.get("enabled") or not config.get("asset"):
@@ -10078,6 +10090,12 @@ if __name__ == '__main__':
     log("  BUILD: 20260821-F (+ pindah SC JS ke dash.js area (hapus Jinja raw block) + fix base_usd → target_usd semua lokasi)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
+    if USE_BINANCE_DIRECT:
+        try:
+            _usdt_bal = get_usdt_balance()
+            log(f"  Saldo USDT (free) : ${_usdt_bal:.2f}")
+        except Exception as _e:
+            log(f"WARN gagal cek saldo USDT saat startup: {_e}")
     log(f"  Timeframe        : {TIMEFRAME}")
     log(f"  Entry syarat     : ST-up, >EMA20, 3bar-bullish, vol>={VOLUME_MULT}xMA, RSI<{RSI_MAX}" + (f", Stoch<{STOCH_MAX}" if STOCH_MAX is not None else "") + (f", ATR<{ATR_MAX_PCT}%" if ATR_MAX_PCT is not None else "") + f", HTF3D>{HTF_VOL_MULT}xMA")
     log(f"  Exit             : trailing adaptif (arm +{TRAIL_ARM_PCT}%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)")
