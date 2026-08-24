@@ -1353,12 +1353,16 @@ def load_active_deals():
             for sym, d in list(active_deals.items()):
                 asset = sym.replace("USDT","")
                 try:
-                    qty = binance_get_asset_qty(asset)
-                    if qty == 0:
+                    qty_total = binance_get_asset_qty_total(asset)
+                    qty_coin_saved = float(d.get("qty_coin", 0) or 0)
+                    if qty_total > 0:
+                        log(f"   [RECONCILE] {sym}: qty={qty_total:.4f} {asset} ✓")
+                    elif qty_coin_saved > 0:
+                        # Wallet baca 0 tapi deal punya qty_coin > 0 (mungkin Soft Staking)
+                        log(f"   [RECONCILE] {sym}: Binance qty=0 tapi qty_coin={qty_coin_saved:.4f} di deal — dipertahankan")
+                    else:
                         to_remove.append(sym)
                         log(f"   [RECONCILE] {sym}: qty=0 di Binance → auto-remove (deal sudah close)")
-                    else:
-                        log(f"   [RECONCILE] {sym}: qty={qty:.4f} {asset} ✓")
                 except Exception as e:
                     log(f"   [RECONCILE] {sym}: error cek qty ({e}) — dipertahankan")
             if to_remove:
@@ -1807,6 +1811,19 @@ def binance_get_asset_qty(asset: str) -> float:
         return 0.0
     except Exception as e:
         log(f"WARN [BINANCE] get_asset_qty {asset}: {e}")
+        return -1.0
+
+
+def binance_get_asset_qty_total(asset: str) -> float:
+    """Baca qty total (free + locked) untuk reconcile — menghindari false-remove akibat Soft Staking."""
+    try:
+        data = _binance_trading_request("GET", "/api/v3/account", {})
+        for b in data.get("balances", []):
+            if b["asset"] == asset:
+                return float(b["free"]) + float(b.get("locked", 0))
+        return 0.0
+    except Exception as e:
+        log(f"WARN [BINANCE] get_asset_qty_total {asset}: {e}")
         return -1.0
 
 
