@@ -3770,6 +3770,17 @@ def thread2_monitor():
                 pass
         add_usd      = d.get('add_usd', 0)
         add_fund_sent = d.get('add_fund_sent', False)
+        # brkX2 (12h): recompute add_usd pakai tier sizing TERKINI (bukan nilai lama saat open),
+        # supaya perubahan score_to_target_usd langsung berlaku ke deal yg belum add-fund.
+        if d.get('strategy', 'brkX2') == 'brkX2' and not add_fund_sent and 'score' in d:
+            _fresh_target = score_to_target_usd(d.get('score', 0))
+            _fresh_add    = _fresh_target - BASE_ORDER_VOLUME
+            if _fresh_add != add_usd:
+                log(f"[T2] {sym} add_usd disesuaikan ke tier terkini: ${add_usd} -> ${_fresh_add}")
+                add_usd = _fresh_add
+                with active_deals_lock:
+                    if sym in active_deals:
+                        active_deals[sym]['add_usd'] = _fresh_add
         if add_usd > 0 and not add_fund_sent:
             if not get_deal_override(sym, 'auto_add_fund', True):
                 log(f"[T2] {sym} add fund di-skip (auto_add_fund=OFF via dashboard)")
