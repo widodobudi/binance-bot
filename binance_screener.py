@@ -1906,9 +1906,9 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
     if strategy == 'hunting_4h':
         target  = float(HUNTING_ORDER_VOLUME)
         add_usd = 0
-    # Akumulasi pakai BASE_ORDER_VOLUME flat, tanpa add fund
+    # Akumulasi pakai base_usd dari Strategy Control (fallback BASE_ORDER_VOLUME), tanpa add fund
     elif strategy in ('akum_entry_a', 'akum_entry_b'):
-        target  = float(BASE_ORDER_VOLUME)
+        target  = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
         add_usd = 0
     # brkX2_4h di Binance direct: pakai BASE_ORDER_VOLUME flat, tidak pakai sizing
     elif strategy == 'brkX2_4h' and USE_BINANCE_DIRECT:
