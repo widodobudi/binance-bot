@@ -1613,16 +1613,16 @@ def get_binance_spot_assets() -> list:
     return sorted(result, key=lambda item: item["asset"])
 
 
-def get_usdt_balance() -> float:
-    """Saldo USDT free (Spot wallet saja, bukan Earn/Funding/Margin) saat ini. Return 0.0 kalau gagal."""
+def get_usdt_balance() -> tuple:
+    """Saldo USDT Spot wallet saat ini: (free, locked). Return (0.0, 0.0) kalau gagal."""
     try:
         data = _binance_trading_request("GET", "/api/v3/account", {})
         for item in data.get("balances", []):
             if str(item.get("asset", "")).upper() == "USDT":
-                return float(item.get("free", 0))
+                return float(item.get("free", 0)), float(item.get("locked", 0))
     except Exception as e:
         log(f"WARN get_usdt_balance: {e}")
-    return 0.0
+    return 0.0, 0.0
 
 _last_balance_log_ts = 0.0
 
@@ -3658,7 +3658,8 @@ def thread2_monitor():
     if USE_BINANCE_DIRECT and (time.time() - _last_balance_log_ts) >= 300:
         _last_balance_log_ts = time.time()
         try:
-            log(f"[T2] Saldo USDT (free, Spot wallet): ${get_usdt_balance():.2f}")
+            _usdt_free, _usdt_locked = get_usdt_balance()
+            log(f"[T2] Saldo USDT Spot wallet: free=${_usdt_free:.2f} locked=${_usdt_locked:.2f}")
         except Exception as _e:
             log(f"WARN [T2] gagal cek saldo USDT: {_e}")
     try:
@@ -10101,8 +10102,8 @@ if __name__ == '__main__':
     log("="*55)
     if USE_BINANCE_DIRECT:
         try:
-            _usdt_bal = get_usdt_balance()
-            log(f"  Saldo USDT (free) : ${_usdt_bal:.2f}")
+            _usdt_free, _usdt_locked = get_usdt_balance()
+            log(f"  Saldo USDT Spot wallet : free=${_usdt_free:.2f} locked=${_usdt_locked:.2f}")
         except Exception as _e:
             log(f"WARN gagal cek saldo USDT saat startup: {_e}")
     log(f"  Timeframe        : {TIMEFRAME}")
