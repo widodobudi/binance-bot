@@ -10228,23 +10228,6 @@ if __name__ == '__main__':
             log(f"  Migrasi base_usd strategi profitable: {_new_bases}")
     except Exception as _e:
         log(f"WARN migrasi base_usd startup gagal: {_e}")
-    # One-time patch: koreksi SNX deal qty/cost setelah reconcile false-remove + Earn redemption (24/08/2026)
-    try:
-        _d_patch = None
-        with active_deals_lock:
-            _snx_qty = active_deals.get("SNXUSDT", {}).get("qty_coin", 0)
-            if "SNXUSDT" in active_deals and _snx_qty < 100:
-                active_deals["SNXUSDT"]["qty_coin"]  = 196.83542864
-                active_deals["SNXUSDT"]["total_usd"] = 43.0
-                active_deals["SNXUSDT"]["add_usd"]   = 35.0
-                active_deals["SNXUSDT"]["avg_price"] = 0.21847
-                _d_patch = dict(active_deals)
-        if _d_patch is not None:
-            with open(ACTIVE_DEALS_FILE, "w") as _f:
-                import json as _jj; _jj.dump(_d_patch, _f)
-            log("  [PATCH] SNXUSDT dikoreksi: qty=196.84 SNX total=$43 avg=0.21847")
-    except Exception as _e:
-        log(f"WARN patch SNXUSDT startup gagal: {_e}")
     if USE_BINANCE_DIRECT:
         try:
             _usdt_free, _usdt_locked = get_usdt_balance()
@@ -10328,6 +10311,23 @@ if __name__ == '__main__':
     time.sleep(2.0)
 
     load_active_deals()
+    # One-time patch: koreksi SNX deal qty/cost setelah reconcile false-remove + Earn redemption (24/08/2026)
+    try:
+        _d_patch = None
+        with active_deals_lock:
+            _snx_qty = active_deals.get("SNXUSDT", {}).get("qty_coin", 0)
+            if "SNXUSDT" in active_deals and _snx_qty < 100:
+                active_deals["SNXUSDT"]["qty_coin"]  = 196.83542864
+                active_deals["SNXUSDT"]["total_usd"] = 43.0
+                active_deals["SNXUSDT"]["add_usd"]   = 35.0
+                active_deals["SNXUSDT"]["avg_price"] = 0.21847
+                _d_patch = dict(active_deals)
+        if _d_patch is not None:
+            with open(ACTIVE_DEALS_FILE, "w") as _f:
+                import json as _jj; _jj.dump(_d_patch, _f)
+            log("  [PATCH] SNXUSDT dikoreksi: qty=196.84 SNX total=$43 avg=0.21847")
+    except Exception as _e:
+        log(f"WARN patch SNXUSDT startup gagal: {_e}")
     load_last_closed()
     sync_base_usd_from_binance()  # auto-fix base_usd dari Binance API saat startup
     try:
