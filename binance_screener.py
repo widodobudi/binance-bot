@@ -3844,6 +3844,42 @@ def thread2_monitor():
         with active_deals_lock:
             if sym in active_deals: active_deals[sym]['last_price'] = price
         d['last_price'] = price
+
+        # Hedge short sintetis: posisi long sudah dijual (lihat /hedge_short), sekarang
+        # cuma tunggu harga TP (turun) atau safety-stop (naik balik ke entry lama) buat
+        # beli-balik. Tidak ikut logic long biasa (trailing/TP/hold-limit/hard-stop).
+        if d.get('mode') == 'synthetic_short':
+            target = float(d.get('short_target_price', 0) or 0)
+            stop   = float(d.get('short_stop_price', 0) or 0)
+            hit_tp   = target > 0 and price <= target
+            hit_stop = stop > 0 and price >= stop
+            if hit_tp or hit_stop:
+                hedge_reason = (f"Hedge TP tercapai (harga {_fmt_price(price)} <= target {_fmt_price(target)})"
+                                 if hit_tp else
+                                 f"Hedge safety-stop (harga {_fmt_price(price)} >= entry awal {_fmt_price(stop)})")
+                proceeds = float(d.get('short_proceeds_usdt', 0) or 0)
+                if proceeds <= 0:
+                    log(f"WARN [T2-HEDGE] {sym} short_proceeds_usdt kosong, skip buyback")
+                else:
+                    try:
+                        _buyback = binance_buy_market(sym, proceeds)
+                    except Exception as _e:
+                        log(f"WARN [T2-HEDGE] {sym} gagal beli balik: {_e}")
+                        _buyback = None
+                    if _buyback and _buyback.get('qty', 0) > 0:
+                        _qty_diff = _buyback['qty'] - float(d.get('short_sold_qty', 0) or 0)
+                        log(f"[T2-HEDGE] {sym} BUYBACK: {hedge_reason} | qty={_buyback['qty']:.6f} @ {_buyback['price_avg']:.6f}")
+                        send_telegram(
+                            f"HEDGE SHORT CLOSE\n"
+                            f"Pair  : {to_display_pair(sym)}\n"
+                            f"Alasan: {hedge_reason}\n"
+                            f"Jual  : @ {_fmt_price(d.get('short_sold_at',0))} -> ${proceeds:.2f}\n"
+                            f"Beli-balik: {_buyback['qty']:.4f} @ {_fmt_price(_buyback['price_avg'])}\n"
+                            f"Selisih koin: {_qty_diff:+.4f}"
+                        )
+                        remove_from_active_deals(sym)
+            continue
+
         d = enrich_deal_open_indicators(sym, d)
 
         # Update stoch_k dan st_dir untuk trailing factor variatif hunting
@@ -6428,7 +6464,7 @@ DASHBOARD_HTML = '''
     {% if active_deals %}
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <table style="min-width:1280px">
-            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=target</span></th><th>TP Target ($)</th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
+            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=target</span></th><th>TP Target ($)</th><th>Hedge Short<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">jual &amp; beli-balik</span></th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr>
@@ -6456,6 +6492,26 @@ DASHBOARD_HTML = '''
             <input type="hidden" name="sym" value="{{ sym }}">
             <input type="number" name="value" step="0.1" min="0.01" style="width:64px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)" value="{{ overrides.get(sym,{}).get("tp1_target_usd",1.0) }}" onchange="this.form.submit()">
           </form>
+        </td>
+        <td>
+          {% if d.get("mode") == "synthetic_short" %}
+          <span class="badge" style="background:#7c3aed;color:#fff">SHORT AKTIF</span>
+          <div style="font-size:9px;color:var(--muted);margin-top:2px">jual @ {{ fmt_price(d.get("short_sold_at",0)) }}</div>
+          <div style="font-size:9px;color:var(--muted)">stop&gt;={{ fmt_price(d.get("short_stop_price",0)) }}</div>
+          <form method="POST" action="/set_hedge_target" style="display:inline">
+            <input type="hidden" name="sym" value="{{ sym }}">
+            <input type="number" name="value" step="0.000001" min="0" style="width:80px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:10px;font-family:var(--font);margin-top:2px" value="{{ d.get("short_target_price",0) }}" title="Edit target TP beli-balik" onchange="this.form.submit()">
+          </form>
+          {% else %}
+          <form method="POST" action="/hedge_short" style="display:flex;flex-direction:column;gap:3px;align-items:flex-start" onsubmit="if(!this.tp_price.value){alert('Isi target harga TP beli-balik dulu sebelum centang Jual & Short.');return false;}">
+            <input type="hidden" name="sym" value="{{ sym }}">
+            <input type="number" name="tp_price" step="0.000001" min="0" placeholder="target TP" style="width:80px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:10px;font-family:var(--font)">
+            <label style="display:flex;align-items:center;gap:4px;font-size:9px;color:var(--muted);cursor:pointer">
+              <input type="checkbox" onchange="if(this.checked){this.form.requestSubmit();}else{this.checked=false;}">
+              Jual &amp; Short
+            </label>
+          </form>
+          {% endif %}
         </td>
         <td style="white-space:nowrap">
           <div>{{ fmt_price(d.get("last_price",0)) if d.get("last_price") else "-" }}</div>
@@ -8450,6 +8506,8 @@ def run_web_dashboard():
                 if sym not in active_deals:
                     return jsonify({"ok": False, "error": f"{sym} tidak ada di active_deals"})
                 d = dict(active_deals[sym])
+            if d.get('mode') == 'synthetic_short':
+                return jsonify({"ok": False, "error": f"{sym} sedang hedge short (koin sudah dijual), tunggu buyback otomatis"})
             add_usd = d.get('add_usd', 0)
             # Strategi tanpa add_usd (Akumulasi, brkX2_4h dll): pakai nominal dari form atau BASE_ORDER_VOLUME
             manual_amount = request.form.get("amount", "")
@@ -8515,6 +8573,8 @@ def run_web_dashboard():
                 if sym not in active_deals:
                     return jsonify({"ok": False, "error": f"{sym} tidak ada di active_deals"})
                 d = dict(active_deals[sym])
+            if d.get('mode') == 'synthetic_short':
+                return jsonify({"ok": False, "error": f"{sym} sedang hedge short (koin sudah dijual), tunggu buyback otomatis"})
             strat = d.get('strategy', 'brkX2')
             try:
                 price_now = get_price_now(sym)
@@ -8677,6 +8737,74 @@ def run_web_dashboard():
                     overrides[sym] = {}
                 overrides[sym]['tp1_target_usd'] = val
                 save_deal_overrides(overrides)
+            return redirect("/")
+
+        @app.route("/hedge_short", methods=["POST"])
+        def hedge_short():
+            """Jual base currency deal ini sekarang (realized ke USDT) dan ubah jadi
+            hedge short sintetis: bot beli balik otomatis kalau harga turun ke target
+            (TP) atau naik balik ke entry awal (safety-stop)."""
+            sym = request.form.get("sym", "").upper().strip()
+            if sym and not sym.endswith("USDT"):
+                sym = sym + "USDT"
+            try:
+                target = float(request.form.get("tp_price", "0"))
+            except (TypeError, ValueError):
+                target = 0.0
+            with active_deals_lock:
+                d = dict(active_deals.get(sym, {}))
+            if not d or d.get('mode') == 'synthetic_short':
+                return redirect("/")
+            if target <= 0:
+                log(f"[HEDGE] {sym} target TP belum diisi, hedge dibatalkan")
+                return redirect("/")
+            qty = float(d.get('qty_coin', 0) or 0)
+            if qty <= 0:
+                log(f"[HEDGE] {sym} qty_coin tidak diketahui, hedge dibatalkan")
+                return redirect("/")
+            try:
+                result = binance_sell_market(sym, qty)
+            except Exception as e:
+                log(f"WARN [HEDGE] {sym} gagal jual: {e}")
+                return redirect("/")
+            if result.get('proceeds_usdt', 0) <= 0:
+                log(f"WARN [HEDGE] {sym} sell gagal (proceeds 0)")
+                return redirect("/")
+            stop_price = float(d.get('entry_price', 0) or 0)
+            with active_deals_lock:
+                if sym in active_deals:
+                    active_deals[sym]['mode']                = 'synthetic_short'
+                    active_deals[sym]['short_sold_at']        = result['price_avg']
+                    active_deals[sym]['short_sold_qty']       = result['qty']
+                    active_deals[sym]['short_proceeds_usdt']  = result['proceeds_usdt']
+                    active_deals[sym]['short_stop_price']     = stop_price
+                    active_deals[sym]['short_target_price']   = target
+                    active_deals[sym]['short_opened_at']      = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+            save_active_deals()
+            log(f"[HEDGE] {sym} JUAL {result['qty']:.6f} @ {result['price_avg']:.6f} -> "
+                f"${result['proceeds_usdt']:.2f} | target TP={target} stop={stop_price}")
+            send_telegram(
+                f"HEDGE SHORT AKTIF\n"
+                f"Pair : {to_display_pair(sym)}\n"
+                f"Jual : {result['qty']:.4f} @ {_fmt_price(result['price_avg'])} -> ${result['proceeds_usdt']:.2f}\n"
+                f"Target beli-balik (TP): {_fmt_price(target)}\n"
+                f"Safety stop (>= entry lama): {_fmt_price(stop_price)}"
+            )
+            return redirect("/")
+
+        @app.route("/set_hedge_target", methods=["POST"])
+        def set_hedge_target():
+            sym = request.form.get("sym", "").upper().strip()
+            if sym and not sym.endswith("USDT"):
+                sym = sym + "USDT"
+            try:
+                val = float(request.form.get("value", "0"))
+            except (TypeError, ValueError):
+                val = 0.0
+            with active_deals_lock:
+                if sym in active_deals and active_deals[sym].get('mode') == 'synthetic_short' and val > 0:
+                    active_deals[sym]['short_target_price'] = round(val, 8)
+            save_active_deals()
             return redirect("/")
 
         @app.route("/api/strategy_config", methods=["GET", "POST"])
