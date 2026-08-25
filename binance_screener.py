@@ -3906,6 +3906,8 @@ def thread2_monitor():
                             'williams_r':   f"{d['williams_r_open']:.1f}"if d.get('williams_r_open') is not None else "—",
                             'cci':          f"{d['cci_open']:.1f}"        if d.get('cci_open')        is not None else "—",
                             'obv':          f"{d['obv_open']:.0f}"        if d.get('obv_open')        is not None else "—",
+                            'ema20':        f"{d['ema20_open']:.6f}"      if d.get('ema20_open')      is not None else "—",
+                            'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
                         })
                         deal_log_write({
                             'timestamp_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
@@ -3988,6 +3990,8 @@ def thread2_monitor():
                 'williams_r':   f"{d['williams_r_open']:.1f}"if d.get('williams_r_open') is not None else "—",
                 'cci':          f"{d['cci_open']:.1f}"        if d.get('cci_open')        is not None else "—",
                 'obv':          f"{d['obv_open']:.0f}"        if d.get('obv_open')        is not None else "—",
+                'ema20':        f"{d['ema20_open']:.6f}"      if d.get('ema20_open')      is not None else "—",
+                'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
             })
 
         # deteksi pergerakan cepat (HANYA relevan saat armed) utk polling adaptif
