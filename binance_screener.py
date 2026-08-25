@@ -623,6 +623,14 @@ def load_strategy_config() -> dict:
 def save_strategy_config(cfg: dict):
     try:
         base = {k: dict(v) for k, v in STRATEGY_CONFIG_DEFAULTS.items()}
+        if os.path.exists(STRATEGY_CONFIG_FILE):
+            with open(STRATEGY_CONFIG_FILE) as f:
+                saved = json.load(f)
+            for k, v in saved.items():
+                if isinstance(v, dict):
+                    base[k] = {**base.get(k, {}), **v}
+                else:
+                    base[k] = v
         incoming = cfg or {}
         for key, value in incoming.items():
             if isinstance(value, dict):
