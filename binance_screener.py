@@ -5160,6 +5160,8 @@ def thread1d_scan_4h():
 
         slip_pct = (entry_price / signal_price - 1) * 100 if signal_price > 0 else 0
 
+        _r4msg = df.iloc[-1]
+
         add_to_active_deals(sym, {
             "strategy":      "brkX2_4h",
             "entry_price":   entry_price,
@@ -5186,8 +5188,7 @@ def thread1d_scan_4h():
 
         trail_arm = get_arm_pct(atrp)
         trail_d   = trailing_dist(atrp)
-        
-        _r4msg = df.iloc[-1]
+
         _rsi_val   = _r4msg.get("rsi", float("nan"))
         _stoch_val = _r4msg.get("stoch_k", float("nan"))
         _ema20_val = _r4msg.get("ema20", float("nan"))
@@ -5923,6 +5924,9 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
     # ── Data indikator ────────────────────────────────────────────────────────
     if df is None or len(df) < 51:
         return False
+    # df yang masuk cuma OHLCV mentah — lengkapi dulu (rsi/stoch/macd/bb/williams/cci/obv/
+    # ema20/st_dir) supaya field itu terisi asli, bukan "—" terus di notif OPEN.
+    df = compute_indicators_4h(df)
     r = df.iloc[-1]
 
     # +1 bullish dan 0 transisi diterima; hanya -1 bearish yang ditolak.
@@ -6090,7 +6094,10 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
         + f"\nSlot hunting: {active_deal_count_hunting()}/{HUNTING_MAX_DEALS}"
     )
     send_telegram(msg)
-    log_oac('OPEN', symbol, 'hunting-4h', {
+    # Cuma masukkan field yang benar-benar ada nilainya — kalau None, biarkan absen
+    # supaya mekanisme auto-lengkapi di log_oac() (fetch+hitung ulang) yang isi, bukan
+    # ketiban placeholder "—" duluan (placeholder bikin auto-lengkapi di-skip).
+    _oac_fields = {
         'entry_price':  _fmt_price(entry_price),
         'slip_pct':     f"{slip_pct:+.2f}%",
         'atr_pct':      f"{atrp:.2f}%",
@@ -6098,20 +6105,21 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
         'trail_dist':   f"{trail_d}%",
         'score':        score,
         'modal_usd':    f"${target_usd:.0f}",
-        'rsi':          f"{_rsi_open:.1f}"   if _rsi_open  is not None else "—",
-        'stoch_k':      f"{_sk_open:.1f}"    if _sk_open   is not None else "—",
-        'stoch_d':      f"{_sd_open:.1f}"    if _sd_open   is not None else "—",
-        'macd_hist':    f"{_mh_open:.5f}"    if _mh_open   is not None else "—",
-        'bb_pct':       f"{_bb_open:.3f}"    if _bb_open   is not None else "—",
-        'williams_r':   f"{_wr_open:.1f}"    if _wr_open   is not None else "—",
-        'cci':          f"{_cci_open:.1f}"   if _cci_open  is not None else "—",
-        'obv':          f"{_obv_open:.0f}"   if _obv_open  is not None else "—",
-        'ema20':        _fmt_price(_ema20_open) if _ema20_open is not None else "—",
         'dist_ema20':   f"{dist_ema20:.2f}%",
         'ema_gap':      f"{ema_gap_str}%",
         'chg':          f"{price_change_pct:.2f}%",
         'uptrend':      str(uptrend),
-    })
+    }
+    if _rsi_open   is not None: _oac_fields['rsi']        = f"{_rsi_open:.1f}"
+    if _sk_open    is not None: _oac_fields['stoch_k']    = f"{_sk_open:.1f}"
+    if _sd_open    is not None: _oac_fields['stoch_d']    = f"{_sd_open:.1f}"
+    if _mh_open    is not None: _oac_fields['macd_hist']  = f"{_mh_open:.5f}"
+    if _bb_open    is not None: _oac_fields['bb_pct']     = f"{_bb_open:.3f}"
+    if _wr_open    is not None: _oac_fields['williams_r'] = f"{_wr_open:.1f}"
+    if _cci_open   is not None: _oac_fields['cci']        = f"{_cci_open:.1f}"
+    if _obv_open   is not None: _oac_fields['obv']        = f"{_obv_open:.0f}"
+    if _ema20_open is not None: _oac_fields['ema20']      = _fmt_price(_ema20_open)
+    log_oac('OPEN', symbol, 'hunting-4h', _oac_fields)
 
     csv_log_open({
         'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
