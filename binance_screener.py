@@ -6428,7 +6428,7 @@ DASHBOARD_HTML = '''
     {% if active_deals %}
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <table style="min-width:1280px">
-            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=target</span></th><th>TP Target ($)</th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
+            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Cancel<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">stop track, koin tetap</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=target</span></th><th>TP Target ($)</th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr>
@@ -6443,6 +6443,12 @@ DASHBOARD_HTML = '''
         <td class="{{ "profit-pos" if d.get("upnl_usd",0) > 0 else "profit-neg" }}" style="white-space:nowrap">
           <div>{{ "%+.2f"|format(d.get("upnl_usd",0)) }}</div>
           <div style="font-size:9px;color:var(--muted)">${{ "%.0f"|format(d.get("total_usd_display",0)) }}</div>
+        </td>
+        <td>
+          <form method="POST" action="/cancel_deal" style="display:inline" onsubmit="return confirm('Cancel deal {{ sym.replace(\"USDT\",\"/USDT\") }}?\n\nBot berhenti kelola pair ini (auto add fund/TP/close berhenti). Koin yang sudah dibeli TETAP di wallet, TIDAK dijual.');">
+            <input type="hidden" name="sym" value="{{ sym }}">
+            <button type="submit" style="background:#ef4444;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Cancel</button>
+          </form>
         </td>
         <td>
           <form method="POST" action="/toggle" style="display:inline">
@@ -8560,6 +8566,42 @@ def run_web_dashboard():
                     return jsonify({"ok": False, "error": "3Commas menolak close"})
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)})
+
+        @app.route("/cancel_deal", methods=["POST"])
+        def cancel_deal():
+            """Cancel deal (dashboard button). Sama konsepnya dengan tombol Cancel di
+            3Commas: berhenti nge-track & mengelola deal ini (auto add fund/TP/close
+            berhenti jalan), TAPI TIDAK menjual apa pun — base currency yang sudah
+            dibeli tetap utuh di wallet Binance. Bot ini murni market-order (tidak
+            pernah nyisain order pending di exchange), jadi tidak ada perintah apa pun
+            yang dikirim ke Binance di sini — murni penghapusan tracking internal."""
+            sym = request.form.get("sym", "").upper().strip()
+            if sym and not sym.endswith("USDT"):
+                sym = sym + "USDT"
+            with active_deals_lock:
+                if sym not in active_deals:
+                    return redirect("/")
+                removed_deal = dict(active_deals[sym])
+                del active_deals[sym]
+            save_active_deals()
+            try:
+                base_usd_file = os.path.join(DATA_DIR, "deal_base_usd.json")
+                if os.path.exists(base_usd_file):
+                    with open(base_usd_file, "r") as f:
+                        existing = json.load(f)
+                    existing.pop(sym, None)
+                    with open(base_usd_file, "w") as f:
+                        json.dump(existing, f)
+            except Exception:
+                pass
+            log(f"[CANCEL] {sym} dibatalkan dari tracking (koin tetap di wallet, tidak dijual)")
+            send_telegram(
+                f"CANCEL DEAL (dashboard)\n"
+                f"Pair : {to_display_pair(sym)}\n"
+                f"Strategi: {removed_deal.get('strategy','-')}\n"
+                f"Bot berhenti kelola pair ini. Koin TIDAK dijual, tetap di wallet."
+            )
+            return redirect("/")
 
         @app.route("/resend_open_notification", methods=["POST"])
         def resend_open_notification():
