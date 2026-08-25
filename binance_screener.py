@@ -2328,6 +2328,26 @@ def compute_indicators_reversal(df):
     rng = (high - low).replace(0, float('nan'))
     df['body_ratio'] = (close - df['open']).abs() / rng
     df['ha_bull'] = heikin_ashi_bullish(df)
+    # Indikator tambahan (untuk laporan notif OPEN/CLOSE, tidak dipakai syarat entry)
+    df['rsi'] = ta.rsi(close, length=14)
+    _stoch = ta.stoch(high, low, close, k=14, d=3, smooth_k=3)
+    _kcol = [c for c in _stoch.columns if 'STOCHk' in c]
+    _dcol = [c for c in _stoch.columns if 'STOCHd' in c]
+    df['stoch_k'] = _stoch[_kcol[0]] if _kcol else float('nan')
+    df['stoch_d'] = _stoch[_dcol[0]] if _dcol else float('nan')
+    _macd_df = ta.macd(close, fast=12, slow=26, signal=9)
+    df['macd_hist'] = _macd_df[[c for c in _macd_df.columns if 'MACDh' in c][0]]
+    try:
+        _bb = ta.bbands(close, length=20, std=2)
+        _bb_pct_col = [c for c in _bb.columns if 'BBP' in c]
+        df['bb_pct'] = _bb[_bb_pct_col[0]] if _bb_pct_col else float('nan')
+    except Exception: df['bb_pct'] = float('nan')
+    try: df['williams_r'] = ta.willr(high, low, close, length=14)
+    except Exception: df['williams_r'] = float('nan')
+    try: df['cci'] = ta.cci(high, low, close, length=14)
+    except Exception: df['cci'] = float('nan')
+    try: df['obv'] = ta.obv(close, df['vol'])
+    except Exception: df['obv'] = float('nan')
     return df
 
 def _cross_up(df, idx, ema_col):
@@ -3443,18 +3463,30 @@ def thread1_scan():
             if entry_price <= 0:
                 entry_price = signal_price
             slip_pct = (entry_price/signal_price - 1) * 100 if signal_price > 0 else 0.0
+            # Ambil row indikator terkini (dipakai utk _open fields + notif + re-entry compare)
+            df_saved = all_dfs.get(sym)
+            r = df_saved.iloc[-1] if df_saved is not None else None
+            def _rv(col):
+                if r is None: return None
+                v = r.get(col)
+                return None if v is None or pd.isna(v) else float(v)
+            _open_fields = {
+                'rsi_open': _rv('rsi'), 'stoch_k_open': _rv('stoch_k'), 'stoch_d_open': _rv('stoch_d'),
+                'macd_hist_open': _rv('macd_hist'), 'bb_pct_open': _rv('bb_pct'),
+                'williams_r_open': _rv('williams_r'), 'cci_open': _rv('cci'), 'obv_open': _rv('obv'),
+                'ema20_open': _rv('ema_fast'),
+            }
             add_to_active_deals(sym, {
                 'entry_price': entry_price, 'peak': entry_price,
                 'signal_price': signal_price, 'atr_pct': atrp,
                 'opened_candle_ts': int(newest_ts), 'trailing_armed': False,
                 'strategy': 'brkX2', 'score': score, 'target_usd': target_usd,
                 'add_usd': add_usd, 'add_fund_sent': False,
+                **_open_fields,
             })
             # Simpan indikator saat open untuk perbandingan re-entry berikutnya
             try:
-                df_saved = all_dfs.get(sym)
                 if df_saved is not None:
-                    r = df_saved.iloc[-1]
                     vol_ma = float(r['vol_ma']) if not pd.isna(r.get('vol_ma', float('nan'))) else None
                     vol_r  = (float(r['vol'])/vol_ma) if vol_ma and vol_ma > 0 else None
                     save_open_indicators(sym, {
@@ -3469,6 +3501,7 @@ def thread1_scan():
             except Exception as e:
                 log(f"  [T1] WARN gagal simpan indikator {sym}: {e}")
             addfund_txt = f" (+add ${add_usd} delay 15s)" if add_usd>0 else ""
+            _ind_block = _fmt_indicators_open_block(_open_fields)
             send_telegram(
                 f"brkX2-12h | OPEN LONG\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
@@ -3478,7 +3511,8 @@ def thread1_scan():
                 f"Selisih (lonjakan/slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
-                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}\n"
+                f"{_ind_block}"
             )
             threading.Thread(target=send_email_open_long, args=("OPEN LONG brkX2-12h: " + to_display_pair(sym), 
                 f"brkX2-12h | OPEN LONG\n"
@@ -3489,7 +3523,8 @@ def thread1_scan():
                 f"Selisih (lonjakan/slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
-                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}\n"
+                f"{_ind_block}"
             ), daemon=True).start()
             
             csv_log_open({
@@ -3580,6 +3615,7 @@ def thread1b_scan_reversal():
     candidates = []
     near_miss = []
     scan_blockers = {}
+    all_dfs_rev = {}   # sym -> df terakhir (utk isi indikator notif OPEN)
     for sym in universe:
         with active_deals_lock:
             if sym in active_deals:
@@ -3599,6 +3635,7 @@ def thread1b_scan_reversal():
                 count_blocker(scan_blockers, "Data candle tertutup kurang", True)
                 continue
         df = compute_indicators_reversal(df)
+        all_dfs_rev[sym] = df   # simpan utk isi indikator notif OPEN
         failures = reversal_blockers(df)
         for failure in failures:
             count_blocker(scan_blockers, failure, True)
@@ -3655,11 +3692,24 @@ def thread1b_scan_reversal():
             entry_price = get_price_now(sym)
             if entry_price <= 0: entry_price = signal_price
             slip_pct = (entry_price/signal_price - 1) * 100 if signal_price > 0 else 0.0
+            _dfr = all_dfs_rev.get(sym)
+            _rr  = _dfr.iloc[-1] if _dfr is not None else None
+            def _rvv(col):
+                if _rr is None: return None
+                v = _rr.get(col)
+                return None if v is None or pd.isna(v) else float(v)
+            _open_fields_rev = {
+                'rsi_open': _rvv('rsi'), 'stoch_k_open': _rvv('stoch_k'), 'stoch_d_open': _rvv('stoch_d'),
+                'macd_hist_open': _rvv('macd_hist'), 'bb_pct_open': _rvv('bb_pct'),
+                'williams_r_open': _rvv('williams_r'), 'cci_open': _rvv('cci'), 'obv_open': _rvv('obv'),
+                'ema20_open': _rvv('ema_fast'),
+            }
             add_to_active_deals(sym, {
                 'entry_price': entry_price, 'peak': entry_price,
                 'signal_price': signal_price, 'atr_pct': atrp,
                 'opened_candle_ts': int(cts), 'trailing_armed': False,
-                'strategy': 'reversal'
+                'strategy': 'reversal',
+                **_open_fields_rev,
             })
             send_telegram(
                 f"Reversal-8h | OPEN LONG\n"
@@ -3670,7 +3720,8 @@ def thread1b_scan_reversal():
                 f"Selisih (slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
-                f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+                f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}\n"
+                f"{_fmt_indicators_open_block(_open_fields_rev)}"
             )
             threading.Thread(target=send_email_open_long, args=("OPEN LONG Reversal-8h: " + to_display_pair(sym), 
                 f"Reversal-8h | OPEN LONG\n"
@@ -3681,7 +3732,8 @@ def thread1b_scan_reversal():
                 f"Selisih (slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
-                f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+                f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}\n"
+                f"{_fmt_indicators_open_block(_open_fields_rev)}"
             ), daemon=True).start()
             
             csv_log_open({
@@ -3706,6 +3758,17 @@ def thread1b_scan_reversal():
             
     last_rev_candle_ts = newest_rev
     return None if opened_any else f"{len(candidates)} kandidat reversal lolos tapi tak ada yg dibuka."
+def _fmt_indicators_open_block(d: dict) -> str:
+    """Format blok indikator _open (RSI/Stoch/MACD/BB/WR/CCI/OBV) utk notif Telegram."""
+    def g(key, digits=1):
+        v = d.get(key)
+        return f"{float(v):.{digits}f}" if v is not None else "—"
+    return (
+        f"RSI: {g('rsi_open')} | Stoch K: {g('stoch_k_open')} | Stoch D: {g('stoch_d_open')}\n"
+        f"MACD hist: {g('macd_hist_open', 5)} | BB%: {g('bb_pct_open', 3)}\n"
+        f"Williams R: {g('williams_r_open')} | CCI: {g('cci_open')} | OBV: {g('obv_open', 0)}"
+    )
+
 def enrich_deal_open_indicators(symbol: str, deal: dict) -> dict:
     """Isi indikator report yang belum tersimpan dari candle timeframe strategi."""
     indicator_keys = (
@@ -4194,7 +4257,9 @@ def thread2_monitor():
                     f"Pair   : {to_display_pair(sym)}\n"
                     f"Alasan : {reason}\n"
                     f"Profit : {prof_from_entry:.2f}% (net -0.2% fee)\n"
-                    f"U/PnL  : {_upnl_usd_cl:+.2f} USD (modal ${_total_usd_cl:.0f})"
+                    f"U/PnL  : {_upnl_usd_cl:+.2f} USD (modal ${_total_usd_cl:.0f})\n"
+                    f"Hold candles: {_hold_c}\n"
+                    f"{_fmt_indicators_open_block(d)}"
                     f"{prog_close}"
                 )
                 # Notif timeline lengkap khusus hunting_4h
