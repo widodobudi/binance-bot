@@ -7663,6 +7663,9 @@ def score_akumulasi(df, sym: str) -> dict:
             "ema_gap":        p2_val,
             "obv_slope":      p3_val,
             "atr_drop":       p4_val,
+            "ema_slope":      p5_val,
+            "close_drift":    p6_val,
+            "range_dist":     p7_val,
             "vol_asim":       s1_val,
             "rsi":            s2_val,
             "macd_flat":      s3_val,
@@ -9022,6 +9025,12 @@ def run_web_dashboard():
                          "ok": bool(res.get('p3_ok')), "actual": res.get('obv_slope','?')},
                         {"label": f"ATR turun >{AKUM_ATR_DROP_PCT*100:.0f}%",
                          "ok": bool(res.get('p4_ok')), "actual": res.get('atr_drop','?')},
+                        {"label": f"EMA20 slope turun <{AKUM_EMA_SLOPE_MAX*100:.0f}%",
+                         "ok": bool(res.get('p5_ok')), "actual": res.get('ema_slope','?')},
+                        {"label": f"Close drift <{AKUM_CLOSE_DRIFT_MAX*100:.0f}%",
+                         "ok": bool(res.get('p6_ok')), "actual": res.get('close_drift','?')},
+                        {"label": f"Distribusi range <{AKUM_RANGE_DIST_MAX}x",
+                         "ok": bool(res.get('p7_ok')), "actual": res.get('range_dist','?')},
                     ]
                     if strat == "Akumulasi-4h":
                         secondary_labels = [
