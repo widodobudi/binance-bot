@@ -290,7 +290,7 @@ AKUM_CLOSE_DRIFT_MAX      = 0.06        # P6: close awal vs close akhir jendela,
 AKUM_RANGE_DIST_MAX       = 2.5         # P7: max(range_bagian)/min(range_bagian), >2.5 = volatilitas tidak merata
 AKUM_ATR_LOOKBACK         = 100         # candle lookback untuk cari ATR puncak
 AKUM_MACD_FLAT_PCT        = 0.005       # S3: |MACD hist| < 0.5% × close → flat
-AKUM_BODY_RATIO_MAX       = 0.42        # S4: rata-rata body/range < 0.42 → konsolidasi
+AKUM_BODY_RATIO_MAX       = 0.5         # S4: rata-rata body/range < 0.5 → konsolidasi
 AKUM_MIN_SECONDARY        = 2           # minimal 2 dari 4 secondary harus lolos
 AKUM_MAX_RESULTS          = 5           # tampilkan maks 5 pair
 AKUM_MIN_VOL_USD          = 1_000_000   # min vol24h $1jt
@@ -7600,7 +7600,7 @@ def score_akumulasi(df, sym: str) -> dict:
         if not s1_ok: fails.append(f"Vol asimetri {s1_val}")
         if not s2_ok: fails.append(f"RSI {s2_val} OOB")
         if not s3_ok: fails.append(f"MACD {s3_val} tdk flat")
-        if not s4_ok: fails.append(f"Body {s4_val} >0.42")
+        if not s4_ok: fails.append(f"Body {s4_val} >{AKUM_BODY_RATIO_MAX}")
 
         # Cari kapan harga mulai bergerak dalam range ini (scan mundur, dibatasi ke jendela win)
         _ts_col2 = 'ot' if 'ot' in df.columns else ('ts' if 'ts' in df.columns else None)
@@ -9031,7 +9031,7 @@ def run_web_dashboard():
                              "actual": res.get('rsi','?'), "ok": bool(res.get('s2_ok'))},
                             {"key":"macd_flat","label":"MACD flat≈0",
                              "actual": res.get('macd_flat','?'), "ok": bool(res.get('s3_ok'))},
-                            {"key":"body_ratio","label":"Body ratio<0.42",
+                            {"key":"body_ratio","label":f"Body ratio<{AKUM_BODY_RATIO_MAX}",
                              "actual": res.get('body_ratio','?'), "ok": bool(res.get('s4_ok'))},
                         ]
                         extra = {}
