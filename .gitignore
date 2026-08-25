@@ -19,7 +19,8 @@ tes6.txt
 to_notice.txt
 
 # Folder Sampah & Cache Lokal
-_pycache_/
+__pycache__/
+*.pyc
 graphify-out/
 tradingview-3commas_with_python/
 ritika/
