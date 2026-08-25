@@ -4002,7 +4002,15 @@ def thread2_monitor():
                 want_fast = True
 
         do_close=False; reason=""
-        if not _is_akum and price <= entry * (1 - HARD_STOP_LOSS_PCT / 100):
+        # TP $1: tutup otomatis begitu U/PnL bersih (net -0.2% fee) sudah >= $1.00 USDT
+        _base_usd_now  = float(d.get('base_usd', d.get('target_usd', BASE_ORDER_VOLUME)))
+        _add_usd_now   = float(d.get('add_usd', 0)) if d.get('add_fund_sent') else 0.0
+        _total_usd_now = _base_usd_now + _add_usd_now
+        _upnl_usd_now  = prof_from_entry / 100 * _total_usd_now
+        if get_deal_override(sym, 'tp1usd', True) and _upnl_usd_now >= 1.0:
+            do_close = True
+            reason = f"TP $1: profit bersih ${_upnl_usd_now:.2f} (modal ${_total_usd_now:.0f})"
+        if not do_close and not _is_akum and price <= entry * (1 - HARD_STOP_LOSS_PCT / 100):
             do_close = True
             reason = f"hard stop volatilitas: price {_fmt_price(price)} turun >= {HARD_STOP_LOSS_PCT:.1f}% dari entry"
         if not do_close and armed and not _is_akum:
@@ -6411,12 +6419,13 @@ DASHBOARD_HTML = '''
   <div class="card">
         <div class="card-header" onclick="toggleCard(this)">
             <h2>Active Deals ({{ active_count }}) <span class="card-toggle">&#9660;</span></h2>
+            <span class="scan-time">Sisa USDT (blm terpakai): <b style="color:var(--accent)">${{ "%.2f"|format(free_usdt) }}</b></span>
     </div>
     <div class="card-body">
     {% if active_deals %}
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <table style="min-width:1280px">
-            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
+            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>TP $1<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=$1</span></th><th>AI Call</th><th>Report</th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr>
@@ -6454,6 +6463,13 @@ DASHBOARD_HTML = '''
             <input type="hidden" name="sym" value="{{ sym }}">
             <input type="hidden" name="key" value="auto_close">
             <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("auto_close",True) else "" }}>
+          </form>
+        </td>
+        <td>
+          <form method="POST" action="/toggle" style="display:inline">
+            <input type="hidden" name="sym" value="{{ sym }}">
+            <input type="hidden" name="key" value="tp1usd">
+            <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("tp1usd",True) else "" }}>
           </form>
         </td>
         <td>
@@ -8394,6 +8410,10 @@ def run_web_dashboard():
             }
             with _akum_lock:
                 akum_entry_status = dict(_akum_entry_status)
+            try:
+                free_usdt, _locked_usdt = get_usdt_balance() if USE_BINANCE_DIRECT else (0.0, 0.0)
+            except Exception:
+                free_usdt = 0.0
             return render_template_string(
                 DASHBOARD_HTML,
                 active_deals=deals_display,
@@ -8405,6 +8425,7 @@ def run_web_dashboard():
                 window_info=window_info,
                 fmt_price=_fmt_price,
                 akum_entry_status=akum_entry_status,
+                free_usdt=free_usdt,
             )
 
         @app.route("/manual_addfund", methods=["POST"])
