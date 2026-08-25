@@ -4002,15 +4002,17 @@ def thread2_monitor():
                 want_fast = True
 
         do_close=False; reason=""
-        # TP $1: tutup otomatis begitu U/PnL bersih (net -0.2% fee) sudah >= $1.00 USDT
-        # Pakai estimate_deal_total_usd() (qty_coin * entry_price aktual) supaya modal yang
-        # dipakai cek TP1 sama persis dengan yang ditampilkan di dashboard (base_usd/add_usd
-        # field bisa basi/tidak sinkron kalau ada add-fund manual atau posisi ganda).
+        # TP custom: tutup otomatis begitu U/PnL bersih (net -0.2% fee) sudah >= target $ per deal
+        # (default $1.00 kalau belum diisi manual). Pakai estimate_deal_total_usd()
+        # (qty_coin * entry_price aktual) supaya modal yang dipakai cek TP sama persis dengan
+        # yang ditampilkan di dashboard (base_usd/add_usd field bisa basi/tidak sinkron kalau
+        # ada add-fund manual atau posisi ganda).
         _total_usd_now = estimate_deal_total_usd(d)
         _upnl_usd_now  = prof_from_entry / 100 * _total_usd_now
-        if get_deal_override(sym, 'tp1usd', False) and _upnl_usd_now >= 1.0:
+        _tp_target_usd = float(get_deal_override(sym, 'tp1_target_usd', 1.0) or 1.0)
+        if get_deal_override(sym, 'tp1usd', False) and _upnl_usd_now >= _tp_target_usd:
             do_close = True
-            reason = f"TP $1: profit bersih ${_upnl_usd_now:.2f} (modal ${_total_usd_now:.0f})"
+            reason = f"TP ${_tp_target_usd:.2f}: profit bersih ${_upnl_usd_now:.2f} (modal ${_total_usd_now:.0f})"
         if not do_close and not _is_akum and price <= entry * (1 - HARD_STOP_LOSS_PCT / 100):
             do_close = True
             reason = f"hard stop volatilitas: price {_fmt_price(price)} turun >= {HARD_STOP_LOSS_PCT:.1f}% dari entry"
@@ -6426,7 +6428,7 @@ DASHBOARD_HTML = '''
     {% if active_deals %}
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <table style="min-width:1280px">
-            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>TP $1<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=$1</span></th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
+            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=target</span></th><th>TP Target ($)</th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr>
@@ -6447,6 +6449,12 @@ DASHBOARD_HTML = '''
             <input type="hidden" name="sym" value="{{ sym }}">
             <input type="hidden" name="key" value="tp1usd">
             <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("tp1usd",False) else "" }}>
+          </form>
+        </td>
+        <td>
+          <form method="POST" action="/set_tp_target" style="display:inline">
+            <input type="hidden" name="sym" value="{{ sym }}">
+            <input type="number" name="value" step="0.1" min="0.01" style="width:64px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)" value="{{ overrides.get(sym,{}).get("tp1_target_usd",1.0) }}" onchange="this.form.submit()">
           </form>
         </td>
         <td style="white-space:nowrap">
@@ -8652,6 +8660,22 @@ def run_web_dashboard():
                 if sym not in overrides:
                     overrides[sym] = {}
                 overrides[sym][key] = value
+                save_deal_overrides(overrides)
+            return redirect("/")
+
+        @app.route("/set_tp_target", methods=["POST"])
+        def set_tp_target():
+            sym = request.form.get("sym", "")
+            try:
+                val = float(request.form.get("value", "1"))
+            except (TypeError, ValueError):
+                val = 1.0
+            val = round(max(val, 0.01), 2)
+            if sym:
+                overrides = load_deal_overrides()
+                if sym not in overrides:
+                    overrides[sym] = {}
+                overrides[sym]['tp1_target_usd'] = val
                 save_deal_overrides(overrides)
             return redirect("/")
 
