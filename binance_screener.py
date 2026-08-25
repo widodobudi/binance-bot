@@ -2105,10 +2105,22 @@ def compute_indicators(df):
     _macd_df=ta.macd(close,fast=12,slow=26,signal=9)
     df['macd_hist']=_macd_df[[c for c in _macd_df.columns if 'MACDh' in c][0]]
     df['rsi']=ta.rsi(close,length=RSI_LENGTH)
-    if STOCH_MAX is not None:
-        stoch=ta.stoch(high,low,close,k=14,d=3,smooth_k=3)
-        kcol=[c for c in stoch.columns if 'STOCHk' in c][0]
-        df['stoch_k']=stoch[kcol]
+    _stoch=ta.stoch(high,low,close,k=14,d=3,smooth_k=3)
+    _kcol=[c for c in _stoch.columns if 'STOCHk' in c]
+    _dcol=[c for c in _stoch.columns if 'STOCHd' in c]
+    df['stoch_k']=_stoch[_kcol[0]] if _kcol else float('nan')
+    df['stoch_d']=_stoch[_dcol[0]] if _dcol else float('nan')
+    try:
+        _bb=ta.bbands(close,length=20,std=2)
+        _bb_pct_col=[c for c in _bb.columns if 'BBP' in c]
+        df['bb_pct']=_bb[_bb_pct_col[0]] if _bb_pct_col else float('nan')
+    except Exception: df['bb_pct']=float('nan')
+    try: df['williams_r']=ta.willr(high,low,close,length=14)
+    except Exception: df['williams_r']=float('nan')
+    try: df['cci']=ta.cci(high,low,close,length=14)
+    except Exception: df['cci']=float('nan')
+    try: df['obv']=ta.obv(close,df['vol'])
+    except Exception: df['obv']=float('nan')
     # 2 dari 3 bar bullish: minimal 2 candle terakhir close > open
     df['bull3'] = (
         (df['close'] > df['open']) &
@@ -8458,6 +8470,13 @@ def run_web_dashboard():
             if not deal:
                 return jsonify({"ok": False, "error": f"{symbol} tidak ada di active deals"}), 404
             strategy = deal.get("strategy", "brkX2")
+            _STRAT_DISPLAY = {
+                "brkX2": "brkX2-12h", "reversal": "Reversal-8h",
+                "brkX2_4h": "brkX2-4h", "brkX2_crossema": "CrossEMA-4h",
+                "hunting_4h": "Hunting-4h",
+                "akum_entry_a": "Akumulasi-4h", "akum_entry_b": "Akumulasi-4h",
+            }
+            strategy_display = _STRAT_DISPLAY.get(strategy, strategy)
             opened_at = deal.get("opened_at") or deal.get("opened_at_wib") or "-"
             entry_price = float(deal.get("entry_price", 0) or 0)
             peak = float(deal.get("peak", entry_price) or entry_price)
@@ -8465,12 +8484,22 @@ def run_web_dashboard():
             profit_pct = (price / entry_price - 1) * 100 - FEE_ROUND_TRIP_PCT if entry_price > 0 else 0
             fmt_indicator = lambda key, digits: (f"{float(deal[key]):.{digits}f}" if deal.get(key) is not None else "—")
             atr_pct = float(deal.get("atr_pct", 0) or 0)
-            hold_candles = deal.get("hold_candle_count", "—")
+            # Hitung hold candles dari opened_candle_ts (lebih akurat dari stored counter)
+            _opened_ts = deal.get("opened_candle_ts")
+            if _opened_ts:
+                _candle_secs = {
+                    "reversal": 8 * 3600,
+                    "brkX2_4h": 4 * 3600, "brkX2_crossema": 4 * 3600,
+                    "hunting_4h": 4 * 3600, "akum_entry_a": 4 * 3600, "akum_entry_b": 4 * 3600,
+                }.get(strategy, 12 * 3600)
+                hold_candles = int((time.time() - float(_opened_ts) / 1000) / _candle_secs)
+            else:
+                hold_candles = deal.get("hold_candle_count", "—")
             message = (
                 f"OPEN LONG REPORT TERLAMBAT / RESEND\n"
                 f"Waktu open: {opened_at}\n"
                 f"Pair: {to_display_pair(symbol)}\n"
-                f"Strategi: {strategy}\n"
+                f"Strategi: {strategy_display}\n"
                 f"Entry: {_fmt_price(entry_price)}\n"
                 f"Harga terakhir: {_fmt_price(price)}\n"
                 f"Peak: {_fmt_price(peak)}\n"
