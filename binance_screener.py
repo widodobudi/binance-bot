@@ -3846,17 +3846,12 @@ def thread2_monitor():
         d['last_price'] = price
 
         # Hedge short sintetis: posisi long sudah dijual (lihat /hedge_short), sekarang
-        # cuma tunggu harga TP (turun) atau safety-stop (naik balik ke entry lama) buat
-        # beli-balik. Tidak ikut logic long biasa (trailing/TP/hold-limit/hard-stop).
+        # cuma tunggu harga naik balik ke target (>= harga beli awal) buat beli-balik.
+        # Tidak ikut logic long biasa (trailing/TP/hold-limit/hard-stop).
         if d.get('mode') == 'synthetic_short':
             target = float(d.get('short_target_price', 0) or 0)
-            stop   = float(d.get('short_stop_price', 0) or 0)
-            hit_tp   = target > 0 and price <= target
-            hit_stop = stop > 0 and price >= stop
-            if hit_tp or hit_stop:
-                hedge_reason = (f"Hedge TP tercapai (harga {_fmt_price(price)} <= target {_fmt_price(target)})"
-                                 if hit_tp else
-                                 f"Hedge safety-stop (harga {_fmt_price(price)} >= entry awal {_fmt_price(stop)})")
+            if target > 0 and price >= target:
+                hedge_reason = f"Hedge buyback: harga {_fmt_price(price)} >= target {_fmt_price(target)}"
                 proceeds = float(d.get('short_proceeds_usdt', 0) or 0)
                 if proceeds <= 0:
                     log(f"WARN [T2-HEDGE] {sym} short_proceeds_usdt kosong, skip buyback")
@@ -6464,7 +6459,7 @@ DASHBOARD_HTML = '''
     {% if active_deals %}
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <table style="min-width:1280px">
-            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=target</span></th><th>TP Target ($)</th><th>Hedge Short<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">jual &amp; beli-balik</span></th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
+            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=target</span></th><th>TP Target ($)</th><th>Hedge Short<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">jual sekarang, beli balik saat harga&gt;=target</span></th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Add Fund</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr>
@@ -6497,15 +6492,15 @@ DASHBOARD_HTML = '''
           {% if d.get("mode") == "synthetic_short" %}
           <span class="badge" style="background:#7c3aed;color:#fff">SHORT AKTIF</span>
           <div style="font-size:9px;color:var(--muted);margin-top:2px">jual @ {{ fmt_price(d.get("short_sold_at",0)) }}</div>
-          <div style="font-size:9px;color:var(--muted)">stop&gt;={{ fmt_price(d.get("short_stop_price",0)) }}</div>
+          <div style="font-size:9px;color:var(--muted)">entry awal: {{ fmt_price(d.get("short_entry_price",0)) }}</div>
           <form method="POST" action="/set_hedge_target" style="display:inline">
             <input type="hidden" name="sym" value="{{ sym }}">
-            <input type="number" name="value" step="0.000001" min="0" style="width:80px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:10px;font-family:var(--font);margin-top:2px" value="{{ d.get("short_target_price",0) }}" title="Edit target TP beli-balik" onchange="this.form.submit()">
+            <input type="number" name="value" step="0.000001" min="{{ d.get("short_entry_price",0) }}" style="width:80px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:10px;font-family:var(--font);margin-top:2px" value="{{ d.get("short_target_price",0) }}" title="Edit target beli-balik (wajib >= harga beli awal)" onchange="this.form.submit()">
           </form>
           {% else %}
-          <form method="POST" action="/hedge_short" style="display:flex;flex-direction:column;gap:3px;align-items:flex-start" onsubmit="if(!this.tp_price.value){alert('Isi target harga TP beli-balik dulu sebelum centang Jual & Short.');return false;}">
+          <form method="POST" action="/hedge_short" style="display:flex;flex-direction:column;gap:3px;align-items:flex-start" onsubmit="if(!this.tp_price.value){alert('Isi target harga beli-balik dulu (wajib >= harga beli awal) sebelum centang Jual & Short.');return false;}">
             <input type="hidden" name="sym" value="{{ sym }}">
-            <input type="number" name="tp_price" step="0.000001" min="0" placeholder="target TP" style="width:80px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:10px;font-family:var(--font)">
+            <input type="number" name="tp_price" step="0.000001" min="{{ d.get("entry_price",0) }}" placeholder="target &gt;= {{ fmt_price(d.get("entry_price",0)) }}" style="width:90px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:10px;font-family:var(--font)">
             <label style="display:flex;align-items:center;gap:4px;font-size:9px;color:var(--muted);cursor:pointer">
               <input type="checkbox" onchange="if(this.checked){this.form.requestSubmit();}else{this.checked=false;}">
               Jual &amp; Short
@@ -8742,8 +8737,9 @@ def run_web_dashboard():
         @app.route("/hedge_short", methods=["POST"])
         def hedge_short():
             """Jual base currency deal ini sekarang (realized ke USDT) dan ubah jadi
-            hedge short sintetis: bot beli balik otomatis kalau harga turun ke target
-            (TP) atau naik balik ke entry awal (safety-stop)."""
+            hedge short sintetis: bot beli balik otomatis begitu harga naik balik ke
+            target (wajib >= harga beli awal, supaya beli-balik tidak lebih murah dari
+            entry lama sebelum posisi ini dianggap 'pulih')."""
             sym = request.form.get("sym", "").upper().strip()
             if sym and not sym.endswith("USDT"):
                 sym = sym + "USDT"
@@ -8755,8 +8751,13 @@ def run_web_dashboard():
                 d = dict(active_deals.get(sym, {}))
             if not d or d.get('mode') == 'synthetic_short':
                 return redirect("/")
+            entry_price = float(d.get('entry_price', 0) or 0)
             if target <= 0:
-                log(f"[HEDGE] {sym} target TP belum diisi, hedge dibatalkan")
+                log(f"[HEDGE] {sym} target belum diisi, hedge dibatalkan")
+                return redirect("/")
+            if entry_price > 0 and target < entry_price:
+                log(f"[HEDGE] {sym} target {target} < harga beli awal {entry_price}, hedge dibatalkan "
+                    f"(target wajib >= harga beli awal)")
                 return redirect("/")
             qty = float(d.get('qty_coin', 0) or 0)
             if qty <= 0:
@@ -8770,25 +8771,23 @@ def run_web_dashboard():
             if result.get('proceeds_usdt', 0) <= 0:
                 log(f"WARN [HEDGE] {sym} sell gagal (proceeds 0)")
                 return redirect("/")
-            stop_price = float(d.get('entry_price', 0) or 0)
             with active_deals_lock:
                 if sym in active_deals:
                     active_deals[sym]['mode']                = 'synthetic_short'
                     active_deals[sym]['short_sold_at']        = result['price_avg']
                     active_deals[sym]['short_sold_qty']       = result['qty']
                     active_deals[sym]['short_proceeds_usdt']  = result['proceeds_usdt']
-                    active_deals[sym]['short_stop_price']     = stop_price
+                    active_deals[sym]['short_entry_price']    = entry_price
                     active_deals[sym]['short_target_price']   = target
                     active_deals[sym]['short_opened_at']      = now_wib().strftime('%Y-%m-%d %H:%M:%S')
             save_active_deals()
             log(f"[HEDGE] {sym} JUAL {result['qty']:.6f} @ {result['price_avg']:.6f} -> "
-                f"${result['proceeds_usdt']:.2f} | target TP={target} stop={stop_price}")
+                f"${result['proceeds_usdt']:.2f} | target buyback={target} (entry awal={entry_price})")
             send_telegram(
                 f"HEDGE SHORT AKTIF\n"
                 f"Pair : {to_display_pair(sym)}\n"
                 f"Jual : {result['qty']:.4f} @ {_fmt_price(result['price_avg'])} -> ${result['proceeds_usdt']:.2f}\n"
-                f"Target beli-balik (TP): {_fmt_price(target)}\n"
-                f"Safety stop (>= entry lama): {_fmt_price(stop_price)}"
+                f"Target beli-balik: {_fmt_price(target)} (harga beli awal: {_fmt_price(entry_price)})"
             )
             return redirect("/")
 
@@ -8803,7 +8802,11 @@ def run_web_dashboard():
                 val = 0.0
             with active_deals_lock:
                 if sym in active_deals and active_deals[sym].get('mode') == 'synthetic_short' and val > 0:
-                    active_deals[sym]['short_target_price'] = round(val, 8)
+                    _min_target = float(active_deals[sym].get('short_entry_price', 0) or 0)
+                    if _min_target <= 0 or val >= _min_target:
+                        active_deals[sym]['short_target_price'] = round(val, 8)
+                    else:
+                        log(f"[HEDGE] {sym} target baru {val} < harga beli awal {_min_target}, diabaikan")
             save_active_deals()
             return redirect("/")
 
