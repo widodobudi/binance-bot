@@ -8613,7 +8613,7 @@ def run_web_dashboard():
 
         @app.route("/resend_open_notification", methods=["POST"])
         def resend_open_notification():
-            symbol = str((request.json or {}).get("symbol", "")).upper().replace("/", "")
+            symbol = str((request.get_json(force=True, silent=True) or {}).get("symbol", "")).upper().replace("/", "")
             with active_deals_lock:
                 deal = dict(active_deals.get(symbol, {}))
             if not deal:
@@ -8733,7 +8733,7 @@ def run_web_dashboard():
         def api_strat_config():
             if request.method == "GET":
                 return jsonify(load_strategy_config())
-            save_strategy_config(request.json or {})
+            save_strategy_config(request.get_json(force=True, silent=True) or {})
             return jsonify({"ok": True})
 
         @app.route("/dash.js")
@@ -9238,7 +9238,7 @@ def run_web_dashboard():
 
         @app.route("/admin/remove_deal", methods=["POST"])
         def admin_remove_deal():
-            data = request.json or {}
+            data = request.get_json(force=True, silent=True) or {}
             sym  = data.get("symbol", "").upper().replace("/","")
             if not sym:
                 return jsonify({"ok": False, "error": "symbol required"})
@@ -9276,7 +9276,7 @@ def run_web_dashboard():
             Jika ada lebih dari 1 baris dengan symbol+strategy yang sama, hapus yang paling baru (close_time_wib terbesar).
             Body JSON: {"symbol": "WLDUSDT", "strategy": "brkX2_4h"}
             """
-            data     = request.json or {}
+            data     = request.get_json(force=True, silent=True) or {}
             sym      = data.get("symbol", "").upper().replace("/", "")
             strategy = data.get("strategy", "")
             if not sym:
@@ -9321,7 +9321,7 @@ def run_web_dashboard():
             Body JSON: {"symbol": "BTCUSDT", "usdt": 1.0}
             HANYA untuk validasi koneksi — gunakan nominal kecil ($1-$2).
             """
-            data   = request.json or {}
+            data   = request.get_json(force=True, silent=True) or {}
             symbol = data.get("symbol", "").upper().replace("/", "")
             usdt   = float(data.get("usdt", 0))
             if not symbol or usdt <= 0:
@@ -9338,7 +9338,7 @@ def run_web_dashboard():
             Test jual MARKET via Binance direct API.
             Body JSON: {"symbol": "BTCUSDT", "qty": 0.00001}
             """
-            data   = request.json or {}
+            data   = request.get_json(force=True, silent=True) or {}
             symbol = data.get("symbol", "").upper().replace("/", "")
             qty    = float(data.get("qty", 0))
             if not symbol or qty <= 0:
@@ -9372,7 +9372,7 @@ def run_web_dashboard():
         @app.route("/admin/add_closed_trade", methods=["POST"])
         def admin_add_closed_trade():
             """Inject baris CLOSED manual ke CSV untuk deal yang close tanpa baris OPEN."""
-            data    = request.json or {}
+            data    = request.get_json(force=True, silent=True) or {}
             sym     = data.get("symbol", "")
             strat   = data.get("strategy", "hunting_4h")
             pct     = float(data.get("profit_pct", 0))
@@ -9530,7 +9530,7 @@ def run_web_dashboard():
         def tradingview_webhook():
             """Terima JSON TradingView; eksekusi hanya jika diaktifkan eksplisit."""
             webhook_secret = os.environ.get("TRADINGVIEW_WEBHOOK_SECRET", "")
-            payload = request.json or {}
+            payload = request.get_json(force=True, silent=True) or {}
             supplied_secret = payload.get("secret", "") or request.headers.get("X-Webhook-Secret", "")
             if not webhook_secret or supplied_secret != webhook_secret:
                 return jsonify({"ok": False, "error": "webhook tidak terautentikasi"}), 401
@@ -9543,6 +9543,7 @@ def run_web_dashboard():
                 "brkx2-12h": "brkX2", "brkx2": "brkX2", "reversal-8h": "reversal",
                 "brkx2-4h": "brkX2_4h", "crossema-4h": "brkX2_crossema",
                 "hunting-4h": "hunting_4h",
+                "akumulasi-4h-a": "akum_entry_a", "akumulasi-4h-b": "akum_entry_b",
             }.get(strategy, strategy)
             if action not in {"open_long", "add_fund", "start_trailing", "close_deal"} or not symbol.endswith("USDT"):
                 return jsonify({"ok": False, "error": "action atau symbol tidak valid"}), 400
@@ -9594,7 +9595,7 @@ def run_web_dashboard():
         def api_ai_provider_config():
             if request.method == "POST":
                 try:
-                    save_ai_provider_config((request.json or {}).get("mode", "anthropic_gemini"))
+                    save_ai_provider_config((request.get_json(force=True, silent=True) or {}).get("mode", "anthropic_gemini"))
                 except ValueError as error:
                     return jsonify({"ok": False, "error": str(error)}), 400
             return jsonify({"ok": True, **load_ai_provider_config()})
@@ -9602,7 +9603,7 @@ def run_web_dashboard():
         @app.route("/api/simulate_balance_conversion", methods=["POST"])
         def api_simulate_balance_conversion():
             try:
-                payload = request.json or {}
+                payload = request.get_json(force=True, silent=True) or {}
                 threshold = float(payload.get("threshold", 0))
                 requested = float(payload.get("amount", 0))
                 asset = str(payload.get("asset", "BIDR")).upper()
@@ -9652,7 +9653,7 @@ def run_web_dashboard():
         def api_auto_sell_config():
             try:
                 if request.method == "POST":
-                    payload = request.json or {}
+                    payload = request.get_json(force=True, silent=True) or {}
                     config = {
                         "enabled": bool(payload.get("enabled", False)),
                         "asset": str(payload.get("asset", "")).upper(),
@@ -9668,7 +9669,7 @@ def run_web_dashboard():
         @app.route("/api/hunting_config", methods=["POST"])
         def api_hunting_config():
             with _hunting_lock:
-                _hunting_config.update(request.json or {})
+                _hunting_config.update(request.get_json(force=True, silent=True) or {})
             return jsonify({"ok": True})
 
         @app.route("/api/hunting_signals")
