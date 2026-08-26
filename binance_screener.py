@@ -7213,6 +7213,7 @@ if (typeof STRAT_SECONDARY !== 'undefined') {
   <div style="overflow-x:auto">
     <table id="ct-table" style="width:100%;border-collapse:collapse;font-size:11px">
       <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
+        <th data-sort-key="open_time" onclick="sortClosedTrades('open_time')" style="text-align:left;padding:5px 8px;cursor:pointer">Opened</th>
         <th data-sort-key="close_time" onclick="sortClosedTrades('close_time')" style="text-align:left;padding:5px 8px;cursor:pointer">Close</th>
         <th data-sort-key="symbol" onclick="sortClosedTrades('symbol')" style="text-align:left;padding:5px 8px;cursor:pointer">Pair</th>
         <th data-sort-key="strategy" onclick="sortClosedTrades('strategy')" style="text-align:left;padding:5px 8px;cursor:pointer">Strategi</th>
@@ -7224,7 +7225,7 @@ if (typeof STRAT_SECONDARY !== 'undefined') {
         <th data-sort-key="duration" onclick="sortClosedTrades('duration')" style="text-align:right;padding:5px 8px;cursor:pointer">Durasi</th>
         <th style="text-align:left;padding:5px 8px">Alasan</th>
       </tr></thead>
-      <tbody id="ct-body"><tr><td colspan="10" style="color:var(--muted);padding:12px 8px;text-align:center">Klik Refresh untuk muat data</td></tr></tbody>
+      <tbody id="ct-body"><tr><td colspan="11" style="color:var(--muted);padding:12px 8px;text-align:center">Klik Refresh untuk muat data</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -7268,16 +7269,17 @@ function renderClosedTradesRows() {
     }
     document.querySelectorAll('#ct-table th[data-sort-key]').forEach(function(th) {
         var label = th.getAttribute('data-sort-key');
-        var text = {close_time:'Close',symbol:'Pair',strategy:'Strategi',profit_pct:'Profit%',profit_usd:'Profit$',duration:'Durasi'}[label];
+        var text = {open_time:'Opened',close_time:'Close',symbol:'Pair',strategy:'Strategi',profit_pct:'Profit%',profit_usd:'Profit$',duration:'Durasi'}[label];
         th.textContent = text + (closedTradesSortKey === label ? (closedTradesSortDirection === 1 ? ' ▲' : ' ▼') : '');
     });
     var tbody = document.getElementById('ct-body');
-    if (!rows.length) { tbody.innerHTML = '<tr><td colspan="10" style="color:var(--muted);padding:12px 8px;text-align:center">Belum ada data closed trades</td></tr>'; return; }
+    if (!rows.length) { tbody.innerHTML = '<tr><td colspan="11" style="color:var(--muted);padding:12px 8px;text-align:center">Belum ada data closed trades</td></tr>'; return; }
     tbody.innerHTML = rows.map(function(r) {
             var pct = parseFloat(r.profit_pct||0);
             var usd = parseFloat(r.profit_usd||0);
             var clr = pct>=0?'var(--green)':'var(--red)';
             return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">' +
+                '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.open_time||'').substring(0,16) + '</td>' +
                 '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.close_time||'').substring(0,16) + '</td>' +
                 '<td style="padding:5px 8px;font-weight:600">' + (r.symbol||'-') + '</td>' +
                 '<td style="padding:5px 8px;color:var(--muted)">' + (strat_map[r.strategy]||r.strategy||'-') + '</td>' +
@@ -7310,7 +7312,7 @@ function loadClosedTrades() {
     ].join('<span style="color:var(--border);margin:0 4px">|</span>');
         closedTradesRows = d.trades || [];
         renderClosedTradesRows();
-  }).catch(function(e){ document.getElementById('ct-body').innerHTML = '<tr><td colspan="10" style="color:var(--red);padding:8px">Error: ' + e + '</td></tr>'; });
+  }).catch(function(e){ document.getElementById('ct-body').innerHTML = '<tr><td colspan="11" style="color:var(--red);padding:8px">Error: ' + e + '</td></tr>'; });
 }
 window.addEventListener('load', function(){ loadClosedTrades(); });
 </script>
@@ -9759,6 +9761,7 @@ def run_web_dashboard():
                     total_pnl_pct += pct
                     total_pnl_usd += p_usd
                     trades.append({
+                        "open_time":    r.get('open_time_wib',''),
                         "close_time":   r.get('close_time_wib',''),
                         "symbol":       r.get('symbol',''),
                         "strategy":     r.get('strategy',''),
@@ -9897,7 +9900,7 @@ def _ai_call(prompt: str) -> str:
         if not providers:
             providers = ["anthropic", "gemini"]
         providers = list(dict.fromkeys(providers))
-    anthropic_error = ""
+    provider_errors = {}
     for provider in providers:
         try:
             result = _anthropic_ai_call(prompt) if provider == "anthropic" else _gemini_ai_call(prompt)
@@ -9907,19 +9910,35 @@ def _ai_call(prompt: str) -> str:
                 return result
         except Exception as error:
             error_text = str(error)
-            if provider == "anthropic": anthropic_error = error_text
+            provider_errors[provider] = error_text
             log(f"WARN [AI] {provider} gagal: {error_text[:160]}")
     AI_LAST_PROVIDER = "rule-based Python"
     if not _ai_quota_notif_sent:
         _ai_quota_notif_sent = True
-        _msg = (
-            "AI Decision provider tidak tersedia.\n"
-            "Anthropic dan Gemini gagal atau credit/billing habis.\n"
-            "Bot memakai rule-based Python sebagai fallback terakhir."
-        )
-        send_telegram(_msg, parse_mode=None)
-        log(f"WARN [AI] fallback terakhir rule-based aktif; Anthropic={anthropic_error[:80]}")
+        _lines = ["AI Decision provider tidak tersedia."]
+        for provider, error_text in provider_errors.items():
+            _lines.append(f"{provider.capitalize()}: {_classify_ai_error(error_text)}")
+        _lines.append("Bot memakai rule-based Python sebagai fallback terakhir.")
+        send_telegram("\n".join(_lines), parse_mode=None)
+        _err_summary = "; ".join(f"{p}={e[:80]}" for p, e in provider_errors.items())
+        log(f"WARN [AI] fallback terakhir rule-based aktif; {_err_summary}")
     return ""
+
+
+def _classify_ai_error(error_text: str) -> str:
+    """Terjemahkan error HTTP mentah jadi penyebab yang jelas (bukan asumsi 'billing habis')."""
+    t = error_text.lower()
+    if "401" in t or "unauthorized" in t:
+        return f"API key tidak valid/revoked (401 Unauthorized) — cek env var API key. [{error_text[:100]}]"
+    if "403" in t or "forbidden" in t:
+        return f"Akses ditolak (403 Forbidden) — cek permission/region key. [{error_text[:100]}]"
+    if "429" in t or "rate limit" in t or "quota" in t:
+        return f"Rate limit/quota terlampaui (429). [{error_text[:100]}]"
+    if "404" in t:
+        return f"Endpoint/model tidak ditemukan (404) — cek nama model atau API key. [{error_text[:100]}]"
+    if "credit" in t or "billing" in t or "insufficient" in t:
+        return f"Credit/billing habis. [{error_text[:100]}]"
+    return f"Gagal: {error_text[:120]}"
 
 
 def load_ai_provider_config() -> dict:
