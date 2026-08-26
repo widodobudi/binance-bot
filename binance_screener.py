@@ -7297,7 +7297,7 @@ function renderClosedTradesRows() {
             var usd = parseFloat(r.profit_usd||0);
             var clr = pct>=0?'var(--green)':'var(--red)';
             return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">' +
-                '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.open_time||'').substring(0,16) + '</td>' +
+                '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.open_time ? r.open_time.substring(0,16) : '-') + '</td>' +
                 '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.close_time||'').substring(0,16) + '</td>' +
                 '<td style="padding:5px 8px;font-weight:600">' + (r.symbol||'-') + '</td>' +
                 '<td style="padding:5px 8px;color:var(--muted)">' + (strat_map[r.strategy]||r.strategy||'-') + '</td>' +
