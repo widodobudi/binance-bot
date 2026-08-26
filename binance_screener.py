@@ -601,12 +601,12 @@ TRADES_CSV = os.path.join(DATA_DIR, "trades_forwardtest.csv")
 STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # Default values — edit hard-coded di sini untuk ubah nilai RESET
 STRATEGY_CONFIG_DEFAULTS = {
-    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 12, "add_usd": None},
-    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": None},
-    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": 0},
-    "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None},
-    "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None},
-    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None},
+    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 12, "add_usd": None, "cooldown_enabled": True},
+    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": None, "cooldown_enabled": True},
+    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": 0,    "cooldown_enabled": True},
+    "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True},
+    "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True},
+    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True},
 }
 
 def load_strategy_config() -> dict:
@@ -659,6 +659,12 @@ def is_strategy_enabled(strategy: str) -> bool:
 def is_sizing_enabled(strategy: str) -> bool:
     cfg = load_strategy_config()
     return cfg.get(strategy, {}).get("sizing_enabled", True)
+
+def is_cooldown_enabled(strategy: str) -> bool:
+    """Default True: skip re-entry pair yang sama dalam COOLDOWN_SECONDS pasca-close.
+    Uncheck di dashboard kalau mau matikan proteksi ini per strategi (mis. testing)."""
+    cfg = load_strategy_config()
+    return cfg.get(strategy, {}).get("cooldown_enabled", True)
 
 def get_strategy_base_usd(strategy: str) -> float:
     cfg = load_strategy_config()
@@ -3511,7 +3517,7 @@ def thread1_scan():
         with active_deals_lock:
             if sym in active_deals:
                 continue  # sudah punya deal di pair ini
-        sisa = cooldown_remaining(sym)
+        sisa = cooldown_remaining(sym) if is_cooldown_enabled('brkX2') else 0
         if sisa > 0:
             log(f"[T1] {sym} LOLOS 7/7 tapi masih cooldown internal (sisa {sisa/3600:.1f} jam) -> skip, tidak kirim sinyal.")
             cooldown_held.append((sym, sisa))
@@ -4595,7 +4601,7 @@ def thread1c_scan_intrabar():
             break
         with active_deals_lock:
             if sym in active_deals: continue
-        if cooldown_remaining(sym) > 0: continue
+        if is_cooldown_enabled('brkX2') and cooldown_remaining(sym) > 0: continue
         # LAPIS 1: candle 12h n-1
         df12 = get_ohlcv(sym, interval=TIMEFRAME, limit=120)
         if df12 is None: continue
@@ -4774,7 +4780,7 @@ def thread1c_scan_intrabar_early():
             break
         with active_deals_lock:
             if sym in active_deals: continue
-        if cooldown_remaining(sym) > 0: continue
+        if is_cooldown_enabled('brkX2') and cooldown_remaining(sym) > 0: continue
 
         # LAPIS 1: indikator dari candle 12h yang sudah tutup (n-1)
         df12 = get_ohlcv(sym, interval=TIMEFRAME, limit=120)
@@ -5231,7 +5237,7 @@ def thread1d_scan_4h():
         n4h = active_deal_count_4h()
         if n4h >= STRAT4H_MAX_DEALS: break
         if sym in (set(active_deals.keys())): continue
-        if cooldown_remaining(sym) > 0:
+        if is_cooldown_enabled('brkX2_4h') and cooldown_remaining(sym) > 0:
             log(f"[T1d] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
             continue
 
@@ -6018,7 +6024,7 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
         return False
     if symbol in SYMBOL_BLACKLIST:
         return False
-    if cooldown_remaining(symbol) > 0:
+    if is_cooldown_enabled('hunting_4h') and cooldown_remaining(symbol) > 0:
         return False
 
     # ── Data indikator ────────────────────────────────────────────────────────
@@ -6516,9 +6522,10 @@ DASHBOARD_HTML = '''
           <th style="text-align:center;padding:5px 8px">Gunakan Setting Modal</th>
           <th style="text-align:center;padding:5px 8px">Base Order (USDT)</th>
           <th style="text-align:center;padding:5px 8px">Add Fund (USDT)</th>
+          <th style="text-align:center;padding:5px 8px">Cooldown Re-entry</th>
                     <th style="text-align:center;padding:5px 8px">Action</th>
         </tr></thead>
-                <tbody id="sc-body"><tr><td colspan="6" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
+                <tbody id="sc-body"><tr><td colspan="7" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
     </table>
     </div>
     </div>
@@ -7102,14 +7109,15 @@ function loadStrategyConfig() {
             var tbody = document.getElementById('sc-body');
             if (!tbody) return;
             if (!keys.length || !Object.keys(d || {}).length) {
-                tbody.innerHTML = '<tr><td colspan="5" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
                 return;
             }
             for (var i = 0; i < keys.length; i++) {
                 var k = keys[i];
-                var cfg = d[k] || {strategy_enabled: true, sizing_enabled: true, base_usd: 8, add_usd: null};
+                var cfg = d[k] || {strategy_enabled: true, sizing_enabled: true, base_usd: 8, add_usd: null, cooldown_enabled: true};
                 var strategyEnabled = cfg.strategy_enabled !== false;
                 var sizingEnabled = cfg.sizing_enabled !== false;
+                var cooldownEnabled = cfg.cooldown_enabled !== false;
                 var dim = sizingEnabled ? '' : 'opacity:0.35;pointer-events:none';
                 var saveButton = '<button type="button" onclick="saveStrategyConfig(this)" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>';
                 var addFundCell = '';
@@ -7128,6 +7136,7 @@ function loadStrategyConfig() {
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-size-' + k + '" ' + (sizingEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>'
                     + addFundCell
+                    + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-cooldown-' + k + '" ' + (cooldownEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer" title="Skip re-entry pair yang sama selama masih cooldown"></td>'
                     + '<td style="text-align:center;padding:5px 8px">' + saveButton + '</td>'
                     + '</tr>';
             }
@@ -7141,7 +7150,7 @@ function loadStrategyConfig() {
         .catch(function(e) {
             var tbody = document.getElementById('sc-body');
             if (tbody) {
-                tbody.innerHTML = '<tr><td colspan="6" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
             }
         });
 }
@@ -7164,9 +7173,11 @@ function saveStrategyConfig(button) {
     var addEl = document.getElementById('sc-add-' + key);
     var strategyEnabledEl = document.getElementById('sc-run-' + key);
     var sizingEnabledEl = document.getElementById('sc-size-' + key);
+    var cooldownEnabledEl = document.getElementById('sc-cooldown-' + key);
     data[key] = {
         strategy_enabled: strategyEnabledEl ? strategyEnabledEl.checked : true,
         sizing_enabled: sizingEnabledEl ? sizingEnabledEl.checked : true,
+        cooldown_enabled: cooldownEnabledEl ? cooldownEnabledEl.checked : true,
         base_usd: parseFloat(baseEl ? baseEl.value : 8) || 8,
     };
     if (SC_HAS_ADDFUND[key]) {
