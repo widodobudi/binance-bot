@@ -175,7 +175,9 @@ TRAIL_HTF_CACHE_SECONDS = 60   # jangan request HTF pada setiap siklus monitor 1
 TRAIL_HTF_HEALTH_MIN_VOTES = 3 # minimal indikator sehat per timeframe
 VOLATILITY_GUARD_ATR_PCT = 10.0  # ATR terbaru di atas ini: jangan add fund
 VOLATILITY_GUARD_ATR_MULT = 2.0   # ATR melonjak >=2x ATR saat open: jangan add fund
-HARD_STOP_LOSS_PCT = 8.0          # proteksi penurunan ekstrem dari harga entry
+HARD_STOP_MULT = 1.1              # pengali (K) atas base hard-stop per tier ATR% (lihat hard_stop_pct()).
+                                   # K=1.1 disepakati 26/08/2026 studi kasus TLM/USDT: base tier Volatil 9%
+                                   # x1.1 = 9.9%, cover wick turun sampai -9.9% tanpa ke-exit (wick TLM -9.55%)
 MAX_HOLD_DAYS     = 5
 # detik per candle sesuai timeframe (utk batas hold yg benar di TF apa pun).
 # 1d=86400, 12h=43200, 6h=21600, 4h=14400. Batas hold = MAX_HOLD_DAYS candle.
@@ -2456,6 +2458,19 @@ def trailing_dist(atr_pct: float) -> float:
     else: base = 1.5   # ATR>=7%: turun dari 2.5% ke 1.5% (backtest_arm_sweep)
     return round(base * TRAILING_FAKTOR, 4)
 
+def hard_stop_pct(atr_pct: float):
+    """Hard stop % dari entry, di-tier berdasar ATR% (volatilitas pair) lalu dikali HARD_STOP_MULT.
+    Pair makin volatil (ATR% tinggi) dikasih toleransi turun lebih lebar supaya noise wajar
+    pair itu sendiri nggak langsung kena stop; pair tenang tetap diproteksi ketat.
+    Return: (label_rating, base_pct_sebelum_K, final_pct_setelah_dikali_K)
+    """
+    if atr_pct < 1.0:   label, base = "Tenang",  4.0
+    elif atr_pct < 2.0: label, base = "Normal",  5.5
+    elif atr_pct < 4.0: label, base = "Aktif",   7.0
+    elif atr_pct < 7.0: label, base = "Volatil", 9.0
+    else:                label, base = "Ekstrem", 11.0
+    return label, base, round(base * HARD_STOP_MULT, 4)
+
 def get_arm_pct(atr_pct: float) -> float:
     """Arm threshold: ATR>=7% pakai 3.5%, lainnya 2.0% (backtest_arm_sweep optimal)."""
     if atr_pct >= 7.0:
@@ -4021,9 +4036,12 @@ def thread2_monitor():
         if get_deal_override(sym, 'tp1usd', False) and _upnl_usd_now >= _tp_target_usd:
             do_close = True
             reason = f"TP ${_tp_target_usd:.2f}: profit bersih ${_upnl_usd_now:.2f} (modal ${_total_usd_now:.0f})"
-        if not do_close and not _is_akum and price <= entry * (1 - HARD_STOP_LOSS_PCT / 100):
-            do_close = True
-            reason = f"hard stop volatilitas: price {_fmt_price(price)} turun >= {HARD_STOP_LOSS_PCT:.1f}% dari entry"
+        if not do_close and not _is_akum:
+            _hs_label, _hs_base, _hs_pct = hard_stop_pct(atrp)
+            if price <= entry * (1 - _hs_pct / 100):
+                do_close = True
+                reason = (f"hard stop volatilitas [{_hs_label}, ATR {atrp:.2f}%]: price {_fmt_price(price)} "
+                          f"turun >= {_hs_pct:.2f}% dari entry (base {_hs_base:.1f}% x K{HARD_STOP_MULT:.2f})")
         if not do_close and armed and not _is_akum:
             stop = peak*(1 - tdist/100)
             if price <= stop:
