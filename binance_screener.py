@@ -173,6 +173,11 @@ TRAIL_FACTOR_TIGHTENED = 0.5   # Stoch%K baru turun dari >80 (lock profit)
 TRAIL_HTF_GRACE_SECONDS = 300  # maksimal menahan trailing close sambil cek HTF
 TRAIL_HTF_CACHE_SECONDS = 60   # jangan request HTF pada setiap siklus monitor 15 detik
 TRAIL_HTF_HEALTH_MIN_VOTES = 3 # minimal indikator sehat per timeframe
+# Un-arm histeresis (26/08/2026): trailing di-un-arm kalau ATR% live naik cukup jauh
+# sejak arm (bukan cuma nyebrang tier) DAN sudah armed cukup lama — dua syarat sekaligus
+# supaya nggak flapping arm<->un-arm tiap ATR% naik-turun tipis di sekitar batas tier.
+UNARM_ATR_MARGIN_PP     = 0.5   # ATR% live harus naik >0.5pp dari ATR% live saat arm
+UNARM_MIN_ARMED_MINUTES = 15    # minimal armed 15 menit sebelum boleh dievaluasi un-arm
 VOLATILITY_GUARD_ATR_PCT = 10.0  # ATR terbaru di atas ini: jangan add fund
 VOLATILITY_GUARD_ATR_MULT = 2.0   # ATR melonjak >=2x ATR saat open: jangan add fund
 HARD_STOP_MULT = 1.1              # pengali (K) atas base hard-stop per tier ATR% (lihat hard_stop_pct()).
@@ -2472,10 +2477,14 @@ def hard_stop_pct(atr_pct: float):
     return label, base, round(base * HARD_STOP_MULT, 4)
 
 def get_arm_pct(atr_pct: float) -> float:
-    """Arm threshold: ATR>=7% pakai 3.5%, lainnya 2.0% (backtest_arm_sweep optimal)."""
-    if atr_pct >= 7.0:
-        return 3.5
-    return TRAIL_ARM_PCT  # 2.0% untuk tier lain
+    """Arm threshold, 5 tier ATR% (konsisten dgn hard_stop_pct()/trailing_dist()).
+    Titik Aktif=2.0% & Ekstrem=3.5% tervalidasi backtest_arm_sweep; 3 titik tengah interpolasi.
+    """
+    if atr_pct < 1.0:   return 1.0    # Tenang
+    elif atr_pct < 2.0: return 1.5    # Normal
+    elif atr_pct < 4.0: return 2.0    # Aktif
+    elif atr_pct < 7.0: return 2.75   # Volatil
+    else:                return 3.5    # Ekstrem
 
 
 def trailing_dist_progressive(atr_pct: float, current_profit_pct: float) -> float:
@@ -2595,6 +2604,40 @@ def trailing_htf_is_healthy(symbol: str) -> bool:
     with _trail_htf_cache_lock:
         _trail_htf_cache[symbol] = (now, healthy)
     return healthy
+
+LIVE_ATR_CACHE_SECONDS = 300  # 5 menit — TTL ATR% live utk arm/trailing (26/08/2026)
+_live_atr_cache = {}
+_live_atr_cache_lock = threading.Lock()
+
+def get_live_atr_pct(symbol: str, strategy: str, fallback: float) -> float:
+    """ATR% live (bukan snapshot saat OPEN), dipakai utk tier arm_pct/trailing_dist
+    yang reaktif terhadap perubahan volatilitas selama deal berjalan. Cache TTL
+    LIVE_ATR_CACHE_SECONDS supaya tidak fetch OHLCV tiap siklus monitor 15 detik
+    (ATR sendiri cuma berubah berarti tiap candle closed, bukan tiap detik).
+    Gagal fetch -> pakai fallback (biasanya snapshot ATR% saat OPEN)."""
+    now = time.time()
+    with _live_atr_cache_lock:
+        cached = _live_atr_cache.get(symbol)
+        if cached and now - cached[0] < LIVE_ATR_CACHE_SECONDS:
+            return cached[1]
+    atrp = fallback
+    try:
+        if strategy in ('brkX2_4h', 'brkX2_crossema', 'hunting_4h'):
+            frame = get_ohlcv_4h(symbol, limit=30)
+        elif strategy == 'reversal':
+            frame = get_ohlcv(symbol, interval=REVERSAL_TIMEFRAME, limit=30)
+        else:
+            frame = get_ohlcv(symbol, interval=TIMEFRAME, limit=30)
+        if frame is not None and len(frame) >= 20:
+            atr = ta.atr(frame['high'], frame['low'], frame['close'], length=14)
+            val = atr.iloc[-1] / frame['close'].iloc[-1] * 100
+            if not pd.isna(val):
+                atrp = float(val)
+    except Exception as error:
+        log(f"[T2] live ATR% {symbol} gagal, pakai fallback {fallback:.2f}%: {error}")
+    with _live_atr_cache_lock:
+        _live_atr_cache[symbol] = (now, atrp)
+    return atrp
 
 def current_volatility_guard(symbol: str, strategy: str, entry_atr: float) -> tuple:
     """Return (allowed, atr_pct) for add-fund; unavailable data fails closed."""
@@ -3952,6 +3995,7 @@ def thread2_monitor():
         prof_peak       = (peak/entry-1)*100
         atrp = d.get('atr_pct',3.0)
         strat = d.get('strategy', 'brkX2')
+        live_atrp = get_live_atr_pct(sym, strat, atrp)
 
         # Trailing factor variatif untuk hunting_4h
         if strat == 'hunting_4h':
@@ -3969,17 +4013,18 @@ def thread2_monitor():
                     with active_deals_lock:
                         if sym in active_deals:
                             active_deals[sym]['in_fomo'] = new_fomo
-            # Trailing dist dengan factor variatif
-            base_td = trailing_dist(atrp)
+            # Trailing dist dengan factor variatif, ATR% live
+            base_td = trailing_dist(live_atrp)
             tdist   = round(base_td * _factor, 4)
         else:
-            tdist = trailing_dist_progressive(atrp, prof_peak)
+            tdist = trailing_dist_progressive(live_atrp, prof_peak)
         armed = d.get('trailing_armed', False)
 
-        # arm trailing setelah profit >= +2% (pakai puncak)
+        # arm trailing setelah profit >= arm_pct tier ATR% LIVE (pakai puncak, bukan
+        # snapshot ATR% saat entry — supaya reaktif ke perubahan volatilitas terkini)
         # — SKIP untuk akumulasi: exit via TP/SL/Timeout, bukan trailing
         _is_akum = strat in ('akum_entry_a', 'akum_entry_b')
-        if (not armed) and (not _is_akum) and prof_peak >= get_arm_pct(atrp):
+        if (not armed) and (not _is_akum) and prof_peak >= get_arm_pct(live_atrp):
             # AI decision jika ai_call=True untuk deal ini
             if get_deal_override(sym, 'ai_call', False):
                 if not ai_decision_armed(sym, d.get('strategy', 'brkX2'), d, price, peak):
@@ -3990,19 +4035,21 @@ def thread2_monitor():
                     save_active_deals()
                     continue
             armed = True
-            log(f"[T2] {sym} trailing ARMED (peak profit {prof_peak:.2f}%)")
-            # Simpan waktu arm dan stoch saat arm untuk notif close hunting
+            log(f"[T2] {sym} trailing ARMED (peak profit {prof_peak:.2f}%, ATR% live {live_atrp:.2f}%)")
+            # Simpan waktu arm, ATR% live saat arm (acuan un-arm), dan stoch saat arm
             with active_deals_lock:
                 if sym in active_deals:
                     active_deals[sym]['armed_at_wib'] = now_wib().strftime('%d/%m/%Y %H:%M')
                     active_deals[sym]['armed_price']   = peak
                     active_deals[sym]['armed_prof_pct'] = prof_peak
+                    active_deals[sym]['armed_since_ts'] = time.time()
+                    active_deals[sym]['armed_live_atr']  = live_atrp
             save_active_deals()
             log_oac('ARMED', sym, d.get('strategy', 'brkX2'), {
                 'peak_profit':  f"{prof_peak:.2f}%",
-                'arm_pct':      f"{get_arm_pct(atrp):.1f}%",
-                'atr_pct':      f"{atrp:.2f}%",
-                'trail_dist':   f"{trailing_dist_progressive(atrp, prof_peak):.2f}%",
+                'arm_pct':      f"{get_arm_pct(live_atrp):.1f}%",
+                'atr_pct':      f"{live_atrp:.2f}%",
+                'trail_dist':   f"{tdist:.2f}%",
                 'entry_price':  _fmt_price(d.get('entry_price', 0)),
                 'peak_price':   _fmt_price(peak),
                 'rsi':          f"{d['rsi_open']:.1f}"        if d.get('rsi_open')        is not None else "—",
@@ -4016,6 +4063,30 @@ def thread2_monitor():
                 'ema20':        f"{d['ema20_open']:.6f}"      if d.get('ema20_open')      is not None else "—",
                 'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
             })
+
+        # un-arm: ATR% live naik cukup jauh sejak arm (histeresis: margin UNARM_ATR_MARGIN_PP)
+        # DAN sudah armed minimal UNARM_MIN_ARMED_MINUTES (anti-flapping) DAN peak profit yang
+        # sudah dicapai tidak lagi cukup utk tier arm_pct yang berlaku sekarang — trailing ketat
+        # yang di-set saat market tenang jadi nggak relevan lagi di kondisi volatil sekarang,
+        # fallback ke hard stop saja sampai nanti profit cukup utk re-arm di tier baru.
+        if armed and not _is_akum:
+            _armed_ref_atr = d.get('armed_live_atr', atrp)
+            _armed_since   = d.get('armed_since_ts', 0)
+            _armed_min     = (time.time() - _armed_since) / 60.0 if _armed_since > 0 else 999.0
+            if (prof_peak < get_arm_pct(live_atrp)
+                    and live_atrp >= _armed_ref_atr + UNARM_ATR_MARGIN_PP
+                    and _armed_min >= UNARM_MIN_ARMED_MINUTES):
+                armed = False
+                log(f"[T2] {sym} trailing UN-ARMED (ATR% live naik {_armed_ref_atr:.2f}%→{live_atrp:.2f}% "
+                    f"sejak arm, peak profit {prof_peak:.2f}% < arm_pct tier sekarang {get_arm_pct(live_atrp):.1f}%)")
+                with active_deals_lock:
+                    if sym in active_deals:
+                        active_deals[sym]['trailing_armed'] = False
+                        active_deals[sym].pop('armed_since_ts', None)
+                        active_deals[sym].pop('armed_live_atr', None)
+                        active_deals[sym].pop('trail_htf_grace_started_at', None)
+                save_active_deals()
+                d.pop('trail_htf_grace_started_at', None)
 
         # deteksi pergerakan cepat (HANYA relevan saat armed) utk polling adaptif
         last_price = d.get('last_price', price)
@@ -4263,7 +4334,7 @@ def thread2_monitor():
                     'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
                 })
                 remove_from_active_deals(sym)
-                if strat == 'brkX2': record_closed(sym)
+                if strat in ('brkX2', 'hunting_4h'): record_closed(sym)
                 
                 # progress forward-test PER STRATEGI
                 if strat == 'reversal':
@@ -5904,11 +5975,12 @@ def _try_swap_hunting_slot(incoming_symbol: str) -> bool:
         return False
 
     reason = f"slot swap → buka {to_display_pair(incoming_symbol)} (profit +{swap_pct:.2f}%)"
-    send_close_long(swap_sym, "hunting_4h", reason)
+    send_close_long(swap_sym, "hunting_4h")
 
     with active_deals_lock:
         d_swap = active_deals.pop(swap_sym, {})
     save_active_deals()
+    record_closed(swap_sym)
 
     entry = d_swap.get("entry_price", price_now)
     prof  = (price_now / entry - 1) * 100 - FEE_ROUND_TRIP_PCT if entry > 0 else 0
@@ -5945,6 +6017,8 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
     if active_deal_count_4h() + active_deal_count_hunting() >= COMMAS_MAX_ACTIVE_DEALS:
         return False
     if symbol in SYMBOL_BLACKLIST:
+        return False
+    if cooldown_remaining(symbol) > 0:
         return False
 
     # ── Data indikator ────────────────────────────────────────────────────────
@@ -8591,7 +8665,7 @@ def run_web_dashboard():
                         'total_usd':     d.get('target_usd', ''),
                     })
                     remove_from_active_deals(sym)
-                    if strat == 'brkX2': record_closed(sym)
+                    if strat in ('brkX2', 'hunting_4h'): record_closed(sym)
                     log(f"[MANUAL-CLOSE] {sym} @ {price_now:.6g} profit={prof:.2f}%")
                     send_telegram(
                         f"CLOSE MANUAL (dashboard)\n"
