@@ -7458,22 +7458,38 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
     </div>
 </div>
 <script>
+var SCAN_BLOCKERS_SCHEDULE = {
+    'brkX2-12h':   'Scan tiap loop (~1-3 menit), tidak dibatasi jendela waktu',
+    'brkX2-4h':    'Hanya scan di menit ke-5 s/d 60 tiap candle 4h',
+    'CrossEMA-4h': 'Hanya scan di menit ke-~12 s/d 36 tiap candle 4h',
+    'Reversal-8h': 'Hanya scan sekali saat candle 8h baru tertutup',
+    'Hunting-4h':  'Scan tiap loop (~1-3 menit), tidak dibatasi jendela waktu',
+    'Akumulasi-4h':'Scan periodik (~tiap beberapa menit)'
+};
 function loadScanBlockers() {
     fetch('/api/scan_blockers').then(function(r){ return r.json(); }).then(function(d) {
         var scans = d.scans || {};
-        var keys = Object.keys(scans);
         var status = document.getElementById('scan-blockers-status');
         var table = document.getElementById('scan-blockers-table');
         var body = document.getElementById('scan-blockers-body');
-        if (!keys.length) { status.textContent = 'Belum ada snapshot scan. Jalankan scan strategi terlebih dahulu.'; return; }
-        body.innerHTML = keys.map(function(k) {
-            var s = scans[k], b = s.blockers || {}, names = Object.keys(b).sort(function(a, z){ return (Number(b[z]) || 0) - (Number(b[a]) || 0); });
+        var allKeys = Object.keys(SCAN_BLOCKERS_SCHEDULE);
+        Object.keys(scans).forEach(function(k){ if (allKeys.indexOf(k) === -1) allKeys.push(k); });
+        body.innerHTML = allKeys.map(function(k) {
+            var s = scans[k];
+            if (!s) {
+                return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">' +
+                    '<td style="padding:5px 8px;font-weight:600;color:var(--muted)">' + k + '</td>' +
+                    '<td style="padding:5px 8px;text-align:right;color:var(--muted)">-</td>' +
+                    '<td style="padding:5px 8px;text-align:right;color:var(--muted)">-</td>' +
+                    '<td style="padding:5px 8px;color:var(--muted);font-style:italic">Belum ada snapshot sejak restart &mdash; ' + (SCAN_BLOCKERS_SCHEDULE[k] || 'jadwal tidak diketahui') + '</td></tr>';
+            }
+            var b = s.blockers || {}, names = Object.keys(b).sort(function(a, z){ return (Number(b[z]) || 0) - (Number(b[a]) || 0); });
             var top = names.slice(0, 3).map(function(n){ return n + ': ' + b[n]; }).join(' | ') || 'Tidak ada blocker';
             var resultLabel = k === 'Akumulasi-4h' ? 'hasil detector' : 'kandidat valid';
             return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)"><td style="padding:5px 8px;font-weight:600">' + k + '</td><td style="padding:5px 8px;text-align:right">' + s.total_scanned + '</td><td style="padding:5px 8px;text-align:right">' + s.candidates + '<br><small style="color:var(--muted)">' + resultLabel + '</small></td><td style="padding:5px 8px;color:var(--muted)">' + top + '<br><small>Scan: ' + s.scan_time + '</small></td></tr>';
         }).join('');
         table.style.display = 'table';
-        status.textContent = 'Snapshot blocker per scan terakhir. Satu pair dapat gagal pada beberapa indikator.';
+        status.textContent = 'Snapshot blocker per scan terakhir. Satu pair dapat gagal pada beberapa indikator. Strategi berjadwal (4h/8h) baru terisi saat window scan-nya aktif.';
     }).catch(function(e){ document.getElementById('scan-blockers-status').textContent = 'Gagal memuat blocker: ' + e; });
 }
 document.addEventListener('DOMContentLoaded', function(){ loadScanBlockers(); setInterval(loadScanBlockers, 30000); });
