@@ -9823,7 +9823,10 @@ def run_web_dashboard():
                     'hunting_4h': HUNTING_FWDTEST_PHASE_OFFSET,
                 }
                 if strategy_filter:
-                    rows = [r for r in rows if (r.get('strategy') or 'brkX2') == strategy_filter]
+                    if strategy_filter == 'akumulasi':
+                        rows = [r for r in rows if (r.get('strategy') or 'brkX2') in ('akum_entry_a', 'akum_entry_b')]
+                    else:
+                        rows = [r for r in rows if (r.get('strategy') or 'brkX2') == strategy_filter]
                     offset = phase_offsets.get(strategy_filter, 0)
                     if offset:
                         rows = rows[offset:]
