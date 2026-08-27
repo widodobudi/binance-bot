@@ -6573,9 +6573,10 @@ DASHBOARD_HTML = '''
           </form>
         </td>
         <td>
-          <form method="POST" action="/set_tp_target" style="display:inline">
+          <form method="POST" action="/set_tp_target" style="display:inline-flex;gap:4px;align-items:center">
             <input type="hidden" name="sym" value="{{ sym }}">
-            <input type="number" name="value" step="0.1" min="0.01" style="width:64px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)" value="{{ overrides.get(sym,{}).get("tp1_target_usd",1.0) }}" onchange="this.form.submit()">
+            <input type="number" name="value" step="0.1" min="0.01" style="width:64px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)" value="{{ overrides.get(sym,{}).get("tp1_target_usd",1.0) }}">
+            <button type="submit" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Save</button>
           </form>
         </td>
         <td style="white-space:nowrap">
