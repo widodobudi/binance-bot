@@ -832,6 +832,49 @@ def trend_continuation_ok(symbol: str, current_price: float) -> bool:
     thresh = info.get('price', 0) * (1 + TREND_CONT_MARGIN_PCT / 100)
     return current_price >= thresh
 
+# Forward-test terpisah khusus trade yang dibuka lewat Quick-Reentry (trend-
+# continuation bypass di atas) -- supaya nggak campur dgn hitungan brkX2-4h
+# biasa, dan biar kelihatan sendiri apakah mekanisme ini beneran net-positive
+# di produksi kayak hasil backtest-nya (28/08/2026).
+QUICK_REENTRY_TARGET    = 10
+QUICK_REENTRY_FILE = os.path.join(DATA_DIR, "quick_reentry_trades.json")
+quick_reentry_trades = []   # list of {'symbol','ts','profit_pct'}
+quick_reentry_lock = threading.Lock()
+
+def load_quick_reentry_trades():
+    global quick_reentry_trades
+    if not os.path.exists(QUICK_REENTRY_FILE):
+        return
+    try:
+        with open(QUICK_REENTRY_FILE, 'r') as f: data = json.load(f)
+        with quick_reentry_lock:
+            quick_reentry_trades = data
+        log(f"   Loaded quick_reentry_trades: {len(quick_reentry_trades)} trade.")
+    except Exception as e:
+        log(f"WARN gagal baca quick_reentry_trades.json: {e}")
+
+def save_quick_reentry_trades():
+    try:
+        with quick_reentry_lock: data = list(quick_reentry_trades)
+        with open(QUICK_REENTRY_FILE, 'w') as f: json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan quick_reentry_trades.json: {e}")
+
+def record_quick_reentry_close(symbol: str, profit_pct: float):
+    with quick_reentry_lock:
+        quick_reentry_trades.append({'symbol': symbol, 'ts': time.time(), 'profit_pct': profit_pct})
+    save_quick_reentry_trades()
+
+def quick_reentry_progress() -> dict:
+    with quick_reentry_lock:
+        trades = list(quick_reentry_trades)
+    n = len(trades)
+    if n == 0:
+        return {'n': 0, 'win': 0, 'loss': 0, 'total_pct': 0.0}
+    win = sum(1 for t in trades if t.get('profit_pct', 0) > 0)
+    total = sum(t.get('profit_pct', 0) for t in trades)
+    return {'n': n, 'win': win, 'loss': n - win, 'total_pct': total}
+
 trades_csv_lock = threading.Lock()
 
 # Kolom CSV log forward-test (1 baris per trade; ditulis saat OPEN, dilengkapi saat CLOSE)
@@ -3272,11 +3315,13 @@ def heartbeat_general_tick():
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
     else:
         nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
+        prog_qr = quick_reentry_progress()
         prog_line = (f"Progress forward-test (gabungan): {nn} selesai ({wl}, total {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2-12h  : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2,      lc_brk)}\n"
                      f"  - reversal-8h: {_fmt_hunting_live(prog_rev, lc_rev)}\n"
                      f"    reversal-8h: Close #{rev_since_live} since LIVE\n"
                      f"  - brkX2-4h   : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET,    lc_4h)}\n"
+                     f"    brkX2-4h: Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
                      f"  - crossema-4h: {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST,    lc_cx)}\n"
                      f"  - hunting-4h : {_fmt_hunting_live(prog_hunt, lc_hunt)}\n"
                      f"    hunting-4h: Close #{hunt_since_live} since LIVE\n"
@@ -4467,6 +4512,7 @@ def thread2_monitor():
                 remove_from_active_deals(sym)
                 if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h'): record_closed(sym)
                 if strat == 'brkX2_4h' and trail_stop_triggered: record_trail_close(sym, price)
+                if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof_from_entry)
                 if _hold_no_sell: record_hold_no_sell_closed(sym)
 
                 # progress forward-test PER STRATEGI
@@ -4583,11 +4629,13 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
     else:
         nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
+        prog_qr = quick_reentry_progress()
         prog_line = (f"Progress forward-test (gabungan): {nn} selesai ({wl}, total {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2    : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2)}\n"
                      f"  - reversal : {_fmt_hunting_live(prog_rev)}\n"
                      f"    reversal : Close #{rev_since_live} since LIVE\n"
                      f"  - 4h       : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET)}\n"
+                     f"    4h       : Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
                      f"  - crossema : {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST)}\n"
                      f"  - hunting  : {_fmt_hunting_live(prog_hunt)}\n"
                      f"    hunting  : Close #{hunt_since_live} since LIVE")
@@ -5390,8 +5438,10 @@ def thread1d_scan_4h():
         n4h = active_deal_count_4h()
         if n4h >= STRAT4H_MAX_DEALS: break
         if sym in (set(active_deals.keys())): continue
+        _quick_reentry = False
         if is_cooldown_enabled('brkX2_4h') and cooldown_remaining(sym) > 0:
             if trend_continuation_ok(sym, signal_price):
+                _quick_reentry = True
                 log(f"[T1d] {sym} trend-continuation quick re-entry: cooldown "
                     f"{cooldown_remaining(sym)/3600:.1f}j di-bypass (price {_fmt_price(signal_price)} "
                     f"reclaim exit+{TREND_CONT_MARGIN_PCT:.1f}%, sinyal breakout lolos ulang)")
@@ -5439,6 +5489,7 @@ def thread1d_scan_4h():
             "opened_ts":     time.time(),
             "opened_candle_ts": int(candle_open_ms),
             "tf":            STRAT4H_TIMEFRAME,
+            "quick_reentry_open": _quick_reentry,
             # Indikator saat open (untuk log ARMED/CLOSE)
             "rsi_open":        float(_r4msg.get("rsi", float("nan"))) if not pd.isna(_r4msg.get("rsi", float("nan"))) else None,
             "stoch_k_open":    float(_r4msg.get("stoch_k", float("nan"))) if not pd.isna(_r4msg.get("stoch_k", float("nan"))) else None,
@@ -8892,6 +8943,7 @@ def run_web_dashboard():
                     })
                     remove_from_active_deals(sym)
                     if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h'): record_closed(sym)
+                    if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof)
                     log(f"[MANUAL-CLOSE] {sym} @ {price_now:.6g} profit={prof:.2f}%")
                     send_telegram(
                         f"CLOSE MANUAL (dashboard)\n"
@@ -10818,6 +10870,7 @@ if __name__ == '__main__':
     load_last_closed()
     load_hold_no_sell_closed()
     load_trail_reentry()
+    load_quick_reentry_trades()
     sync_base_usd_from_binance()  # auto-fix base_usd dari Binance API saat startup
     try:
         import math as _math
