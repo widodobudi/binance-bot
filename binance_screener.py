@@ -444,6 +444,9 @@ FWDTEST_TARGET_TRADES  = 25         # (lama, gabungan) evaluasi FINAL
 # Target per-strategi utk forward-test berhasil (tiap close update #X/N):
 FWDTEST_TARGET_BRKX2    = 15        # target close deal brkX2 utk forward-test berhasil
 FWDTEST_TARGET_REVERSAL = 8         # target close deal reversal utk forward-test berhasil
+REVERSAL_LIVE_BASELINE  = 8         # closed deals saat Reversal-8h dipromosikan ke LIVE
+                                     # (TERCAPAI 28/08/2026 @ #10/8, 8W/2L, +16.4%; baseline=target
+                                     # supaya 2 trade yg sudah lewat target ikut kehitung "sejak LIVE")
 FWDTEST_TARGET_4H       = 7         # target close deal brkX2-4h utk forward-test berhasil
 # Offset untuk multi-tahap forward-test brkX2:
 # Set ke total deal yang sudah selesai di AKHIR tahap sebelumnya.
@@ -3193,6 +3196,7 @@ def heartbeat_general_tick():
     prog_hunt = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
     prog_akum = csv_progress('akumulasi')
     hunt_since_live = max(0, (prog_hunt or {}).get('n', 0) - HUNTING_LIVE_BASELINE)
+    rev_since_live  = max(0, (prog_rev  or {}).get('n', 0) - REVERSAL_LIVE_BASELINE)
     lc_brk    = csv_last_close('brkX2',        offset=FWDTEST_BRKX2_PHASE_OFFSET)
     lc_rev    = csv_last_close('reversal')
     lc_4h     = csv_last_close('brkX2_4h')
@@ -3205,7 +3209,8 @@ def heartbeat_general_tick():
         nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
         prog_line = (f"Progress forward-test (gabungan): {nn} selesai ({wl}, total {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2-12h  : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2,      lc_brk)}\n"
-                     f"  - reversal-8h: {_fmt_strat(prog_rev,  FWDTEST_TARGET_REVERSAL,    lc_rev)}\n"
+                     f"  - reversal-8h: {_fmt_hunting_live(prog_rev, lc_rev)}\n"
+                     f"    reversal-8h: Close #{rev_since_live} since LIVE\n"
                      f"  - brkX2-4h   : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET,    lc_4h)}\n"
                      f"  - crossema-4h: {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST,    lc_cx)}\n"
                      f"  - hunting-4h : {_fmt_hunting_live(prog_hunt, lc_hunt)}\n"
@@ -4406,8 +4411,9 @@ def thread2_monitor():
                 if pstrat and pstrat['n']>0:
                     done_n = pstrat['n']; wl = f"{pstrat['win']}W/{pstrat['loss']}L"
                     status = "TERCAPAI - waktunya evaluasi!" if done_n>=tgt else f"menuju {tgt}"
-                    if strat == 'hunting_4h':
-                        since_live = max(0, done_n - HUNTING_LIVE_BASELINE)
+                    if strat in ('hunting_4h', 'reversal'):
+                        _live_baseline = HUNTING_LIVE_BASELINE if strat == 'hunting_4h' else REVERSAL_LIVE_BASELINE
+                        since_live = max(0, done_n - _live_baseline)
                         prog_close = (f"\n{strat_label} LIVE: {done_n} closed"
                                       f"\n  {wl}, total {pstrat['total_pct']:+.1f}%"
                                       f"\n{strat_label}: Close #{since_live} since LIVE")
@@ -4500,6 +4506,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
     prog_cx   = csv_progress('brkX2_crossema')
     prog_hunt = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
     hunt_since_live = max(0, (prog_hunt or {}).get('n', 0) - HUNTING_LIVE_BASELINE)
+    rev_since_live  = max(0, (prog_rev  or {}).get('n', 0) - REVERSAL_LIVE_BASELINE)
 
     if prog_all is None:
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
@@ -4507,7 +4514,8 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
         nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
         prog_line = (f"Progress forward-test (gabungan): {nn} selesai ({wl}, total {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2    : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2)}\n"
-                     f"  - reversal : {_fmt_strat(prog_rev,  FWDTEST_TARGET_REVERSAL)}\n"
+                     f"  - reversal : {_fmt_hunting_live(prog_rev)}\n"
+                     f"    reversal : Close #{rev_since_live} since LIVE\n"
                      f"  - 4h       : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET)}\n"
                      f"  - crossema : {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST)}\n"
                      f"  - hunting  : {_fmt_hunting_live(prog_hunt)}\n"
