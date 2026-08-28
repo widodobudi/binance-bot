@@ -6543,7 +6543,7 @@ DASHBOARD_HTML = '''
     {% if active_deals %}
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <table style="min-width:1280px">
-            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Cancel<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">stop track, koin tetap</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=target</span></th><th>TP Target ($)</th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>isArmed</th><th>Auto Avg Down</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
+            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>Cancel<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">stop track, koin tetap</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=target</span></th><th>TP Target ($)</th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>isArmed</th><th>Auto Avg Down</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr>
@@ -6559,6 +6559,7 @@ DASHBOARD_HTML = '''
           <div>{{ "%+.2f"|format(d.get("upnl_usd",0)) }}</div>
           <div style="font-size:9px;color:var(--muted)">${{ "%.0f"|format(d.get("total_usd_display",0)) }}</div>
         </td>
+        <td class="{{ "profit-pos" if d.get("upnl_pct",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_pct",0)) }}%</td>
         <td>
           <form method="POST" action="/cancel_deal" style="display:inline" onsubmit="return confirm('Cancel deal {{ sym.replace(\"USDT\",\"/USDT\") }}?\n\nBot berhenti kelola pair ini (auto add fund/TP/close berhenti). Koin yang sudah dibeli TETAP di wallet, TIDAK dijual.');">
             <input type="hidden" name="sym" value="{{ sym }}">
@@ -6587,7 +6588,6 @@ DASHBOARD_HTML = '''
           </div>
           {% endif %}
         </td>
-        <td class="{{ "profit-pos" if d.get("upnl_pct",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_pct",0)) }}%</td>
         <td>{% if d.get("strategy","") in ("akum_entry_a","akum_entry_b") %}<span class="badge" style="background:#444;color:#888">N/A</span>{% elif d.get("trailing_armed") %}<span class="badge badge-armed">Yes</span>{% else %}<span class="badge badge-wait">Wait</span>{% endif %}</td>
         <td>
           <form method="POST" action="/toggle" style="display:inline">
