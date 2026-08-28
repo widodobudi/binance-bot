@@ -5111,7 +5111,7 @@ def thread_rev_intrabar_scan():
                 f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} "
                 f"| total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
             )
-            threading.Thread(target=send_email_open_long, args=("OPEN LONG brkX2-4h: " + to_display_pair(sym), 
+            threading.Thread(target=send_email_open_long, args=("OPEN LONG Reversal-8h: " + to_display_pair(sym),
                 f"Reversal-8h | OPEN LONG INTRABAR\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
@@ -5146,6 +5146,12 @@ def thread_rev_intrabar_scan():
                 'base_usd':       target_usd,
                 'score':          0,
                 'strategy':       'reversal',
+            })
+            log_oac('OPEN', sym, 'Reversal-8h', {
+                'entry_price': _fmt_price(entry_price),
+                'slip_pct':    f"{slip_pct:+.2f}%",
+                'atr_pct':     f"{atrp:.2f}%",
+                'trail_dist':  f"{trailing_dist(atrp)}%",
             })
             last_rev_intrabar_candle_ts[sym] = candle_open_ms
 
