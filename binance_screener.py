@@ -10669,21 +10669,6 @@ if __name__ == '__main__':
     log("  BUILD: 20260821-F (+ pindah SC JS ke dash.js area (hapus Jinja raw block) + fix base_usd → target_usd semua lokasi)")
     log("  STRATEGI: MOMENTUM BREAKOUT brkX2 (12h)")
     log("="*55)
-    # Migrasi one-time: paksa base_usd strategi profitable ke nilai baru (24/08/2026),
-    # supaya tidak tertahan oleh override lama yg mungkin sudah tersimpan di strategy_config.json.
-    try:
-        _new_bases = {"brkX2": 12, "reversal": 15, "brkX2_4h": 15, "hunting_4h": 25}
-        _cfg_now = load_strategy_config()
-        _cfg_changed = False
-        for _strat_k, _new_base in _new_bases.items():
-            if _cfg_now.get(_strat_k, {}).get("base_usd") != _new_base:
-                _cfg_now.setdefault(_strat_k, {})["base_usd"] = _new_base
-                _cfg_changed = True
-        if _cfg_changed:
-            save_strategy_config(_cfg_now)
-            log(f"  Migrasi base_usd strategi profitable: {_new_bases}")
-    except Exception as _e:
-        log(f"WARN migrasi base_usd startup gagal: {_e}")
     if USE_BINANCE_DIRECT:
         try:
             _usdt_free, _usdt_locked = get_usdt_balance()
