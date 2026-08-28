@@ -3799,6 +3799,9 @@ def thread1b_scan_reversal():
             break
         with active_deals_lock:
             if sym in active_deals: continue
+        if is_cooldown_enabled('reversal') and cooldown_remaining(sym) > 0:
+            log(f"[T1b] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
+            continue
         log(f"[T1b] SINYAL REVERSAL: {sym} close_candle={_fmt_price(signal_price)} atr%={atrp:.2f}")
         if send_open_long(sym, 'reversal'):
             entry_price = get_price_now(sym)
@@ -4387,7 +4390,7 @@ def thread2_monitor():
                     'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
                 })
                 remove_from_active_deals(sym)
-                if strat in ('brkX2', 'hunting_4h'): record_closed(sym)
+                if strat in ('brkX2', 'hunting_4h', 'reversal'): record_closed(sym)
                 if _hold_no_sell: record_hold_no_sell_closed(sym)
 
                 # progress forward-test PER STRATEGI
@@ -5014,6 +5017,8 @@ def thread_rev_intrabar_scan():
         with active_deals_lock:
             if sym in active_deals:
                 continue
+        if is_cooldown_enabled('reversal') and cooldown_remaining(sym) > 0:
+            continue
         # Gating: jangan entry 2x di candle 8h yang sama untuk symbol ini
         if last_rev_intrabar_candle_ts.get(sym) == candle_open_ms:
             continue
@@ -8762,7 +8767,7 @@ def run_web_dashboard():
                         'total_usd':     d.get('target_usd', ''),
                     })
                     remove_from_active_deals(sym)
-                    if strat in ('brkX2', 'hunting_4h'): record_closed(sym)
+                    if strat in ('brkX2', 'hunting_4h', 'reversal'): record_closed(sym)
                     log(f"[MANUAL-CLOSE] {sym} @ {price_now:.6g} profit={prof:.2f}%")
                     send_telegram(
                         f"CLOSE MANUAL (dashboard)\n"
