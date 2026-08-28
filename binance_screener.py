@@ -607,12 +607,12 @@ TRADES_CSV = os.path.join(DATA_DIR, "trades_forwardtest.csv")
 STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # Default values — edit hard-coded di sini untuk ubah nilai RESET
 STRATEGY_CONFIG_DEFAULTS = {
-    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 12, "add_usd": None, "cooldown_enabled": True},
-    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": None, "cooldown_enabled": True},
-    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": 0,    "cooldown_enabled": True},
-    "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True},
-    "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True},
-    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True},
+    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 12, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False},
+    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False},
+    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": False},
+    "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": False},
+    "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": False},
+    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False},
 }
 
 def load_strategy_config() -> dict:
@@ -671,6 +671,14 @@ def is_cooldown_enabled(strategy: str) -> bool:
     Uncheck di dashboard kalau mau matikan proteksi ini per strategi (mis. testing)."""
     cfg = load_strategy_config()
     return cfg.get(strategy, {}).get("cooldown_enabled", True)
+
+def is_ai_call_open_enabled(strategy: str) -> bool:
+    """Default FALSE: kalau True, tiap kandidat OPEN yang sudah lolos semua filter rule-based
+    strategi ini masih dikonsultasikan ke AI (ai_decision_open) sebelum benar-benar dibuka.
+    Beda dari filter numerik lain di bot ini, keputusan AI tidak bisa di-backtest/di-sweep --
+    default OFF, nyalakan per-strategi lewat Strategy Control kalau mau (28/08/2026)."""
+    cfg = load_strategy_config()
+    return cfg.get(strategy, {}).get("ai_call_open", False)
 
 def get_strategy_base_usd(strategy: str) -> float:
     cfg = load_strategy_config()
@@ -3568,8 +3576,8 @@ def thread1_scan():
             cooldown_held.append((sym, sisa))
             continue  # jangan kirim webhook yg pasti ditolak 3Commas (cegah deal hantu)
         log(f"[T1] SINYAL: {sym} close_candle={_fmt_price(signal_price)} atr%={atrp:.2f} skor={score}")
-        # AI decision jika ai_call=True untuk pair ini (cek overrides sebelum open)
-        if get_deal_override(sym, 'ai_call', False):
+        # AI decision jika toggle "AI Call on Open" aktif utk strategi brkX2 (Strategy Control)
+        if is_ai_call_open_enabled('brkX2'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
             if not ai_decision_open(sym, 'brkX2-12h', _ai_ind, active_deal_count()):
                 log(f"[T1] {sym} OPEN di-skip oleh AI decision")
@@ -3808,6 +3816,11 @@ def thread1b_scan_reversal():
             log(f"[T1b] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
             continue
         log(f"[T1b] SINYAL REVERSAL: {sym} close_candle={_fmt_price(signal_price)} atr%={atrp:.2f}")
+        if is_ai_call_open_enabled('reversal'):
+            _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'signal_price': _fmt_price(signal_price)}
+            if not ai_decision_open(sym, 'Reversal-8h', _ai_ind, active_deal_count()):
+                log(f"[T1b] {sym} OPEN di-skip oleh AI decision")
+                continue
         if send_open_long(sym, 'reversal'):
             entry_price = get_price_now(sym)
             if entry_price <= 0: entry_price = signal_price
@@ -4707,6 +4720,11 @@ def thread1c_scan_intrabar():
         score        = signal_score(r12)
         signal_price = float(r12['close'])
         log(f"[T1c] SINYAL INTRABAR: {sym} elapsed={elapsed_pct*100:.1f}% price={price_now:.6g} skor={score}")
+        if is_ai_call_open_enabled('brkX2'):
+            _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
+            if not ai_decision_open(sym, 'brkX2-12h', _ai_ind, active_deal_count()):
+                log(f"[T1c] {sym} OPEN di-skip oleh AI decision")
+                continue
         ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2')
         if ok:
             entry_price = get_price_now(sym)
@@ -4899,6 +4917,11 @@ def thread1c_scan_intrabar_early():
         signal_price = float(r12['close'])
         log(f"[T1c-E] SINYAL EARLY: {sym} elapsed={elapsed_pct*100:.1f}% price={price_now:.6g} skor={score}")
 
+        if is_ai_call_open_enabled('brkX2'):
+            _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
+            if not ai_decision_open(sym, 'brkX2-12h', _ai_ind, active_deal_count()):
+                log(f"[T1c-E] {sym} OPEN di-skip oleh AI decision")
+                continue
         ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2')
         if ok:
             entry_price = get_price_now(sym)
@@ -5097,6 +5120,11 @@ def thread_rev_intrabar_scan():
         log(f"[T3-REV] SINYAL REVERSAL INTRABAR: {sym} price_now={price_now:.6g} "
             f"EMA20={ema20_now:.6g} atr%={atrp:.2f}")
 
+        if is_ai_call_open_enabled('reversal'):
+            _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'signal_price': _fmt_price(signal_price)}
+            if not ai_decision_open(sym, 'Reversal-8h', _ai_ind, active_deal_count()):
+                log(f"[T3-REV] {sym} OPEN di-skip oleh AI decision")
+                continue
         if send_open_long(sym, 'reversal'):
             entry_price = get_price_now(sym)
             if entry_price <= 0:
@@ -5307,6 +5335,11 @@ def thread1d_scan_4h():
         if is_cooldown_enabled('brkX2_4h') and cooldown_remaining(sym) > 0:
             log(f"[T1d] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
             continue
+        if is_ai_call_open_enabled('brkX2_4h'):
+            _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
+            if not ai_decision_open(sym, 'brkX2-4h', _ai_ind, active_deal_count()):
+                log(f"[T1d] {sym} OPEN di-skip oleh AI decision")
+                continue
 
         ok, target_usd, add_usd = open_deal_with_sizing(sym, score, strategy="brkX2_4h")
         if not ok: continue
@@ -5636,6 +5669,11 @@ def thread_crossema_scan():
             log(f"[T_CROSSEMA] SINYAL: {sym} price={price_now:.6g} "
                 f"EMA20={ef:.6g} atr%={atrp:.2f} elapsed={elapsed_pct*100:.1f}%")
 
+            if is_ai_call_open_enabled('brkX2_crossema'):
+                _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'signal_price': _fmt_price(signal_price)}
+                if not ai_decision_open(sym, 'CrossEMA-4h', _ai_ind, active_deal_count()):
+                    log(f"[T_CROSSEMA] {sym} OPEN di-skip oleh AI decision")
+                    continue
             ok, target_usd, add_usd = open_deal_with_sizing(sym, 0, strategy="brkX2_crossema")
             if not ok:
                 count_blocker(scan_blockers_cx, "Order open", True)
@@ -6186,6 +6224,11 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
     if not has_enough_balance_for_hunting(HUNTING_ORDER_VOLUME, HUNTING_CAPITAL_USD):
         log(f"[T1d-HUNT] {symbol} skip: estimasi saldo tidak cukup untuk open ${HUNTING_ORDER_VOLUME}")
         return False
+    if is_ai_call_open_enabled('hunting_4h'):
+        _ai_ind = {'atr_pct': f"{atrp:.2f}%"}
+        if not ai_decision_open(symbol, 'Hunting-4h', _ai_ind, active_deal_count()):
+            log(f"[T1d-HUNT] {symbol} OPEN di-skip oleh AI decision")
+            return False
     ok, target_usd, add_usd = open_deal_with_sizing(symbol, score, strategy="hunting_4h")
     if not ok:
         log(f"[T1d-HUNT] {symbol} " + ("Binance order ditolak" if USE_BINANCE_DIRECT else "3Commas TOLAK") + " open hunting")
@@ -6586,13 +6629,14 @@ DASHBOARD_HTML = '''
         <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
           <th style="text-align:left;padding:5px 8px">Strategi</th>
           <th style="text-align:center;padding:5px 8px">Izinkan Open Long</th>
+          <th style="text-align:center;padding:5px 8px">AI Call on Open</th>
           <th style="text-align:center;padding:5px 8px">Gunakan Setting Modal</th>
           <th style="text-align:center;padding:5px 8px">Base Order (USDT)</th>
           <th style="text-align:center;padding:5px 8px">Add Fund (USDT)</th>
           <th style="text-align:center;padding:5px 8px">Cooldown Re-entry</th>
                     <th style="text-align:center;padding:5px 8px">Action</th>
         </tr></thead>
-                <tbody id="sc-body"><tr><td colspan="7" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
+                <tbody id="sc-body"><tr><td colspan="8" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
     </table>
     </div>
     </div>
@@ -7186,15 +7230,16 @@ function loadStrategyConfig() {
             var tbody = document.getElementById('sc-body');
             if (!tbody) return;
             if (!keys.length || !Object.keys(d || {}).length) {
-                tbody.innerHTML = '<tr><td colspan="7" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
                 return;
             }
             for (var i = 0; i < keys.length; i++) {
                 var k = keys[i];
-                var cfg = d[k] || {strategy_enabled: true, sizing_enabled: true, base_usd: 8, add_usd: null, cooldown_enabled: true};
+                var cfg = d[k] || {strategy_enabled: true, sizing_enabled: true, base_usd: 8, add_usd: null, cooldown_enabled: true, ai_call_open: false};
                 var strategyEnabled = cfg.strategy_enabled !== false;
                 var sizingEnabled = cfg.sizing_enabled !== false;
                 var cooldownEnabled = cfg.cooldown_enabled !== false;
+                var aiCallOpenEnabled = cfg.ai_call_open === true;
                 var dim = sizingEnabled ? '' : 'opacity:0.35;pointer-events:none';
                 var saveButton = '<button type="button" onclick="saveStrategyConfig(this)" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>';
                 var addFundCell = '';
@@ -7210,6 +7255,7 @@ function loadStrategyConfig() {
                 rows += '<tr data-strategy="' + k + '" style="border-bottom:1px solid rgba(255,255,255,0.04)">'
                     + '<td style="padding:5px 8px;font-weight:600">' + SC_LABELS[k] + '</td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-run-' + k + '" ' + (strategyEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
+                    + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-aicall-' + k + '" ' + (aiCallOpenEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer" title="Kandidat OPEN yang lolos semua filter rule-based masih dikonsultasikan ke AI dulu sebelum dibuka. Default OFF -- ini nggak bisa di-backtest kayak parameter lain."></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-size-' + k + '" ' + (sizingEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>'
                     + addFundCell
@@ -7227,7 +7273,7 @@ function loadStrategyConfig() {
         .catch(function(e) {
             var tbody = document.getElementById('sc-body');
             if (tbody) {
-                tbody.innerHTML = '<tr><td colspan="7" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
             }
         });
 }
@@ -7251,10 +7297,12 @@ function saveStrategyConfig(button) {
     var strategyEnabledEl = document.getElementById('sc-run-' + key);
     var sizingEnabledEl = document.getElementById('sc-size-' + key);
     var cooldownEnabledEl = document.getElementById('sc-cooldown-' + key);
+    var aiCallOpenEl = document.getElementById('sc-aicall-' + key);
     data[key] = {
         strategy_enabled: strategyEnabledEl ? strategyEnabledEl.checked : true,
         sizing_enabled: sizingEnabledEl ? sizingEnabledEl.checked : true,
         cooldown_enabled: cooldownEnabledEl ? cooldownEnabledEl.checked : true,
+        ai_call_open: aiCallOpenEl ? aiCallOpenEl.checked : false,
         base_usd: parseFloat(baseEl ? baseEl.value : 8) || 8,
     };
     if (SC_HAS_ADDFUND[key]) {
@@ -8304,6 +8352,11 @@ def thread_akum_entry_scan():
             price_now = get_price_now(sym)
             if price_now <= 0: continue
             strat_key = f'akum_entry_{entry_type.lower()}'
+            if is_ai_call_open_enabled('akum_entry_a'):
+                _ai_ind = {'entry_type': entry_type, 'price_now': _fmt_price(price_now)}
+                if not ai_decision_open(sym, f'Akumulasi-4h Entry {entry_type}', _ai_ind, active_deal_count()):
+                    log(f"[T_AKUM_ENTRY] {sym} OPEN di-skip oleh AI decision")
+                    continue
             ok, target_usd, add_usd = open_deal_with_sizing(sym, score, strat_key)
             if not ok:
                 reject_reason = "Binance order ditolak (cek saldo/lot size)" if USE_BINANCE_DIRECT else "3Commas tolak (cek saldo/slot)"
@@ -10568,58 +10621,6 @@ def ai_decision_near_timeout(symbol: str, strategy: str, d: dict, price: float, 
         f"{reasoning}",
         parse_mode=None
     )
-    return decision
-
-
-def ai_decision_close(symbol: str, strategy: str, d: dict, price: float, peak: float, reason: str) -> bool:
-    """
-    AI decide: close deal sekarang atau hold (override stop).
-    Return True = close, False = hold.
-    Default True jika AI tidak tersedia / error.
-    Fee round trip 0.3% diperhitungkan.
-    """
-    FEE_ROUND_TRIP = 0.3
-    entry  = d.get('entry_price', 0)
-    atrp   = d.get('atr_pct', 0)
-    armed  = d.get('trailing_armed', False)
-    profit_gross    = (price/entry - 1)*100 if entry > 0 else 0
-    profit_after_fee = profit_gross - FEE_ROUND_TRIP
-    profit_peak     = (peak/entry - 1)*100  if entry > 0 else 0
-    tdist  = trailing_dist_progressive(atrp, profit_peak)
-    prompt = (
-        f"Kamu adalah AI analyst trading crypto. Berikan analisis singkat.\n\n"
-        f"Deal: {to_display_pair(symbol)} | Strategi: {strategy}\n"
-        f"Entry: {_fmt_price(entry)} | Peak: {_fmt_price(peak)} | Harga skrg: {_fmt_price(price)}\n"
-        f"Profit gross: {profit_gross:+.2f}% | Setelah fee (0.3%): {profit_after_fee:+.2f}% | Peak profit: {profit_peak:+.2f}%\n"
-        f"ATR%: {atrp:.2f}% | Trail dist: {tdist:.2f}% | Armed: {armed}\n"
-        f"Alasan close: {reason}\n\n"
-        f"Apakah CLOSE sekarang atau HOLD (tahan, beri kesempatan recovery)?\n\n"
-        f"Format jawaban (ikuti persis):\n"
-        f"CLOSE atau HOLD\n"
-        f"Alasan: penjelasan singkat keputusan\n"
-        f"Warning: risiko kalau HOLD (atau 'Tidak ada')\n\n"
-        f"Baris pertama HARUS hanya kata CLOSE atau HOLD."
-    )
-    result = _ai_call(prompt)
-    if not result:
-        return True
-    lines = result.strip().split("\n")
-    first_line = lines[0].strip().upper()
-    decision = "CLOSE" in first_line
-    reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
-    log(f"[AI] CLOSE decision {symbol}: {first_line} → {'CLOSE' if decision else 'HOLD'}")
-    if not decision:
-        send_telegram(
-            f"🤖 AI Decision | {to_display_pair(symbol)}\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"{ai_provider_note()}\n"
-            f"Strategi : {strategy}\n"
-            f"Event    : CLOSE ({reason[:40]})\n"
-            f"Profit   : {profit_after_fee:+.2f}% (setelah fee)\n"
-            f"Keputusan: ⏸ HOLD\n"
-            f"{reasoning}",
-            parse_mode=None
-        )
     return decision
 
 
