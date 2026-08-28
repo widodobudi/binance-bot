@@ -183,6 +183,9 @@ VOLATILITY_GUARD_ATR_MULT = 2.0   # ATR melonjak >=2x ATR saat open: jangan add 
 HARD_STOP_MULT = 1.1              # pengali (K) atas base hard-stop per tier ATR% (lihat hard_stop_pct()).
                                    # K=1.1 disepakati 26/08/2026 studi kasus TLM/USDT: base tier Volatil 9%
                                    # x1.1 = 9.9%, cover wick turun sampai -9.9% tanpa ke-exit (wick TLM -9.55%)
+HOLD_NO_SELL_WARN_RATIO = 0.85    # checkbox "hold, jangan jual" muncul di 85% dari ambang hard-stop
+                                   # tier deal itu (bukan pas 100%) -- kasih ruang waktu react sebelum
+                                   # hard-stop beneran kesulut (disepakati 27/08/2026)
 MAX_HOLD_DAYS     = 5
 # detik per candle sesuai timeframe (utk batas hold yg benar di TF apa pun).
 # 1d=86400, 12h=43200, 6h=21600, 4h=14400. Batas hold = MAX_HOLD_DAYS candle.
@@ -714,13 +717,50 @@ def record_closed(symbol: str):
         last_closed_ts[symbol] = time.time()
     save_last_closed()
 
+# Cooldown diperpanjang khusus deal yang di-hold (bukan dijual) saat hard-stop —
+# 96 jam / 4 hari, hasil backtest_posthardstop khusus (27/08/2026): itu bucket pertama
+# dengan sample cukup (N=336) yang repeat-hard-stop rate & avg outcome-nya sudah setara
+# baseline trade normal; bucket di bawahnya (<96j) sample-nya terlalu tipis dipercaya.
+HOLD_NO_SELL_COOLDOWN_SECONDS = 96 * 3600
+HOLD_NO_SELL_CLOSED_FILE = os.path.join(DATA_DIR, "hold_no_sell_closed.json")
+hold_no_sell_ts = {}
+hold_no_sell_lock = threading.Lock()
+
+def load_hold_no_sell_closed():
+    global hold_no_sell_ts
+    if not os.path.exists(HOLD_NO_SELL_CLOSED_FILE):
+        return
+    try:
+        with open(HOLD_NO_SELL_CLOSED_FILE, 'r') as f: data = json.load(f)
+        with hold_no_sell_lock:
+            hold_no_sell_ts = {k: float(v) for k, v in data.items()}
+        log(f"   Loaded hold_no_sell_ts: {len(hold_no_sell_ts)} symbol.")
+    except Exception as e:
+        log(f"WARN gagal baca hold_no_sell_closed.json: {e}")
+
+def save_hold_no_sell_closed():
+    try:
+        with hold_no_sell_lock: data = dict(hold_no_sell_ts)
+        with open(HOLD_NO_SELL_CLOSED_FILE, 'w') as f: json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan hold_no_sell_closed.json: {e}")
+
+def record_hold_no_sell_closed(symbol: str):
+    """Catat waktu deal di-hold (bukan dijual) via hard-stop -> cooldown 96 jam, semua strategi."""
+    with hold_no_sell_lock:
+        hold_no_sell_ts[symbol] = time.time()
+    save_hold_no_sell_closed()
+
 def cooldown_remaining(symbol: str) -> float:
-    """Sisa detik cooldown utk symbol ini. 0 kalau tidak dalam cooldown (atau belum pernah close)."""
+    """Sisa detik cooldown utk symbol ini (ambil yang terpanjang antara cooldown normal
+    COOLDOWN_SECONDS dan cooldown diperpanjang pasca hold-no-sell). 0 kalau tidak cooldown."""
     with last_closed_lock:
         ts = last_closed_ts.get(symbol)
-    if ts is None: return 0.0
-    sisa = COOLDOWN_SECONDS - (time.time() - ts)
-    return max(0.0, sisa)
+    normal_sisa = max(0.0, COOLDOWN_SECONDS - (time.time() - ts)) if ts is not None else 0.0
+    with hold_no_sell_lock:
+        ts2 = hold_no_sell_ts.get(symbol)
+    extended_sisa = max(0.0, HOLD_NO_SELL_COOLDOWN_SECONDS - (time.time() - ts2)) if ts2 is not None else 0.0
+    return max(normal_sisa, extended_sisa)
 
 def is_in_cooldown(symbol: str) -> bool:
     return cooldown_remaining(symbol) > 0
@@ -4101,7 +4141,7 @@ def thread2_monitor():
             if armed and move_pct >= T2_FAST_TRIGGER_PCT:
                 want_fast = True
 
-        do_close=False; reason=""
+        do_close=False; reason=""; hard_stop_triggered=False
         # TP custom: tutup otomatis begitu U/PnL bersih (net -0.2% fee) sudah >= target $ per deal
         # (default $1.00 kalau belum diisi manual). Pakai estimate_deal_total_usd()
         # (qty_coin * entry_price aktual) supaya modal yang dipakai cek TP sama persis dengan
@@ -4119,6 +4159,7 @@ def thread2_monitor():
                 do_close = True
                 reason = (f"hard stop volatilitas [{_hs_label}, ATR {atrp:.2f}%]: price {_fmt_price(price)} "
                           f"turun >= {_hs_pct:.2f}% dari entry (base {_hs_base:.1f}% x K{HARD_STOP_MULT:.2f})")
+                hard_stop_triggered = True
         if not do_close and armed and not _is_akum:
             stop = peak*(1 - tdist/100)
             if price <= stop:
@@ -4285,7 +4326,13 @@ def thread2_monitor():
                 strat_label = "Akumulasi-4h Entry B"
             else:
                 strat_label = "Momentum brkX2 (12h)"
-            if send_close_long(sym, strat):
+            # Hold-no-sell: kalau ini hard-stop DAN checkbox "hold, jangan jual" aktif (default True)
+            # untuk deal ini -> tetap catat sebagai loss (statistik tetap jujur), tapi SKIP jual —
+            # koin tetap di wallet. Cooldown 96 jam berlaku ke symbol ini lintas semua strategi.
+            _hold_no_sell = hard_stop_triggered and get_deal_override(sym, 'hold_no_sell', True)
+            if _hold_no_sell:
+                reason += " [HOLD: koin tidak dijual, cooldown 96j]"
+            if _hold_no_sell or send_close_long(sym, strat):
                 # catat ke CSV DULU supaya trade ini ikut terhitung di progress
                 total_usd = estimate_deal_total_usd(d)
                 csv_log_close(
@@ -4341,7 +4388,8 @@ def thread2_monitor():
                 })
                 remove_from_active_deals(sym)
                 if strat in ('brkX2', 'hunting_4h'): record_closed(sym)
-                
+                if _hold_no_sell: record_hold_no_sell_closed(sym)
+
                 # progress forward-test PER STRATEGI
                 if strat == 'reversal':
                     tgt = FWDTEST_TARGET_REVERSAL
@@ -6561,10 +6609,19 @@ DASHBOARD_HTML = '''
         </td>
         <td class="{{ "profit-pos" if d.get("upnl_pct",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_pct",0)) }}%</td>
         <td>
+          {% if d.get("hardstop_warn_pct") is not none and d.get("upnl_pct",0) <= -1 * d.get("hardstop_warn_pct") %}
+          <form method="POST" action="/toggle" style="display:inline" title="Deal ini sudah dekat hard-stop ({{ '%.1f'|format(d.get('hardstop_full_pct',0)) }}%). Tercentang = kalau hard-stop kesulut, koin di-HOLD (tidak dijual), catat sebagai loss, cooldown 96j. Uncheck = tetap dijual seperti biasa.">
+            <input type="hidden" name="sym" value="{{ sym }}">
+            <input type="hidden" name="key" value="hold_no_sell">
+            <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("hold_no_sell",True) else "" }} style="width:16px;height:16px;cursor:pointer">
+            <div style="font-size:8px;color:var(--muted);white-space:nowrap">Hold, jgn jual</div>
+          </form>
+          {% else %}
           <form method="POST" action="/cancel_deal" style="display:inline" onsubmit="return confirm('Cancel deal {{ sym.replace(\"USDT\",\"/USDT\") }}?\n\nBot berhenti kelola pair ini (auto add fund/TP/close berhenti). Koin yang sudah dibeli TETAP di wallet, TIDAK dijual.');">
             <input type="hidden" name="sym" value="{{ sym }}">
             <button type="submit" style="background:#ef4444;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Cancel</button>
           </form>
+          {% endif %}
         </td>
         <td>
           <form method="POST" action="/toggle" style="display:inline">
@@ -8508,6 +8565,12 @@ def run_web_dashboard():
                 total_usd = estimate_deal_total_usd(dd)
                 dd["total_usd_display"] = total_usd
                 dd["upnl_usd"] = round(dd["upnl_pct"] / 100 * total_usd, 2)
+                # Ambang checkbox "hold, jangan jual": 85% dari ambang hard-stop tier deal ini.
+                # Akumulasi dikecualikan -- exit-nya via SL/TP sendiri, bukan hard_stop_pct().
+                if dd.get("strategy", "") not in ("akum_entry_a", "akum_entry_b"):
+                    _hs_lbl, _hs_bs, _hs_full = hard_stop_pct(dd.get("atr_pct", 3.0))
+                    dd["hardstop_full_pct"] = _hs_full
+                    dd["hardstop_warn_pct"] = round(_hs_full * HOLD_NO_SELL_WARN_RATIO, 4)
                 deals_display[sym] = dd
             with _dashboard_lock:
                 nm = dict(_dashboard_state["near_miss"])
@@ -10685,6 +10748,7 @@ if __name__ == '__main__':
 
     load_active_deals()
     load_last_closed()
+    load_hold_no_sell_closed()
     sync_base_usd_from_binance()  # auto-fix base_usd dari Binance API saat startup
     try:
         import math as _math
