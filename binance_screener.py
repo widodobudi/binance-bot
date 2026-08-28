@@ -775,6 +775,63 @@ def cooldown_remaining(symbol: str) -> float:
 
 def is_in_cooldown(symbol: str) -> bool:
     return cooldown_remaining(symbol) > 0
+
+# ── Trend-Continuation Quick Re-entry (khusus brkX2-4h, backtest 28/08/2026) ──
+# Kasus nyata: CHIP/USDT closed via trailing 18:00 (+2.16%) lalu price lanjut rally
+# tapi bot nggak bisa masuk lagi krn brkX2_4h waktu itu nggak pernah dicatat ke
+# record_closed() (bug terpisah, sudah dibenarkan di call site di bawah). Backtest
+# 78 symbol/~333 hari (scratchpad backtest_trend_continuation_reentry.py):
+#   - Versi longgar (asal price balik naik lagi, TANPA re-cek sinyal): avg +1.7~+2.25%
+#     tapi worst-case -47.9% (LEBIH BURUK dari worst baseline -32.7%) -- ditolak.
+#   - Versi ketat (price reclaim >= exit+0.5% DAN sinyal breakout brkX2-4h lolos
+#     ulang, window <=12 jam): N=37, avg +6.89%, WR 100% (vs baseline avg +1.36%,
+#     WR 75.5%) -- dipakai.
+# Syarat "sinyal lolos ulang" otomatis terpenuhi di caller (thread1d_scan_4h) krn
+# baru dipakai setelah symbol lolos scan candidates (breakout ter-validasi ulang).
+TREND_CONT_WINDOW_SECONDS = 12 * 3600
+TREND_CONT_MARGIN_PCT     = 0.5
+TRAIL_REENTRY_FILE = os.path.join(DATA_DIR, "trail_reentry.json")
+trail_reentry_info = {}   # symbol -> {'ts': epoch close, 'price': harga exit trailing terakhir}
+trail_reentry_lock = threading.Lock()
+
+def load_trail_reentry():
+    global trail_reentry_info
+    if not os.path.exists(TRAIL_REENTRY_FILE):
+        return
+    try:
+        with open(TRAIL_REENTRY_FILE, 'r') as f: data = json.load(f)
+        with trail_reentry_lock:
+            trail_reentry_info = data
+        log(f"   Loaded trail_reentry_info: {len(trail_reentry_info)} symbol.")
+    except Exception as e:
+        log(f"WARN gagal baca trail_reentry.json: {e}")
+
+def save_trail_reentry():
+    try:
+        with trail_reentry_lock: data = dict(trail_reentry_info)
+        with open(TRAIL_REENTRY_FILE, 'w') as f: json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan trail_reentry.json: {e}")
+
+def record_trail_close(symbol: str, exit_price: float):
+    """Catat harga+waktu close via TRAILING (bukan hard-stop/manual) utk cek quick re-entry."""
+    with trail_reentry_lock:
+        trail_reentry_info[symbol] = {'ts': time.time(), 'price': exit_price}
+    save_trail_reentry()
+
+def trend_continuation_ok(symbol: str, current_price: float) -> bool:
+    """True kalau symbol ini baru saja closed via trailing (brkX2-4h), dlm window
+    <=12 jam, DAN current_price sudah reclaim >= harga exit + margin konfirmasi 0.5%."""
+    with trail_reentry_lock:
+        info = trail_reentry_info.get(symbol)
+    if not info:
+        return False
+    age = time.time() - info.get('ts', 0)
+    if age > TREND_CONT_WINDOW_SECONDS:
+        return False
+    thresh = info.get('price', 0) * (1 + TREND_CONT_MARGIN_PCT / 100)
+    return current_price >= thresh
+
 trades_csv_lock = threading.Lock()
 
 # Kolom CSV log forward-test (1 baris per trade; ditulis saat OPEN, dilengkapi saat CLOSE)
@@ -4162,7 +4219,7 @@ def thread2_monitor():
             if armed and move_pct >= T2_FAST_TRIGGER_PCT:
                 want_fast = True
 
-        do_close=False; reason=""; hard_stop_triggered=False
+        do_close=False; reason=""; hard_stop_triggered=False; trail_stop_triggered=False
         # TP custom: tutup otomatis begitu U/PnL bersih (net -0.2% fee) sudah >= target $ per deal
         # (default $1.00 kalau belum diisi manual). Pakai estimate_deal_total_usd()
         # (qty_coin * entry_price aktual) supaya modal yang dipakai cek TP sama persis dengan
@@ -4200,7 +4257,7 @@ def thread2_monitor():
                     log(f"[T2] {sym} trailing ditahan: HTF sehat, grace tersisa "
                         f"{max(0, TRAIL_HTF_GRACE_SECONDS - (time.time() - trail_grace_started)):.0f}s")
                 else:
-                    do_close=True; reason=trail_reason
+                    do_close=True; reason=trail_reason; trail_stop_triggered=True
             elif d.get('trail_htf_grace_started_at'):
                 with active_deals_lock:
                     if sym in active_deals:
@@ -4408,7 +4465,8 @@ def thread2_monitor():
                     'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
                 })
                 remove_from_active_deals(sym)
-                if strat in ('brkX2', 'hunting_4h', 'reversal'): record_closed(sym)
+                if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h'): record_closed(sym)
+                if strat == 'brkX2_4h' and trail_stop_triggered: record_trail_close(sym, price)
                 if _hold_no_sell: record_hold_no_sell_closed(sym)
 
                 # progress forward-test PER STRATEGI
@@ -5333,8 +5391,13 @@ def thread1d_scan_4h():
         if n4h >= STRAT4H_MAX_DEALS: break
         if sym in (set(active_deals.keys())): continue
         if is_cooldown_enabled('brkX2_4h') and cooldown_remaining(sym) > 0:
-            log(f"[T1d] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
-            continue
+            if trend_continuation_ok(sym, signal_price):
+                log(f"[T1d] {sym} trend-continuation quick re-entry: cooldown "
+                    f"{cooldown_remaining(sym)/3600:.1f}j di-bypass (price {_fmt_price(signal_price)} "
+                    f"reclaim exit+{TREND_CONT_MARGIN_PCT:.1f}%, sinyal breakout lolos ulang)")
+            else:
+                log(f"[T1d] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
+                continue
         if is_ai_call_open_enabled('brkX2_4h'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
             if not ai_decision_open(sym, 'brkX2-4h', _ai_ind, active_deal_count()):
@@ -8828,7 +8891,7 @@ def run_web_dashboard():
                         'total_usd':     d.get('target_usd', ''),
                     })
                     remove_from_active_deals(sym)
-                    if strat in ('brkX2', 'hunting_4h', 'reversal'): record_closed(sym)
+                    if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h'): record_closed(sym)
                     log(f"[MANUAL-CLOSE] {sym} @ {price_now:.6g} profit={prof:.2f}%")
                     send_telegram(
                         f"CLOSE MANUAL (dashboard)\n"
@@ -10754,6 +10817,7 @@ if __name__ == '__main__':
     load_active_deals()
     load_last_closed()
     load_hold_no_sell_closed()
+    load_trail_reentry()
     sync_base_usd_from_binance()  # auto-fix base_usd dari Binance API saat startup
     try:
         import math as _math
