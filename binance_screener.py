@@ -214,6 +214,7 @@ HUNTING_MAX_DEALS        = 3       # max deal hunting aktif bersamaan
 HUNTING_MAX_HOLD_CANDLES = 15      # timeout 15 candle 4h = 2.5 hari (sama brkX2-4h)
 HUNTING_FWDTEST_TARGET   = 7       # target forward-test
 HUNTING_LIVE_BASELINE    = 7       # closed deals saat Hunting dipromosikan ke LIVE
+HUNTING_PHASE2_TARGET    = 15      # target fase-2 (counter "2nd") setelah LIVE, 28/08/2026
 HUNTING_MIN_ATR_PCT      = 0.5     # ATR% minimum — filter koin stagnan
 HUNTING_RSI_MAX          = 60      # RSI < 60 (backtest_hunting_filter_sweep: +0.714% vs baseline)
 HUNTING_CAPITAL_USD      = float(os.environ.get("HUNTING_CAPITAL_USD", "90.0"))  # estimasi total kapital bot (update manual kalau top-up)
@@ -447,6 +448,7 @@ FWDTEST_TARGET_REVERSAL = 8         # target close deal reversal utk forward-tes
 REVERSAL_LIVE_BASELINE  = 8         # closed deals saat Reversal-8h dipromosikan ke LIVE
                                      # (TERCAPAI 28/08/2026 @ #10/8, 8W/2L, +16.4%; baseline=target
                                      # supaya 2 trade yg sudah lewat target ikut kehitung "sejak LIVE")
+REVERSAL_PHASE2_TARGET  = 15        # target fase-2 (counter "2nd") setelah LIVE, 28/08/2026
 FWDTEST_TARGET_4H       = 7         # target close deal brkX2-4h utk forward-test berhasil
 # Offset untuk multi-tahap forward-test brkX2:
 # Set ke total deal yang sudah selesai di AKHIR tahap sebelumnya.
@@ -3303,13 +3305,11 @@ def heartbeat_general_tick():
     prog_cx   = csv_progress('brkX2_crossema')
     prog_hunt = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
     prog_akum = csv_progress('akumulasi')
-    hunt_since_live = max(0, (prog_hunt or {}).get('n', 0) - HUNTING_LIVE_BASELINE)
-    rev_since_live  = max(0, (prog_rev  or {}).get('n', 0) - REVERSAL_LIVE_BASELINE)
+    prog_rev2  = csv_progress('reversal',    offset=REVERSAL_LIVE_BASELINE)
+    prog_hunt2 = csv_progress('hunting_4h',  offset=HUNTING_FWDTEST_PHASE_OFFSET + HUNTING_LIVE_BASELINE)
     lc_brk    = csv_last_close('brkX2',        offset=FWDTEST_BRKX2_PHASE_OFFSET)
-    lc_rev    = csv_last_close('reversal')
     lc_4h     = csv_last_close('brkX2_4h')
     lc_cx     = csv_last_close('brkX2_crossema')
-    lc_hunt   = csv_last_close('hunting_4h',   offset=HUNTING_FWDTEST_PHASE_OFFSET)
     lc_akum   = csv_last_close('akumulasi')
     if prog_all is None:
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
@@ -3318,13 +3318,13 @@ def heartbeat_general_tick():
         prog_qr = quick_reentry_progress()
         prog_line = (f"Progress forward-test (gabungan): {nn} selesai ({wl}, total {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2-12h  : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2,      lc_brk)}\n"
-                     f"  - reversal-8h: {_fmt_hunting_live(prog_rev, lc_rev)}\n"
-                     f"    reversal-8h: Close #{rev_since_live} since LIVE\n"
+                     f"  - reversal-8h: {_fmt_hunting_live(prog_rev)}\n"
+                     f"    reversal-8h: 2nd {_fmt_strat(prog_rev2, REVERSAL_PHASE2_TARGET)}\n"
                      f"  - brkX2-4h   : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET,    lc_4h)}\n"
                      f"    brkX2-4h: Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
                      f"  - crossema-4h: {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST,    lc_cx)}\n"
-                     f"  - hunting-4h : {_fmt_hunting_live(prog_hunt, lc_hunt)}\n"
-                     f"    hunting-4h: Close #{hunt_since_live} since LIVE\n"
+                     f"  - hunting-4h : {_fmt_hunting_live(prog_hunt)}\n"
+                     f"    hunting-4h: 2nd {_fmt_strat(prog_hunt2, HUNTING_PHASE2_TARGET)}\n"
                      f"  - akumulasi-4h: {_fmt_strat(prog_akum, AKUM_ENTRY_FWDTEST_TARGET, lc_akum)}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
@@ -4553,11 +4553,16 @@ def thread2_monitor():
                     done_n = pstrat['n']; wl = f"{pstrat['win']}W/{pstrat['loss']}L"
                     status = "TERCAPAI - waktunya evaluasi!" if done_n>=tgt else f"menuju {tgt}"
                     if strat in ('hunting_4h', 'reversal'):
-                        _live_baseline = HUNTING_LIVE_BASELINE if strat == 'hunting_4h' else REVERSAL_LIVE_BASELINE
-                        since_live = max(0, done_n - _live_baseline)
+                        _live_baseline  = HUNTING_LIVE_BASELINE if strat == 'hunting_4h' else REVERSAL_LIVE_BASELINE
+                        _phase2_target  = HUNTING_PHASE2_TARGET if strat == 'hunting_4h' else REVERSAL_PHASE2_TARGET
+                        _phase2_offset  = (HUNTING_FWDTEST_PHASE_OFFSET if strat == 'hunting_4h' else 0) + _live_baseline
+                        _p2 = csv_progress(strat, offset=_phase2_offset)
+                        _p2_n   = _p2['n'] if _p2 else 0
+                        _p2_wl  = f"{_p2['win']}W/{_p2['loss']}L" if _p2 and _p2['n'] > 0 else "0W/0L"
+                        _p2_tot = _p2['total_pct'] if _p2 else 0.0
                         prog_close = (f"\n{strat_label} LIVE: {done_n} closed"
                                       f"\n  {wl}, total {pstrat['total_pct']:+.1f}%"
-                                      f"\n{strat_label}: Close #{since_live} since LIVE")
+                                      f"\n{strat_label}: 2nd #{_p2_n}/{_phase2_target} ({_p2_wl}, total {_p2_tot:+.1f}%)")
                     else:
                         prog_close = (f"\nForward-test {strat_label}: #{done_n}/{tgt} ({status})"
                                       f"\n  {wl}, total {pstrat['total_pct']:+.1f}%")
@@ -4646,8 +4651,8 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
     prog_4h   = csv_progress('brkX2_4h')
     prog_cx   = csv_progress('brkX2_crossema')
     prog_hunt = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
-    hunt_since_live = max(0, (prog_hunt or {}).get('n', 0) - HUNTING_LIVE_BASELINE)
-    rev_since_live  = max(0, (prog_rev  or {}).get('n', 0) - REVERSAL_LIVE_BASELINE)
+    prog_rev2  = csv_progress('reversal',   offset=REVERSAL_LIVE_BASELINE)
+    prog_hunt2 = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET + HUNTING_LIVE_BASELINE)
 
     if prog_all is None:
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
@@ -4657,12 +4662,12 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
         prog_line = (f"Progress forward-test (gabungan): {nn} selesai ({wl}, total {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2    : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2)}\n"
                      f"  - reversal : {_fmt_hunting_live(prog_rev)}\n"
-                     f"    reversal : Close #{rev_since_live} since LIVE\n"
+                     f"    reversal : 2nd {_fmt_strat(prog_rev2, REVERSAL_PHASE2_TARGET)}\n"
                      f"  - 4h       : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET)}\n"
                      f"    4h       : Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
                      f"  - crossema : {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST)}\n"
                      f"  - hunting  : {_fmt_hunting_live(prog_hunt)}\n"
-                     f"    hunting  : Close #{hunt_since_live} since LIVE")
+                     f"    hunting  : 2nd {_fmt_strat(prog_hunt2, HUNTING_PHASE2_TARGET)}")
 
     # Status T3 intrabar
     t3_str = ""
