@@ -3413,6 +3413,30 @@ def heartbeat_general_tick():
             parse_mode="Markdown"
         )
         log("[HB-GEN] Milestone 30 deal brkX2-4h — notif analisis timing terkirim")
+
+    # ── Milestone lanjutan: ulangi analisis timing dgn sample lebih besar ────
+    # Analisis di #30 (28/08/2026) pakai log Drive open-arm-close.txt (BUKAN
+    # analyze_deal_timing.py -- script itu ternyata nggak pernah dibuat):
+    # jam 15:00 WIB justru avg terbaik (+4.12%, WR 100%, N=4), tapi sample
+    # kelewat tipis (16 trade total, cuma 4 jam kerepresentasi) utk simpulkan
+    # apa pun, dan fix cooldown brkX2-4h (commit 61c265c) baru live SETELAH
+    # window itu jadi belum ada data pasca-fix sama sekali. Cek ulang di #60
+    # (30 trade lagi, kemungkinan besar sudah pasca-fix semua) dgn sample yg
+    # lebih layak.
+    if prog_4h and prog_4h.get('n') == 60:
+        send_telegram(
+            "📊 *MILESTONE brkX2-4h: 60 deal closed!*\n\n"
+            "Lanjutan analisis pola jam dari #30 (28/08/2026) — waktu itu jam "
+            "15:00 WIB kelihatan justru terbaik tapi sample cuma 16 trade "
+            "(kelewat tipis) & belum ada data pasca-fix cooldown brkX2-4h.\n\n"
+            "Sekarang sample 2x lebih besar & mayoritas pasca-fix — minta "
+            "Claude analisis ulang breakdown per jam open (pakai log Drive "
+            "open-arm-close.txt atau trades_forwardtest.csv), cek lagi apakah "
+            "ada jam yang konsisten lebih jelek.\n\n"
+            "_(notif ini hanya muncul sekali di milestone 60 deal)_",
+            parse_mode="Markdown"
+        )
+        log("[HB-GEN] Milestone 60 deal brkX2-4h — notif analisis timing lanjutan terkirim")
     heartbeat_gen_last_sent    = now
     heartbeat_gen_window_start = now_dt
 
