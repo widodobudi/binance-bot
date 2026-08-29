@@ -7213,10 +7213,12 @@ DASHBOARD_HTML = '''
             <button type="submit" style="background:#ef4444;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Cancel</button>
           </form>
           {% endif %}
-          <form method="POST" action="/reconcile_deal" style="display:inline;margin-left:4px" title="Khusus kalau koinnya SUDAH TERJUAL di luar jalur normal bot (mis. lewat webhook TradingView) tapi masih nyangkut di sini -- akan dicatat ke Closed Trades pakai harga sekarang & dihapus dari list. Ditolak otomatis kalau saldo wallet masih signifikan (pakai Cancel kalau koin memang belum dijual)." onsubmit="return confirm('Reconcile deal {{ sym.replace(\"USDT\",\"/USDT\") }}?\n\nDIPAKAI KHUSUS kalau koinnya SUDAH TERJUAL di luar bot (mis. lewat webhook) tapi masih nyangkut di sini. Akan dicatat ke Closed Trades pakai harga SEKARANG sbg estimasi exit, lalu dihapus dari Active Deals.\n\nKalau koin BELUM dijual, batalkan ini dan pakai Cancel.');">
+          {% if d.get("needs_reconcile") %}
+          <form method="POST" action="/reconcile_deal" style="display:inline;margin-left:4px" title="Terdeteksi: saldo wallet asset ini jauh di bawah qty yang seharusnya -- koin kemungkinan sudah terjual di luar jalur normal bot (mis. lewat webhook TradingView). Klik utk catat ke Closed Trades pakai harga sekarang & hapus dari list." onsubmit="return confirm('Reconcile deal {{ sym.replace(\"USDT\",\"/USDT\") }}?\n\nTerdeteksi saldo wallet-nya jauh di bawah qty yang seharusnya -- koin kemungkinan sudah terjual di luar bot. Akan dicatat ke Closed Trades pakai harga SEKARANG sbg estimasi exit, lalu dihapus dari Active Deals.\n\nKalau ternyata koin belum dijual, batalkan ini dan pakai Cancel.');">
             <input type="hidden" name="sym" value="{{ sym }}">
             <button type="submit" style="background:#78716c;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Reconcile</button>
           </form>
+          {% endif %}
         </td>
         <td>
           <form method="POST" action="/toggle" style="display:inline">
@@ -9375,6 +9377,16 @@ def run_web_dashboard():
         def index():
             with active_deals_lock:
                 deals = dict(active_deals)
+            # Saldo wallet SEKALI aja (bukan per-deal) -- buat deteksi deal yg "needs_reconcile"
+            # (koinnya udah kejual di luar jalur normal tapi masih nyangkut di active_deals).
+            _wallet_balances = {}
+            if USE_BINANCE_DIRECT and deals:
+                try:
+                    _acct = _binance_trading_request("GET", "/api/v3/account", {})
+                    for _b in (_acct or {}).get("balances", []):
+                        _wallet_balances[_b["asset"]] = float(_b.get("free", 0) or 0)
+                except Exception as _e:
+                    log(f"WARN [DASHBOARD] gagal baca saldo wallet utk needs_reconcile: {_e}")
             deals_display = {}
             for sym, d in deals.items():
                 dd = dict(d)
@@ -9392,6 +9404,16 @@ def run_web_dashboard():
                     _hs_lbl, _hs_bs, _hs_full = hard_stop_pct(dd.get("atr_pct", 3.0))
                     dd["hardstop_full_pct"] = _hs_full
                     dd["hardstop_warn_pct"] = round(_hs_full * HOLD_NO_SELL_WARN_RATIO, 4)
+                # needs_reconcile: qty_coin tercatat (atau estimasi dari modal/entry_price kalau
+                # qty_coin nggak ada -- kasus deal dibuka lewat webhook lama) jauh lebih besar
+                # dari saldo wallet SEKARANG -> pertanda koin sudah kejual di luar jalur normal.
+                if _wallet_balances:
+                    _asset = sym.replace("USDT", "")
+                    _qty_expected = float(dd.get("qty_coin", 0) or 0)
+                    if _qty_expected <= 0 and ep > 0:
+                        _qty_expected = total_usd / ep
+                    _wallet_qty = _wallet_balances.get(_asset)
+                    dd["needs_reconcile"] = bool(_wallet_qty is not None and _qty_expected > 0 and _wallet_qty <= _qty_expected * 0.05)
                 deals_display[sym] = dd
             with _dashboard_lock:
                 nm = dict(_dashboard_state["near_miss"])
@@ -9635,10 +9657,13 @@ def run_web_dashboard():
             di luar jalur normal bot (mis. lewat webhook TradingView close_deal versi lama
             sebelum di-fix 29/08/2026 -- order kejual beneran tapi bookkeeping internal
             nggak ke-update). BEDA dari Cancel: ini khusus buat kasus koin SUDAH TERJUAL
-            (saldo wallet ~0), jadi ditulis ke Closed Trades pakai harga sekarang sbg
-            estimasi exit, bukan cuma dihapus diam-diam. Guard: nolak kalau saldo wallet
-            masih signifikan (>0.5% dari qty_coin tercatat) -- itu tandanya koin BELUM
-            kejual, harusnya pakai Cancel, bukan Reconcile."""
+            (saldo wallet <=5% dari qty seharusnya), jadi ditulis ke Closed Trades pakai
+            harga sekarang sbg estimasi exit, bukan cuma dihapus diam-diam. Guard: nolak
+            kalau saldo wallet masih signifikan (>5% dari qty_coin tercatat, atau estimasi
+            modal/entry_price kalau qty_coin nggak ada -- kasus deal dibuka lewat webhook
+            lama) -- itu tandanya koin BELUM kejual, harusnya pakai Cancel, bukan Reconcile.
+            Threshold & fallback qty di sini SAMA PERSIS dengan yg dipakai buat nentuin
+            kapan tombol Reconcile muncul di dashboard (lihat index(), 'needs_reconcile')."""
             sym = request.form.get("sym", "").upper().strip()
             if sym and not sym.endswith("USDT"):
                 sym = sym + "USDT"
@@ -9651,9 +9676,12 @@ def run_web_dashboard():
                 wallet_qty = binance_get_asset_qty(asset)
             except Exception:
                 wallet_qty = 0.0
-            qty_coin = float(deal.get("qty_coin", 0) or 0)
-            if qty_coin > 0 and wallet_qty > qty_coin * 0.005:
-                log(f"[RECONCILE] {sym} ditolak: saldo wallet {wallet_qty} masih signifikan vs qty_coin {qty_coin} -- koin sepertinya belum terjual, pakai Cancel kalau memang mau berhenti track.")
+            entry_price_chk = float(deal.get('entry_price', 0) or 0)
+            qty_expected = float(deal.get("qty_coin", 0) or 0)
+            if qty_expected <= 0 and entry_price_chk > 0:
+                qty_expected = estimate_deal_total_usd(deal) / entry_price_chk
+            if qty_expected > 0 and wallet_qty > qty_expected * 0.05:
+                log(f"[RECONCILE] {sym} ditolak: saldo wallet {wallet_qty} masih signifikan vs qty seharusnya {qty_expected} -- koin sepertinya belum terjual, pakai Cancel kalau memang mau berhenti track.")
                 return redirect("/")
             price = get_price_now(sym)
             entry_price = float(deal.get('entry_price', 0) or 0)
