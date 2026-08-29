@@ -1950,6 +1950,10 @@ def get_binance_avg_cost(asset: str, ttl_seconds: int = 300) -> float:
                     pos_cost = 0.0
         if pos_qty > 0:
             avg = pos_cost / pos_qty
+        n_buys = sum(1 for t in trades if t.get("isBuyer"))
+        n_sells = len(trades) - n_buys
+        log(f"DEBUG [AUTO-SELL] avg_cost {symbol}: {len(trades)} trade ({n_buys} buy/{n_sells} sell) "
+            f"-> pos_qty={pos_qty} pos_cost={pos_cost} avg={avg}")
     except Exception as error:
         log(f"WARN [AUTO-SELL] gagal tarik myTrades {symbol}: {error}")
     _binance_avg_cost_cache[asset] = (time.time(), avg)
