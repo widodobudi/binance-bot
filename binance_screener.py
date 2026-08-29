@@ -3712,8 +3712,32 @@ def heartbeat_general_tick():
 
 NEAR_MISS_LOG    = "/data/near_miss_log.txt"
 TFPCT_BLOCKED_LOG = "/data/tfpct_blocked_log.txt"
+SCAN_BLOCKERS_FILE = os.path.join(DATA_DIR, "scan_blockers.json")
 _scan_blockers = {}
 _scan_blockers_lock = threading.Lock()
+
+def load_scan_blockers():
+    """Muat snapshot scan blocker terakhir dari file -- biar survive restart/redeploy.
+    Tanpa ini, strategi dgn jendela scan sempit (brkX2-4h, CrossEMA-4h) bakal tampil
+    'Belum ada snapshot' tiap restart sampai jendela scan berikutnya kebuka, padahal
+    snapshot scan sebelumnya (n-1, n-2, dst) masih valid buat ditampilkan. 29/08/2026."""
+    global _scan_blockers
+    if not os.path.exists(SCAN_BLOCKERS_FILE):
+        return
+    try:
+        with open(SCAN_BLOCKERS_FILE, 'r') as f: data = json.load(f)
+        with _scan_blockers_lock:
+            _scan_blockers = data
+        log(f"   Loaded scan_blockers: {len(_scan_blockers)} strategi.")
+    except Exception as e:
+        log(f"WARN gagal baca scan_blockers.json: {e}")
+
+def save_scan_blockers():
+    try:
+        with _scan_blockers_lock: data = dict(_scan_blockers)
+        with open(SCAN_BLOCKERS_FILE, 'w') as f: json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan scan_blockers.json: {e}")
 
 def record_scan_blockers(strategy: str, total: int, candidates: int, blockers: dict) -> None:
     """Simpan ringkasan scan terakhir; satu pair boleh gagal di beberapa indikator."""
@@ -3725,6 +3749,7 @@ def record_scan_blockers(strategy: str, total: int, candidates: int, blockers: d
             "candidates": candidates,
             "blockers": dict(sorted(blockers.items(), key=lambda item: item[1], reverse=True)),
         }
+    save_scan_blockers()
 
 def get_scan_blockers() -> dict:
     with _scan_blockers_lock:
@@ -8133,7 +8158,7 @@ function loadScanBlockers() {
                     '<td style="padding:5px 8px;font-weight:600;color:var(--muted)">' + k + '</td>' +
                     '<td style="padding:5px 8px;text-align:right;color:var(--muted)">-</td>' +
                     '<td style="padding:5px 8px;text-align:right;color:var(--muted)">-</td>' +
-                    '<td style="padding:5px 8px;color:var(--muted);font-style:italic">Belum ada snapshot sejak restart &mdash; ' + (SCAN_BLOCKERS_SCHEDULE[k] || 'jadwal tidak diketahui') + '</td></tr>';
+                    '<td style="padding:5px 8px;color:var(--muted);font-style:italic">Belum pernah ada snapshot scan &mdash; ' + (SCAN_BLOCKERS_SCHEDULE[k] || 'jadwal tidak diketahui') + '</td></tr>';
             }
             var b = s.blockers || {}, names = Object.keys(b).sort(function(a, z){ return (Number(b[z]) || 0) - (Number(b[a]) || 0); });
             var top = names.slice(0, 3).map(function(n){ return n + ': ' + b[n]; }).join(' | ') || 'Tidak ada blocker';
@@ -11361,6 +11386,7 @@ if __name__ == '__main__':
     load_last_closed()
     load_hold_no_sell_closed()
     load_hold_no_sell_price()
+    load_scan_blockers()
     load_trail_reentry()
     load_quick_reentry_trades()
     sync_base_usd_from_binance()  # auto-fix base_usd dari Binance API saat startup
