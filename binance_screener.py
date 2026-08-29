@@ -1761,23 +1761,56 @@ def binance_sell_market(symbol: str, qty: float) -> dict:
 
 
 def load_auto_sell_config() -> dict:
-    default = {"enabled": False, "asset": "", "threshold_usdt": 0.0}
+    """Return {"assets": {ASSET: {"enabled":bool,"threshold_usdt":float}, ...}}.
+    Migrasi otomatis dari format lama single-asset ({"enabled","asset","threshold_usdt"})
+    supaya setting yang sudah aktif (mis. TAO) nggak hilang saat upgrade ke multi-asset."""
+    default = {"assets": {}}
     try:
         if os.path.exists(AUTO_SELL_CONFIG_FILE):
             with open(AUTO_SELL_CONFIG_FILE, encoding="utf-8") as file:
-                default.update(json.load(file))
+                raw = json.load(file)
+            if "assets" in raw and isinstance(raw["assets"], dict):
+                default["assets"] = raw["assets"]
+            elif raw.get("asset"):
+                # format lama -> migrasi 1x, langsung simpan ulang format baru
+                default["assets"] = {
+                    str(raw["asset"]).upper(): {
+                        "enabled": bool(raw.get("enabled", False)),
+                        "threshold_usdt": float(raw.get("threshold_usdt", 0) or 0),
+                    }
+                }
+                save_auto_sell_config(default)
+                log(f"   Migrasi auto_sell_config lama -> multi-asset: {list(default['assets'].keys())}")
     except Exception as error:
         log(f"WARN [BINANCE] auto-sell config: {error}")
     return default
 
 
 def save_auto_sell_config(config: dict) -> None:
+    assets = config.get("assets", {})
+    clean = {}
+    for asset, cfg in assets.items():
+        clean[str(asset).upper()] = {
+            "enabled": bool(cfg.get("enabled", False)),
+            "threshold_usdt": float(cfg.get("threshold_usdt", 0) or 0),
+        }
     with open(AUTO_SELL_CONFIG_FILE, "w", encoding="utf-8") as file:
-        json.dump({
-            "enabled": bool(config.get("enabled", False)),
-            "asset": str(config.get("asset", "")).upper(),
-            "threshold_usdt": float(config.get("threshold_usdt", 0)),
-        }, file, indent=2)
+        json.dump({"assets": clean}, file, indent=2)
+
+
+def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float) -> dict:
+    """Tambah/update 1 entry asset di auto-sell config, tanpa ganggu asset lain."""
+    config = load_auto_sell_config()
+    config["assets"][str(asset).upper()] = {"enabled": bool(enabled), "threshold_usdt": float(threshold_usdt)}
+    save_auto_sell_config(config)
+    return config
+
+
+def remove_auto_sell_asset(asset: str) -> dict:
+    config = load_auto_sell_config()
+    config["assets"].pop(str(asset).upper(), None)
+    save_auto_sell_config(config)
+    return config
 
 
 def get_binance_spot_assets() -> list:
@@ -1872,13 +1905,10 @@ def ensure_spot_usdt(min_needed: float, wait_seconds: int = 12) -> bool:
 _last_balance_log_ts = 0.0
 
 
-def check_auto_sell_crossing() -> None:
-    config = load_auto_sell_config()
-    if not config.get("enabled") or not config.get("asset"):
-        return
-    asset = str(config["asset"]).upper()
+def _check_auto_sell_one(asset: str, threshold: float) -> None:
+    """Cek 1 asset: kalau crossing naik lewat threshold, jual 95% saldo bebasnya
+    lalu nonaktifkan HANYA entry asset ini (asset lain di daftar tetap jalan)."""
     symbol = asset + "USDT"
-    threshold = float(config.get("threshold_usdt", 0))
     if threshold <= 0:
         return
     price = get_price_now(symbol)
@@ -1921,7 +1951,10 @@ def check_auto_sell_crossing() -> None:
         log(f"[AUTO-SELL] {symbol} preflight gagal — order dibatalkan: {error}")
         return
     result = binance_sell_market(symbol, sell_quantity)
-    save_auto_sell_config({**config, "enabled": False})
+    config = load_auto_sell_config()
+    if asset in config["assets"]:
+        config["assets"][asset]["enabled"] = False
+        save_auto_sell_config(config)
     send_telegram(
         f"AUTO SELL {asset}/USDT\n"
         f"Harga crossing: {_fmt_price(price)} USDT\n"
@@ -1929,9 +1962,20 @@ def check_auto_sell_crossing() -> None:
         f"Saldo bebas: {quantity}\n"
         f"Qty dijual (95%): {sell_quantity}\n"
         f"Hasil: {result.get('proceeds_usdt', 0):.2f} USDT\n"
-        "Auto-sell dinonaktifkan setelah satu eksekusi."
+        "Auto-sell asset ini dinonaktifkan setelah satu eksekusi (asset lain di daftar tetap jalan)."
     )
     log(f"[AUTO-SELL] {symbol} crossing {threshold} -> sold {quantity}")
+
+
+def check_auto_sell_crossing() -> None:
+    config = load_auto_sell_config()
+    for asset, cfg in config.get("assets", {}).items():
+        if not cfg.get("enabled"):
+            continue
+        try:
+            _check_auto_sell_one(str(asset).upper(), float(cfg.get("threshold_usdt", 0) or 0))
+        except Exception as error:
+            log(f"WARN [AUTO-SELL] {asset}: {error}")
 
 
 # Cache LOT_SIZE stepSize per symbol agar tidak fetch berulang
@@ -7499,67 +7543,109 @@ function resendOpenNotification(sym) {
 }
 
 function loadAutoSellConfig() {
-        fetch('/api/auto_sell_config').then(function(r){ return r.json(); }).then(function(d) {
-            var enabled = document.getElementById('auto-sell-enabled');
-            var asset = document.getElementById('auto-sell-asset');
-            var threshold = document.getElementById('auto-sell-threshold');
-            var status = document.getElementById('auto-sell-status');
-            if (enabled) enabled.checked = !!d.enabled;
-            if (threshold) threshold.value = d.threshold_usdt || 0;
-            return fetch('/api/binance_spot_assets').then(function(r){
+        Promise.all([
+            fetch('/api/auto_sell_config').then(function(r){ return r.json(); }),
+            fetch('/api/binance_spot_assets').then(function(r){
                 return r.json().then(function(a){ if (!r.ok || !a.ok) throw new Error(a.error || 'Gagal membaca aset Binance'); return a; });
-            }).then(function(a) {
-                if (!asset) return;
-                asset.innerHTML = '';
-                var assets = a.assets || [];
-                if (!assets.length) {
-                    asset.innerHTML = '<option value="">Tidak ada aset bebas</option>';
-                    if (status) status.textContent = 'Tidak ada aset bebas yang dapat dijual';
-                    return;
+            })
+        ]).then(function(results) {
+            var cfg = results[0], freeAssets = results[1].assets || [];
+            var sel = document.getElementById('auto-sell-new-asset');
+            if (sel) {
+                sel.innerHTML = '';
+                if (!freeAssets.length) {
+                    sel.innerHTML = '<option value="">Tidak ada aset bebas</option>';
+                } else {
+                    freeAssets.forEach(function(item) {
+                        var option = document.createElement('option');
+                        option.value = item.asset;
+                        option.textContent = item.asset + ' (' + item.free + ')';
+                        sel.appendChild(option);
+                    });
                 }
-                assets.forEach(function(item) {
-                    var option = document.createElement('option');
-                    option.value = item.asset;
-                    option.textContent = item.asset + ' (' + item.free + ')';
-                    asset.appendChild(option);
-                });
-                if (d.asset) asset.value = d.asset;
-                if (status) status.textContent = d.enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif';
-                refreshAutoSellPrice();
-            });
+            }
+            renderAutoSellTable(cfg.assets || {});
         }).catch(function(e){
-            var asset = document.getElementById('auto-sell-asset');
-            if (asset) asset.innerHTML = '<option value="">Gagal memuat aset</option>';
-            var status = document.getElementById('auto-sell-status');
-            if (status) status.textContent = 'Tidak dapat membaca saldo: ' + e;
+            var tbody = document.getElementById('auto-sell-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="color:var(--red);padding:8px">Gagal memuat: ' + e + '</td></tr>';
         });
     }
 
-function saveAutoSellConfig() {
-        var enabled = document.getElementById('auto-sell-enabled').checked;
-        var asset = document.getElementById('auto-sell-asset').value;
-        var threshold = parseFloat(document.getElementById('auto-sell-threshold').value) || 0;
-        if (enabled && (!asset || threshold <= 0)) { alert('Isi aset dan threshold harga yang valid.'); return; }
-        fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:enabled, asset:asset, threshold_usdt:threshold})})
-            .then(function(r){ return r.json(); }).then(function(d){
-                var status = document.getElementById('auto-sell-status');
-                if (status) status.textContent = d.ok ? (enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif') : 'Error: ' + d.error;
-            });
+function renderAutoSellTable(assets) {
+    var tbody = document.getElementById('auto-sell-tbody');
+    if (!tbody) return;
+    var names = Object.keys(assets);
+    if (!names.length) {
+        tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted);padding:8px">Belum ada asset auto-sell. Tambah lewat form di bawah.</td></tr>';
+        return;
     }
+    tbody.innerHTML = '';
+    names.forEach(function(asset) {
+        var cfg = assets[asset];
+        var tr = document.createElement('tr');
+        tr.id = 'auto-sell-row-' + asset;
+        tr.style.borderBottom = '1px solid var(--border)';
+        tr.innerHTML =
+            '<td style="padding:5px 6px;font-weight:600">' + asset + '</td>' +
+            '<td style="padding:5px 6px" id="auto-sell-price-' + asset + '">memuat...</td>' +
+            '<td style="padding:5px 6px"><input type="number" min="0" step="0.00000001" value="' + cfg.threshold_usdt + '" id="auto-sell-thr-' + asset + '" style="width:100px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"></td>' +
+            '<td style="padding:5px 6px" id="auto-sell-gap-' + asset + '">-</td>' +
+            '<td style="padding:5px 6px;color:var(--muted)">' + (cfg.enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif') + '</td>' +
+            '<td style="padding:5px 6px"><input type="checkbox" ' + (cfg.enabled ? 'checked' : '') + ' id="auto-sell-chk-' + asset + '"></td>' +
+            '<td style="padding:5px 6px;white-space:nowrap">' +
+                '<button type="button" onclick="saveAutoSellRow(\'' + asset + '\')" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;margin-right:4px;font-weight:600">SAVE</button>' +
+                '<button type="button" onclick="removeAutoSellRow(\'' + asset + '\')" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer">Hapus</button>' +
+            '</td>';
+        tbody.appendChild(tr);
+        refreshAutoSellRowPrice(asset);
+    });
+}
 
-function refreshAutoSellPrice() {
-    var asset = document.getElementById('auto-sell-asset').value;
-    var priceEl = document.getElementById('auto-sell-current-price');
-    var gapEl = document.getElementById('auto-sell-price-gap');
-    if (!asset || !priceEl) return;
-    fetch('/api/auto_sell_price?asset=' + encodeURIComponent(asset))
-        .then(function(r){ return r.json(); })
-        .then(function(d) {
-            if (!d.ok) { priceEl.textContent = 'Current price: tidak tersedia'; if (gapEl) gapEl.textContent = ''; return; }
-            priceEl.textContent = 'Current price: ' + d.price + ' USDT';
-            if (gapEl) gapEl.textContent = 'Target: ' + d.threshold + ' USDT | Jarak: ' + d.gap_pct + '%';
-        })
-        .catch(function(){ priceEl.textContent = 'Current price: tidak tersedia'; if (gapEl) gapEl.textContent = ''; });
+function refreshAutoSellRowPrice(asset) {
+    fetch('/api/auto_sell_price?asset=' + encodeURIComponent(asset)).then(function(r){ return r.json(); }).then(function(d) {
+        var priceEl = document.getElementById('auto-sell-price-' + asset);
+        var gapEl = document.getElementById('auto-sell-gap-' + asset);
+        if (!d.ok) { if (priceEl) priceEl.textContent = 'tidak tersedia'; return; }
+        if (priceEl) priceEl.textContent = d.price + ' USDT';
+        if (gapEl) gapEl.textContent = d.gap_pct + '%';
+    }).catch(function(){});
+}
+
+function saveAutoSellRow(asset) {
+    var thrEl = document.getElementById('auto-sell-thr-' + asset);
+    var chkEl = document.getElementById('auto-sell-chk-' + asset);
+    var enabled = chkEl ? chkEl.checked : false;
+    var threshold = parseFloat(thrEl ? thrEl.value : 0) || 0;
+    if (enabled && threshold <= 0) { alert('Isi threshold harga yang valid.'); return; }
+    fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({asset:asset, enabled:enabled, threshold_usdt:threshold})})
+        .then(function(r){ return r.json(); }).then(function(d){
+            if (!d.ok) { alert('Error: ' + d.error); return; }
+            renderAutoSellTable(d.assets || {});
+        });
+}
+
+function removeAutoSellRow(asset) {
+    if (!confirm('Hapus auto-sell untuk ' + asset + '?')) return;
+    fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({asset:asset, remove:true})})
+        .then(function(r){ return r.json(); }).then(function(d){
+            if (!d.ok) { alert('Error: ' + d.error); return; }
+            renderAutoSellTable(d.assets || {});
+        });
+}
+
+function addAutoSellAsset() {
+    var sel = document.getElementById('auto-sell-new-asset');
+    var thrEl = document.getElementById('auto-sell-new-threshold');
+    var asset = sel ? sel.value : '';
+    var threshold = parseFloat(thrEl ? thrEl.value : 0) || 0;
+    if (!asset) { alert('Pilih asset dulu.'); return; }
+    if (threshold <= 0) { alert('Isi threshold harga yang valid.'); return; }
+    fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({asset:asset, enabled:true, threshold_usdt:threshold})})
+        .then(function(r){ return r.json(); }).then(function(d){
+            if (!d.ok) { alert('Error: ' + d.error); return; }
+            if (thrEl) thrEl.value = 0;
+            renderAutoSellTable(d.assets || {});
+        });
 }
 if (typeof STRAT_SECONDARY !== 'undefined') {
     STRAT_SECONDARY['Hunting-4h'] = [{key: 'rsi', label: 'RSI<60'}];
@@ -7695,18 +7781,27 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
     <div class="card">
         <div class="card-header" onclick="toggleCard(this)"><h2>AUTO SELL ASSET <span class="card-toggle">&#9660;</span></h2></div>
         <div class="card-body" style="font-size:11px">
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-                <label><input id="auto-sell-enabled" type="checkbox"> Aktifkan jual otomatis</label>
-                <label>Asset <select id="auto-sell-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option>Memuat...</option></select></label>
-                <label>Harga trigger (USDT) <input id="auto-sell-threshold" type="number" min="0" step="0.00000001" value="0" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
-                <button type="button" onclick="saveAutoSellConfig()" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
+            <div style="color:var(--muted);margin-bottom:8px">Tiap asset dipantau &amp; dieksekusi independen — begitu 1 asset crossing naik lewat target, cuma asset itu yang dijual (95% saldo bebas) &amp; nonaktif; asset lain di daftar tetap jalan.</div>
+            <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse">
+                <thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--border)">
+                    <th style="padding:5px 6px">Asset</th>
+                    <th style="padding:5px 6px">Harga sekarang</th>
+                    <th style="padding:5px 6px">Target (USDT)</th>
+                    <th style="padding:5px 6px">Jarak</th>
+                    <th style="padding:5px 6px">Status</th>
+                    <th style="padding:5px 6px">Aktif</th>
+                    <th style="padding:5px 6px"></th>
+                </tr></thead>
+                <tbody id="auto-sell-tbody"><tr><td colspan="7" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
+            </table>
+            </div>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+                <label>+ Tambah asset <select id="auto-sell-new-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option>Memuat...</option></select></label>
+                <label>Harga trigger (USDT) <input id="auto-sell-new-threshold" type="number" min="0" step="0.00000001" value="0" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
+                <button type="button" onclick="addAutoSellAsset()" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">+ TAMBAH</button>
                 <button type="button" onclick="loadAutoSellConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh saldo</button>
             </div>
-            <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;color:var(--muted)">
-                <span id="auto-sell-current-price">Current price: memuat...</span>
-                <span id="auto-sell-price-gap"></span>
-            </div>
-            <div id="auto-sell-status" style="margin-top:10px;color:var(--muted)">Nonaktif. Saat aktif, seluruh saldo bebas asset dijual sekali ketika harga crossing naik.</div>
         </div>
     </div>
 </div>
@@ -10066,7 +10161,7 @@ def run_web_dashboard():
                 if price <= 0:
                     return jsonify({"ok": False, "error": "Harga tidak tersedia"}), 404
                 config = load_auto_sell_config()
-                threshold = float(config.get("threshold_usdt", 0) or 0)
+                threshold = float(config.get("assets", {}).get(asset, {}).get("threshold_usdt", 0) or 0)
                 gap_pct = ((threshold / price) - 1) * 100 if threshold > 0 else 0
                 return jsonify({"ok": True, "asset": asset, "symbol": symbol,
                                 "price": _fmt_price(price), "threshold": _fmt_price(threshold),
@@ -10076,17 +10171,22 @@ def run_web_dashboard():
 
         @app.route("/api/auto_sell_config", methods=["GET", "POST"])
         def api_auto_sell_config():
+            """GET: daftar semua asset auto-sell. POST: upsert (atau hapus) 1 entry asset,
+            asset lain di daftar tidak terpengaruh."""
             try:
                 if request.method == "POST":
                     payload = request.get_json(force=True, silent=True) or {}
-                    config = {
-                        "enabled": bool(payload.get("enabled", False)),
-                        "asset": str(payload.get("asset", "")).upper(),
-                        "threshold_usdt": float(payload.get("threshold_usdt", 0)),
-                    }
-                    if config["enabled"] and (not config["asset"] or config["threshold_usdt"] <= 0):
-                        return jsonify({"ok": False, "error": "Asset dan threshold wajib diisi"}), 400
-                    save_auto_sell_config(config)
+                    asset = str(payload.get("asset", "")).upper().strip()
+                    if not asset:
+                        return jsonify({"ok": False, "error": "Asset wajib diisi"}), 400
+                    if payload.get("remove"):
+                        remove_auto_sell_asset(asset)
+                    else:
+                        enabled   = bool(payload.get("enabled", False))
+                        threshold = float(payload.get("threshold_usdt", 0) or 0)
+                        if enabled and threshold <= 0:
+                            return jsonify({"ok": False, "error": "Threshold wajib diisi"}), 400
+                        upsert_auto_sell_asset(asset, enabled, threshold)
                 return jsonify({"ok": True, **load_auto_sell_config()})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
