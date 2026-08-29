@@ -8040,7 +8040,7 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
                 <label>+ Tambah asset <select id="auto-sell-new-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option>Memuat...</option></select></label>
                 <label>Avg beli (opsional) <input id="auto-sell-new-avg" type="number" min="0" step="0.00000001" placeholder="kalau tahu" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><div id="auto-sell-new-avgsrc" style="color:var(--muted);font-size:9px"></div></label>
                 <label>Harga trigger jual (USDT) <input id="auto-sell-new-threshold" type="number" min="0" step="0.00000001" value="0" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
-                <label title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB"><input id="auto-sell-new-bnb" type="checkbox"> Convert sisa ke BNB</label>
+                <label title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB"><input id="auto-sell-new-bnb" type="checkbox" checked> Convert sisa ke BNB</label>
                 <button type="button" onclick="addAutoSellAsset()" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">+ TAMBAH</button>
                 <button type="button" onclick="loadAutoSellConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh saldo</button>
             </div>
