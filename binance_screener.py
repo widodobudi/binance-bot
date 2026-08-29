@@ -1962,11 +1962,27 @@ def get_binance_avg_cost(asset: str, ttl_seconds: int = 300) -> float:
     return avg
 
 
+def get_active_deal_avg_price(asset: str) -> float:
+    """entry_price dari deal AKTIF bot untuk symbol ini (kalau ada) -- sudah otomatis
+    ke-average tiap kali add fund/DCA (lihat send_add_funds()), jadi ini sumber PALING
+    presisi & real-time, tanpa perlu hitung ulang dari riwayat Binance. 0 kalau asset
+    ini nggak lagi jadi deal aktif (sudah closed / memang bukan dikelola bot)."""
+    symbol = str(asset).upper() + "USDT"
+    with active_deals_lock:
+        deal = active_deals.get(symbol)
+        return float(deal.get("entry_price", 0) or 0) if deal else 0.0
+
+
 def get_effective_avg_price(asset: str) -> float:
-    """Prioritas: harga rata-rata dari riwayat hold-no-sell bot (otomatis, otoritatif)
-    -> avg_price manual yang diisi user di dashboard -> rata-rata riwayat BUY di Binance
-    (perkiraan, buat asset yang belum ada data sama sekali) -> 0 (tidak diketahui)."""
+    """Prioritas: entry_price dari deal AKTIF bot saat ini (paling presisi & real-time)
+    -> harga rata-rata dari riwayat hold-no-sell bot (deal LAMA yg di-hold pas hard-stop,
+    udah nggak aktif lagi, tapi tetap otoritatif) -> avg_price manual yang diisi user di
+    dashboard -> rata-rata riwayat BUY di Binance (perkiraan, buat asset yang belum ada
+    data sama sekali) -> 0 (tidak diketahui)."""
     asset = str(asset).upper()
+    deal_entry = get_active_deal_avg_price(asset)
+    if deal_entry > 0:
+        return deal_entry
     auto = get_hold_no_sell_price(asset)
     if auto and auto.get("entry_price", 0) > 0:
         return float(auto["entry_price"])
@@ -7865,7 +7881,7 @@ function refreshAutoSellRowPrice(asset) {
         if (priceEl) priceEl.textContent = d.price + ' USDT';
         if (gapEl) gapEl.innerHTML = d.gap_pct + '%' + (d.est_profit_usd ? '<br><span style="color:var(--muted);font-size:9px">≈ ' + d.est_profit_usd + ' USDT kalau target kena</span>' : '');
         if (avgGapEl) avgGapEl.textContent = d.avg_gap_pct ? (d.avg_gap_pct + '%') : '-';
-        if (avgSrcEl) avgSrcEl.textContent = d.avg_price_source === 'auto' ? '(otomatis dari bot)' : (d.avg_price_source === 'manual' ? '(input manual)' : (d.avg_price_source === 'binance_history' ? '(perkiraan dari riwayat Binance)' : ''));
+        if (avgSrcEl) avgSrcEl.textContent = d.avg_price_source === 'active_deal' ? '(deal aktif bot saat ini)' : (d.avg_price_source === 'auto' ? '(otomatis dari bot)' : (d.avg_price_source === 'manual' ? '(input manual)' : (d.avg_price_source === 'binance_history' ? '(perkiraan dari riwayat Binance)' : '')));
         if (breakevenEl) {
             var beTxt = d.breakeven ? ('breakeven ~' + d.breakeven) : '';
             if (d.htf_trend) beTxt += (beTxt ? ' | ' : '') + 'HTF ' + d.htf_trend;
@@ -7874,7 +7890,7 @@ function refreshAutoSellRowPrice(asset) {
             if (d.breakeven_warning) breakevenEl.innerHTML += '<br><span style="color:var(--red)">⚠ ' + d.breakeven_warning + '</span>';
         }
         // Jangan timpa avg_price kalau user lagi ngetik / sudah keisi lokal, cuma isi kalau field masih kosong & ada suggestion (auto atau perkiraan riwayat Binance)
-        if (avgEl && !avgEl.value && d.avg_price && (d.avg_price_source === 'auto' || d.avg_price_source === 'binance_history')) avgEl.value = d.avg_price;
+        if (avgEl && !avgEl.value && d.avg_price && (d.avg_price_source === 'active_deal' || d.avg_price_source === 'auto' || d.avg_price_source === 'binance_history')) avgEl.value = d.avg_price;
     }).catch(function(){});
 }
 
@@ -7918,7 +7934,7 @@ function suggestNewAssetAvg() {
         if (avgEl) avgEl.placeholder = 'kalau tahu';
         if (!d.ok || !d.avg_price) return;
         if (avgEl) avgEl.value = d.avg_price;
-        if (srcEl) srcEl.textContent = d.avg_price_source === 'auto' ? '(otomatis dari bot)' : (d.avg_price_source === 'binance_history' ? '(perkiraan dari riwayat Binance)' : '');
+        if (srcEl) srcEl.textContent = d.avg_price_source === 'active_deal' ? '(deal aktif bot saat ini)' : (d.avg_price_source === 'auto' ? '(otomatis dari bot)' : (d.avg_price_source === 'binance_history' ? '(perkiraan dari riwayat Binance)' : ''));
     }).catch(function(){ if (avgEl) avgEl.placeholder = 'kalau tahu'; });
 }
 
@@ -10435,7 +10451,10 @@ def run_web_dashboard():
                 avg_info = get_hold_no_sell_price(asset)
                 avg_price = get_effective_avg_price(asset)
                 cfg_manual = float(config.get("assets", {}).get(asset, {}).get("avg_price", 0) or 0)
-                if avg_info and avg_info.get("entry_price", 0) > 0:
+                deal_entry = get_active_deal_avg_price(asset)
+                if deal_entry > 0:
+                    avg_source = "active_deal"
+                elif avg_info and avg_info.get("entry_price", 0) > 0:
                     avg_source = "auto"
                 elif cfg_manual > 0:
                     avg_source = "manual"
