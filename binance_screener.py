@@ -10786,66 +10786,90 @@ def ai_provider_note() -> str:
     return f"Provider: {AI_LAST_PROVIDER}"
 
 
-def fetch_htf_context_for_ai(symbol: str) -> str:
-    """
-    Fetch indikator HTF (3D dan 1W) untuk konteks AI decision.
-    Dipakai di OPEN dan ARMED. Return string siap masuk prompt.
-    """
+def _tf_indicator_line_for_ai(symbol: str, tf_label: str, tf_binance: str, limit: int) -> str | None:
+    """1 baris ringkasan indikator lengkap utk 1 timeframe (dipakai HTF maupun LTF).
+    Return None kalau data nggak cukup / gagal fetch."""
     try:
         import pandas_ta as _pta
+        df_htf = get_ohlcv_htf(symbol, interval=tf_binance, limit=limit)
+        if df_htf is None or len(df_htf) < 14:
+            return None
+        c = df_htf["close"]; h = df_htf["high"]; l = df_htf["low"]
+        ema20 = _pta.ema(c, length=20).iloc[-1]
+        ema50 = _pta.ema(c, length=50).iloc[-1]
+        ema200 = _pta.ema(c, length=200).iloc[-1]
+        rsi = _pta.rsi(c, length=14).iloc[-1]
+        atr = _pta.atr(h, l, c, length=14).iloc[-1]
+        atr_pct = atr / c.iloc[-1] * 100 if c.iloc[-1] > 0 else None
+        st = _pta.supertrend(h, l, c, length=7, multiplier=3.0)
+        std_col = [col for col in st.columns if "SUPERTd" in col]
+        st_dir = int(st[std_col[0]].iloc[-1]) if std_col else 0
+        adx_df = _pta.adx(h, l, c, length=14)
+        adx_col = [col for col in adx_df.columns if col.startswith("ADX_")]
+        adx = adx_df[adx_col[0]].iloc[-1] if adx_col else None
+        stoch = _pta.stoch(h, l, c, k=14, d=3, smooth_k=3)
+        stoch_k_col = [col for col in stoch.columns if "STOCHk" in col]
+        stoch_d_col = [col for col in stoch.columns if "STOCHd" in col]
+        stoch_k = stoch[stoch_k_col[0]].iloc[-1] if stoch_k_col else None
+        stoch_d = stoch[stoch_d_col[0]].iloc[-1] if stoch_d_col else None
+        macd = _pta.macd(c, fast=12, slow=26, signal=9)
+        macd_col = [col for col in macd.columns if "MACDh" in col]
+        macd_hist = macd[macd_col[0]].iloc[-1] if macd_col else None
+        bb = _pta.bbands(c, length=20, std=2)
+        bb_col = [col for col in bb.columns if "BBP" in col]
+        bb_pct = bb[bb_col[0]].iloc[-1] if bb_col else None
+        willr = _pta.willr(h, l, c, length=14).iloc[-1]
+        cci = _pta.cci(h, l, c, length=20).iloc[-1]
+        obv = _pta.obv(c, df_htf["vol"]).iloc[-1]
+        vol_ma = df_htf["vol"].rolling(20).mean().iloc[-1]
+        vol_ratio = df_htf["vol"].iloc[-1] / vol_ma if vol_ma > 0 else None
+        p20 = (c.iloc[-1] / ema20 - 1) * 100 if ema20 > 0 else None
+        p50 = (c.iloc[-1] / ema50 - 1) * 100 if ema50 > 0 else None
+        p200 = (c.iloc[-1] / ema200 - 1) * 100 if ema200 > 0 else None
+        def fmt(label, value, spec):
+            return f"{label}=" + (format(float(value), spec) if value is not None and not pd.isna(value) else "n/a")
+        parts = [f"{tf_label}: ST={'Uptrend' if st_dir == 1 else 'Downtrend' if st_dir == -1 else 'Neutral'}",
+                 fmt("RSI", rsi, ".1f"), fmt("ATR%", atr_pct, ".2f"), fmt("vs EMA20", p20, "+.2f"),
+                 fmt("vs EMA50", p50, "+.2f"), fmt("vs EMA200", p200, "+.2f"), fmt("Stoch%K", stoch_k, ".1f"),
+                 fmt("Stoch%D", stoch_d, ".1f"), fmt("MACD hist", macd_hist, "+.6f"), fmt("BB%b", bb_pct, ".2f"),
+                 fmt("Williams%R", willr, ".1f"), fmt("CCI", cci, ".1f"), fmt("ADX", adx, ".1f"),
+                 fmt("Vol", vol_ratio, ".2f"), fmt("OBV", obv, ".0f"),
+                 f"Candle={'bullish' if c.iloc[-1] > df_htf['open'].iloc[-1] else 'bearish'}"]
+        return " | ".join(parts)
+    except Exception:
+        return None
+
+
+def fetch_htf_context_for_ai(symbol: str) -> str:
+    """
+    Fetch indikator HTF (1D, 3D, 1W) untuk konteks AI decision.
+    Dipakai di OPEN dan ARMED. Return string siap masuk prompt.
+    (29/08/2026: nambah 1D -- sebelumnya cuma 3D+1W. Juga fix bug lama:
+    get_ohlcv_htf() dipanggil pakai keyword salah [tf= bukan interval=],
+    jadi TypeError kena try/except tiap timeframe & context ini SELALU
+    kosong dari awal dibuat -- AI nggak pernah beneran lihat data HTF ini.)
+    """
+    try:
         lines_out = []
-        for tf_label, tf_binance, limit in [("3D", "3d", 250), ("1W", "1w", 250)]:
-            try:
-                df_htf = get_ohlcv_htf(symbol, tf=tf_binance, limit=limit)
-                if df_htf is None or len(df_htf) < 14:
-                    continue
-                c = df_htf["close"]; h = df_htf["high"]; l = df_htf["low"]
-                ema20 = _pta.ema(c, length=20).iloc[-1]
-                ema50 = _pta.ema(c, length=50).iloc[-1]
-                ema200 = _pta.ema(c, length=200).iloc[-1]
-                rsi = _pta.rsi(c, length=14).iloc[-1]
-                atr = _pta.atr(h, l, c, length=14).iloc[-1]
-                atr_pct = atr / c.iloc[-1] * 100 if c.iloc[-1] > 0 else None
-                st = _pta.supertrend(h, l, c, length=7, multiplier=3.0)
-                std_col = [col for col in st.columns if "SUPERTd" in col]
-                st_dir = int(st[std_col[0]].iloc[-1]) if std_col else 0
-                adx_df = _pta.adx(h, l, c, length=14)
-                adx_col = [col for col in adx_df.columns if col.startswith("ADX_")]
-                adx = adx_df[adx_col[0]].iloc[-1] if adx_col else None
-                stoch = _pta.stoch(h, l, c, k=14, d=3, smooth_k=3)
-                stoch_k_col = [col for col in stoch.columns if "STOCHk" in col]
-                stoch_d_col = [col for col in stoch.columns if "STOCHd" in col]
-                stoch_k = stoch[stoch_k_col[0]].iloc[-1] if stoch_k_col else None
-                stoch_d = stoch[stoch_d_col[0]].iloc[-1] if stoch_d_col else None
-                macd = _pta.macd(c, fast=12, slow=26, signal=9)
-                macd_col = [col for col in macd.columns if "MACDh" in col]
-                macd_hist = macd[macd_col[0]].iloc[-1] if macd_col else None
-                bb = _pta.bbands(c, length=20, std=2)
-                bb_col = [col for col in bb.columns if "BBP" in col]
-                bb_pct = bb[bb_col[0]].iloc[-1] if bb_col else None
-                willr = _pta.willr(h, l, c, length=14).iloc[-1]
-                cci = _pta.cci(h, l, c, length=20).iloc[-1]
-                obv = _pta.obv(c, df_htf["vol"]).iloc[-1]
-                vol_ma = df_htf["vol"].rolling(20).mean().iloc[-1]
-                vol_ratio = df_htf["vol"].iloc[-1] / vol_ma if vol_ma > 0 else None
-                p20 = (c.iloc[-1] / ema20 - 1) * 100 if ema20 > 0 else None
-                p50 = (c.iloc[-1] / ema50 - 1) * 100 if ema50 > 0 else None
-                p200 = (c.iloc[-1] / ema200 - 1) * 100 if ema200 > 0 else None
-                def fmt(label, value, spec):
-                    return f"{label}=" + (format(float(value), spec) if value is not None and not pd.isna(value) else "n/a")
-                parts = [f"HTF {tf_label}: ST={'Uptrend' if st_dir == 1 else 'Downtrend' if st_dir == -1 else 'Neutral'}",
-                         fmt("RSI", rsi, ".1f"), fmt("ATR%", atr_pct, ".2f"), fmt("vs EMA20", p20, "+.2f"),
-                         fmt("vs EMA50", p50, "+.2f"), fmt("vs EMA200", p200, "+.2f"), fmt("Stoch%K", stoch_k, ".1f"),
-                         fmt("Stoch%D", stoch_d, ".1f"), fmt("MACD hist", macd_hist, "+.6f"), fmt("BB%b", bb_pct, ".2f"),
-                         fmt("Williams%R", willr, ".1f"), fmt("CCI", cci, ".1f"), fmt("ADX", adx, ".1f"),
-                         fmt("Vol", vol_ratio, ".2f"), fmt("OBV", obv, ".0f"),
-                         f"Candle={'bullish' if c.iloc[-1] > df_htf['open'].iloc[-1] else 'bearish'}"]
-                lines_out.append(" | ".join(parts))
-            except Exception:
-                continue
+        for tf_label, tf_binance, limit in [("HTF 1D", "1d", 250), ("HTF 3D", "3d", 250), ("HTF 1W", "1w", 250)]:
+            line = _tf_indicator_line_for_ai(symbol, tf_label, tf_binance, limit)
+            if line:
+                lines_out.append(line)
         return "\n".join(lines_out) if lines_out else ""
     except Exception as e:
         log(f"WARN [AI HTF] fetch gagal: {e}")
+        return ""
+
+
+def fetch_ltf_context_for_ai(symbol: str) -> str:
+    """Fetch indikator LTF (1h) untuk konteks AI decision OPEN -- momentum jangka
+    pendek di bawah TF eksekusi strategi, biar AI juga lihat apa harga lagi
+    'kehabisan tenaga' atau justru baru mulai jalan di skala kecil. 29/08/2026."""
+    try:
+        line = _tf_indicator_line_for_ai(symbol, "LTF 1h", "1h", 250)
+        return line or ""
+    except Exception as e:
+        log(f"WARN [AI LTF] fetch gagal: {e}")
         return ""
 
 
@@ -10938,12 +10962,15 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     AI decide: buka deal atau skip.
     Return True = buka, False = skip.
     Default True jika AI tidak tersedia / error.
-    Fetch HTF 3D dan 1W untuk konteks tambahan (tidak time-critical).
+    Fetch HTF 1D/3D/1W dan LTF 1h untuk konteks tambahan (tidak time-critical).
+    (29/08/2026: nambah 1D + LTF 1h, plus fix bug lama HTF yg selalu kosong.)
     """
     ind_str  = "\n".join(f"- {k}: {v}" for k, v in indicators.items())
     htf_str  = fetch_htf_context_for_ai(symbol)
+    ltf_str  = fetch_ltf_context_for_ai(symbol)
     ind4h_str = get_full_4h_indicator_context(symbol)
-    htf_section  = f"\nKonteks HTF:\n{htf_str}\n" if htf_str else ""
+    htf_section  = f"\nKonteks HTF (1D/3D/1W):\n{htf_str}\n" if htf_str else ""
+    ltf_section  = f"\nKonteks LTF (1h):\n{ltf_str}\n" if ltf_str else ""
     ind4h_section = f"\n{ind4h_str}\n" if ind4h_str else ""
     prompt = (
         f"Kamu adalah AI analyst trading crypto. Berikan analisis singkat.\n\n"
@@ -10951,7 +10978,8 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
         f"Deal aktif saat ini: {n_active}\n\n"
         f"Indikator saat sinyal:\n{ind_str}\n"
         f"{ind4h_section}"
-        f"{htf_section}\n"
+        f"{htf_section}"
+        f"{ltf_section}\n"
         f"Semua filter rule sudah lolos.\n\n"
         f"Format jawaban (ikuti persis):\n"
         f"OPEN atau SKIP\n"
