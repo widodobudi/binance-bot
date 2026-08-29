@@ -7875,7 +7875,7 @@ function addAutoSellAsset() {
     var avgPrice = avgEl && avgEl.value !== '' ? parseFloat(avgEl.value) : null;
     if (!asset) { alert('Pilih asset dulu.'); return; }
     if (threshold <= 0) { alert('Isi threshold harga yang valid.'); return; }
-    var body = {asset:asset, enabled:true, threshold_usdt:threshold, convert_leftover_bnb: bnbEl ? bnbEl.checked : false};
+    var body = {asset:asset, enabled:false, threshold_usdt:threshold, convert_leftover_bnb: bnbEl ? bnbEl.checked : false};
     if (avgPrice !== null) body.avg_price = avgPrice;
     fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
         .then(function(r){ return r.json(); }).then(function(d){
