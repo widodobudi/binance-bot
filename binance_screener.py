@@ -609,12 +609,12 @@ TRADES_CSV = os.path.join(DATA_DIR, "trades_forwardtest.csv")
 STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # Default values — edit hard-coded di sini untuk ubah nilai RESET
 STRATEGY_CONFIG_DEFAULTS = {
-    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 12, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False},
-    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False},
-    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": False},
-    "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": False},
-    "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": False},
-    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False},
+    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 12, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True},
+    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True},
+    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True},
+    "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True},
+    "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True},
+    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True},
 }
 
 def load_strategy_config() -> dict:
@@ -678,9 +678,10 @@ def is_ai_call_open_enabled(strategy: str) -> bool:
     """Default FALSE: kalau True, tiap kandidat OPEN yang sudah lolos semua filter rule-based
     strategi ini masih dikonsultasikan ke AI (ai_decision_open) sebelum benar-benar dibuka.
     Beda dari filter numerik lain di bot ini, keputusan AI tidak bisa di-backtest/di-sweep --
-    default OFF, nyalakan per-strategi lewat Strategy Control kalau mau (28/08/2026)."""
+    default ON (29/08/2026, maksimalkan pemakaian kredit Anthropic yang jarang kepakai),
+    matikan per-strategi lewat Strategy Control kalau mau."""
     cfg = load_strategy_config()
-    return cfg.get(strategy, {}).get("ai_call_open", False)
+    return cfg.get(strategy, {}).get("ai_call_open", True)
 
 def get_strategy_base_usd(strategy: str) -> float:
     cfg = load_strategy_config()
@@ -4420,7 +4421,7 @@ def thread2_monitor():
         _is_akum = strat in ('akum_entry_a', 'akum_entry_b')
         if (not armed) and (not _is_akum) and prof_peak >= get_arm_pct(live_atrp):
             # AI decision jika ai_call=True untuk deal ini
-            if get_deal_override(sym, 'ai_call', False):
+            if get_deal_override(sym, 'ai_call', True):
                 if not ai_decision_armed(sym, d.get('strategy', 'brkX2'), d, price, peak):
                     log(f"[T2] {sym} ARM ditahan oleh AI decision")
                     # skip arm kali ini, cek lagi di siklus berikutnya
@@ -4613,7 +4614,7 @@ def thread2_monitor():
             hold_label = f"batas {MAX_HOLD_DAYS} candle"
         if opened_ts>0 and (time.time()-opened_ts) >= hold_limit_sec:
             do_close=True; reason=hold_label+" tercapai"
-        elif opened_ts>0 and get_deal_override(sym, 'ai_call', False):
+        elif opened_ts>0 and get_deal_override(sym, 'ai_call', True):
             # Tanya AI saat tersisa 2 candle menuju timeout
             elapsed_sec = time.time() - opened_ts
             candle_sec  = hold_limit_sec / (
@@ -4654,7 +4655,7 @@ def thread2_monitor():
                 log(f"[T2] {sym} close di-skip (auto_close=OFF via dashboard)")
                 continue
             # AI decision jika ai_call=True untuk deal ini
-            if get_deal_override(sym, 'ai_call', False):
+            if get_deal_override(sym, 'ai_call', True):
                 if not ai_decision_close(sym, d.get('strategy', 'brkX2'), d, price, peak, reason):
                     log(f"[T2] {sym} CLOSE di-hold oleh AI decision (reason: {reason})")
                     continue
@@ -7077,7 +7078,7 @@ DASHBOARD_HTML = '''
           <form method="POST" action="/toggle" style="display:inline">
             <input type="hidden" name="sym" value="{{ sym }}">
             <input type="hidden" name="key" value="ai_call">
-            <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("ai_call",False) else "" }}>
+            <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("ai_call",True) else "" }}>
           </form>
         </td>
                 <td><button type="button" onclick="resendOpenNotification('{{ sym }}')" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 7px;font-size:10px;cursor:pointer">Resend OPEN</button></td>
@@ -10526,7 +10527,7 @@ def run_web_dashboard():
 import urllib.request as _urllib_req
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-AI_DECISION_MODEL  = "claude-haiku-4-5-20251001"
+AI_DECISION_MODEL  = "claude-sonnet-5"   # naik dari Haiku 4.5 (29/08/2026, maksimalkan kredit Anthropic yg jarang kepakai)
 GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_AI_MODEL    = os.environ.get("GEMINI_AI_MODEL", "gemini-2.5-flash")
 AI_DECISION_TIMEOUT = 10  # detik
