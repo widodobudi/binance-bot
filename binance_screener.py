@@ -7213,6 +7213,10 @@ DASHBOARD_HTML = '''
             <button type="submit" style="background:#ef4444;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Cancel</button>
           </form>
           {% endif %}
+          <form method="POST" action="/reconcile_deal" style="display:inline;margin-left:4px" title="Khusus kalau koinnya SUDAH TERJUAL di luar jalur normal bot (mis. lewat webhook TradingView) tapi masih nyangkut di sini -- akan dicatat ke Closed Trades pakai harga sekarang & dihapus dari list. Ditolak otomatis kalau saldo wallet masih signifikan (pakai Cancel kalau koin memang belum dijual)." onsubmit="return confirm('Reconcile deal {{ sym.replace(\"USDT\",\"/USDT\") }}?\n\nDIPAKAI KHUSUS kalau koinnya SUDAH TERJUAL di luar bot (mis. lewat webhook) tapi masih nyangkut di sini. Akan dicatat ke Closed Trades pakai harga SEKARANG sbg estimasi exit, lalu dihapus dari Active Deals.\n\nKalau koin BELUM dijual, batalkan ini dan pakai Cancel.');">
+            <input type="hidden" name="sym" value="{{ sym }}">
+            <button type="submit" style="background:#78716c;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Reconcile</button>
+          </form>
         </td>
         <td>
           <form method="POST" action="/toggle" style="display:inline">
@@ -9625,6 +9629,54 @@ def run_web_dashboard():
             )
             return redirect("/")
 
+        @app.route("/reconcile_deal", methods=["POST"])
+        def reconcile_deal():
+            """Bersihkan deal yang NYANGKUT di active_deals padahal koinnya sudah kejual
+            di luar jalur normal bot (mis. lewat webhook TradingView close_deal versi lama
+            sebelum di-fix 29/08/2026 -- order kejual beneran tapi bookkeeping internal
+            nggak ke-update). BEDA dari Cancel: ini khusus buat kasus koin SUDAH TERJUAL
+            (saldo wallet ~0), jadi ditulis ke Closed Trades pakai harga sekarang sbg
+            estimasi exit, bukan cuma dihapus diam-diam. Guard: nolak kalau saldo wallet
+            masih signifikan (>0.5% dari qty_coin tercatat) -- itu tandanya koin BELUM
+            kejual, harusnya pakai Cancel, bukan Reconcile."""
+            sym = request.form.get("sym", "").upper().strip()
+            if sym and not sym.endswith("USDT"):
+                sym = sym + "USDT"
+            with active_deals_lock:
+                deal = dict(active_deals.get(sym, {}))
+            if not deal:
+                return redirect("/")
+            asset = sym.replace("USDT", "")
+            try:
+                wallet_qty = binance_get_asset_qty(asset)
+            except Exception:
+                wallet_qty = 0.0
+            qty_coin = float(deal.get("qty_coin", 0) or 0)
+            if qty_coin > 0 and wallet_qty > qty_coin * 0.005:
+                log(f"[RECONCILE] {sym} ditolak: saldo wallet {wallet_qty} masih signifikan vs qty_coin {qty_coin} -- koin sepertinya belum terjual, pakai Cancel kalau memang mau berhenti track.")
+                return redirect("/")
+            price = get_price_now(sym)
+            entry_price = float(deal.get('entry_price', 0) or 0)
+            prof_pct = ((price / entry_price) - 1) * 100 if entry_price > 0 and price > 0 else 0.0
+            total_usd = estimate_deal_total_usd(deal)
+            strat = deal.get('strategy', 'brkX2')
+            csv_log_close(sym, now_wib().strftime('%Y-%m-%d %H:%M:%S'), price, prof_pct,
+                          "manual reconcile (koin sudah terjual di luar jalur normal)",
+                          strategy=strat, base_usd=total_usd)
+            remove_from_active_deals(sym)
+            if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b'):
+                record_closed(sym)
+            log(f"[RECONCILE] {sym} dibersihkan dari active_deals + dicatat ke Closed Trades (harga estimasi {price}, profit {prof_pct:+.2f}%)")
+            send_telegram(
+                f"RECONCILE DEAL (dashboard)\n"
+                f"Pair   : {to_display_pair(sym)}\n"
+                f"Strategi: {strat}\n"
+                f"Exit (estimasi harga sekarang): {_fmt_price(price)}\n"
+                f"Profit : {prof_pct:+.2f}%\n"
+                f"Koin sudah terjual di luar jalur normal bot, sekarang disinkronkan ke Closed Trades."
+            )
+            return redirect("/")
+
         @app.route("/resend_open_notification", methods=["POST"])
         def resend_open_notification():
             symbol = str((request.get_json(force=True, silent=True) or {}).get("symbol", "")).upper().replace("/", "")
@@ -10584,6 +10636,12 @@ def run_web_dashboard():
                         "opened_at": now_wib().strftime("%Y-%m-%d %H:%M:%S"),
                         "target_usd": target_usd, "add_usd": add_usd, "source": "tradingview_webhook",
                     })
+                    csv_log_open({
+                        'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                        'symbol': to_display_pair(symbol), 'strategy': strategy,
+                        'signal_price': f"{_fmt_price(entry_price)}", 'entry_price': f"{_fmt_price(entry_price)}",
+                        'base_usd': target_usd, 'score': score,
+                    })
                     send_telegram(f"OPEN LONG TradingView\nPair: {to_display_pair(symbol)}\nStrategi: {strategy}\nEntry: {_fmt_price(entry_price)}\nModal: ${target_usd:.2f}")
                 return jsonify({"ok": ok, "action": action, "symbol": symbol, "target_usd": target_usd, "add_usd": add_usd})
             with active_deals_lock:
@@ -10596,7 +10654,28 @@ def run_web_dashboard():
             elif action == "start_trailing":
                 ok = send_start_trailing(symbol, strategy)
             else:
+                # close_deal -- jalankan pipeline closing LENGKAP (bukan cuma raw sell ke Binance),
+                # biar active_deals/Closed Trades/cooldown ikut update sama kayak close via T2 internal.
+                # Sebelumnya cuma send_close_long() doang: order kejual beneran tapi bot "lupa" deal-nya
+                # sudah selesai -- nyangkut selamanya di Active Deals & nggak pernah muncul di Closed Trades.
+                wh_price = get_price_now(symbol)
+                wh_entry = float(deal.get('entry_price', 0) or 0)
+                wh_prof_pct = ((wh_price / wh_entry) - 1) * 100 if wh_entry > 0 and wh_price > 0 else 0.0
                 ok = send_close_long(symbol, strategy)
+                if ok:
+                    wh_total_usd = estimate_deal_total_usd(deal)
+                    csv_log_close(symbol, now_wib().strftime('%Y-%m-%d %H:%M:%S'), wh_price, wh_prof_pct,
+                                  "close via TradingView webhook", strategy=strategy, base_usd=wh_total_usd)
+                    remove_from_active_deals(symbol)
+                    if strategy in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b'):
+                        record_closed(symbol)
+                    send_telegram(
+                        f"{strategy} | CLOSE LONG (TradingView webhook)\n"
+                        f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                        f"Pair   : {to_display_pair(symbol)}\n"
+                        f"Exit   : {_fmt_price(wh_price)}\n"
+                        f"Profit : {wh_prof_pct:+.2f}%"
+                    )
             if ok and action == "start_trailing":
                 with active_deals_lock:
                     if symbol in active_deals:
