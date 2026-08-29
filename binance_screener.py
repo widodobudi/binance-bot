@@ -1830,20 +1830,27 @@ def save_auto_sell_config(config: dict) -> None:
             "enabled": bool(cfg.get("enabled", False)),
             "threshold_usdt": float(cfg.get("threshold_usdt", 0) or 0),
             "avg_price": float(cfg.get("avg_price", 0) or 0),
+            "convert_leftover_bnb": bool(cfg.get("convert_leftover_bnb", False)),
         }
     with open(AUTO_SELL_CONFIG_FILE, "w", encoding="utf-8") as file:
         json.dump({"assets": clean}, file, indent=2)
 
 
-def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg_price: float = None) -> dict:
+def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg_price: float = None,
+                            convert_leftover_bnb: bool = None) -> dict:
     """Tambah/update 1 entry asset di auto-sell config, tanpa ganggu asset lain.
-    avg_price=None -> pertahankan nilai avg_price yang sudah ada (kalau ada)."""
+    avg_price/convert_leftover_bnb=None -> pertahankan nilai yang sudah ada (kalau ada)."""
     config = load_auto_sell_config()
     asset = str(asset).upper()
     existing = config["assets"].get(asset, {})
     if avg_price is None:
         avg_price = existing.get("avg_price", 0)
-    config["assets"][asset] = {"enabled": bool(enabled), "threshold_usdt": float(threshold_usdt), "avg_price": float(avg_price or 0)}
+    if convert_leftover_bnb is None:
+        convert_leftover_bnb = existing.get("convert_leftover_bnb", False)
+    config["assets"][asset] = {
+        "enabled": bool(enabled), "threshold_usdt": float(threshold_usdt),
+        "avg_price": float(avg_price or 0), "convert_leftover_bnb": bool(convert_leftover_bnb),
+    }
     save_auto_sell_config(config)
     return config
 
@@ -2014,9 +2021,38 @@ def ensure_spot_usdt(min_needed: float, wait_seconds: int = 12) -> bool:
 _last_balance_log_ts = 0.0
 
 
-def _check_auto_sell_one(asset: str, threshold: float) -> None:
+def _convert_leftover_to_bnb(asset: str, symbol: str, filter_info: dict):
+    """Jual sisa saldo asset (leftover ~5% stlh auto-sell utama) -> USDT -> beli BNB,
+    biar user bisa numpuk stok BNB buat diskon fee trading 25%. Return dict hasil
+    kalau berhasil, None kalau leftover kosong/di bawah minimum order Binance."""
+    if asset == "BNB":
+        return None
+    leftover = binance_get_asset_qty(asset)
+    if leftover <= 0:
+        return None
+    step_size = filter_info.get("step_size", 0)
+    if step_size > 0:
+        leftover = (leftover // step_size) * step_size
+    price_now = get_price_now(symbol)
+    if leftover < filter_info.get("min_qty", 0) or leftover * price_now < filter_info.get("min_notional", 0):
+        log(f"[AUTO-SELL] {symbol} sisa saldo {leftover} di bawah minimum Binance -- convert BNB dilewati")
+        return None
+    sell_result = binance_sell_market(symbol, leftover)
+    proceeds = sell_result.get("proceeds_usdt", 0)
+    if proceeds <= 0:
+        return None
+    buy_result = binance_buy_market("BNBUSDT", proceeds)
+    return {
+        "leftover_qty": leftover, "usdt_from_leftover": proceeds,
+        "bnb_bought": buy_result.get("qty", 0), "bnb_avg": buy_result.get("price_avg", 0),
+    }
+
+
+def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: bool = False) -> None:
     """Cek 1 asset: kalau crossing naik lewat threshold, jual 95% saldo bebasnya
-    lalu nonaktifkan HANYA entry asset ini (asset lain di daftar tetap jalan)."""
+    lalu nonaktifkan HANYA entry asset ini (asset lain di daftar tetap jalan).
+    convert_leftover_bnb: kalau True, sisa ~5% yg nggak ikut dijual otomatis dikonversi
+    ke BNB (jual ke USDT lalu beli BNB) -- buat numpuk stok BNB diskon fee 25%."""
     symbol = asset + "USDT"
     if threshold <= 0:
         return
@@ -2060,11 +2096,17 @@ def _check_auto_sell_one(asset: str, threshold: float) -> None:
         log(f"[AUTO-SELL] {symbol} preflight gagal — order dibatalkan: {error}")
         return
     result = binance_sell_market(symbol, sell_quantity)
+    bnb_result = None
+    if convert_leftover_bnb:
+        try:
+            bnb_result = _convert_leftover_to_bnb(asset, symbol, info)
+        except Exception as error:
+            log(f"WARN [AUTO-SELL] convert leftover ke BNB {asset}: {error}")
     config = load_auto_sell_config()
     if asset in config["assets"]:
         config["assets"][asset]["enabled"] = False
         save_auto_sell_config(config)
-    send_telegram(
+    msg = (
         f"AUTO SELL {asset}/USDT\n"
         f"Harga crossing: {_fmt_price(price)} USDT\n"
         f"Threshold: {_fmt_price(threshold)} USDT\n"
@@ -2073,6 +2115,11 @@ def _check_auto_sell_one(asset: str, threshold: float) -> None:
         f"Hasil: {result.get('proceeds_usdt', 0):.2f} USDT\n"
         "Auto-sell asset ini dinonaktifkan setelah satu eksekusi (asset lain di daftar tetap jalan)."
     )
+    if bnb_result:
+        msg += (f"\n\nSisa saldo {bnb_result['leftover_qty']} {asset} dikonversi ke BNB:\n"
+                f"{bnb_result['usdt_from_leftover']:.2f} USDT -> {bnb_result['bnb_bought']:.6f} BNB "
+                f"@ {bnb_result['bnb_avg']:.2f}")
+    send_telegram(msg)
     log(f"[AUTO-SELL] {symbol} crossing {threshold} -> sold {quantity}")
 
 
@@ -2082,7 +2129,8 @@ def check_auto_sell_crossing() -> None:
         if not cfg.get("enabled"):
             continue
         try:
-            _check_auto_sell_one(str(asset).upper(), float(cfg.get("threshold_usdt", 0) or 0))
+            _check_auto_sell_one(str(asset).upper(), float(cfg.get("threshold_usdt", 0) or 0),
+                                  bool(cfg.get("convert_leftover_bnb", False)))
         except Exception as error:
             log(f"WARN [AUTO-SELL] {asset}: {error}")
 
@@ -7678,7 +7726,7 @@ function loadAutoSellConfig() {
             renderAutoSellTable(cfg.assets || {});
         }).catch(function(e){
             var tbody = document.getElementById('auto-sell-tbody');
-            if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="color:var(--red);padding:8px">Gagal memuat: ' + e + '</td></tr>';
+            if (tbody) tbody.innerHTML = '<tr><td colspan="10" style="color:var(--red);padding:8px">Gagal memuat: ' + e + '</td></tr>';
         });
     }
 
@@ -7687,7 +7735,7 @@ function renderAutoSellTable(assets) {
     if (!tbody) return;
     var names = Object.keys(assets);
     if (!names.length) {
-        tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted);padding:8px">Belum ada asset auto-sell. Tambah lewat form di bawah.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" style="color:var(--muted);padding:8px">Belum ada asset auto-sell. Tambah lewat form di bawah.</td></tr>';
         return;
     }
     tbody.innerHTML = '';
@@ -7705,6 +7753,7 @@ function renderAutoSellTable(assets) {
             '<td style="padding:5px 6px" id="auto-sell-gap-' + asset + '">-</td>' +
             '<td style="padding:5px 6px;color:var(--muted)">' + (cfg.enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif') + '</td>' +
             '<td style="padding:5px 6px"><input type="checkbox" ' + (cfg.enabled ? 'checked' : '') + ' id="auto-sell-chk-' + asset + '"></td>' +
+            '<td style="padding:5px 6px" title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB (buat diskon fee trading 25%)"><input type="checkbox" ' + (cfg.convert_leftover_bnb ? 'checked' : '') + ' id="auto-sell-bnb-' + asset + '"></td>' +
             '<td style="padding:5px 6px;white-space:nowrap">' +
                 '<button type="button" onclick="saveAutoSellRow(\'' + asset + '\')" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;margin-right:4px;font-weight:600">SAVE</button>' +
                 '<button type="button" onclick="removeAutoSellRow(\'' + asset + '\')" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer">Hapus</button>' +
@@ -7743,11 +7792,12 @@ function saveAutoSellRow(asset) {
     var thrEl = document.getElementById('auto-sell-thr-' + asset);
     var chkEl = document.getElementById('auto-sell-chk-' + asset);
     var avgEl = document.getElementById('auto-sell-avg-' + asset);
+    var bnbEl = document.getElementById('auto-sell-bnb-' + asset);
     var enabled = chkEl ? chkEl.checked : false;
     var threshold = parseFloat(thrEl ? thrEl.value : 0) || 0;
     var avgPrice = avgEl && avgEl.value !== '' ? parseFloat(avgEl.value) : null;
     if (enabled && threshold <= 0) { alert('Isi threshold harga yang valid.'); return; }
-    var body = {asset:asset, enabled:enabled, threshold_usdt:threshold};
+    var body = {asset:asset, enabled:enabled, threshold_usdt:threshold, convert_leftover_bnb: bnbEl ? bnbEl.checked : false};
     if (avgPrice !== null) body.avg_price = avgPrice;
     fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
         .then(function(r){ return r.json(); }).then(function(d){
@@ -7769,12 +7819,13 @@ function addAutoSellAsset() {
     var sel = document.getElementById('auto-sell-new-asset');
     var thrEl = document.getElementById('auto-sell-new-threshold');
     var avgEl = document.getElementById('auto-sell-new-avg');
+    var bnbEl = document.getElementById('auto-sell-new-bnb');
     var asset = sel ? sel.value : '';
     var threshold = parseFloat(thrEl ? thrEl.value : 0) || 0;
     var avgPrice = avgEl && avgEl.value !== '' ? parseFloat(avgEl.value) : null;
     if (!asset) { alert('Pilih asset dulu.'); return; }
     if (threshold <= 0) { alert('Isi threshold harga yang valid.'); return; }
-    var body = {asset:asset, enabled:true, threshold_usdt:threshold};
+    var body = {asset:asset, enabled:true, threshold_usdt:threshold, convert_leftover_bnb: bnbEl ? bnbEl.checked : false};
     if (avgPrice !== null) body.avg_price = avgPrice;
     fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
         .then(function(r){ return r.json(); }).then(function(d){
@@ -7930,15 +7981,17 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
                     <th style="padding:5px 6px">Jarak ke target</th>
                     <th style="padding:5px 6px">Status</th>
                     <th style="padding:5px 6px">Aktif</th>
+                    <th style="padding:5px 6px" title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB (buat diskon fee trading 25%)">Sisa→BNB</th>
                     <th style="padding:5px 6px"></th>
                 </tr></thead>
-                <tbody id="auto-sell-tbody"><tr><td colspan="9" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
+                <tbody id="auto-sell-tbody"><tr><td colspan="10" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
             </table>
             </div>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
                 <label>+ Tambah asset <select id="auto-sell-new-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option>Memuat...</option></select></label>
                 <label>Avg beli (opsional) <input id="auto-sell-new-avg" type="number" min="0" step="0.00000001" placeholder="kalau tahu" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
                 <label>Harga trigger jual (USDT) <input id="auto-sell-new-threshold" type="number" min="0" step="0.00000001" value="0" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
+                <label title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB"><input id="auto-sell-new-bnb" type="checkbox"> Convert sisa ke BNB</label>
                 <button type="button" onclick="addAutoSellAsset()" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">+ TAMBAH</button>
                 <button type="button" onclick="loadAutoSellConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh saldo</button>
             </div>
@@ -10339,7 +10392,9 @@ def run_web_dashboard():
                             return jsonify({"ok": False, "error": "Threshold wajib diisi"}), 400
                         avg_price = payload.get("avg_price", None)
                         avg_price = float(avg_price) if avg_price not in (None, "") else None
-                        upsert_auto_sell_asset(asset, enabled, threshold, avg_price)
+                        convert_bnb = payload.get("convert_leftover_bnb", None)
+                        convert_bnb = bool(convert_bnb) if convert_bnb is not None else None
+                        upsert_auto_sell_asset(asset, enabled, threshold, avg_price, convert_bnb)
                 return jsonify({"ok": True, **load_auto_sell_config()})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
