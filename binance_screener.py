@@ -4534,7 +4534,7 @@ def thread2_monitor():
                     'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
                 })
                 remove_from_active_deals(sym)
-                if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h'): record_closed(sym)
+                if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b'): record_closed(sym)
                 if strat == 'brkX2_4h' and trail_stop_triggered: record_trail_close(sym, price)
                 if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof_from_entry)
                 if _hold_no_sell: record_hold_no_sell_closed(sym)
@@ -5808,6 +5808,10 @@ def thread_crossema_scan():
             # LOLOS → OPEN DEAL
             atrp         = float(r["atr_pct"]) if not pd.isna(r.get("atr_pct")) else 3.0
             signal_price = float(r["close"])
+
+            if is_cooldown_enabled('brkX2_crossema') and cooldown_remaining(sym) > 0:
+                log(f"[T_CROSSEMA] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
+                continue
 
             log(f"[T_CROSSEMA] SINYAL: {sym} price={price_now:.6g} "
                 f"EMA20={ef:.6g} atr%={atrp:.2f} elapsed={elapsed_pct*100:.1f}%")
@@ -8495,6 +8499,9 @@ def thread_akum_entry_scan():
             price_now = get_price_now(sym)
             if price_now <= 0: continue
             strat_key = f'akum_entry_{entry_type.lower()}'
+            if is_cooldown_enabled(strat_key) and cooldown_remaining(sym) > 0:
+                log(f"[T_AKUM_ENTRY] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
+                continue
             if is_ai_call_open_enabled('akum_entry_a'):
                 _ai_ind = {'entry_type': entry_type, 'price_now': _fmt_price(price_now)}
                 if not ai_decision_open(sym, f'Akumulasi-4h Entry {entry_type}', _ai_ind, active_deal_count()):
@@ -8971,7 +8978,7 @@ def run_web_dashboard():
                         'total_usd':     d.get('target_usd', ''),
                     })
                     remove_from_active_deals(sym)
-                    if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h'): record_closed(sym)
+                    if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b'): record_closed(sym)
                     if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof)
                     log(f"[MANUAL-CLOSE] {sym} @ {price_now:.6g} profit={prof:.2f}%")
                     send_telegram(
