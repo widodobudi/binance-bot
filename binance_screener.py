@@ -1912,15 +1912,45 @@ def get_sell_suggestion(asset: str) -> dict:
     return result
 
 
+_binance_avg_cost_cache: dict = {}   # asset -> (ts, avg_price) -- TTL cache, myTrades agak berat dipanggil tiap request
+
+def get_binance_avg_cost(asset: str, ttl_seconds: int = 300) -> float:
+    """Rata-rata tertimbang harga BELI asset ini dari riwayat transaksi Binance (myTrades).
+    PERKIRAAN, bukan cost-basis presisi -- nggak nge-net-kan sell parsial (kalau pernah jual
+    sebagian lalu beli lagi di harga beda, hasilnya bisa meleset). Dipakai sbg suggestion
+    awal yang bisa diedit manual, buat asset yang sama sekali belum ada data avg-nya."""
+    asset = str(asset).upper()
+    cached = _binance_avg_cost_cache.get(asset)
+    if cached and (time.time() - cached[0]) < ttl_seconds:
+        return cached[1]
+    symbol = asset + "USDT"
+    avg = 0.0
+    try:
+        trades = _binance_trading_request("GET", "/api/v3/myTrades", {"symbol": symbol, "limit": 500})
+        buys = [t for t in trades if t.get("isBuyer")]
+        total_qty = sum(float(t["qty"]) for t in buys)
+        total_cost = sum(float(t["qty"]) * float(t["price"]) for t in buys)
+        if total_qty > 0:
+            avg = total_cost / total_qty
+    except Exception as error:
+        log(f"WARN [AUTO-SELL] gagal tarik myTrades {symbol}: {error}")
+    _binance_avg_cost_cache[asset] = (time.time(), avg)
+    return avg
+
+
 def get_effective_avg_price(asset: str) -> float:
     """Prioritas: harga rata-rata dari riwayat hold-no-sell bot (otomatis, otoritatif)
-    -> avg_price manual yang diisi user di dashboard -> 0 (tidak diketahui)."""
+    -> avg_price manual yang diisi user di dashboard -> rata-rata riwayat BUY di Binance
+    (perkiraan, buat asset yang belum ada data sama sekali) -> 0 (tidak diketahui)."""
     asset = str(asset).upper()
     auto = get_hold_no_sell_price(asset)
     if auto and auto.get("entry_price", 0) > 0:
         return float(auto["entry_price"])
     cfg = load_auto_sell_config()
-    return float(cfg.get("assets", {}).get(asset, {}).get("avg_price", 0) or 0)
+    manual = float(cfg.get("assets", {}).get(asset, {}).get("avg_price", 0) or 0)
+    if manual > 0:
+        return manual
+    return get_binance_avg_cost(asset)
 
 
 def remove_auto_sell_asset(asset: str) -> dict:
@@ -7723,6 +7753,8 @@ function loadAutoSellConfig() {
                         sel.appendChild(option);
                     });
                 }
+                sel.onchange = suggestNewAssetAvg;
+                suggestNewAssetAvg();
             }
             renderAutoSellTable(cfg.assets || {});
         }).catch(function(e){
@@ -7776,7 +7808,7 @@ function refreshAutoSellRowPrice(asset) {
         if (priceEl) priceEl.textContent = d.price + ' USDT';
         if (gapEl) gapEl.textContent = d.gap_pct + '%';
         if (avgGapEl) avgGapEl.textContent = d.avg_gap_pct ? (d.avg_gap_pct + '%') : '-';
-        if (avgSrcEl) avgSrcEl.textContent = d.avg_price_source === 'auto' ? '(otomatis dari bot)' : (d.avg_price_source === 'manual' ? '(input manual)' : '');
+        if (avgSrcEl) avgSrcEl.textContent = d.avg_price_source === 'auto' ? '(otomatis dari bot)' : (d.avg_price_source === 'manual' ? '(input manual)' : (d.avg_price_source === 'binance_history' ? '(perkiraan dari riwayat Binance)' : ''));
         if (breakevenEl) {
             var beTxt = d.breakeven ? ('breakeven ~' + d.breakeven) : '';
             if (d.htf_trend) beTxt += (beTxt ? ' | ' : '') + 'HTF ' + d.htf_trend;
@@ -7784,8 +7816,8 @@ function refreshAutoSellRowPrice(asset) {
             breakevenEl.innerHTML = beTxt;
             if (d.breakeven_warning) breakevenEl.innerHTML += '<br><span style="color:var(--red)">⚠ ' + d.breakeven_warning + '</span>';
         }
-        // Jangan timpa avg_price kalau user lagi ngetik / sudah keisi lokal, cuma isi kalau field masih kosong & bot punya data otomatis
-        if (avgEl && !avgEl.value && d.avg_price && d.avg_price_source === 'auto') avgEl.value = d.avg_price;
+        // Jangan timpa avg_price kalau user lagi ngetik / sudah keisi lokal, cuma isi kalau field masih kosong & ada suggestion (auto atau perkiraan riwayat Binance)
+        if (avgEl && !avgEl.value && d.avg_price && (d.avg_price_source === 'auto' || d.avg_price_source === 'binance_history')) avgEl.value = d.avg_price;
     }).catch(function(){});
 }
 
@@ -7816,6 +7848,23 @@ function removeAutoSellRow(asset) {
         });
 }
 
+function suggestNewAssetAvg() {
+    var sel = document.getElementById('auto-sell-new-asset');
+    var avgEl = document.getElementById('auto-sell-new-avg');
+    var srcEl = document.getElementById('auto-sell-new-avgsrc');
+    var asset = sel ? sel.value : '';
+    if (avgEl) avgEl.value = '';
+    if (srcEl) srcEl.textContent = '';
+    if (!asset) return;
+    if (avgEl) avgEl.placeholder = 'memuat...';
+    fetch('/api/auto_sell_price?asset=' + encodeURIComponent(asset)).then(function(r){ return r.json(); }).then(function(d) {
+        if (avgEl) avgEl.placeholder = 'kalau tahu';
+        if (!d.ok || !d.avg_price) return;
+        if (avgEl) avgEl.value = d.avg_price;
+        if (srcEl) srcEl.textContent = d.avg_price_source === 'auto' ? '(otomatis dari bot)' : (d.avg_price_source === 'binance_history' ? '(perkiraan dari riwayat Binance)' : '');
+    }).catch(function(){ if (avgEl) avgEl.placeholder = 'kalau tahu'; });
+}
+
 function addAutoSellAsset() {
     var sel = document.getElementById('auto-sell-new-asset');
     var thrEl = document.getElementById('auto-sell-new-threshold');
@@ -7833,6 +7882,8 @@ function addAutoSellAsset() {
             if (!d.ok) { alert('Error: ' + d.error); return; }
             if (thrEl) thrEl.value = 0;
             if (avgEl) avgEl.value = '';
+            var srcEl = document.getElementById('auto-sell-new-avgsrc');
+            if (srcEl) srcEl.textContent = '';
             renderAutoSellTable(d.assets || {});
         });
 }
@@ -7990,7 +8041,7 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
             </div>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
                 <label>+ Tambah asset <select id="auto-sell-new-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option>Memuat...</option></select></label>
-                <label>Avg beli (opsional) <input id="auto-sell-new-avg" type="number" min="0" step="0.00000001" placeholder="kalau tahu" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
+                <label>Avg beli (opsional) <input id="auto-sell-new-avg" type="number" min="0" step="0.00000001" placeholder="kalau tahu" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><div id="auto-sell-new-avgsrc" style="color:var(--muted);font-size:9px"></div></label>
                 <label>Harga trigger jual (USDT) <input id="auto-sell-new-threshold" type="number" min="0" step="0.00000001" value="0" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
                 <label title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB"><input id="auto-sell-new-bnb" type="checkbox"> Convert sisa ke BNB</label>
                 <button type="button" onclick="addAutoSellAsset()" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">+ TAMBAH</button>
@@ -10359,13 +10410,22 @@ def run_web_dashboard():
                 gap_pct = ((threshold / price) - 1) * 100 if threshold > 0 else 0
                 avg_info = get_hold_no_sell_price(asset)
                 avg_price = get_effective_avg_price(asset)
+                cfg_manual = float(config.get("assets", {}).get(asset, {}).get("avg_price", 0) or 0)
+                if avg_info and avg_info.get("entry_price", 0) > 0:
+                    avg_source = "auto"
+                elif cfg_manual > 0:
+                    avg_source = "manual"
+                elif avg_price > 0:
+                    avg_source = "binance_history"
+                else:
+                    avg_source = ""
                 avg_gap_pct = ((price / avg_price) - 1) * 100 if avg_price > 0 else None
                 sugg = get_sell_suggestion(asset)
                 return jsonify({"ok": True, "asset": asset, "symbol": symbol,
                                 "price": _fmt_price(price), "threshold": _fmt_price(threshold),
                                 "gap_pct": f"{gap_pct:+.2f}",
                                 "avg_price": _fmt_price(avg_price) if avg_price > 0 else "",
-                                "avg_price_source": "auto" if (avg_info and avg_info.get("entry_price", 0) > 0) else ("manual" if avg_price > 0 else ""),
+                                "avg_price_source": avg_source,
                                 "avg_gap_pct": f"{avg_gap_pct:+.2f}" if avg_gap_pct is not None else "",
                                 "breakeven": _fmt_price(sugg["breakeven"]) if sugg["breakeven"] > 0 else "",
                                 "resistance": _fmt_price(sugg["resistance"]) if sugg["resistance"] else "",
