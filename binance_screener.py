@@ -7928,6 +7928,7 @@ if (typeof STRAT_SECONDARY !== 'undefined') {
         <option value="hunting_4h">Hunting-4h</option>
         <option value="brkX2_crossema">CrossEMA-4h</option>
         <option value="akumulasi">Akumulasi-4h</option>
+        <option value="__exclude_hardstop__">Semua strategi, exclude hardstop volatilitas</option>
       </select>
     <button onclick="event.stopPropagation();loadClosedTrades()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh</button>
     </div>
@@ -8019,7 +8020,8 @@ function renderClosedTradesRows() {
 
 function loadClosedTrades() {
   var strat = document.getElementById('ct-filter-strat').value;
-  var url = '/api/closed_trades' + (strat ? '?strategy=' + strat : '');
+  var url = strat === '__exclude_hardstop__' ? '/api/closed_trades?exclude_hardstop=1'
+          : (strat ? '/api/closed_trades?strategy=' + strat : '/api/closed_trades');
   fetch(url).then(function(r){return r.json();}).then(function(d){
     var stats = d.stats || {};
     var sEl = document.getElementById('ct-stats');
@@ -10514,6 +10516,7 @@ def run_web_dashboard():
             try:
                 import datetime as _dt
                 strategy_filter = request.args.get("strategy", "")
+                exclude_hardstop = request.args.get("exclude_hardstop", "") in ("1", "true", "True")
                 rows = []
                 if os.path.exists(TRADES_CSV):
                     with trades_csv_lock:
@@ -10545,6 +10548,8 @@ def run_web_dashboard():
                     for key, strategy_rows in rows_by_strategy.items():
                         offset = phase_offsets.get(key, 0)
                         rows.extend(strategy_rows[offset:] if offset else strategy_rows)
+                if exclude_hardstop:
+                    rows = [r for r in rows if not (r.get('exit_reason') or '').lower().startswith('hard stop volatilitas')]
                 # Sort terbaru dulu
                 rows.sort(key=lambda r: r.get('close_time_wib',''), reverse=True)
                 # Hitung stats dan profit$
