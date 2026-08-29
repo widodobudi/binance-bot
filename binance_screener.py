@@ -7803,7 +7803,7 @@ function refreshAutoSellRowPrice(asset) {
         var avgEl = document.getElementById('auto-sell-avg-' + asset);
         if (!d.ok) { if (priceEl) priceEl.textContent = 'tidak tersedia'; return; }
         if (priceEl) priceEl.textContent = d.price + ' USDT';
-        if (gapEl) gapEl.textContent = d.gap_pct + '%';
+        if (gapEl) gapEl.innerHTML = d.gap_pct + '%' + (d.est_profit_usd ? '<br><span style="color:var(--muted);font-size:9px">≈ ' + d.est_profit_usd + ' USDT kalau target kena</span>' : '');
         if (avgGapEl) avgGapEl.textContent = d.avg_gap_pct ? (d.avg_gap_pct + '%') : '-';
         if (avgSrcEl) avgSrcEl.textContent = d.avg_price_source === 'auto' ? '(otomatis dari bot)' : (d.avg_price_source === 'manual' ? '(input manual)' : (d.avg_price_source === 'binance_history' ? '(perkiraan dari riwayat Binance)' : ''));
         if (breakevenEl) {
@@ -10418,6 +10418,17 @@ def run_web_dashboard():
                     avg_source = ""
                 avg_gap_pct = ((price / avg_price) - 1) * 100 if avg_price > 0 else None
                 sugg = get_sell_suggestion(asset)
+                # Estimasi profit USDT kalau target tercapai: (target - avg_beli) x qty yg
+                # bakal dijual (95% saldo, sama persis logic eksekusi), dikurangi estimasi
+                # fee jual ~0.1% (Binance spot taker default, blm termasuk diskon BNB).
+                est_profit_usd = None
+                try:
+                    qty = binance_get_asset_qty(asset)
+                    sell_qty = qty * 0.95
+                    if threshold > 0 and avg_price > 0 and sell_qty > 0:
+                        est_profit_usd = sell_qty * threshold * (1 - 0.001) - sell_qty * avg_price
+                except Exception:
+                    pass
                 return jsonify({"ok": True, "asset": asset, "symbol": symbol,
                                 "price": _fmt_price(price), "threshold": _fmt_price(threshold),
                                 "gap_pct": f"{gap_pct:+.2f}",
@@ -10427,7 +10438,8 @@ def run_web_dashboard():
                                 "breakeven": _fmt_price(sugg["breakeven"]) if sugg["breakeven"] > 0 else "",
                                 "resistance": _fmt_price(sugg["resistance"]) if sugg["resistance"] else "",
                                 "breakeven_warning": sugg["warning"] or "",
-                                "htf_trend": sugg["htf_trend"] or ""})
+                                "htf_trend": sugg["htf_trend"] or "",
+                                "est_profit_usd": f"{est_profit_usd:+.2f}" if est_profit_usd is not None else ""})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
 
