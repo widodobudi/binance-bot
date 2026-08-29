@@ -2133,10 +2133,7 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
             bnb_result = _convert_leftover_to_bnb(asset, symbol, info)
         except Exception as error:
             log(f"WARN [AUTO-SELL] convert leftover ke BNB {asset}: {error}")
-    config = load_auto_sell_config()
-    if asset in config["assets"]:
-        config["assets"][asset]["enabled"] = False
-        save_auto_sell_config(config)
+    remove_auto_sell_asset(asset)
     msg = (
         f"AUTO SELL {asset}/USDT\n"
         f"Harga crossing: {_fmt_price(price)} USDT\n"
@@ -2144,7 +2141,7 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
         f"Saldo bebas: {quantity}\n"
         f"Qty dijual (95%): {sell_quantity}\n"
         f"Hasil: {result.get('proceeds_usdt', 0):.2f} USDT\n"
-        "Auto-sell asset ini dinonaktifkan setelah satu eksekusi (asset lain di daftar tetap jalan)."
+        "Asset ini otomatis dihapus dari daftar Auto Sell setelah satu eksekusi (asset lain di daftar tetap jalan)."
     )
     if bnb_result:
         msg += (f"\n\nSisa saldo {bnb_result['leftover_qty']} {asset} dikonversi ke BNB:\n"
