@@ -1848,6 +1848,62 @@ def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg
     return config
 
 
+def get_sell_suggestion(asset: str) -> dict:
+    """Hitung suggested minimum sell price (breakeven) + konteks teknikal buat Auto Sell
+    Asset: resistance terdekat TF 4h (reuse pivot-high N=4 candle, LOGIC SAMA PERSIS
+    dengan TP3 Akumulasi) dan arah tren HTF 12h (Supertrend + struktur EMA20/50).
+    Breakeven tetap floor mutlak -- ini cuma nambahin KONTEKS, bukan ganti angkanya."""
+    symbol = asset.upper() + "USDT"
+    avg_price = get_effective_avg_price(asset)
+    result = {"breakeven": 0.0, "resistance": None, "warning": None, "htf_trend": None}
+    if avg_price <= 0:
+        return result
+    result["breakeven"] = round(avg_price * 1.002, 8)  # +0.2% buffer fee round-trip
+
+    try:
+        df4 = get_ohlcv_4h(symbol, limit=100)
+        if df4 is not None and len(df4) > 20:
+            price_now = float(df4["close"].iloc[-1])
+            N4 = 4
+            hi_arr = df4["high"].values
+            pivots = []
+            for pi in range(N4, len(hi_arr) - N4):
+                ph = hi_arr[pi]
+                if (all(ph > hi_arr[pi - j] for j in range(1, N4 + 1)) and
+                        all(ph > hi_arr[pi + j] for j in range(1, N4 + 1))):
+                    pivots.append(ph)
+            res_above = sorted(ph for ph in pivots if ph > price_now)
+            if res_above:
+                resistance = float(res_above[0])
+                result["resistance"] = resistance
+                if result["breakeven"] >= resistance * 0.995:
+                    result["warning"] = (f"breakeven dekat/di atas resistance terdekat "
+                                          f"({_fmt_price(resistance)}) -- mungkin butuh momentum ekstra buat tembus")
+    except Exception as e:
+        log(f"WARN get_sell_suggestion resistance {asset}: {e}")
+
+    try:
+        import pandas_ta as _pta
+        df_htf = get_ohlcv(symbol, interval="12h", limit=60)
+        if df_htf is not None and len(df_htf) > 20:
+            st = _pta.supertrend(df_htf["high"], df_htf["low"], df_htf["close"], length=10, multiplier=3.0)
+            st_col = [c for c in st.columns if "SUPERTd" in c]
+            st_dir = st[st_col[0]].iloc[-1] if st_col else float("nan")
+            ema20 = _pta.ema(df_htf["close"], length=20).iloc[-1]
+            ema50 = _pta.ema(df_htf["close"], length=50).iloc[-1]
+            price_htf = float(df_htf["close"].iloc[-1])
+            if st_dir == 1 and price_htf > ema20 > ema50:
+                result["htf_trend"] = "uptrend"
+            elif st_dir == -1 and price_htf < ema20 < ema50:
+                result["htf_trend"] = "downtrend"
+            else:
+                result["htf_trend"] = "sideways"
+    except Exception as e:
+        log(f"WARN get_sell_suggestion htf {asset}: {e}")
+
+    return result
+
+
 def get_effective_avg_price(asset: str) -> float:
     """Prioritas: harga rata-rata dari riwayat hold-no-sell bot (otomatis, otoritatif)
     -> avg_price manual yang diisi user di dashboard -> 0 (tidak diketahui)."""
@@ -7671,7 +7727,13 @@ function refreshAutoSellRowPrice(asset) {
         if (gapEl) gapEl.textContent = d.gap_pct + '%';
         if (avgGapEl) avgGapEl.textContent = d.avg_gap_pct ? (d.avg_gap_pct + '%') : '-';
         if (avgSrcEl) avgSrcEl.textContent = d.avg_price_source === 'auto' ? '(otomatis dari bot)' : (d.avg_price_source === 'manual' ? '(input manual)' : '');
-        if (breakevenEl) breakevenEl.textContent = d.breakeven ? ('breakeven ~' + d.breakeven) : '';
+        if (breakevenEl) {
+            var beTxt = d.breakeven ? ('breakeven ~' + d.breakeven) : '';
+            if (d.htf_trend) beTxt += (beTxt ? ' | ' : '') + 'HTF ' + d.htf_trend;
+            if (d.resistance) beTxt += (beTxt ? ' | ' : '') + 'resistance terdekat ~' + d.resistance;
+            breakevenEl.innerHTML = beTxt;
+            if (d.breakeven_warning) breakevenEl.innerHTML += '<br><span style="color:var(--red)">⚠ ' + d.breakeven_warning + '</span>';
+        }
         // Jangan timpa avg_price kalau user lagi ngetik / sudah keisi lokal, cuma isi kalau field masih kosong & bot punya data otomatis
         if (avgEl && !avgEl.value && d.avg_price && d.avg_price_source === 'auto') avgEl.value = d.avg_price;
     }).catch(function(){});
@@ -10244,14 +10306,17 @@ def run_web_dashboard():
                 avg_info = get_hold_no_sell_price(asset)
                 avg_price = get_effective_avg_price(asset)
                 avg_gap_pct = ((price / avg_price) - 1) * 100 if avg_price > 0 else None
-                breakeven = round(avg_price * 1.002, 8) if avg_price > 0 else 0  # +0.2% buffer fee round-trip
+                sugg = get_sell_suggestion(asset)
                 return jsonify({"ok": True, "asset": asset, "symbol": symbol,
                                 "price": _fmt_price(price), "threshold": _fmt_price(threshold),
                                 "gap_pct": f"{gap_pct:+.2f}",
                                 "avg_price": _fmt_price(avg_price) if avg_price > 0 else "",
                                 "avg_price_source": "auto" if (avg_info and avg_info.get("entry_price", 0) > 0) else ("manual" if avg_price > 0 else ""),
                                 "avg_gap_pct": f"{avg_gap_pct:+.2f}" if avg_gap_pct is not None else "",
-                                "breakeven": _fmt_price(breakeven) if breakeven > 0 else ""})
+                                "breakeven": _fmt_price(sugg["breakeven"]) if sugg["breakeven"] > 0 else "",
+                                "resistance": _fmt_price(sugg["resistance"]) if sugg["resistance"] else "",
+                                "breakeven_warning": sugg["warning"] or "",
+                                "htf_trend": sugg["htf_trend"] or ""})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
 
