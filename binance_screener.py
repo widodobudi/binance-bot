@@ -7755,8 +7755,8 @@ function renderAutoSellTable(assets) {
             '<td style="padding:5px 6px"><input type="checkbox" ' + (cfg.enabled ? 'checked' : '') + ' id="auto-sell-chk-' + asset + '"></td>' +
             '<td style="padding:5px 6px" title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB (buat diskon fee trading 25%)"><input type="checkbox" ' + (cfg.convert_leftover_bnb ? 'checked' : '') + ' id="auto-sell-bnb-' + asset + '"></td>' +
             '<td style="padding:5px 6px;white-space:nowrap">' +
-                '<button type="button" onclick="saveAutoSellRow(\'' + asset + '\')" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;margin-right:4px;font-weight:600">SAVE</button>' +
-                '<button type="button" onclick="removeAutoSellRow(\'' + asset + '\')" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer">Hapus</button>' +
+                '<button type="button" onclick="saveAutoSellRow(\\'' + asset + '\\')" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;margin-right:4px;font-weight:600">SAVE</button>' +
+                '<button type="button" onclick="removeAutoSellRow(\\'' + asset + '\\')" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer">Hapus</button>' +
             '</td>';
         tbody.appendChild(tr);
         refreshAutoSellRowPrice(asset);
