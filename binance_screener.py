@@ -7144,6 +7144,39 @@ DASHBOARD_HTML = '''
     {% endif %}
     </div>
   </div>
+<div class="container" style="margin-top:12px">
+    <div class="card">
+        <div class="card-header" onclick="toggleCard(this)"><h2>AUTO SELL ASSET <span class="card-toggle">&#9660;</span></h2></div>
+        <div class="card-body" style="font-size:11px">
+            <div style="color:var(--muted);margin-bottom:8px">Tiap asset dipantau &amp; dieksekusi independen — begitu 1 asset crossing naik lewat target, cuma asset itu yang dijual (95% saldo bebas) &amp; nonaktif; asset lain di daftar tetap jalan.</div>
+            <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse">
+                <thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--border)">
+                    <th style="padding:5px 6px">Asset</th>
+                    <th style="padding:5px 6px">Avg beli (USDT/coin)</th>
+                    <th style="padding:5px 6px">Harga sekarang</th>
+                    <th style="padding:5px 6px">vs Avg</th>
+                    <th style="padding:5px 6px">Target jual (USDT)</th>
+                    <th style="padding:5px 6px">Jarak ke target</th>
+                    <th style="padding:5px 6px">Status</th>
+                    <th style="padding:5px 6px">Aktif</th>
+                    <th style="padding:5px 6px" title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB (buat diskon fee trading 25%)">Sisa→BNB</th>
+                    <th style="padding:5px 6px"></th>
+                </tr></thead>
+                <tbody id="auto-sell-tbody"><tr><td colspan="10" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
+            </table>
+            </div>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+                <label>+ Tambah asset <select id="auto-sell-new-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option>Memuat...</option></select></label>
+                <label>Avg beli, USDT per coin (opsional) <input id="auto-sell-new-avg" type="number" min="0" step="0.00000001" placeholder="kalau tahu" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><div id="auto-sell-new-avgsrc" style="color:var(--muted);font-size:9px"></div></label>
+                <label>Harga trigger jual (USDT) <input id="auto-sell-new-threshold" type="number" min="0" step="0.00000001" value="0" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
+                <label title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB"><input id="auto-sell-new-bnb" type="checkbox" checked> Convert sisa ke BNB</label>
+                <button type="button" onclick="addAutoSellAsset()" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">+ TAMBAH</button>
+                <button type="button" onclick="loadAutoSellConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh saldo</button>
+            </div>
+        </div>
+    </div>
+</div>
   <!-- ═══════════════ MANUAL SCAN ═══════════════ -->
   <div class="section-title">Manual Scan</div>
   <div class="card" style="margin-bottom:16px">
@@ -8041,39 +8074,6 @@ function loadClosedTrades() {
 }
 window.addEventListener('load', function(){ loadClosedTrades(); });
 </script>
-<div class="container" style="margin-top:12px">
-    <div class="card">
-        <div class="card-header" onclick="toggleCard(this)"><h2>AUTO SELL ASSET <span class="card-toggle">&#9660;</span></h2></div>
-        <div class="card-body" style="font-size:11px">
-            <div style="color:var(--muted);margin-bottom:8px">Tiap asset dipantau &amp; dieksekusi independen — begitu 1 asset crossing naik lewat target, cuma asset itu yang dijual (95% saldo bebas) &amp; nonaktif; asset lain di daftar tetap jalan.</div>
-            <div style="overflow-x:auto">
-            <table style="width:100%;border-collapse:collapse">
-                <thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--border)">
-                    <th style="padding:5px 6px">Asset</th>
-                    <th style="padding:5px 6px">Avg beli (USDT/coin)</th>
-                    <th style="padding:5px 6px">Harga sekarang</th>
-                    <th style="padding:5px 6px">vs Avg</th>
-                    <th style="padding:5px 6px">Target jual (USDT)</th>
-                    <th style="padding:5px 6px">Jarak ke target</th>
-                    <th style="padding:5px 6px">Status</th>
-                    <th style="padding:5px 6px">Aktif</th>
-                    <th style="padding:5px 6px" title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB (buat diskon fee trading 25%)">Sisa→BNB</th>
-                    <th style="padding:5px 6px"></th>
-                </tr></thead>
-                <tbody id="auto-sell-tbody"><tr><td colspan="10" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
-            </table>
-            </div>
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
-                <label>+ Tambah asset <select id="auto-sell-new-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option>Memuat...</option></select></label>
-                <label>Avg beli, USDT per coin (opsional) <input id="auto-sell-new-avg" type="number" min="0" step="0.00000001" placeholder="kalau tahu" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><div id="auto-sell-new-avgsrc" style="color:var(--muted);font-size:9px"></div></label>
-                <label>Harga trigger jual (USDT) <input id="auto-sell-new-threshold" type="number" min="0" step="0.00000001" value="0" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
-                <label title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB"><input id="auto-sell-new-bnb" type="checkbox" checked> Convert sisa ke BNB</label>
-                <button type="button" onclick="addAutoSellAsset()" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">+ TAMBAH</button>
-                <button type="button" onclick="loadAutoSellConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh saldo</button>
-            </div>
-        </div>
-    </div>
-</div>
 <div class="container" style="margin-top:12px">
     <div class="card">
         <div class="card-header" onclick="toggleCard(this)"><h2>SCAN BLOCKERS <span class="card-toggle">&#9660;</span></h2></div>
