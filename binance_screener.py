@@ -209,6 +209,8 @@ STRAT4H_SCAN_INTERVAL   = 180     # scan tiap 3 menit (180 detik)
 STRAT4H_ENTRY_MIN_PCT   = 5/240   # menit ke-5 dari 240 menit candle 4h = 2.08%
 STRAT4H_ENTRY_MAX_PCT   = 60/240  # menit ke-60 dari 240 menit = 25% elapsed (diubah dari 10/240, 31/07/2026)
 STRAT4H_FWDTEST_TARGET  = 30      # target forward-test fase 2 (fase 1 selesai: #15/7, 13W/1L +12.6%)
+STRAT4H_LIVE_BASELINE   = 30      # closed deals saat brkX2-4h TERCAPAI target fase 2 -> LIVE
+STRAT4H_PHASE2_TARGET   = 15      # target fase-2 (counter "2nd") setelah LIVE, 29/08/2026, samain hunting/reversal
 # ── Hunting-4h ───────────────────────────────────────────────────────────────
 HUNTING_MAX_DEALS        = 3       # max deal hunting aktif bersamaan
 HUNTING_MAX_HOLD_CANDLES = 15      # timeout 15 candle 4h = 2.5 hari (sama brkX2-4h)
@@ -3557,9 +3559,9 @@ def heartbeat_general_tick():
     prog_hunt = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
     prog_akum = csv_progress('akumulasi')
     prog_rev2  = csv_progress('reversal',    offset=REVERSAL_LIVE_BASELINE)
+    prog_4h2   = csv_progress('brkX2_4h',    offset=STRAT4H_LIVE_BASELINE)
     prog_hunt2 = csv_progress('hunting_4h',  offset=HUNTING_FWDTEST_PHASE_OFFSET + HUNTING_LIVE_BASELINE)
     lc_brk    = csv_last_close('brkX2',        offset=FWDTEST_BRKX2_PHASE_OFFSET)
-    lc_4h     = csv_last_close('brkX2_4h')
     lc_cx     = csv_last_close('brkX2_crossema')
     lc_akum   = csv_last_close('akumulasi')
     if prog_all is None:
@@ -3571,7 +3573,8 @@ def heartbeat_general_tick():
                      f"  - brkX2-12h  : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2,      lc_brk)}\n"
                      f"  - reversal-8h: {_fmt_hunting_live(prog_rev)}\n"
                      f"    reversal-8h: 2nd {_fmt_strat(prog_rev2, REVERSAL_PHASE2_TARGET)}\n"
-                     f"  - brkX2-4h   : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET,    lc_4h)}\n"
+                     f"  - brkX2-4h   : {_fmt_hunting_live(prog_4h)}\n"
+                     f"    brkX2-4h: 2nd {_fmt_strat(prog_4h2, STRAT4H_PHASE2_TARGET)}\n"
                      f"    brkX2-4h: Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
                      f"  - crossema-4h: {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST,    lc_cx)}\n"
                      f"  - hunting-4h : {_fmt_hunting_live(prog_hunt)}\n"
