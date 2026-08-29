@@ -7785,10 +7785,12 @@ function loadAutoSellConfig() {
         });
     }
 
+var autoSellCurrentAssets = [];
 function renderAutoSellTable(assets) {
     var tbody = document.getElementById('auto-sell-tbody');
     if (!tbody) return;
     var names = Object.keys(assets);
+    autoSellCurrentAssets = names;
     if (!names.length) {
         tbody.innerHTML = '<tr><td colspan="10" style="color:var(--muted);padding:8px">Belum ada asset auto-sell. Tambah lewat form di bawah.</td></tr>';
         return;
@@ -7912,6 +7914,7 @@ function addAutoSellAsset() {
 if (typeof STRAT_SECONDARY !== 'undefined') {
     STRAT_SECONDARY['Hunting-4h'] = [{key: 'rsi', label: 'RSI<60'}];
 }
+setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); }, 30000);
 </script>
 
 <!-- ═══════════════ CLOSED TRADES ═══════════════ -->
@@ -7986,9 +7989,6 @@ function renderClosedTradesRows() {
             if (av < bv) return -1 * closedTradesSortDirection;
             if (av > bv) return 1 * closedTradesSortDirection;
             return 0;
-            loadAutoSellConfig();
-    setInterval(refreshAutoSellPrice, 30000);
-    document.getElementById('auto-sell-asset').addEventListener('change', refreshAutoSellPrice);
         });
     }
     document.querySelectorAll('#ct-table th[data-sort-key]').forEach(function(th) {
