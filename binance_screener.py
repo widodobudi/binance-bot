@@ -1885,8 +1885,8 @@ def get_sell_suggestion(asset: str) -> dict:
                 resistance = float(res_above[0])
                 result["resistance"] = resistance
                 if result["breakeven"] >= resistance * 0.995:
-                    result["warning"] = (f"breakeven dekat/di atas resistance terdekat "
-                                          f"({_fmt_price(resistance)}) -- mungkin butuh momentum ekstra buat tembus")
+                    result["warning"] = (f"harga harus naik 2 tahap: tembus resistance {_fmt_price(resistance)} dulu, "
+                                          f"baru lanjut naik lagi sampai breakeven {_fmt_price(result['breakeven'])}")
     except Exception as e:
         log(f"WARN get_sell_suggestion resistance {asset}: {e}")
 
