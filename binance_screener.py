@@ -764,6 +764,42 @@ def record_hold_no_sell_closed(symbol: str):
         hold_no_sell_ts[symbol] = time.time()
     save_hold_no_sell_closed()
 
+# Harga rata-rata beli (avg/base order) koin yang di-hold (bukan dijual) saat hard-stop --
+# dipakai dashboard Auto Sell Asset supaya user tahu breakeven-nya tanpa gali log manual
+# (kasus TAO/TRUMP 29/08/2026: user bingung nyari harga average-nya di mana).
+HOLD_NO_SELL_PRICE_FILE = os.path.join(DATA_DIR, "hold_no_sell_price.json")
+hold_no_sell_price = {}   # symbol -> {'entry_price':, 'strategy':, 'ts':}
+hold_no_sell_price_lock = threading.Lock()
+
+def load_hold_no_sell_price():
+    global hold_no_sell_price
+    if not os.path.exists(HOLD_NO_SELL_PRICE_FILE):
+        return
+    try:
+        with open(HOLD_NO_SELL_PRICE_FILE, 'r') as f: data = json.load(f)
+        with hold_no_sell_price_lock:
+            hold_no_sell_price = data
+        log(f"   Loaded hold_no_sell_price: {len(hold_no_sell_price)} symbol.")
+    except Exception as e:
+        log(f"WARN gagal baca hold_no_sell_price.json: {e}")
+
+def save_hold_no_sell_price():
+    try:
+        with hold_no_sell_price_lock: data = dict(hold_no_sell_price)
+        with open(HOLD_NO_SELL_PRICE_FILE, 'w') as f: json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan hold_no_sell_price.json: {e}")
+
+def record_hold_no_sell_price(symbol: str, entry_price: float, strategy: str):
+    with hold_no_sell_price_lock:
+        hold_no_sell_price[symbol] = {"entry_price": float(entry_price), "strategy": strategy, "ts": time.time()}
+    save_hold_no_sell_price()
+
+def get_hold_no_sell_price(asset: str):
+    """Return {'entry_price','strategy','ts'} kalau asset ini punya riwayat hold-no-sell, else None."""
+    with hold_no_sell_price_lock:
+        return hold_no_sell_price.get(str(asset).upper() + "USDT")
+
 def cooldown_remaining(symbol: str) -> float:
     """Sisa detik cooldown utk symbol ini (ambil yang terpanjang antara cooldown normal
     COOLDOWN_SECONDS dan cooldown diperpanjang pasca hold-no-sell). 0 kalau tidak cooldown."""
@@ -1793,17 +1829,34 @@ def save_auto_sell_config(config: dict) -> None:
         clean[str(asset).upper()] = {
             "enabled": bool(cfg.get("enabled", False)),
             "threshold_usdt": float(cfg.get("threshold_usdt", 0) or 0),
+            "avg_price": float(cfg.get("avg_price", 0) or 0),
         }
     with open(AUTO_SELL_CONFIG_FILE, "w", encoding="utf-8") as file:
         json.dump({"assets": clean}, file, indent=2)
 
 
-def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float) -> dict:
-    """Tambah/update 1 entry asset di auto-sell config, tanpa ganggu asset lain."""
+def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg_price: float = None) -> dict:
+    """Tambah/update 1 entry asset di auto-sell config, tanpa ganggu asset lain.
+    avg_price=None -> pertahankan nilai avg_price yang sudah ada (kalau ada)."""
     config = load_auto_sell_config()
-    config["assets"][str(asset).upper()] = {"enabled": bool(enabled), "threshold_usdt": float(threshold_usdt)}
+    asset = str(asset).upper()
+    existing = config["assets"].get(asset, {})
+    if avg_price is None:
+        avg_price = existing.get("avg_price", 0)
+    config["assets"][asset] = {"enabled": bool(enabled), "threshold_usdt": float(threshold_usdt), "avg_price": float(avg_price or 0)}
     save_auto_sell_config(config)
     return config
+
+
+def get_effective_avg_price(asset: str) -> float:
+    """Prioritas: harga rata-rata dari riwayat hold-no-sell bot (otomatis, otoritatif)
+    -> avg_price manual yang diisi user di dashboard -> 0 (tidak diketahui)."""
+    asset = str(asset).upper()
+    auto = get_hold_no_sell_price(asset)
+    if auto and auto.get("entry_price", 0) > 0:
+        return float(auto["entry_price"])
+    cfg = load_auto_sell_config()
+    return float(cfg.get("assets", {}).get(asset, {}).get("avg_price", 0) or 0)
 
 
 def remove_auto_sell_asset(asset: str) -> dict:
@@ -4581,7 +4634,9 @@ def thread2_monitor():
                 if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b'): record_closed(sym)
                 if strat == 'brkX2_4h' and trail_stop_triggered: record_trail_close(sym, price)
                 if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof_from_entry)
-                if _hold_no_sell: record_hold_no_sell_closed(sym)
+                if _hold_no_sell:
+                    record_hold_no_sell_closed(sym)
+                    record_hold_no_sell_price(sym, d.get('entry_price', 0) or 0, strat)
 
                 # progress forward-test PER STRATEGI
                 if strat == 'reversal':
@@ -7567,7 +7622,7 @@ function loadAutoSellConfig() {
             renderAutoSellTable(cfg.assets || {});
         }).catch(function(e){
             var tbody = document.getElementById('auto-sell-tbody');
-            if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="color:var(--red);padding:8px">Gagal memuat: ' + e + '</td></tr>';
+            if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="color:var(--red);padding:8px">Gagal memuat: ' + e + '</td></tr>';
         });
     }
 
@@ -7576,7 +7631,7 @@ function renderAutoSellTable(assets) {
     if (!tbody) return;
     var names = Object.keys(assets);
     if (!names.length) {
-        tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted);padding:8px">Belum ada asset auto-sell. Tambah lewat form di bawah.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted);padding:8px">Belum ada asset auto-sell. Tambah lewat form di bawah.</td></tr>';
         return;
     }
     tbody.innerHTML = '';
@@ -7587,8 +7642,10 @@ function renderAutoSellTable(assets) {
         tr.style.borderBottom = '1px solid var(--border)';
         tr.innerHTML =
             '<td style="padding:5px 6px;font-weight:600">' + asset + '</td>' +
+            '<td style="padding:5px 6px"><input type="number" min="0" step="0.00000001" value="' + (cfg.avg_price || '') + '" placeholder="belum diketahui" id="auto-sell-avg-' + asset + '" style="width:100px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"><div id="auto-sell-avgsrc-' + asset + '" style="color:var(--muted);font-size:9px"></div></td>' +
             '<td style="padding:5px 6px" id="auto-sell-price-' + asset + '">memuat...</td>' +
-            '<td style="padding:5px 6px"><input type="number" min="0" step="0.00000001" value="' + cfg.threshold_usdt + '" id="auto-sell-thr-' + asset + '" style="width:100px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"></td>' +
+            '<td style="padding:5px 6px" id="auto-sell-avggap-' + asset + '">-</td>' +
+            '<td style="padding:5px 6px"><input type="number" min="0" step="0.00000001" value="' + cfg.threshold_usdt + '" id="auto-sell-thr-' + asset + '" style="width:100px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"><div id="auto-sell-breakeven-' + asset + '" style="color:var(--muted);font-size:9px"></div></td>' +
             '<td style="padding:5px 6px" id="auto-sell-gap-' + asset + '">-</td>' +
             '<td style="padding:5px 6px;color:var(--muted)">' + (cfg.enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif') + '</td>' +
             '<td style="padding:5px 6px"><input type="checkbox" ' + (cfg.enabled ? 'checked' : '') + ' id="auto-sell-chk-' + asset + '"></td>' +
@@ -7605,19 +7662,32 @@ function refreshAutoSellRowPrice(asset) {
     fetch('/api/auto_sell_price?asset=' + encodeURIComponent(asset)).then(function(r){ return r.json(); }).then(function(d) {
         var priceEl = document.getElementById('auto-sell-price-' + asset);
         var gapEl = document.getElementById('auto-sell-gap-' + asset);
+        var avgGapEl = document.getElementById('auto-sell-avggap-' + asset);
+        var avgSrcEl = document.getElementById('auto-sell-avgsrc-' + asset);
+        var breakevenEl = document.getElementById('auto-sell-breakeven-' + asset);
+        var avgEl = document.getElementById('auto-sell-avg-' + asset);
         if (!d.ok) { if (priceEl) priceEl.textContent = 'tidak tersedia'; return; }
         if (priceEl) priceEl.textContent = d.price + ' USDT';
         if (gapEl) gapEl.textContent = d.gap_pct + '%';
+        if (avgGapEl) avgGapEl.textContent = d.avg_gap_pct ? (d.avg_gap_pct + '%') : '-';
+        if (avgSrcEl) avgSrcEl.textContent = d.avg_price_source === 'auto' ? '(otomatis dari bot)' : (d.avg_price_source === 'manual' ? '(input manual)' : '');
+        if (breakevenEl) breakevenEl.textContent = d.breakeven ? ('breakeven ~' + d.breakeven) : '';
+        // Jangan timpa avg_price kalau user lagi ngetik / sudah keisi lokal, cuma isi kalau field masih kosong & bot punya data otomatis
+        if (avgEl && !avgEl.value && d.avg_price && d.avg_price_source === 'auto') avgEl.value = d.avg_price;
     }).catch(function(){});
 }
 
 function saveAutoSellRow(asset) {
     var thrEl = document.getElementById('auto-sell-thr-' + asset);
     var chkEl = document.getElementById('auto-sell-chk-' + asset);
+    var avgEl = document.getElementById('auto-sell-avg-' + asset);
     var enabled = chkEl ? chkEl.checked : false;
     var threshold = parseFloat(thrEl ? thrEl.value : 0) || 0;
+    var avgPrice = avgEl && avgEl.value !== '' ? parseFloat(avgEl.value) : null;
     if (enabled && threshold <= 0) { alert('Isi threshold harga yang valid.'); return; }
-    fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({asset:asset, enabled:enabled, threshold_usdt:threshold})})
+    var body = {asset:asset, enabled:enabled, threshold_usdt:threshold};
+    if (avgPrice !== null) body.avg_price = avgPrice;
+    fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
         .then(function(r){ return r.json(); }).then(function(d){
             if (!d.ok) { alert('Error: ' + d.error); return; }
             renderAutoSellTable(d.assets || {});
@@ -7636,14 +7706,19 @@ function removeAutoSellRow(asset) {
 function addAutoSellAsset() {
     var sel = document.getElementById('auto-sell-new-asset');
     var thrEl = document.getElementById('auto-sell-new-threshold');
+    var avgEl = document.getElementById('auto-sell-new-avg');
     var asset = sel ? sel.value : '';
     var threshold = parseFloat(thrEl ? thrEl.value : 0) || 0;
+    var avgPrice = avgEl && avgEl.value !== '' ? parseFloat(avgEl.value) : null;
     if (!asset) { alert('Pilih asset dulu.'); return; }
     if (threshold <= 0) { alert('Isi threshold harga yang valid.'); return; }
-    fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({asset:asset, enabled:true, threshold_usdt:threshold})})
+    var body = {asset:asset, enabled:true, threshold_usdt:threshold};
+    if (avgPrice !== null) body.avg_price = avgPrice;
+    fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
         .then(function(r){ return r.json(); }).then(function(d){
             if (!d.ok) { alert('Error: ' + d.error); return; }
             if (thrEl) thrEl.value = 0;
+            if (avgEl) avgEl.value = '';
             renderAutoSellTable(d.assets || {});
         });
 }
@@ -7786,19 +7861,22 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
             <table style="width:100%;border-collapse:collapse">
                 <thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--border)">
                     <th style="padding:5px 6px">Asset</th>
+                    <th style="padding:5px 6px">Avg beli</th>
                     <th style="padding:5px 6px">Harga sekarang</th>
-                    <th style="padding:5px 6px">Target (USDT)</th>
-                    <th style="padding:5px 6px">Jarak</th>
+                    <th style="padding:5px 6px">vs Avg</th>
+                    <th style="padding:5px 6px">Target jual (USDT)</th>
+                    <th style="padding:5px 6px">Jarak ke target</th>
                     <th style="padding:5px 6px">Status</th>
                     <th style="padding:5px 6px">Aktif</th>
                     <th style="padding:5px 6px"></th>
                 </tr></thead>
-                <tbody id="auto-sell-tbody"><tr><td colspan="7" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
+                <tbody id="auto-sell-tbody"><tr><td colspan="9" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
             </table>
             </div>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
                 <label>+ Tambah asset <select id="auto-sell-new-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option>Memuat...</option></select></label>
-                <label>Harga trigger (USDT) <input id="auto-sell-new-threshold" type="number" min="0" step="0.00000001" value="0" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
+                <label>Avg beli (opsional) <input id="auto-sell-new-avg" type="number" min="0" step="0.00000001" placeholder="kalau tahu" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
+                <label>Harga trigger jual (USDT) <input id="auto-sell-new-threshold" type="number" min="0" step="0.00000001" value="0" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
                 <button type="button" onclick="addAutoSellAsset()" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">+ TAMBAH</button>
                 <button type="button" onclick="loadAutoSellConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh saldo</button>
             </div>
@@ -10163,9 +10241,17 @@ def run_web_dashboard():
                 config = load_auto_sell_config()
                 threshold = float(config.get("assets", {}).get(asset, {}).get("threshold_usdt", 0) or 0)
                 gap_pct = ((threshold / price) - 1) * 100 if threshold > 0 else 0
+                avg_info = get_hold_no_sell_price(asset)
+                avg_price = get_effective_avg_price(asset)
+                avg_gap_pct = ((price / avg_price) - 1) * 100 if avg_price > 0 else None
+                breakeven = round(avg_price * 1.002, 8) if avg_price > 0 else 0  # +0.2% buffer fee round-trip
                 return jsonify({"ok": True, "asset": asset, "symbol": symbol,
                                 "price": _fmt_price(price), "threshold": _fmt_price(threshold),
-                                "gap_pct": f"{gap_pct:+.2f}"})
+                                "gap_pct": f"{gap_pct:+.2f}",
+                                "avg_price": _fmt_price(avg_price) if avg_price > 0 else "",
+                                "avg_price_source": "auto" if (avg_info and avg_info.get("entry_price", 0) > 0) else ("manual" if avg_price > 0 else ""),
+                                "avg_gap_pct": f"{avg_gap_pct:+.2f}" if avg_gap_pct is not None else "",
+                                "breakeven": _fmt_price(breakeven) if breakeven > 0 else ""})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
 
@@ -10186,7 +10272,9 @@ def run_web_dashboard():
                         threshold = float(payload.get("threshold_usdt", 0) or 0)
                         if enabled and threshold <= 0:
                             return jsonify({"ok": False, "error": "Threshold wajib diisi"}), 400
-                        upsert_auto_sell_asset(asset, enabled, threshold)
+                        avg_price = payload.get("avg_price", None)
+                        avg_price = float(avg_price) if avg_price not in (None, "") else None
+                        upsert_auto_sell_asset(asset, enabled, threshold, avg_price)
                 return jsonify({"ok": True, **load_auto_sell_config()})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
@@ -11005,6 +11093,7 @@ if __name__ == '__main__':
     load_active_deals()
     load_last_closed()
     load_hold_no_sell_closed()
+    load_hold_no_sell_price()
     load_trail_reentry()
     load_quick_reentry_trades()
     sync_base_usd_from_binance()  # auto-fix base_usd dari Binance API saat startup
