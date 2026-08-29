@@ -4596,7 +4596,7 @@ def thread2_monitor():
         # snapshot ATR% saat entry — supaya reaktif ke perubahan volatilitas terkini)
         # — SKIP untuk akumulasi: exit via TP/SL/Timeout, bukan trailing
         _is_akum = strat in ('akum_entry_a', 'akum_entry_b')
-        if (not armed) and (not _is_akum) and prof_peak >= get_arm_pct(live_atrp):
+        if (not armed) and (not _is_akum) and get_deal_override(sym, 'arm_trailing_enabled', True) and prof_peak >= get_arm_pct(live_atrp):
             # AI decision jika ai_call=True untuk deal ini
             if get_deal_override(sym, 'ai_call', True):
                 if not ai_decision_armed(sym, d.get('strategy', 'brkX2'), d, price, peak):
@@ -7182,7 +7182,7 @@ DASHBOARD_HTML = '''
     {% if active_deals %}
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <table style="min-width:1280px">
-            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>Cancel<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">stop track, koin tetap</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=target</span></th><th>TP Target ($)</th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>isArmed</th><th>Auto Avg Down</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
+            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>Cancel<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">stop track, koin tetap</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=target</span></th><th>TP Target ($)</th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>isArmed</th><th>Arm Trailing</th><th>Auto Avg Down</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr>
@@ -7237,6 +7237,17 @@ DASHBOARD_HTML = '''
           {% endif %}
         </td>
         <td>{% if d.get("strategy","") in ("akum_entry_a","akum_entry_b") %}<span class="badge" style="background:#444;color:#888">N/A</span>{% elif d.get("trailing_armed") %}<span class="badge badge-armed">Yes</span>{% else %}<span class="badge badge-wait">Wait</span>{% endif %}</td>
+        <td>
+          {% if d.get("strategy","") in ("akum_entry_a","akum_entry_b") %}
+          <span class="badge" style="background:#444;color:#888">N/A</span>
+          {% else %}
+          <form method="POST" action="/toggle" style="display:inline" title="Uncheck = trailing TIDAK akan pernah di-arm buat deal ini, walau profit sudah lewat ambang arm. Deal tetap dipantau normal (hard-stop/manual close tetap jalan), cuma nggak ada auto-lock profit via trailing.">
+            <input type="hidden" name="sym" value="{{ sym }}">
+            <input type="hidden" name="key" value="arm_trailing_enabled">
+            <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("arm_trailing_enabled",True) else "" }} style="width:16px;height:16px;cursor:pointer">
+          </form>
+          {% endif %}
+        </td>
         <td>
           <form method="POST" action="/toggle" style="display:inline">
             <input type="hidden" name="sym" value="{{ sym }}">
