@@ -8041,7 +8041,7 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
             <table style="width:100%;border-collapse:collapse">
                 <thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--border)">
                     <th style="padding:5px 6px">Asset</th>
-                    <th style="padding:5px 6px">Avg beli</th>
+                    <th style="padding:5px 6px">Avg beli (USDT/coin)</th>
                     <th style="padding:5px 6px">Harga sekarang</th>
                     <th style="padding:5px 6px">vs Avg</th>
                     <th style="padding:5px 6px">Target jual (USDT)</th>
@@ -8056,7 +8056,7 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
             </div>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
                 <label>+ Tambah asset <select id="auto-sell-new-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option>Memuat...</option></select></label>
-                <label>Avg beli (opsional) <input id="auto-sell-new-avg" type="number" min="0" step="0.00000001" placeholder="kalau tahu" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><div id="auto-sell-new-avgsrc" style="color:var(--muted);font-size:9px"></div></label>
+                <label>Avg beli, USDT per coin (opsional) <input id="auto-sell-new-avg" type="number" min="0" step="0.00000001" placeholder="kalau tahu" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><div id="auto-sell-new-avgsrc" style="color:var(--muted);font-size:9px"></div></label>
                 <label>Harga trigger jual (USDT) <input id="auto-sell-new-threshold" type="number" min="0" step="0.00000001" value="0" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"></label>
                 <label title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB"><input id="auto-sell-new-bnb" type="checkbox" checked> Convert sisa ke BNB</label>
                 <button type="button" onclick="addAutoSellAsset()" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">+ TAMBAH</button>
