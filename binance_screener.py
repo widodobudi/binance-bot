@@ -1858,14 +1858,50 @@ def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg
     return config
 
 
-def get_sell_suggestion(asset: str) -> dict:
+def _trend_label(symbol: str, interval: str, limit: int = 100) -> str | None:
+    """Label tren 1 timeframe: Supertrend(10,3) + struktur EMA20/50. Dipakai bareng
+    buat HTF (1d/3d/1w) maupun LTF (1h) di get_sell_suggestion -- logic sama persis,
+    cuma beda interval candle."""
+    try:
+        import pandas_ta as _pta
+        df = get_ohlcv(symbol, interval=interval, limit=limit)
+        if df is None or len(df) <= 20:
+            return None
+        st = _pta.supertrend(df["high"], df["low"], df["close"], length=10, multiplier=3.0)
+        st_col = [c for c in st.columns if "SUPERTd" in c]
+        st_dir = st[st_col[0]].iloc[-1] if st_col else float("nan")
+        ema20 = _pta.ema(df["close"], length=20).iloc[-1]
+        ema50 = _pta.ema(df["close"], length=50).iloc[-1]
+        price = float(df["close"].iloc[-1])
+        if st_dir == 1 and price > ema20 > ema50:
+            return "uptrend"
+        elif st_dir == -1 and price < ema20 < ema50:
+            return "downtrend"
+        else:
+            return "sideways"
+    except Exception as e:
+        log(f"WARN _trend_label {symbol} {interval}: {e}")
+        return None
+
+
+_sell_suggestion_cache: dict = {}   # asset -> (ts, result) -- TTL cache, multi-TF lumayan berat kalau dipanggil tiap 30 detik/asset
+
+def get_sell_suggestion(asset: str, ttl_seconds: int = 300) -> dict:
     """Hitung suggested minimum sell price (breakeven) + konteks teknikal buat Auto Sell
     Asset: resistance terdekat TF 4h (reuse pivot-high N=4 candle, LOGIC SAMA PERSIS
-    dengan TP3 Akumulasi) dan arah tren HTF 12h (Supertrend + struktur EMA20/50).
-    Breakeven tetap floor mutlak -- ini cuma nambahin KONTEKS, bukan ganti angkanya."""
-    symbol = asset.upper() + "USDT"
+    dengan TP3 Akumulasi), tren HTF di 3 timeframe (1D/3D/1W) DAN tren LTF (1h) --
+    Supertrend + struktur EMA20/50 tiap timeframe (29/08/2026, sebelumnya cuma 12h).
+    Breakeven tetap floor mutlak -- ini cuma nambahin KONTEKS, bukan ganti angkanya.
+    TTL cache 5 menit -- HTF/LTF trend nggak berubah signifikan tiap 30 detik, dan
+    dashboard nge-refresh row ini tiap 30 detik per asset (jangan bebanin Binance)."""
+    asset = str(asset).upper()
+    cached = _sell_suggestion_cache.get(asset)
+    if cached and (time.time() - cached[0]) < ttl_seconds:
+        return cached[1]
+    symbol = asset + "USDT"
     avg_price = get_effective_avg_price(asset)
-    result = {"breakeven": 0.0, "resistance": None, "warning": None, "htf_trend": None}
+    result = {"breakeven": 0.0, "resistance": None, "warning": None,
+              "htf_1d": None, "htf_3d": None, "htf_1w": None, "ltf_1h": None, "htf_trend": None}
     if avg_price <= 0:
         return result
     result["breakeven"] = round(avg_price * 1.002, 8)  # +0.2% buffer fee round-trip
@@ -1892,25 +1928,14 @@ def get_sell_suggestion(asset: str) -> dict:
     except Exception as e:
         log(f"WARN get_sell_suggestion resistance {asset}: {e}")
 
-    try:
-        import pandas_ta as _pta
-        df_htf = get_ohlcv(symbol, interval="12h", limit=60)
-        if df_htf is not None and len(df_htf) > 20:
-            st = _pta.supertrend(df_htf["high"], df_htf["low"], df_htf["close"], length=10, multiplier=3.0)
-            st_col = [c for c in st.columns if "SUPERTd" in c]
-            st_dir = st[st_col[0]].iloc[-1] if st_col else float("nan")
-            ema20 = _pta.ema(df_htf["close"], length=20).iloc[-1]
-            ema50 = _pta.ema(df_htf["close"], length=50).iloc[-1]
-            price_htf = float(df_htf["close"].iloc[-1])
-            if st_dir == 1 and price_htf > ema20 > ema50:
-                result["htf_trend"] = "uptrend"
-            elif st_dir == -1 and price_htf < ema20 < ema50:
-                result["htf_trend"] = "downtrend"
-            else:
-                result["htf_trend"] = "sideways"
-    except Exception as e:
-        log(f"WARN get_sell_suggestion htf {asset}: {e}")
+    result["htf_1d"] = _trend_label(symbol, "1d")
+    result["htf_3d"] = _trend_label(symbol, "3d")
+    result["htf_1w"] = _trend_label(symbol, "1w", limit=60)
+    result["ltf_1h"] = _trend_label(symbol, "1h")
+    # Ringkasan legacy (dipakai kode lama yg masih baca 'htf_trend') -- pakai 1D sbg wakil utama
+    result["htf_trend"] = result["htf_1d"]
 
+    _sell_suggestion_cache[asset] = (time.time(), result)
     return result
 
 
@@ -7835,8 +7860,9 @@ function refreshAutoSellRowPrice(asset) {
         if (avgSrcEl) avgSrcEl.textContent = d.avg_price_source === 'auto' ? '(otomatis dari bot)' : (d.avg_price_source === 'manual' ? '(input manual)' : (d.avg_price_source === 'binance_history' ? '(perkiraan dari riwayat Binance)' : ''));
         if (breakevenEl) {
             var beTxt = d.breakeven ? ('breakeven ~' + d.breakeven) : '';
-            if (d.htf_trend) beTxt += (beTxt ? ' | ' : '') + 'HTF ' + d.htf_trend;
             if (d.resistance) beTxt += (beTxt ? ' | ' : '') + 'resistance terdekat ~' + d.resistance;
+            if (d.htf_trend) beTxt += (beTxt ? '<br>' : '') + 'HTF: ' + d.htf_trend;
+            if (d.ltf_trend) beTxt += (beTxt ? ' | ' : '') + d.ltf_trend;
             breakevenEl.innerHTML = beTxt;
             if (d.breakeven_warning) breakevenEl.innerHTML += '<br><span style="color:var(--red)">⚠ ' + d.breakeven_warning + '</span>';
         }
@@ -10456,6 +10482,13 @@ def run_web_dashboard():
                         est_profit_usd = sell_qty * threshold * (1 - 0.001) - sell_qty * avg_price
                 except Exception:
                     pass
+                # Ringkasan multi-TF: 1D/3D/1W (HTF) + 1h (LTF) -- 29/08/2026, sebelumnya cuma 12h tunggal
+                _tf_parts = []
+                for _lbl, _key in (("1D", "htf_1d"), ("3D", "htf_3d"), ("1W", "htf_1w")):
+                    if sugg.get(_key):
+                        _tf_parts.append(f"{_lbl} {sugg[_key]}")
+                htf_summary = " | ".join(_tf_parts) if _tf_parts else ""
+                ltf_summary = f"LTF(1h) {sugg['ltf_1h']}" if sugg.get("ltf_1h") else ""
                 return jsonify({"ok": True, "asset": asset, "symbol": symbol,
                                 "price": _fmt_price(price), "threshold": _fmt_price(threshold),
                                 "gap_pct": f"{gap_pct:+.2f}",
@@ -10465,7 +10498,8 @@ def run_web_dashboard():
                                 "breakeven": _fmt_price(sugg["breakeven"]) if sugg["breakeven"] > 0 else "",
                                 "resistance": _fmt_price(sugg["resistance"]) if sugg["resistance"] else "",
                                 "breakeven_warning": sugg["warning"] or "",
-                                "htf_trend": sugg["htf_trend"] or "",
+                                "htf_trend": htf_summary,
+                                "ltf_trend": ltf_summary,
                                 "est_profit_usd": f"{est_profit_usd:+.2f}" if est_profit_usd is not None else ""})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
