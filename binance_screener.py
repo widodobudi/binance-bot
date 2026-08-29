@@ -8091,6 +8091,9 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="akumulasi">Akumulasi-4h</option>
         <option value="__exclude_hardstop__">Semua strategi, exclude hardstop volatilitas</option>
       </select>
+    <select id="ct-filter-pair" onclick="event.stopPropagation()" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+        <option value="">Semua pair</option>
+      </select>
     <button onclick="event.stopPropagation();loadClosedTrades()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh</button>
     </div>
   </div>
@@ -8178,9 +8181,23 @@ function renderClosedTradesRows() {
 
 function loadClosedTrades() {
   var strat = document.getElementById('ct-filter-strat').value;
-  var url = strat === '__exclude_hardstop__' ? '/api/closed_trades?exclude_hardstop=1'
-          : (strat ? '/api/closed_trades?strategy=' + strat : '/api/closed_trades');
+  var pairSel = document.getElementById('ct-filter-pair');
+  var pair = pairSel ? pairSel.value : '';
+  var params = [];
+  if (strat === '__exclude_hardstop__') params.push('exclude_hardstop=1');
+  else if (strat) params.push('strategy=' + strat);
+  if (pair) params.push('pair=' + encodeURIComponent(pair));
+  var url = '/api/closed_trades' + (params.length ? '?' + params.join('&') : '');
   fetch(url).then(function(r){return r.json();}).then(function(d){
+    if (pairSel && pairSel.options.length <= 1 && (d.all_pairs || []).length) {
+        d.all_pairs.forEach(function(item) {
+            var option = document.createElement('option');
+            option.value = item.symbol;
+            option.textContent = item.display;
+            pairSel.appendChild(option);
+        });
+        pairSel.value = pair;
+    }
     var stats = d.stats || {};
     var sEl = document.getElementById('ct-stats');
     var pnl_pct = parseFloat(stats.total_pnl_pct||0);
@@ -10723,6 +10740,7 @@ def run_web_dashboard():
                 import datetime as _dt
                 strategy_filter = request.args.get("strategy", "")
                 exclude_hardstop = request.args.get("exclude_hardstop", "") in ("1", "true", "True")
+                pair_filter = request.args.get("pair", "").upper().replace("/", "")
                 rows = []
                 if os.path.exists(TRADES_CSV):
                     with trades_csv_lock:
@@ -10756,6 +10774,8 @@ def run_web_dashboard():
                         rows.extend(strategy_rows[offset:] if offset else strategy_rows)
                 if exclude_hardstop:
                     rows = [r for r in rows if not (r.get('exit_reason') or '').lower().startswith('hard stop volatilitas')]
+                if pair_filter:
+                    rows = [r for r in rows if (r.get('symbol') or '').replace('/', '').upper() == pair_filter]
                 # Sort terbaru dulu
                 rows.sort(key=lambda r: r.get('close_time_wib',''), reverse=True)
                 # Hitung stats dan profit$
@@ -10798,8 +10818,10 @@ def run_web_dashboard():
                     })
                 total = wins + losses
                 wr = round(wins / total * 100, 1) if total else 0
+                all_pairs = [{"symbol": s, "display": to_display_pair(s)} for s in get_closed_trades_distinct_pairs()]
                 return jsonify({
                     "trades": trades,
+                    "all_pairs": all_pairs,
                     "stats": {
                         "total":         total,
                         "wins":          wins,
