@@ -111,6 +111,10 @@ STOCH_MAX         = 70      # syarat ke-7: Stoch %K < 70 (hindari entry terlalu 
 MIN_VOLUME_USD    = 3_000_000   # dinaikkan dari 1jt ke 3jt (backtest_entry_filter2)
 SYMBOL_BLACKLIST  = {'GIGGLEUSDT', 'SOXLBUSDT', 'KLAYUSDT'}  # pair blacklist — tidak akan di-scan sama sekali
 # KLAYUSDT ditambah 14/08/2026: KLAY sudah delisted dari Binance sejak 28/10/2024, rebranding jadi KAIA/USDT
+SYMBOL_BLACKLIST_HARDCODED = frozenset(SYMBOL_BLACKLIST)  # penanda: pair2 di atas dikunci developer, TIDAK
+# bisa di-unblock lewat menu Block Pair (29/08/2026) -- semua 9 titik scan yang sudah cek
+# "if sym in SYMBOL_BLACKLIST" otomatis ikut nge-block pair yang ditambah user lewat menu itu juga,
+# karena block_pair()/unblock_pair() cuma nambah/buang isi SET SYMBOL_BLACKLIST yang sama ini.
 
 # bStocks Binance (tokenized US stocks) — referensi untuk is_bstock_symbol()
 # TIDAK diblacklist dari scan — NYSE filter yang menjaga di level eksekusi
@@ -802,6 +806,86 @@ def get_hold_no_sell_price(asset: str):
     """Return {'entry_price','strategy','ts'} kalau asset ini punya riwayat hold-no-sell, else None."""
     with hold_no_sell_price_lock:
         return hold_no_sell_price.get(str(asset).upper() + "USDT")
+
+
+# ── BLOCK PAIR (29/08/2026) ────────────────────────────────────────────────
+# User bisa blok/unblok pair lewat dashboard (menu "Block Pair", terpisah dari
+# Strategy Control -- itu per-strategi, ini per-symbol lintas semua strategi).
+# Blok CUMA cegah OPEN BARU (semua 9 titik scan strategi sudah cek keanggotaan
+# SYMBOL_BLACKLIST) -- deal yang KEBETULAN lagi aktif di pair itu TETAP dibiarkan
+# jalan normal sampai closed sendiri (trailing/hard-stop/manual), tidak di-force-close.
+BLOCKED_PAIRS_FILE = os.path.join(DATA_DIR, "blocked_pairs.json")
+blocked_pairs_meta_lock = threading.Lock()
+blocked_pairs_meta: dict = {}   # symbol (raw, "TRUMPUSDT") -> {"blocked_at": "dd/mm/YYYY HH:MM"}
+
+def load_blocked_pairs():
+    global blocked_pairs_meta
+    if not os.path.exists(BLOCKED_PAIRS_FILE):
+        return
+    try:
+        with open(BLOCKED_PAIRS_FILE, 'r') as f: data = json.load(f)
+        with blocked_pairs_meta_lock:
+            blocked_pairs_meta = data
+        for sym in blocked_pairs_meta:
+            SYMBOL_BLACKLIST.add(sym)
+        log(f"   Loaded blocked_pairs: {len(blocked_pairs_meta)} pair -> {sorted(blocked_pairs_meta.keys())}")
+    except Exception as e:
+        log(f"WARN gagal baca blocked_pairs.json: {e}")
+
+def save_blocked_pairs():
+    try:
+        with blocked_pairs_meta_lock: data = dict(blocked_pairs_meta)
+        with open(BLOCKED_PAIRS_FILE, 'w') as f: json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan blocked_pairs.json: {e}")
+
+def block_pair(symbol: str) -> bool:
+    """Tambah symbol ke SYMBOL_BLACKLIST (persist) -- otomatis kena di semua titik scan."""
+    symbol = str(symbol).upper()
+    SYMBOL_BLACKLIST.add(symbol)
+    with blocked_pairs_meta_lock:
+        blocked_pairs_meta[symbol] = {"blocked_at": now_wib().strftime("%d/%m/%Y %H:%M")}
+    save_blocked_pairs()
+    return True
+
+def unblock_pair(symbol: str) -> bool:
+    """Buang symbol dari SYMBOL_BLACKLIST -- kecuali yg dikunci developer (SYMBOL_BLACKLIST_HARDCODED)."""
+    symbol = str(symbol).upper()
+    if symbol in SYMBOL_BLACKLIST_HARDCODED:
+        return False
+    SYMBOL_BLACKLIST.discard(symbol)
+    with blocked_pairs_meta_lock:
+        blocked_pairs_meta.pop(symbol, None)
+    save_blocked_pairs()
+    return True
+
+def get_closed_trades_distinct_pairs() -> list:
+    """Daftar pair unik (symbol raw, mis. 'TRUMPUSDT') dari trades_forwardtest.csv yang
+    statusnya CLOSED -- dipakai sbg sumber dropdown menu Block Pair (bukan full symbol
+    list Binance, biar cuma nawarin pair yg memang pernah di-trade bot)."""
+    try:
+        if not os.path.exists(TRADES_CSV):
+            return []
+        with trades_csv_lock:
+            with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                rows = list(csv.DictReader(f))
+        seen = set()
+        out = []
+        for r in rows:
+            if r.get('status') != 'CLOSED':
+                continue
+            disp = (r.get('symbol') or '').strip()
+            if not disp:
+                continue
+            raw = disp.replace('/', '').upper()
+            if raw not in seen:
+                seen.add(raw)
+                out.append(raw)
+        return sorted(out)
+    except Exception as e:
+        log(f"WARN gagal baca pair unik dari {TRADES_CSV}: {e}")
+        return []
+
 
 def cooldown_remaining(symbol: str) -> float:
     """Sisa detik cooldown utk symbol ini (ambil yang terpanjang antara cooldown normal
@@ -8134,6 +8218,84 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
         </div>
     </div>
 </div>
+<div class="container" style="margin-top:12px">
+    <div class="card">
+        <div class="card-header" onclick="toggleCard(this)"><h2>BLOCK PAIR <span class="card-toggle">&#9660;</span></h2></div>
+        <div class="card-body" style="font-size:11px">
+            <div style="color:var(--muted);margin-bottom:8px">Pair yang diblok tidak akan di-scan/dibuka deal baru sama sekali (lintas semua strategi). Deal yang KEBETULAN sudah aktif di pair itu dibiarkan jalan normal sampai closed sendiri, tidak dipaksa tutup.</div>
+            <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse">
+                <thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--border)">
+                    <th style="padding:5px 6px">Pair</th>
+                    <th style="padding:5px 6px">Diblok sejak</th>
+                    <th style="padding:5px 6px"></th>
+                </tr></thead>
+                <tbody id="block-pair-tbody"><tr><td colspan="3" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
+            </table>
+            </div>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+                <label>+ Block pair <select id="block-pair-new" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option>Memuat...</option></select></label>
+                <button type="button" onclick="addBlockPair()" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">+ BLOCK</button>
+                <button type="button" onclick="loadBlockedPairs()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh</button>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+function loadBlockedPairs() {
+    fetch('/api/blocked_pairs').then(function(r){ return r.json(); }).then(function(d) {
+        if (!d.ok) return;
+        var tbody = document.getElementById('block-pair-tbody');
+        var blocked = d.blocked || [];
+        if (!blocked.length) {
+            tbody.innerHTML = '<tr><td colspan="3" style="color:var(--muted);padding:8px">Belum ada pair yang diblok.</td></tr>';
+        } else {
+            tbody.innerHTML = '';
+            blocked.forEach(function(item) {
+                var tr = document.createElement('tr');
+                tr.style.borderBottom = '1px solid var(--border)';
+                var actionCell = item.hardcoded
+                    ? '<span style="color:var(--muted);font-size:10px" title="Diblok permanen oleh developer, tidak bisa di-unblock lewat menu ini">(sistem)</span>'
+                    : '<button type="button" onclick="removeBlockPair(\\'' + item.symbol + '\\')" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer">Unblock</button>';
+                tr.innerHTML =
+                    '<td style="padding:5px 6px;font-weight:600">' + item.display + '</td>' +
+                    '<td style="padding:5px 6px;color:var(--muted)">' + (item.blocked_at || '-') + '</td>' +
+                    '<td style="padding:5px 6px">' + actionCell + '</td>';
+                tbody.appendChild(tr);
+            });
+        }
+        var sel = document.getElementById('block-pair-new');
+        if (sel) {
+            var avail = d.available || [];
+            sel.innerHTML = avail.length ? '' : '<option value="">Tidak ada pair tersedia</option>';
+            avail.forEach(function(item) {
+                var option = document.createElement('option');
+                option.value = item.symbol;
+                option.textContent = item.display;
+                sel.appendChild(option);
+            });
+        }
+    }).catch(function(){});
+}
+function addBlockPair() {
+    var sel = document.getElementById('block-pair-new');
+    var symbol = sel ? sel.value : '';
+    if (!symbol) { alert('Pilih pair dulu.'); return; }
+    fetch('/api/blocked_pairs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'block', symbol:symbol})})
+        .then(function(r){ return r.json(); }).then(function(d){
+            if (!d.ok) { alert('Error: ' + d.error); return; }
+            loadBlockedPairs();
+        });
+}
+function removeBlockPair(symbol) {
+    fetch('/api/blocked_pairs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'unblock', symbol:symbol})})
+        .then(function(r){ return r.json(); }).then(function(d){
+            if (!d.ok) { alert('Error: ' + d.error); return; }
+            loadBlockedPairs();
+        });
+}
+window.addEventListener('load', function(){ loadBlockedPairs(); });
+</script>
 <script>
 var SCAN_BLOCKERS_SCHEDULE = {
     'brkX2-12h':   'Scan tiap loop (~1-3 menit), tidak dibatasi jendela waktu',
@@ -10654,6 +10816,40 @@ def run_web_dashboard():
         def api_scan_blockers():
             return jsonify({"ok": True, "scans": get_scan_blockers()})
 
+        @app.route("/api/blocked_pairs", methods=["GET", "POST"])
+        def api_blocked_pairs():
+            """GET: daftar pair yg diblok + daftar pair tersedia (dari Closed Trades, blm diblok).
+            POST: {action: 'block'|'unblock', symbol: 'TRUMPUSDT'}."""
+            try:
+                if request.method == "POST":
+                    payload = request.get_json(force=True, silent=True) or {}
+                    action = str(payload.get("action", "")).lower()
+                    symbol = str(payload.get("symbol", "")).upper().strip()
+                    if not symbol.isalnum():
+                        return jsonify({"ok": False, "error": "Symbol tidak valid"}), 400
+                    if action == "block":
+                        block_pair(symbol)
+                    elif action == "unblock":
+                        if not unblock_pair(symbol):
+                            return jsonify({"ok": False, "error": "Pair ini dikunci developer, tidak bisa di-unblock lewat menu"}), 400
+                    else:
+                        return jsonify({"ok": False, "error": "action harus 'block' atau 'unblock'"}), 400
+                with blocked_pairs_meta_lock:
+                    meta = dict(blocked_pairs_meta)
+                blocked = []
+                for sym in sorted(SYMBOL_BLACKLIST):
+                    blocked.append({
+                        "symbol": sym,
+                        "display": to_display_pair(sym),
+                        "blocked_at": meta.get(sym, {}).get("blocked_at", ""),
+                        "hardcoded": sym in SYMBOL_BLACKLIST_HARDCODED,
+                    })
+                available = [{"symbol": s, "display": to_display_pair(s)}
+                             for s in get_closed_trades_distinct_pairs() if s not in SYMBOL_BLACKLIST]
+                return jsonify({"ok": True, "blocked": blocked, "available": available})
+            except Exception as error:
+                return jsonify({"ok": False, "error": str(error)}), 500
+
         log(f"[WEB] Dashboard jalan di port {WEB_PORT}")
         app.run(host="0.0.0.0", port=WEB_PORT, debug=False, use_reloader=False)
     except Exception as e:
@@ -11386,6 +11582,7 @@ if __name__ == '__main__':
     load_last_closed()
     load_hold_no_sell_closed()
     load_hold_no_sell_price()
+    load_blocked_pairs()
     load_scan_blockers()
     load_trail_reentry()
     load_quick_reentry_trades()
