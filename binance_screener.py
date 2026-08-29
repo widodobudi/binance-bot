@@ -1915,10 +1915,14 @@ def get_sell_suggestion(asset: str) -> dict:
 _binance_avg_cost_cache: dict = {}   # asset -> (ts, avg_price) -- TTL cache, myTrades agak berat dipanggil tiap request
 
 def get_binance_avg_cost(asset: str, ttl_seconds: int = 300) -> float:
-    """Rata-rata tertimbang harga BELI asset ini dari riwayat transaksi Binance (myTrades).
-    PERKIRAAN, bukan cost-basis presisi -- nggak nge-net-kan sell parsial (kalau pernah jual
-    sebagian lalu beli lagi di harga beda, hasilnya bisa meleset). Dipakai sbg suggestion
-    awal yang bisa diedit manual, buat asset yang sama sekali belum ada data avg-nya."""
+    """Cost-basis asset yg SAAT INI masih dipegang, dari riwayat transaksi Binance (myTrades)
+    diproses berurutan waktu: tiap BELI nambah qty & cost, tiap JUAL ngurangin qty & cost
+    SECARA PROPORSIONAL (avg cost sisa posisi tetap sama, bukan re-average) -- jadi beli lama
+    yg udah kejual duluan nggak nyampur ke rata-rata sisa coin sekarang. Kalau posisi sempat
+    nol lalu beli lagi, cost-basis-nya mulai dari nol lagi (fresh average).
+    PERKIRAAN -- dipakai sbg suggestion awal yang bisa diedit manual, buat asset yang sama
+    sekali belum ada data avg-nya. Catatan: myTrades cuma nampilin 1000 trade terakhir per
+    symbol, kalau riwayat lebih panjang dari itu bisa meleset."""
     asset = str(asset).upper()
     cached = _binance_avg_cost_cache.get(asset)
     if cached and (time.time() - cached[0]) < ttl_seconds:
@@ -1926,12 +1930,26 @@ def get_binance_avg_cost(asset: str, ttl_seconds: int = 300) -> float:
     symbol = asset + "USDT"
     avg = 0.0
     try:
-        trades = _binance_trading_request("GET", "/api/v3/myTrades", {"symbol": symbol, "limit": 500})
-        buys = [t for t in trades if t.get("isBuyer")]
-        total_qty = sum(float(t["qty"]) for t in buys)
-        total_cost = sum(float(t["qty"]) * float(t["price"]) for t in buys)
-        if total_qty > 0:
-            avg = total_cost / total_qty
+        trades = _binance_trading_request("GET", "/api/v3/myTrades", {"symbol": symbol, "limit": 1000})
+        trades = sorted(trades, key=lambda t: t.get("time", 0))
+        pos_qty = 0.0
+        pos_cost = 0.0
+        for t in trades:
+            qty = float(t["qty"])
+            price = float(t["price"])
+            if t.get("isBuyer"):
+                pos_qty += qty
+                pos_cost += qty * price
+            elif pos_qty > 0:
+                sell_qty = min(qty, pos_qty)
+                avg_before = pos_cost / pos_qty
+                pos_cost -= sell_qty * avg_before
+                pos_qty -= sell_qty
+                if pos_qty <= 1e-12:
+                    pos_qty = 0.0
+                    pos_cost = 0.0
+        if pos_qty > 0:
+            avg = pos_cost / pos_qty
     except Exception as error:
         log(f"WARN [AUTO-SELL] gagal tarik myTrades {symbol}: {error}")
     _binance_avg_cost_cache[asset] = (time.time(), avg)
