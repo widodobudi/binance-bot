@@ -920,6 +920,122 @@ def get_closed_trades_distinct_pairs() -> list:
         return []
 
 
+# ── CIRCUIT BREAKER: BATAS RUGI HARIAN (29/08/2026) ────────────────────────
+# Dihitung terus-menerus (realized P&L hari ini + unrealized P&L deal aktif) vs
+# modal total. Begitu tersulut, cuma blokir OPEN DEAL BARU lintas SEMUA strategi
+# (open_deal_with_sizing() + 2 titik reversal yg bypass itu) -- deal yg sudah
+# aktif TETAP dipantau & dieksekusi normal, tidak dipaksa tutup. Otomatis lepas
+# blokir lagi begitu P&L hari ini balik di atas -limit% (atau ganti hari WIB baru).
+DAILY_LOSS_LIMIT_FILE = os.path.join(DATA_DIR, "daily_loss_limit_config.json")
+daily_loss_limit_lock = threading.Lock()
+daily_loss_limit_pct: float = 3.0   # default -- disepakati dari analisis data nyata 29/08/2026
+
+def load_daily_loss_limit():
+    global daily_loss_limit_pct
+    if not os.path.exists(DAILY_LOSS_LIMIT_FILE):
+        return
+    try:
+        with open(DAILY_LOSS_LIMIT_FILE, 'r') as f:
+            data = json.load(f)
+        with daily_loss_limit_lock:
+            daily_loss_limit_pct = float(data.get("limit_pct", 3.0))
+        log(f"   Loaded daily_loss_limit_pct: {daily_loss_limit_pct}%")
+    except Exception as e:
+        log(f"WARN gagal baca daily_loss_limit_config.json: {e}")
+
+def save_daily_loss_limit(pct: float) -> float:
+    global daily_loss_limit_pct
+    pct = max(0.0, float(pct))
+    with daily_loss_limit_lock:
+        daily_loss_limit_pct = pct
+    try:
+        with open(DAILY_LOSS_LIMIT_FILE, 'w') as f:
+            json.dump({"limit_pct": pct}, f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan daily_loss_limit_config.json: {e}")
+    return pct
+
+def get_today_pnl_usd() -> float:
+    """Realized P&L (trade CLOSED hari ini, WIB) + unrealized P&L (U/PNL semua deal aktif)."""
+    today_str = now_wib().strftime('%Y-%m-%d')
+    realized = 0.0
+    try:
+        if os.path.exists(TRADES_CSV):
+            with trades_csv_lock:
+                with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                    rows = list(csv.DictReader(f))
+            for r in rows:
+                if r.get('status') != 'CLOSED':
+                    continue
+                if not (r.get('close_time_wib') or '').strip().startswith(today_str):
+                    continue
+                try:
+                    pct  = float(r.get('profit_pct') or 0)
+                    base = float(r.get('base_usd') or 8)
+                    realized += pct / 100 * base
+                except (ValueError, TypeError):
+                    pass
+    except Exception as e:
+        log(f"WARN get_today_pnl_usd realized: {e}")
+    unrealized = 0.0
+    try:
+        with active_deals_lock:
+            deals = dict(active_deals)
+        for d in deals.values():
+            ep = d.get('entry_price', 0) or 0
+            if ep <= 0:
+                continue
+            lp = d.get('last_price', ep) or ep
+            upnl_pct = (lp / ep - 1) * 100 - FEE_ROUND_TRIP_PCT
+            unrealized += upnl_pct / 100 * estimate_deal_total_usd(d)
+    except Exception as e:
+        log(f"WARN get_today_pnl_usd unrealized: {e}")
+    return realized + unrealized
+
+def get_total_capital_usd() -> float:
+    """Modal total = USDT bebas (free+locked) + modal yang lagi kepakai di semua deal aktif."""
+    free_usdt = locked_usdt = 0.0
+    try:
+        if USE_BINANCE_DIRECT:
+            free_usdt, locked_usdt = get_usdt_balance()
+    except Exception:
+        pass
+    deployed = 0.0
+    try:
+        with active_deals_lock:
+            deals = dict(active_deals)
+        deployed = sum(estimate_deal_total_usd(d) for d in deals.values())
+    except Exception:
+        pass
+    return free_usdt + locked_usdt + deployed
+
+def get_daily_loss_status() -> dict:
+    """Ringkasan buat dashboard: pnl hari ini ($, %), limit, apakah tersulut."""
+    cap = get_total_capital_usd()
+    pnl_usd = get_today_pnl_usd()
+    pnl_pct = (pnl_usd / cap * 100) if cap > 0 else 0.0
+    with daily_loss_limit_lock:
+        limit_pct = daily_loss_limit_pct
+    breached = limit_pct > 0 and pnl_pct <= -abs(limit_pct)
+    return {"pnl_usd": pnl_usd, "pnl_pct": pnl_pct, "capital_usd": cap,
+            "limit_pct": limit_pct, "breached": breached}
+
+def is_daily_loss_limit_breached() -> bool:
+    try:
+        with daily_loss_limit_lock:
+            limit_pct = daily_loss_limit_pct
+        if limit_pct <= 0:
+            return False
+        cap = get_total_capital_usd()
+        if cap <= 0:
+            return False
+        pnl_pct = get_today_pnl_usd() / cap * 100
+        return pnl_pct <= -abs(limit_pct)
+    except Exception as e:
+        log(f"WARN is_daily_loss_limit_breached: {e}")
+        return False
+
+
 def cooldown_remaining(symbol: str) -> float:
     """Sisa detik cooldown utk symbol ini (ambil yang terpanjang antara cooldown normal
     COOLDOWN_SECONDS dan cooldown diperpanjang pasca hold-no-sell). 0 kalau tidak cooldown."""
@@ -2554,6 +2670,10 @@ def score_to_target_usd(score: int) -> int:
 def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
     """Buka deal + simpan add_usd di active_deals untuk dikirim T2 setelah deal confirmed.
     Return (ok, target_usd, add_usd)."""
+    # Guard: circuit breaker rugi harian (lintas SEMUA strategi) -- lihat is_daily_loss_limit_breached()
+    if is_daily_loss_limit_breached():
+        log(f"[RISK] {symbol} ({strategy}) skip open -- batas rugi harian tersulut")
+        return False, BASE_ORDER_VOLUME, 0
     # Guard: strategi disabled via Strategy Control panel
     if not is_strategy_enabled(strategy):
         log(f"[SIZING] {symbol} skip — strategi {strategy} di-disable via Strategy Control")
@@ -4347,6 +4467,9 @@ def thread1b_scan_reversal():
 
     opened_any = False
     for sym, signal_price, atrp, cts in candidates:
+        if is_daily_loss_limit_breached():
+            log(f"[T1b] Batas rugi harian tersulut, sisa kandidat reversal tidak dibuka.")
+            break
         if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
             log(f"[T1b] Slot reversal/total penuh, sisa kandidat reversal tidak dibuka.")
             break
@@ -5596,6 +5719,9 @@ def thread_rev_intrabar_scan():
     universe = [p for p in pairs if volmap.get(p, 0) >= REVERSAL_MIN_VOL_USD]
 
     for sym in universe:
+        if is_daily_loss_limit_breached():
+            log(f"[T3-REV] Batas rugi harian tersulut, scan intrabar reversal dihentikan.")
+            break
         with active_deals_lock:
             if sym in active_deals:
                 continue
@@ -7190,6 +7316,14 @@ DASHBOARD_HTML = '''
       </div>
     </div>
     <div class="card-body">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border);font-size:11px">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--muted)" title="Circuit breaker lintas semua strategi: dihitung terus-menerus dari P&amp;L hari ini (realized + unrealized deal aktif) vs modal total. Begitu tersulut, cuma blokir OPEN DEAL BARU (deal aktif tetap jalan normal) -- otomatis lepas lagi begitu P&amp;L balik naik.">
+            <span>Batas Rugi Harian (%):</span>
+            <input type="number" id="dll-pct" min="0" step="0.1" value="3" style="width:70px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px">
+        </label>
+        <button type="button" onclick="event.stopPropagation();saveDailyLossLimit()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
+        <span id="dll-status" style="color:var(--muted)">Memuat...</span>
+    </div>
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
     <table style="width:100%;min-width:760px;border-collapse:collapse;font-size:11px" id="sc-table">
         <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
@@ -7940,6 +8074,8 @@ document.addEventListener('DOMContentLoaded', function() {
     setTimeout(loadStrategyConfig, 300);
     loadAIProviderConfig();
     loadAutoSellConfig();
+    loadDailyLossLimit();
+    setInterval(loadDailyLossLimit, 30000);
 });
 
 function loadAIProviderConfig() {
@@ -7955,6 +8091,29 @@ function saveAIProviderConfig() {
     var mode = document.getElementById('ai-provider-mode').value;
     fetch('/api/ai_provider_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:mode})})
         .then(function(){ loadAIProviderConfig(); });
+}
+
+function loadDailyLossLimit() {
+    fetch('/api/daily_loss_limit').then(function(r){ return r.json(); }).then(function(d) {
+        if (!d.ok) return;
+        var input = document.getElementById('dll-pct');
+        var status = document.getElementById('dll-status');
+        if (input && document.activeElement !== input) input.value = d.limit_pct;
+        if (status) {
+            var pnlColor = d.pnl_usd >= 0 ? 'var(--green)' : 'var(--red)';
+            status.innerHTML = 'P&amp;L hari ini: <b style="color:' + pnlColor + '">' + (d.pnl_usd>=0?'+':'') + d.pnl_usd.toFixed(2) + ' USD (' + (d.pnl_pct>=0?'+':'') + d.pnl_pct.toFixed(2) + '%)</b> dari modal $' + d.capital_usd.toFixed(2) +
+                (d.breached ? ' <b style="color:var(--red)">— TERSULUT, open deal baru sedang diblokir</b>' : ' — normal');
+        }
+    }).catch(function(){});
+}
+function saveDailyLossLimit() {
+    var v = parseFloat(document.getElementById('dll-pct').value);
+    if (isNaN(v) || v < 0) { alert('Isi angka batas yang valid.'); return; }
+    fetch('/api/daily_loss_limit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({limit_pct:v})})
+        .then(function(r){ return r.json(); }).then(function(d){
+            if (!d.ok) { alert('Error: ' + d.error); return; }
+            loadDailyLossLimit();
+        });
 }
 
 function resendOpenNotification(sym) {
@@ -11028,6 +11187,23 @@ def run_web_dashboard():
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
 
+        @app.route("/api/daily_loss_limit", methods=["GET", "POST"])
+        def api_daily_loss_limit():
+            """GET: status batas rugi harian (limit, P&L hari ini, tersulut atau tidak).
+            POST: {limit_pct: 3.0} -- update angka batasnya."""
+            try:
+                if request.method == "POST":
+                    payload = request.get_json(force=True, silent=True) or {}
+                    try:
+                        pct = float(payload.get("limit_pct", daily_loss_limit_pct))
+                    except (TypeError, ValueError):
+                        return jsonify({"ok": False, "error": "limit_pct tidak valid"}), 400
+                    save_daily_loss_limit(pct)
+                status = get_daily_loss_status()
+                return jsonify({"ok": True, **status})
+            except Exception as error:
+                return jsonify({"ok": False, "error": str(error)}), 500
+
         log(f"[WEB] Dashboard jalan di port {WEB_PORT}")
         app.run(host="0.0.0.0", port=WEB_PORT, debug=False, use_reloader=False)
     except Exception as e:
@@ -11762,6 +11938,7 @@ if __name__ == '__main__':
     load_hold_no_sell_price()
     load_blocked_pairs()
     load_scan_blockers()
+    load_daily_loss_limit()
     load_trail_reentry()
     load_quick_reentry_trades()
     sync_base_usd_from_binance()  # auto-fix base_usd dari Binance API saat startup
