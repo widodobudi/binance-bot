@@ -7286,8 +7286,42 @@ DASHBOARD_HTML = '''
   <label style="cursor:pointer;display:flex;align-items:center;gap:6px;white-space:nowrap"><input type="checkbox" id="cb-pause-refresh-float" onchange="togglePauseRefresh(this.checked)" style="cursor:pointer"> Pause refresh</label>
 </div>
 
+<!-- ═══════════════ DASHBOARD TABS ═══════════════ -->
+<div class="dash-tabs" style="display:flex;gap:6px;padding:10px 16px;flex-wrap:wrap;position:sticky;top:0;z-index:50;background:var(--bg);border-bottom:1px solid var(--border)">
+  <button type="button" class="dash-tab-btn" data-tab="monitor" onclick="selectDashTab('monitor')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">MONITOR</button>
+  <button type="button" class="dash-tab-btn" data-tab="strategies" onclick="selectDashTab('strategies')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">STRATEGIES</button>
+  <button type="button" class="dash-tab-btn" data-tab="history" onclick="selectDashTab('history')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">HISTORY</button>
+  <button type="button" class="dash-tab-btn" data-tab="control" onclick="selectDashTab('control')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">CONTROL</button>
+  <button type="button" class="dash-tab-btn" data-tab="tools" onclick="selectDashTab('tools')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">TOOLS</button>
+</div>
+<script>
+function selectDashTab(tab) {
+    var starts = document.querySelectorAll('.dash-section-start');
+    starts.forEach(function(startEl) {
+        var show = startEl.getAttribute('data-tab') === tab;
+        var el = startEl;
+        while (el) {
+            if (el !== startEl && el.classList.contains('dash-section-start')) break;
+            el.style.display = show ? '' : 'none';
+            el = el.nextElementSibling;
+        }
+    });
+    document.querySelectorAll('.dash-tab-btn').forEach(function(btn) {
+        var active = btn.getAttribute('data-tab') === tab;
+        btn.style.background = active ? 'var(--accent)' : 'var(--surface)';
+        btn.style.color = active ? '#000' : 'var(--text)';
+    });
+    try { _setCookie('dash_active_tab', tab); } catch (e) {}
+}
+document.addEventListener('DOMContentLoaded', function() {
+    var saved = 'monitor';
+    try { saved = _getCookie('dash_active_tab') || 'monitor'; } catch (e) {}
+    selectDashTab(saved);
+});
+</script>
+
 <!-- ═══════════════ STRATEGY CONTROL ═══════════════ -->
-<div class="container" style="margin-bottom:16px">
+<div class="container dash-section-start" data-tab="control" style="margin-bottom:16px">
     <div class="card">
         <div class="card-header" onclick="toggleCard(this)"><h2>AI DECISION PROVIDER <span class="card-toggle">&#9660;</span></h2></div>
         <div class="card-body" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:11px">
@@ -7344,7 +7378,7 @@ DASHBOARD_HTML = '''
 </div>
 <!-- SC JS loaded via dash.js -->
 
-<div class="container">
+<div class="container dash-section-start" data-tab="monitor">
   <div class="card">
         <div class="card-header" onclick="toggleCard(this)">
             <h2>Active Deals ({{ active_count }}) <span class="card-toggle">&#9660;</span></h2>
@@ -7458,7 +7492,7 @@ DASHBOARD_HTML = '''
     {% endif %}
     </div>
   </div>
-<div class="container" style="margin-top:12px">
+<div class="container dash-section-start" data-tab="monitor" style="margin-top:12px">
     <div class="card">
         <div class="card-header" onclick="toggleCard(this)"><h2>AUTO SELL ASSET <span class="card-toggle">&#9660;</span></h2></div>
         <div class="card-body" style="font-size:11px">
@@ -7492,7 +7526,7 @@ DASHBOARD_HTML = '''
     </div>
 </div>
   <!-- ═══════════════ MANUAL SCAN ═══════════════ -->
-  <div class="section-title">Manual Scan</div>
+  <div class="section-title dash-section-start" data-tab="tools">Manual Scan</div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-body">
       <!-- Dropdown strategi -->
@@ -7628,7 +7662,7 @@ DASHBOARD_HTML = '''
   </div>
 
   <!-- ═══════════════ AKUMULASI DETECTOR ═══════════════ -->
-  <div class="section-title">⭐ Strategi #5 — Akumulasi Detector (4h)</div>
+  <div class="section-title dash-section-start" data-tab="strategies">⭐ Strategi #5 — Akumulasi Detector (4h)</div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-header" onclick="toggleCard(this)">
       <h2>Akumulasi-4h <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Fase sideways post-downtrend | TF 4h | Maks 5 pair</span></h2>
@@ -7796,7 +7830,7 @@ DASHBOARD_HTML = '''
     </div>
   </div>
 
-  <div class="section-title">Kandidat Terdekat per Strategi</div>
+  <div class="section-title dash-section-start" data-tab="strategies">Kandidat Terdekat per Strategi</div>
     <div class="strategy-tabs" role="tablist" aria-label="Kandidat strategi">
     {% set strategy_tab_index = namespace(value=0) %}
     {% for strategi, items in near_miss.items() %}{% if strategi != "Akumulasi-4h" %}
@@ -7851,7 +7885,7 @@ DASHBOARD_HTML = '''
 
 
   <!-- ═══════════════ HUNTING-4H ═══════════════ -->
-  <div class="section-title">🎯 Strategi #7 — Hunting (4h)</div>
+  <div class="section-title dash-section-start" data-tab="strategies">🎯 Strategi #7 — Hunting (4h)</div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-header" onclick="toggleCard(this)">
       <h2>Hunting-4h <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">EMA kompresi tipis, harga baru breakout | TF 4h</span></h2>
@@ -8290,7 +8324,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
 </script>
 
 <!-- ═══════════════ CLOSED TRADES ═══════════════ -->
-<div class="container" style="margin-top:12px">
+<div class="container dash-section-start" data-tab="history" style="margin-top:12px">
 <div class="card" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 22px;margin-top:0">
     <div class="card-header" onclick="toggleCard(this)" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">CLOSED TRADES <span class="card-toggle">&#9660;</span></h2>
@@ -8430,7 +8464,7 @@ function loadClosedTrades() {
 }
 window.addEventListener('load', function(){ loadClosedTrades(); });
 </script>
-<div class="container" style="margin-top:12px">
+<div class="container dash-section-start" data-tab="tools" style="margin-top:12px">
     <div class="card">
         <div class="card-header" onclick="toggleCard(this)"><h2>SCAN BLOCKERS <span class="card-toggle">&#9660;</span></h2></div>
         <div class="card-body" style="font-size:11px">
@@ -8449,7 +8483,7 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
         </div>
     </div>
 </div>
-<div class="container" style="margin-top:12px">
+<div class="container dash-section-start" data-tab="control" style="margin-top:12px">
     <div class="card">
         <div class="card-header" onclick="toggleCard(this)"><h2>BLOCK PAIR <span class="card-toggle">&#9660;</span></h2></div>
         <div class="card-body" style="font-size:11px">
