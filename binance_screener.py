@@ -7501,6 +7501,7 @@ document.addEventListener('DOMContentLoaded', function() {
     {% endif %}
     </div>
   </div>
+</div>
 <div class="container dash-section-start" data-tab="monitor" style="margin-top:12px">
     <div class="card">
         <div class="card-header" onclick="toggleCard(this)"><h2>AUTO SELL ASSET <span class="card-toggle">&#9660;</span></h2></div>
@@ -7922,7 +7923,6 @@ document.addEventListener('DOMContentLoaded', function() {
       <div id="hunting-signals"><em style="color:var(--muted);font-size:11px">Belum ada sinyal.</em></div>
     </div>
   </div>
-</div>
 
 <script>
 function updateHuntingConfig() {
