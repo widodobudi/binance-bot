@@ -4833,10 +4833,17 @@ def thread2_monitor():
         # ada add-fund manual atau posisi ganda).
         _total_usd_now = estimate_deal_total_usd(d)
         _upnl_usd_now  = prof_from_entry / 100 * _total_usd_now
-        _tp_target_usd = float(get_deal_override(sym, 'tp1_target_usd', 1.0) or 1.0)
-        if get_deal_override(sym, 'tp1usd', False) and _upnl_usd_now >= _tp_target_usd:
-            do_close = True
-            reason = f"TP ${_tp_target_usd:.2f}: profit bersih ${_upnl_usd_now:.2f} (modal ${_total_usd_now:.0f})"
+        _tp_mode = get_deal_override(sym, 'tp1_target_mode', 'usd')
+        if _tp_mode == 'pct':
+            _tp_target_pct = float(get_deal_override(sym, 'tp1_target_pct', 1.0) or 1.0)
+            if get_deal_override(sym, 'tp1usd', False) and prof_from_entry >= _tp_target_pct:
+                do_close = True
+                reason = f"TP {_tp_target_pct:.2f}%: profit bersih {prof_from_entry:.2f}% (modal ${_total_usd_now:.0f})"
+        else:
+            _tp_target_usd = float(get_deal_override(sym, 'tp1_target_usd', 1.0) or 1.0)
+            if get_deal_override(sym, 'tp1usd', False) and _upnl_usd_now >= _tp_target_usd:
+                do_close = True
+                reason = f"TP ${_tp_target_usd:.2f}: profit bersih ${_upnl_usd_now:.2f} (modal ${_total_usd_now:.0f})"
         if not do_close and not _is_akum:
             _hs_label, _hs_base, _hs_pct = hard_stop_pct(atrp)
             if price <= entry * (1 - _hs_pct / 100):
@@ -7397,7 +7404,7 @@ document.addEventListener('DOMContentLoaded', function() {
     {% if active_deals %}
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <table style="min-width:1280px">
-            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>Cancel<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">stop track, koin tetap</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=target</span></th><th>TP Target ($)</th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>isArmed</th><th>Arm Trailing</th><th>Auto Avg Down</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
+            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>Cancel<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">stop track, koin tetap</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika U/PnL&gt;=target</span></th><th>TP Target</th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>isArmed</th><th>Arm Trailing</th><th>Auto Avg Down</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr>
@@ -7443,9 +7450,14 @@ document.addEventListener('DOMContentLoaded', function() {
           </form>
         </td>
         <td>
-          <form method="POST" action="/set_tp_target" style="display:inline-flex;gap:4px;align-items:center">
+          {% set _tpmode = overrides.get(sym,{}).get("tp1_target_mode","usd") %}
+          <form method="POST" action="/set_tp_target" style="display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap">
             <input type="hidden" name="sym" value="{{ sym }}">
-            <input type="number" name="value" step="0.01" min="0.01" style="width:64px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)" value="{{ overrides.get(sym,{}).get("tp1_target_usd",1.0) }}">
+            <select name="mode" onchange="var i=this.closest('form').querySelector('input[name=value]'); i.value = this.value==='pct' ? i.dataset.pct : i.dataset.usd;" style="background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 3px;font-size:10px;font-family:var(--font)">
+              <option value="usd" {{ "selected" if _tpmode=="usd" else "" }}>$</option>
+              <option value="pct" {{ "selected" if _tpmode=="pct" else "" }}>%</option>
+            </select>
+            <input type="number" name="value" step="0.01" min="0.01" data-usd="{{ overrides.get(sym,{}).get("tp1_target_usd",1.0) }}" data-pct="{{ overrides.get(sym,{}).get("tp1_target_pct",1.0) }}" style="width:60px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)" value="{{ overrides.get(sym,{}).get('tp1_target_pct',1.0) if _tpmode=='pct' else overrides.get(sym,{}).get('tp1_target_usd',1.0) }}">
             <button type="submit" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Save</button>
           </form>
         </td>
@@ -10058,6 +10070,9 @@ def run_web_dashboard():
         @app.route("/set_tp_target", methods=["POST"])
         def set_tp_target():
             sym = request.form.get("sym", "")
+            mode = request.form.get("mode", "usd")
+            if mode not in ("usd", "pct"):
+                mode = "usd"
             try:
                 val = float(request.form.get("value", "1"))
             except (TypeError, ValueError):
@@ -10067,7 +10082,11 @@ def run_web_dashboard():
                 overrides = load_deal_overrides()
                 if sym not in overrides:
                     overrides[sym] = {}
-                overrides[sym]['tp1_target_usd'] = val
+                overrides[sym]['tp1_target_mode'] = mode
+                if mode == "pct":
+                    overrides[sym]['tp1_target_pct'] = val
+                else:
+                    overrides[sym]['tp1_target_usd'] = val
                 save_deal_overrides(overrides)
             return redirect("/")
 
