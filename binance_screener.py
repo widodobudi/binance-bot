@@ -8424,6 +8424,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <input type="date" id="ct-filter-to" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
       </span>
     <button onclick="event.stopPropagation();loadClosedTrades()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh</button>
+    <button onclick="event.stopPropagation();resetCtFilters()" style="background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reset</button>
     </div>
   </div>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
@@ -8718,6 +8719,28 @@ function loadClosedTrades() {
         renderClosedTradesRows();
   }).catch(function(e){ document.getElementById('ct-body').innerHTML = '<tr><td colspan="11" style="color:var(--red);padding:8px">Error: ' + e + '</td></tr>'; });
 }
+function resetCtFilters() {
+    var stratSel  = document.getElementById('ct-filter-strat');
+    var pairSel   = document.getElementById('ct-filter-pair');
+    var timeSel   = document.getElementById('ct-filter-time');
+    var fromEl    = document.getElementById('ct-filter-from');
+    var toEl      = document.getElementById('ct-filter-to');
+    var outcomeSel= document.getElementById('ct-filter-outcome');
+    var reasonSel = document.getElementById('ct-filter-reason');
+    var searchEl  = document.getElementById('ct-filter-search');
+    if (stratSel)   stratSel.value = '';
+    if (pairSel)    pairSel.value = '';
+    if (timeSel)    timeSel.value = '';
+    if (fromEl)     fromEl.value = '';
+    if (toEl)       toEl.value = '';
+    if (outcomeSel) outcomeSel.value = '';
+    if (reasonSel)  reasonSel.value = '';
+    if (searchEl)   searchEl.value = '';
+    var box = document.getElementById('ct-filter-custom-range');
+    if (box) box.style.display = 'none';
+    loadClosedTrades();   // langsung nge-save cookie kosong & muat ulang "Semua..."
+}
+
 function restoreCtFilters() {
     try {
         var stratSel  = document.getElementById('ct-filter-strat');
