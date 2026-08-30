@@ -8673,6 +8673,22 @@ function loadClosedTrades() {
     if (range.from) params.push('date_from=' + range.from);
     if (range.to) params.push('date_to=' + range.to);
   }
+  // Simpan pilihan filter ke cookie biar SELAMAT dari reload penuh (auto-refresh 30d / manual refresh) --
+  // sebelumnya semua dropdown balik ke default "Semua..." tiap kali halaman reload.
+  try {
+    var timeSel = document.getElementById('ct-filter-time');
+    var fromEl  = document.getElementById('ct-filter-from');
+    var toEl    = document.getElementById('ct-filter-to');
+    var searchEl= document.getElementById('ct-filter-search');
+    _setCookie('ct_strat', strat);
+    _setCookie('ct_pair', pair);
+    _setCookie('ct_outcome', outcomeSel ? outcomeSel.value : '');
+    _setCookie('ct_reason', reasonSel ? reasonSel.value : '');
+    _setCookie('ct_time', timeSel ? timeSel.value : '');
+    _setCookie('ct_from', fromEl ? fromEl.value : '');
+    _setCookie('ct_to', toEl ? toEl.value : '');
+    _setCookie('ct_search', searchEl ? searchEl.value : '');
+  } catch (e) {}
   var url = '/api/closed_trades' + (params.length ? '?' + params.join('&') : '');
   fetch(url).then(function(r){return r.json();}).then(function(d){
     if (pairSel && pairSel.options.length <= 1 && (d.all_pairs || []).length) {
@@ -8682,7 +8698,9 @@ function loadClosedTrades() {
             option.textContent = item.display;
             pairSel.appendChild(option);
         });
-        pairSel.value = pair;
+        var savedPair = pair;
+        try { savedPair = pair || _getCookie('ct_pair') || ''; } catch (e) {}
+        pairSel.value = savedPair;
     }
     var stats = d.stats || {};
     var sEl = document.getElementById('ct-stats');
@@ -8700,7 +8718,28 @@ function loadClosedTrades() {
         renderClosedTradesRows();
   }).catch(function(e){ document.getElementById('ct-body').innerHTML = '<tr><td colspan="11" style="color:var(--red);padding:8px">Error: ' + e + '</td></tr>'; });
 }
-window.addEventListener('load', function(){ loadClosedTrades(); });
+function restoreCtFilters() {
+    try {
+        var stratSel  = document.getElementById('ct-filter-strat');
+        var outcomeSel= document.getElementById('ct-filter-outcome');
+        var reasonSel = document.getElementById('ct-filter-reason');
+        var timeSel   = document.getElementById('ct-filter-time');
+        var fromEl    = document.getElementById('ct-filter-from');
+        var toEl      = document.getElementById('ct-filter-to');
+        var searchEl  = document.getElementById('ct-filter-search');
+        var sv;
+        sv = _getCookie('ct_strat');   if (stratSel && sv)   stratSel.value = sv;
+        sv = _getCookie('ct_outcome'); if (outcomeSel && sv) outcomeSel.value = sv;
+        sv = _getCookie('ct_reason');  if (reasonSel && sv)  reasonSel.value = sv;
+        sv = _getCookie('ct_time');    if (timeSel && sv)    timeSel.value = sv;
+        sv = _getCookie('ct_from');    if (fromEl && sv)     fromEl.value = sv;
+        sv = _getCookie('ct_to');      if (toEl && sv)       toEl.value = sv;
+        sv = _getCookie('ct_search');  if (searchEl && sv)   searchEl.value = sv;
+        var box = document.getElementById('ct-filter-custom-range');
+        if (box) box.style.display = (timeSel && timeSel.value === 'custom') ? 'inline-flex' : 'none';
+    } catch (e) {}
+}
+window.addEventListener('load', function(){ restoreCtFilters(); loadClosedTrades(); });
 </script>
 <div class="container dash-section-start" data-tab="tools" style="margin-top:12px">
     <div class="card">
