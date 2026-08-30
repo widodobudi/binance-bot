@@ -569,6 +569,39 @@ def drive_append(filename: str, new_text: str):
         except Exception as e:
             log(f"WARN [DRIVE] drive_append {filename}: {e}")
 
+def drive_sync_full(filename: str, full_content: str):
+    """TIMPA PENUH isi file Drive dgn full_content (bukan append) -- dipakai buat
+    trades_forwardtest.csv, karena baris CSV-nya berubah status OPEN->CLOSED DI
+    TEMPAT (bukan cuma nambah baris baru kayak log open-arm-close/near_miss).
+    File tujuan HARUS sudah ada duluan di folder Drive (service account nggak
+    punya storage quota buat bikin file baru -- lihat _drive_get_or_create_file_id).
+    29/08/2026: biar Claude bisa baca data trade mentah langsung dari Drive,
+    nggak perlu lagi user download manual & upload ke chat tiap butuh data."""
+    with _drive_lock:
+        svc = _get_drive_service()
+        if not svc:
+            return
+        try:
+            fid = _drive_get_or_create_file_id(svc, filename)
+            if not fid:
+                return
+            _drive_write(svc, fid, full_content)
+        except Exception as e:
+            log(f"WARN [DRIVE] drive_sync_full {filename}: {e}")
+
+def sync_trades_csv_to_drive():
+    """Baca trades_forwardtest.csv lokal, sync penuh ke Drive (background thread,
+    non-blocking). Dipanggil tiap kali ada trade OPEN atau CLOSE."""
+    try:
+        if not os.path.exists(TRADES_CSV):
+            return
+        with trades_csv_lock:
+            with open(TRADES_CSV, 'r', encoding='utf-8') as f:
+                content = f.read()
+        threading.Thread(target=drive_sync_full, args=("trades_forwardtest.csv", content), daemon=True).start()
+    except Exception as e:
+        log(f"WARN [DRIVE] sync_trades_csv_to_drive: {e}")
+
 # ===================== RETRY / ERROR HANDLING =====================
 # Konstanta retry untuk request ke Binance (klines, ticker, price).
 # Tidak dipakai untuk 3Commas webhook (kirim sekali, hasil langsung dipakai).
@@ -1027,6 +1060,7 @@ def csv_log_open(row: dict):
             with open(TRADES_CSV, 'a', newline='', encoding='utf-8') as f:
                 csv.DictWriter(f, fieldnames=CSV_FIELDS).writerow(full)
         log(f"   [CSV] OPEN dicatat: {row.get('symbol')}")
+        sync_trades_csv_to_drive()
     except Exception as e:
         log(f"   [CSV] gagal tulis OPEN: {e}")
 
@@ -1076,6 +1110,7 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
             with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
                 w = csv.DictWriter(f, fieldnames=CSV_FIELDS); w.writeheader(); w.writerows(rows)
         log(f"   [CSV] CLOSE dicatat: {symbol} | base_usd={base_usd}")
+        sync_trades_csv_to_drive()
     except Exception as e:
         log(f"   [CSV] gagal tulis CLOSE: {e}")
 
