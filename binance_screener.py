@@ -7311,7 +7311,6 @@ DASHBOARD_HTML = '''
 <script>
 function selectDashTab(tab) {
     var starts = document.querySelectorAll('.dash-section-start');
-    console.log('[DASHTAB] selectDashTab(' + tab + ') called, markers found:', starts.length);
     starts.forEach(function(startEl, idx) {
         var markerTab = startEl.getAttribute('data-tab');
         try {
@@ -7324,10 +7323,7 @@ function selectDashTab(tab) {
                 el.style.display = show ? '' : 'none';
                 el = el.nextElementSibling;
             }
-            console.log('[DASHTAB] marker#' + idx + ' data-tab=' + markerTab + ' show=' + show + ' walked=' + guard + ' text=' + (startEl.textContent||'').slice(0,40));
-        } catch (e) {
-            console.error('[DASHTAB] marker#' + idx + ' data-tab=' + markerTab + ' THREW:', e);
-        }
+        } catch (e) {}
     });
     document.querySelectorAll('.dash-tab-btn').forEach(function(btn) {
         var active = btn.getAttribute('data-tab') === tab;
