@@ -8426,7 +8426,27 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
     <button onclick="event.stopPropagation();loadClosedTrades()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh</button>
     </div>
   </div>
-  <div id="ct-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:11px"></div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+    <select id="ct-filter-outcome" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+        <option value="">Semua hasil</option>
+        <option value="win">Profit saja</option>
+        <option value="loss">Loss saja</option>
+      </select>
+    <select id="ct-filter-reason" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+        <option value="">Semua alasan close</option>
+        <option value="Take Profit (custom)">Take Profit (custom)</option>
+        <option value="Trailing">Trailing</option>
+        <option value="Hard Stop">Hard Stop</option>
+        <option value="Timeout (candle limit)">Timeout (candle limit)</option>
+        <option value="Manual Reconcile">Manual Reconcile</option>
+        <option value="Lainnya">Lainnya</option>
+      </select>
+    <input type="text" id="ct-filter-search" oninput="renderClosedTradesRows()" placeholder="cari pair..." style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;width:110px">
+    <button onclick="exportCtCsv()" style="background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Export CSV</button>
+  </div>
+  <div id="ct-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px"></div>
+  <div id="ct-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:10px"></div>
+  <div id="ct-equity" style="margin-bottom:14px"></div>
   <div style="overflow-x:auto">
     <table id="ct-table" style="width:100%;border-collapse:collapse;font-size:11px">
       <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
@@ -8461,6 +8481,11 @@ function sortClosedTrades(key) {
 function renderClosedTradesRows() {
     var rows = closedTradesRows.slice();
     var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi',akum_entry_b:'Akumulasi'};
+    var searchBox = document.getElementById('ct-filter-search');
+    var searchTerm = searchBox ? searchBox.value.trim().toUpperCase() : '';
+    if (searchTerm) {
+        rows = rows.filter(function(r) { return (r.symbol||'').toUpperCase().indexOf(searchTerm) !== -1; });
+    }
     if (closedTradesSortKey) {
         rows.sort(function(a,b) {
             var av = a[closedTradesSortKey] || '';
@@ -8486,6 +8511,9 @@ function renderClosedTradesRows() {
         var text = {open_time:'Opened',close_time:'Close',symbol:'Pair',strategy:'Strategi',profit_pct:'Profit%',profit_usd:'Profit$',duration:'Durasi'}[label];
         th.textContent = text + (closedTradesSortKey === label ? (closedTradesSortDirection === 1 ? ' ▲' : ' ▼') : '');
     });
+    window._ctFilteredRows = rows;
+    renderCtSummary(rows);
+    renderCtEquityCurve(rows);
     var tbody = document.getElementById('ct-body');
     if (!rows.length) { tbody.innerHTML = '<tr><td colspan="11" style="color:var(--muted);padding:12px 8px;text-align:center">Belum ada data closed trades</td></tr>'; return; }
     tbody.innerHTML = rows.map(function(r) {
@@ -8506,6 +8534,83 @@ function renderClosedTradesRows() {
                 '<td style="padding:5px 8px;color:var(--muted);font-size:10px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (r.exit_reason||'') + '">' + (r.exit_reason||'-') + '</td>' +
             '</tr>';
     }).join('');
+}
+
+function renderCtSummary(rows) {
+    var el = document.getElementById('ct-summary');
+    if (!el) return;
+    if (!rows.length) { el.innerHTML = ''; return; }
+    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi',akum_entry_b:'Akumulasi'};
+    var groups = {};
+    rows.forEach(function(r) {
+        var key = r.strategy || 'brkX2';
+        if (!groups[key]) groups[key] = {n:0, wins:0, pnlPct:0, pnlUsd:0};
+        var g = groups[key];
+        var pct = parseFloat(r.profit_pct||0), usd = parseFloat(r.profit_usd||0);
+        g.n++;
+        if (pct > 0) g.wins++;
+        g.pnlPct += pct;
+        g.pnlUsd += usd;
+    });
+    el.innerHTML = Object.keys(groups).sort().map(function(key) {
+        var g = groups[key];
+        var wr = (g.wins / g.n * 100).toFixed(0);
+        var clr = g.pnlUsd >= 0 ? 'var(--green)' : 'var(--red)';
+        return '<span style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:3px 8px">' +
+            '<b>' + (strat_map[key]||key) + '</b>: ' + g.n + ' trade, WR ' + wr + '%, ' +
+            '<span style="color:' + clr + '">' + (g.pnlUsd>=0?'+':'') + g.pnlUsd.toFixed(2) + ' USD (' + (g.pnlPct>=0?'+':'') + g.pnlPct.toFixed(1) + '%)</span></span>';
+    }).join('');
+}
+
+function renderCtEquityCurve(rows) {
+    var el = document.getElementById('ct-equity');
+    if (!el) return;
+    if (rows.length < 2) { el.innerHTML = ''; return; }
+    var sorted = rows.slice().sort(function(a,b) { return (a.close_time||'').localeCompare(b.close_time||''); });
+    var cum = 0;
+    var points = sorted.map(function(r) { cum += parseFloat(r.profit_pct||0); return cum; });
+    var minV = Math.min(0, Math.min.apply(null, points));
+    var maxV = Math.max(0, Math.max.apply(null, points));
+    var range = (maxV - minV) || 1;
+    var W = 1000, H = 80, pad = 4;
+    var stepX = points.length > 1 ? (W - pad*2) / (points.length - 1) : 0;
+    var toY = function(v) { return H - pad - ((v - minV) / range) * (H - pad*2); };
+    var pathPts = points.map(function(v, i) { return (pad + i*stepX).toFixed(1) + ',' + toY(v).toFixed(1); }).join(' ');
+    var zeroY = toY(0).toFixed(1);
+    var lineColor = points[points.length-1] >= 0 ? '#3fb950' : '#f85149';
+    el.innerHTML =
+        '<div style="font-size:9px;color:var(--muted);margin-bottom:3px">Equity curve (PnL% kumulatif, ' + points.length + ' trade, terurut waktu)</div>' +
+        '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="width:100%;height:70px;background:var(--bg);border:1px solid var(--border);border-radius:4px">' +
+            '<line x1="0" y1="' + zeroY + '" x2="' + W + '" y2="' + zeroY + '" stroke="var(--border)" stroke-dasharray="4,3" stroke-width="1"></line>' +
+            '<polyline points="' + pathPts + '" fill="none" stroke="' + lineColor + '" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>' +
+        '</svg>';
+}
+
+function exportCtCsv() {
+    var rows = window._ctFilteredRows || [];
+    if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
+    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi',akum_entry_b:'Akumulasi'};
+    var headers = ['Opened','Close','Pair','Strategi','Entry','Exit','Profit%','Profit$','Modal','Durasi','Alasan'];
+    var csvEsc = function(v) {
+        v = String(v === undefined || v === null ? '' : v);
+        if (v.indexOf(',') !== -1 || v.indexOf('"') !== -1 || v.indexOf('\\n') !== -1) { v = '"' + v.replace(/"/g, '""') + '"'; }
+        return v;
+    };
+    var lines = [headers.join(',')];
+    rows.forEach(function(r) {
+        lines.push([r.open_time||'', r.close_time||'', r.symbol||'', strat_map[r.strategy]||r.strategy||'',
+            r.entry_price||'', r.exit_price||'', r.profit_pct||'', r.profit_usd||'', r.base_usd||'',
+            r.duration||'', r.exit_reason||''].map(csvEsc).join(','));
+    });
+    var blob = new Blob([lines.join('\\n')], {type: 'text/csv;charset=utf-8;'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'closed_trades_' + (new Date().toISOString().slice(0,10)) + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 
 function onCtTimeFilterChange() {
@@ -8559,6 +8664,10 @@ function loadClosedTrades() {
   if (strat === '__exclude_hardstop__') params.push('exclude_hardstop=1');
   else if (strat) params.push('strategy=' + strat);
   if (pair) params.push('pair=' + encodeURIComponent(pair));
+  var outcomeSel = document.getElementById('ct-filter-outcome');
+  if (outcomeSel && outcomeSel.value) params.push('outcome=' + outcomeSel.value);
+  var reasonSel = document.getElementById('ct-filter-reason');
+  if (reasonSel && reasonSel.value) params.push('reason_category=' + encodeURIComponent(reasonSel.value));
   var range = ctTimeFilterRange();
   if (range) {
     if (range.from) params.push('date_from=' + range.from);
@@ -11226,6 +11335,21 @@ def run_web_dashboard():
                     "scan_ts": _hunting_scan_ts,
                 })
 
+        def categorize_exit_reason(reason: str) -> str:
+            """Kelompokkan exit_reason (teks bebas) jadi kategori tetap buat filter dashboard."""
+            r = (reason or "").strip().lower()
+            if r.startswith("tp "):
+                return "Take Profit (custom)"
+            if r.startswith("trailing"):
+                return "Trailing"
+            if r.startswith("hard stop volatilitas"):
+                return "Hard Stop"
+            if r.startswith("batas") and "candle" in r:
+                return "Timeout (candle limit)"
+            if r.startswith("manual reconcile"):
+                return "Manual Reconcile"
+            return "Lainnya"
+
         @app.route("/api/closed_trades")
         def api_closed_trades():
             """Baca trades_forwardtest.csv dan kembalikan semua CLOSED trades + stats."""
@@ -11236,6 +11360,8 @@ def run_web_dashboard():
                 pair_filter = request.args.get("pair", "").upper().replace("/", "")
                 date_from = request.args.get("date_from", "").strip()  # "YYYY-MM-DD", filter by close_time_wib
                 date_to   = request.args.get("date_to", "").strip()
+                outcome_filter = request.args.get("outcome", "")  # "win" | "loss"
+                reason_filter  = request.args.get("reason_category", "")
                 rows = []
                 if os.path.exists(TRADES_CSV):
                     with trades_csv_lock:
@@ -11275,6 +11401,12 @@ def run_web_dashboard():
                     rows = [r for r in rows if (r.get('close_time_wib') or '')[:10] >= date_from]
                 if date_to:
                     rows = [r for r in rows if (r.get('close_time_wib') or '')[:10] <= date_to]
+                if outcome_filter == "win":
+                    rows = [r for r in rows if float(r.get('profit_pct') or 0) > 0]
+                elif outcome_filter == "loss":
+                    rows = [r for r in rows if float(r.get('profit_pct') or 0) <= 0]
+                if reason_filter:
+                    rows = [r for r in rows if categorize_exit_reason(r.get('exit_reason', '')) == reason_filter]
                 # Sort terbaru dulu
                 rows.sort(key=lambda r: r.get('close_time_wib',''), reverse=True)
                 # Hitung stats dan profit$
@@ -11313,6 +11445,7 @@ def run_web_dashboard():
                         "profit_usd":   p_usd,
                         "base_usd":     base,
                         "exit_reason":  r.get('exit_reason',''),
+                        "reason_category": categorize_exit_reason(r.get('exit_reason','')),
                         "duration":     dur,
                     })
                 total = wins + losses
