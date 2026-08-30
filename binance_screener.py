@@ -194,6 +194,16 @@ MAX_HOLD_DAYS     = 5
 _TF_SECONDS = {"1d":86400, "12h":43200, "8h":28800, "6h":21600, "4h":14400, "1h":3600}
 SECONDS_PER_CANDLE = _TF_SECONDS.get(TIMEFRAME, 86400)
 
+def _candle_seconds_for_strategy(strat: str) -> float:
+    """Detik per candle sesuai timeframe strategi -- dipakai buat hitung 'Hold candles' di
+    notif CLOSE dgn benar (sebelumnya semua strategi disamain ke SECONDS_PER_CANDLE punya
+    brkX2-12h/43200, salah buat strategi 4h/8h)."""
+    if strat == 'reversal':
+        return REVERSAL_SECONDS_PER_CANDLE
+    if strat in ('brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'akum_entry_a', 'akum_entry_b'):
+        return STRAT4H_SECONDS
+    return SECONDS_PER_CANDLE  # brkX2 (12h), default
+
 BASE_ORDER_VOLUME       = 8    # diubah ke $8 (17/08/2026, saldo $85, agar semua strategi bisa open)
 COMMAS_MAX_ACTIVE_DEALS = 4      # total kedua bot (brkX2 2 + reversal 2). Tiap bot 3Commas di-set max 2.
 MAX_DEALS_BRKX2         = 2      # slot brkX2 (bot existing) — set Max active trades=2 di 3Commas
@@ -5148,8 +5158,13 @@ def thread2_monitor():
                     base_usd=total_usd
                 )
                 # ── DEAL LOG lengkap CLOSE ────────────────────────────────
-                _opened_ts = d.get('opened_candle_ts', 0)
-                _hold_c = round((time.time() - _opened_ts) / SECONDS_PER_CANDLE) if _opened_ts > 0 else ''
+                # opened_candle_ts disimpan dalam MILIDETIK -- wajib dibagi 1000 dulu sebelum
+                # dikurangi time.time() (detik), dan pembagi candle wajib sesuai timeframe
+                # strategi (dulu semua strategi disamain ke SECONDS_PER_CANDLE/12h, bikin
+                # "Hold candles" salah total buat brkX2-4h/reversal/dll -- termasuk pernah
+                # muncul angka rusak kayak -41348942 gara-gara unit ms vs detik ketuker).
+                _opened_ts = (d.get('opened_candle_ts', 0) or 0) / 1000.0
+                _hold_c = round((time.time() - _opened_ts) / _candle_seconds_for_strategy(strat)) if _opened_ts > 0 else ''
                 deal_log_write({
                     'timestamp_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                     'event_type':    'CLOSE',
@@ -5212,9 +5227,13 @@ def thread2_monitor():
                 if pstrat and pstrat['n']>0:
                     done_n = pstrat['n']; wl = f"{pstrat['win']}W/{pstrat['loss']}L"
                     status = "TERCAPAI - waktunya evaluasi!" if done_n>=tgt else f"menuju {tgt}"
-                    if strat in ('hunting_4h', 'reversal'):
-                        _live_baseline  = HUNTING_LIVE_BASELINE if strat == 'hunting_4h' else REVERSAL_LIVE_BASELINE
-                        _phase2_target  = HUNTING_PHASE2_TARGET if strat == 'hunting_4h' else REVERSAL_PHASE2_TARGET
+                    if strat in ('hunting_4h', 'reversal', 'brkX2_4h'):
+                        _live_baseline  = (HUNTING_LIVE_BASELINE if strat == 'hunting_4h'
+                                            else REVERSAL_LIVE_BASELINE if strat == 'reversal'
+                                            else STRAT4H_LIVE_BASELINE)
+                        _phase2_target  = (HUNTING_PHASE2_TARGET if strat == 'hunting_4h'
+                                            else REVERSAL_PHASE2_TARGET if strat == 'reversal'
+                                            else STRAT4H_PHASE2_TARGET)
                         _phase2_offset  = (HUNTING_FWDTEST_PHASE_OFFSET if strat == 'hunting_4h' else 0) + _live_baseline
                         _p2 = csv_progress(strat, offset=_phase2_offset)
                         _p2_n   = _p2['n'] if _p2 else 0
@@ -10187,8 +10206,8 @@ def run_web_dashboard():
                     ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
                     total_usd = estimate_deal_total_usd(d)
                     csv_log_close(to_display_pair(sym), ts, price_now, prof, reason, strategy=strat, base_usd=total_usd)
-                    _opened_ts = d.get('opened_candle_ts', 0)
-                    _hold_c = round((time.time() - _opened_ts) / SECONDS_PER_CANDLE) if _opened_ts > 0 else ''
+                    _opened_ts = (d.get('opened_candle_ts', 0) or 0) / 1000.0
+                    _hold_c = round((time.time() - _opened_ts) / _candle_seconds_for_strategy(strat)) if _opened_ts > 0 else ''
                     deal_log_write({
                         'timestamp_wib': ts,
                         'event_type':    'CLOSE',
