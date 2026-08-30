@@ -322,7 +322,10 @@ AKUM_RANGE_PCT            = 0.18        # P1: range sideways ≤18% dari close
 AKUM_EMA_GAP_PCT          = 0.06        # P2: gap EMA20 vs EMA200 ≤6%
 AKUM_ATR_DROP_PCT         = 0.25        # P4: ATR sekarang ≤ (1 - 0.25) * ATR puncak = turun ≥25%
 AKUM_EMA_SLOPE_MAX        = 0.04        # P5: EMA20 awal vs akhir jendela, turun >4% = downtrend, BUKAN sideways
-AKUM_CLOSE_DRIFT_MAX      = 0.06        # P6: close awal vs close akhir jendela, drift >6% = bukan sideways
+AKUM_CLOSE_DRIFT_MAX      = 0.07        # P6: close awal vs close akhir jendela, drift >7% = bukan sideways
+# (dilonggarkan dari 6%->7%, 30/08/2026, keputusan Budi -- backtest score_akumulasi/compute_indicators_akum
+# asli, 70 pair ~90 hari data 4h, 386 sinyal: kandidat drift 6-7% justru WR 71.4% avg +4.31% (lebih baik dari
+# baseline WR 63.7% avg +4.01%), jadi aman dilonggarkan)
 AKUM_RANGE_DIST_MAX       = 2.5         # P7: max(range_bagian)/min(range_bagian), >2.5 = volatilitas tidak merata
 AKUM_ATR_LOOKBACK         = 100         # candle lookback untuk cari ATR puncak
 AKUM_MACD_FLAT_PCT        = 0.005       # S3: |MACD hist| < 0.5% × close → flat
@@ -7845,7 +7848,7 @@ document.addEventListener('DOMContentLoaded', function() {
       <span style="color:var(--yellow)">S3 MACD flat (5)</span>
       <span style="color:var(--yellow)">S4 Body ratio kecil (5)</span>
       <span style="color:#f85149;margin-left:8px">P5 Slope EMA20≤4% (filter)</span>
-      <span style="color:#f85149">P6 Drift close≤6% (filter)</span>
+      <span style="color:#f85149">P6 Drift close≤7% (filter)</span>
       <span style="color:#f85149">P7 DistRatio≤2.5x (filter)</span>
     </div>
         <div style="margin-bottom:10px;color:var(--muted);font-size:10px">
@@ -9137,7 +9140,7 @@ def score_akumulasi(df, sym: str) -> dict:
             p5_ok  = True   # data tidak cukup, tidak di-disqualify
             p5_val = "n/a"
 
-        # P6: Close drift — selisih close awal vs close akhir jendela tidak boleh >6%
+        # P6: Close drift — selisih close awal vs close akhir jendela tidak boleh > AKUM_CLOSE_DRIFT_MAX
         close_start = float(win['close'].iloc[0])
         close_end   = float(win['close'].iloc[-1])
         if close_start > 0:
@@ -9221,7 +9224,7 @@ def score_akumulasi(df, sym: str) -> dict:
         if not p3_ok: fails.append(f"OBV {p3_val} ↓")
         if not p4_ok: fails.append(f"ATR {p4_val} <25%")
         if not p5_ok: fails.append(f"Slope: {p5_val} >4% (downtrend)")
-        if not p6_ok: fails.append(f"Drift: {p6_val} >6% (bukan sideways)")
+        if not p6_ok: fails.append(f"Drift: {p6_val} >{AKUM_CLOSE_DRIFT_MAX*100:.0f}% (bukan sideways)")
         if not p7_ok: fails.append(f"Dist: {p7_val} (volatilitas tdk merata)")
         if not s1_ok: fails.append(f"Vol asimetri {s1_val}")
         if not s2_ok: fails.append(f"RSI {s2_val} OOB")
