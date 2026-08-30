@@ -11701,7 +11701,10 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AI_DECISION_MODEL  = "claude-sonnet-5"   # naik dari Haiku 4.5 (29/08/2026, maksimalkan kredit Anthropic yg jarang kepakai)
 GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_AI_MODEL    = os.environ.get("GEMINI_AI_MODEL", "gemini-flash-latest")
-AI_DECISION_TIMEOUT = 10  # detik
+AI_DECISION_TIMEOUT = 25  # detik -- dinaikkan dari 10 (30/08/2026), seiringan sama max_tokens 200->1024:
+# model butuh waktu proses lebih lama buat budget token yg lebih besar (apalagi kalau isi block "thinking"
+# dulu), 10 detik kekecilan -> sering "Gagal: The read operation timed out" padahal API-nya sehat, cuma
+# belum sempat selesai jawab dalam 10 detik.
 AI_PROVIDER_CONFIG_FILE = os.path.join(DATA_DIR, "ai_provider_config.json")
 AI_PRIMARY_PROVIDER = os.environ.get("AI_PRIMARY_PROVIDER", "anthropic").lower()
 AI_FALLBACK_PROVIDER = os.environ.get("AI_FALLBACK_PROVIDER", "gemini").lower()
