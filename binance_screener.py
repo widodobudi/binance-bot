@@ -11292,7 +11292,7 @@ import urllib.request as _urllib_req
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AI_DECISION_MODEL  = "claude-sonnet-5"   # naik dari Haiku 4.5 (29/08/2026, maksimalkan kredit Anthropic yg jarang kepakai)
 GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_AI_MODEL    = os.environ.get("GEMINI_AI_MODEL", "gemini-2.5-flash")
+GEMINI_AI_MODEL    = os.environ.get("GEMINI_AI_MODEL", "gemini-flash-latest")
 AI_DECISION_TIMEOUT = 10  # detik
 AI_PROVIDER_CONFIG_FILE = os.path.join(DATA_DIR, "ai_provider_config.json")
 AI_PRIMARY_PROVIDER = os.environ.get("AI_PRIMARY_PROVIDER", "anthropic").lower()
