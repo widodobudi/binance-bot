@@ -11261,7 +11261,8 @@ def run_web_dashboard():
                 with blocked_pairs_meta_lock:
                     meta = dict(blocked_pairs_meta)
                 blocked = []
-                for sym in sorted(SYMBOL_BLACKLIST):
+                # Manual (blok user lewat menu) di atas, sistem (hardcoded) di bawah -- masing-masing grup A-Z
+                for sym in sorted(SYMBOL_BLACKLIST, key=lambda s: (s in SYMBOL_BLACKLIST_HARDCODED, s)):
                     blocked.append({
                         "symbol": sym,
                         "display": to_display_pair(sym),
