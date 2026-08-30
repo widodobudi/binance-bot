@@ -7560,19 +7560,17 @@ document.addEventListener('DOMContentLoaded', function() {
         </td>
         <td class="{{ "profit-pos" if d.get("upnl_pct",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_pct",0)) }}%</td>
         <td>
-          {% if d.get("hardstop_warn_pct") is not none and d.get("upnl_pct",0) <= -1 * d.get("hardstop_warn_pct") %}
-          <form method="POST" action="/toggle" style="display:inline" title="Deal ini sudah dekat hard-stop ({{ '%.1f'|format(d.get('hardstop_full_pct',0)) }}%). Tercentang = kalau hard-stop ATAU timeout (batas candle) kesulut sementara deal lagi rugi, koin di-HOLD (tidak dijual), catat sebagai loss, cooldown 96j. Timeout yg closing untung tetap dijual normal. Uncheck = tetap dijual seperti biasa.">
-            <input type="hidden" name="sym" value="{{ sym }}">
-            <input type="hidden" name="key" value="hold_no_sell">
-            <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("hold_no_sell",True) else "" }} style="width:16px;height:16px;cursor:pointer">
-            <div style="font-size:8px;color:var(--muted);white-space:nowrap">Hold, jgn jual</div>
-          </form>
-          {% else %}
           <form method="POST" action="/cancel_deal" style="display:inline" onsubmit="return confirm('Cancel deal {{ sym.replace(\"USDT\",\"/USDT\") }}?\n\nBot berhenti kelola pair ini (auto add fund/TP/close berhenti). Koin yang sudah dibeli TETAP di wallet, TIDAK dijual.');">
             <input type="hidden" name="sym" value="{{ sym }}">
             <button type="submit" style="background:#ef4444;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Cancel</button>
           </form>
-          {% endif %}
+          {% set _hns_active = d.get("hold_no_sell_active") %}
+          <form method="POST" action="/toggle" style="display:inline-block;margin-left:4px;{{ '' if _hns_active else 'opacity:0.4' }}" title="{{ 'Deal ini sudah dekat hard-stop/timeout-rugi -- checkbox aktif.' if _hns_active else 'Belum dekat hard-stop atau timeout-rugi -- checkbox terkunci, otomatis aktif begitu mendekat.' }} Tercentang = kalau hard-stop ATAU timeout (batas candle) kesulut sementara deal lagi rugi, koin di-HOLD (tidak dijual), catat sebagai loss, cooldown 96j. Timeout yg closing untung tetap dijual normal. Uncheck = tetap dijual seperti biasa.">
+            <input type="hidden" name="sym" value="{{ sym }}">
+            <input type="hidden" name="key" value="hold_no_sell">
+            <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("hold_no_sell",True) else "" }} {{ "" if _hns_active else "disabled" }} style="width:16px;height:16px;cursor:{{ 'pointer' if _hns_active else 'not-allowed' }}">
+            <div style="font-size:8px;color:var(--muted);white-space:nowrap">Hold, jgn jual</div>
+          </form>
           {% if d.get("needs_reconcile") %}
           <form method="POST" action="/reconcile_deal" style="display:inline;margin-left:4px" title="Terdeteksi: saldo wallet asset ini jauh di bawah qty yang seharusnya -- koin kemungkinan sudah terjual di luar jalur normal bot (mis. lewat webhook TradingView). Klik utk catat ke Closed Trades pakai harga sekarang & hapus dari list." onsubmit="return confirm('Reconcile deal {{ sym.replace(\"USDT\",\"/USDT\") }}?\n\nTerdeteksi saldo wallet-nya jauh di bawah qty yang seharusnya -- koin kemungkinan sudah terjual di luar bot. Akan dicatat ke Closed Trades pakai harga SEKARANG sbg estimasi exit, lalu dihapus dari Active Deals.\n\nKalau ternyata koin belum dijual, batalkan ini dan pakai Cancel.');">
             <input type="hidden" name="sym" value="{{ sym }}">
@@ -10030,10 +10028,35 @@ def run_web_dashboard():
                 dd["upnl_usd"] = round(dd["upnl_pct"] / 100 * total_usd, 2)
                 # Ambang checkbox "hold, jangan jual": 85% dari ambang hard-stop tier deal ini.
                 # Akumulasi dikecualikan -- exit-nya via SL/TP sendiri, bukan hard_stop_pct().
+                _near_hardstop = False
                 if dd.get("strategy", "") not in ("akum_entry_a", "akum_entry_b"):
                     _hs_lbl, _hs_bs, _hs_full = hard_stop_pct(dd.get("atr_pct", 3.0))
                     dd["hardstop_full_pct"] = _hs_full
                     dd["hardstop_warn_pct"] = round(_hs_full * HOLD_NO_SELL_WARN_RATIO, 4)
+                    _near_hardstop = dd["upnl_pct"] <= -1 * dd["hardstop_warn_pct"]
+                # Checkbox "hold, jangan jual" (30/08/2026): SELALU tampil di dashboard, tapi
+                # di-disable (dimmed) sampai deal ini beneran dekat bahaya -- dekat hard-stop, ATAU
+                # tinggal <=1 candle lagi menuju timeout SAMBIL lagi rugi (upnl<0). Di luar itu,
+                # checkbox terkunci (nggak bisa diklik) supaya nggak salah kesan "wajib diisi
+                # sekarang" padahal belum relevan.
+                _near_timeout_loss = False
+                _opened_ts_s = (dd.get("opened_candle_ts", 0) or 0) / 1000.0
+                if _opened_ts_s > 0 and dd["upnl_pct"] < 0:
+                    _strat_d = dd.get("strategy", "brkX2")
+                    if _strat_d == "reversal":
+                        _hold_limit_sec_d = REVERSAL_MAX_HOLD_CANDLES * REVERSAL_SECONDS_PER_CANDLE
+                    elif _strat_d == "brkX2_4h":
+                        _hold_limit_sec_d = STRAT4H_MAX_HOLD_CANDLES * STRAT4H_SECONDS
+                    elif _strat_d in ("brkX2_crossema", "hunting_4h"):
+                        _hold_limit_sec_d = HUNTING_MAX_HOLD_CANDLES * STRAT4H_SECONDS
+                    elif _strat_d in ("akum_entry_a", "akum_entry_b"):
+                        _hold_limit_sec_d = (dd.get("timeout_candles", AKUM_ENTRY_TIMEOUT) or AKUM_ENTRY_TIMEOUT) * STRAT4H_SECONDS
+                    else:
+                        _hold_limit_sec_d = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
+                    _candle_sec_d = _candle_seconds_for_strategy(_strat_d)
+                    _remaining_sec_d = _hold_limit_sec_d - (time.time() - _opened_ts_s)
+                    _near_timeout_loss = 0 <= _remaining_sec_d <= _candle_sec_d
+                dd["hold_no_sell_active"] = bool(_near_hardstop or _near_timeout_loss)
                 # needs_reconcile: qty_coin tercatat (atau estimasi dari modal/entry_price kalau
                 # qty_coin nggak ada -- kasus deal dibuka lewat webhook lama) jauh lebih besar
                 # dari saldo wallet SEKARANG -> pertanda koin sudah kejual di luar jalur normal.
