@@ -7536,7 +7536,8 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
 </div>
   <!-- ═══════════════ MANUAL SCAN ═══════════════ -->
-  <div class="section-title dash-section-start" data-tab="tools">Manual Scan</div>
+<div class="container dash-section-start" data-tab="tools">
+  <div class="section-title">Manual Scan</div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-body">
       <!-- Dropdown strategi -->
@@ -7670,9 +7671,11 @@ document.addEventListener('DOMContentLoaded', function() {
       <div id="scan-results"></div>
     </div>
   </div>
+</div>
 
   <!-- ═══════════════ AKUMULASI DETECTOR ═══════════════ -->
-  <div class="section-title dash-section-start" data-tab="strategies">⭐ Strategi #5 — Akumulasi Detector (4h)</div>
+<div class="container dash-section-start" data-tab="strategies">
+  <div class="section-title">⭐ Strategi #5 — Akumulasi Detector (4h)</div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-header" onclick="toggleCard(this)">
       <h2>Akumulasi-4h <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Fase sideways post-downtrend | TF 4h | Maks 5 pair</span></h2>
@@ -7839,8 +7842,10 @@ document.addEventListener('DOMContentLoaded', function() {
     {% endif %}
     </div>
   </div>
+</div>
 
-  <div class="section-title dash-section-start" data-tab="strategies">Kandidat Terdekat per Strategi</div>
+<div class="container dash-section-start" data-tab="strategies">
+  <div class="section-title">Kandidat Terdekat per Strategi</div>
     <div class="strategy-tabs" role="tablist" aria-label="Kandidat strategi">
     {% set strategy_tab_index = namespace(value=0) %}
     {% for strategi, items in near_miss.items() %}{% if strategi != "Akumulasi-4h" %}
@@ -7892,10 +7897,12 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     </script>
+</div>
 
 
   <!-- ═══════════════ HUNTING-4H ═══════════════ -->
-  <div class="section-title dash-section-start" data-tab="strategies">🎯 Strategi #7 — Hunting (4h)</div>
+<div class="container dash-section-start" data-tab="strategies">
+  <div class="section-title">🎯 Strategi #7 — Hunting (4h)</div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-header" onclick="toggleCard(this)">
       <h2>Hunting-4h <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">EMA kompresi tipis, harga baru breakout | TF 4h</span></h2>
@@ -7965,6 +7972,7 @@ function refreshHuntingSignals() {
 setInterval(refreshHuntingSignals, 30000);
 refreshHuntingSignals();
 </script>
+</div>
 
 <script src="/dash.js?v=1786097338"></script>
 <script>
