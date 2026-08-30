@@ -10326,15 +10326,15 @@ def run_web_dashboard():
                     if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
                     df = compute_indicators_4h(df)
                     row = df.iloc[-1]
-                    st_dir = int(row['st_dir']) if not pd.isna(row.get('st_dir')) else 0
-                    close  = float(row['close']); ema20 = float(row['ema_fast'])
+                    st_dir = int(row['st_dir_cx']) if not pd.isna(row.get('st_dir_cx')) else 0
+                    close  = float(row['close']); ema20 = float(row['ema20'])
                     vol_ma = float(row['vol_ma']) if not pd.isna(row.get('vol_ma')) and row['vol_ma']>0 else 1
                     vol_ratio= float(row['vol'])/vol_ma
                     price_now= get_price_now(sym)
                     cross_ok = price_now>0 and price_now>ema20
                     htf_r  = htf_vol_ratio(sym, STRAT4H_HTF_TF, STRAT4H_HTF_LIMIT, STRAT4H_HTF_VOL_MA)
                     vol24  = float(row.get('vol24h_usd',0)) if 'vol24h_usd' in row else 0
-                    p = [st_dir==-1, close<ema20, cross_ok]
+                    p = [st_dir==-1, close <= ema20 * (1 + STRAT_CROSSEMA_EMA20_TOL_PCT / 100), cross_ok]
                     return jsonify(_s({"strat": strat, "sym": sym,
                         "primary": [
                             {"label":"ST=-1 (downtrend)","ok":p[0],"actual":f"ST={st_dir}"},
