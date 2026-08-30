@@ -7288,8 +7288,8 @@ DASHBOARD_HTML = '''
 
 <!-- ═══════════════ DASHBOARD TABS ═══════════════ -->
 <div class="dash-tabs" style="display:flex;gap:6px;flex-wrap:wrap;position:sticky;top:0;z-index:50;background:var(--bg);border-bottom:1px solid var(--border);max-width:1200px;width:calc(100% - 40px);margin:0 auto;padding:10px 20px">
-  <button type="button" class="dash-tab-btn" data-tab="monitor" onclick="selectDashTab('monitor')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">MONITOR</button>
   <button type="button" class="dash-tab-btn" data-tab="strategies" onclick="selectDashTab('strategies')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">STRATEGIES</button>
+  <button type="button" class="dash-tab-btn" data-tab="monitor" onclick="selectDashTab('monitor')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">MONITOR</button>
   <button type="button" class="dash-tab-btn" data-tab="history" onclick="selectDashTab('history')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">HISTORY</button>
   <button type="button" class="dash-tab-btn" data-tab="control" onclick="selectDashTab('control')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">CONTROL</button>
   <button type="button" class="dash-tab-btn" data-tab="tools" onclick="selectDashTab('tools')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">TOOLS</button>
@@ -7323,8 +7323,8 @@ function selectDashTab(tab) {
     try { _setCookie('dash_active_tab', tab); } catch (e) {}
 }
 document.addEventListener('DOMContentLoaded', function() {
-    var saved = 'monitor';
-    try { saved = _getCookie('dash_active_tab') || 'monitor'; } catch (e) {}
+    var saved = 'strategies';
+    try { saved = _getCookie('dash_active_tab') || 'strategies'; } catch (e) {}
     selectDashTab(saved);
 });
 </script>
