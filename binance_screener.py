@@ -269,7 +269,7 @@ STRAT_CROSSEMA_SCAN_INTERVAL= 240      # scan tiap 4 menit
 STRAT_CROSSEMA_MAX_DEALS    = 2
 STRAT_CROSSEMA_MAX_HOLD     = 15
 STRAT_CROSSEMA_FWDTEST      = 7
-STRAT_CROSSEMA_VOLUME_MULT  = 0.25
+STRAT_CROSSEMA_VOLUME_MULT  = 0.10    # dilonggarkan dari 0.25→0.10 (30/08/2026) -- pair yg lagi downtrend (syarat ST=-1) wajar volumenya turun, jadi filter 0.25xMA kegedean
 STRAT_CROSSEMA_VOLUME_MA    = 20
 STRAT_CROSSEMA_MIN_VOL_USD  = 1_000_000
 STRAT_CROSSEMA_HTF_VOL_MULT = 0.7     # dilonggarkan dari 1.0→0.7 (20/08/2026)
