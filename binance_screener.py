@@ -8411,6 +8411,18 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
     <select id="ct-filter-pair" onclick="event.stopPropagation()" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua pair</option>
       </select>
+    <select id="ct-filter-time" onclick="event.stopPropagation()" onchange="onCtTimeFilterChange()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+        <option value="">Semua waktu</option>
+        <option value="today">Today</option>
+        <option value="week">This week</option>
+        <option value="month">This month</option>
+        <option value="custom">Custom</option>
+      </select>
+    <span id="ct-filter-custom-range" onclick="event.stopPropagation()" style="display:none;gap:4px;align-items:center">
+        <input type="date" id="ct-filter-from" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+        <span style="color:var(--muted);font-size:11px">s/d</span>
+        <input type="date" id="ct-filter-to" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+      </span>
     <button onclick="event.stopPropagation();loadClosedTrades()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh</button>
     </div>
   </div>
@@ -8496,6 +8508,49 @@ function renderClosedTradesRows() {
     }).join('');
 }
 
+function onCtTimeFilterChange() {
+  var sel = document.getElementById('ct-filter-time');
+  var box = document.getElementById('ct-filter-custom-range');
+  if (box) box.style.display = (sel && sel.value === 'custom') ? 'inline-flex' : 'none';
+  loadClosedTrades();
+}
+
+function _ctDateStr(d) {
+  var yyyy = d.getFullYear();
+  var mm = String(d.getMonth()+1).padStart(2,'0');
+  var dd = String(d.getDate()).padStart(2,'0');
+  return yyyy + '-' + mm + '-' + dd;
+}
+
+function ctTimeFilterRange() {
+  var sel = document.getElementById('ct-filter-time');
+  var mode = sel ? sel.value : '';
+  if (!mode) return null;
+  var now = new Date();
+  if (mode === 'today') {
+    var s = _ctDateStr(now);
+    return {from: s, to: s};
+  }
+  if (mode === 'week') {
+    var dow = now.getDay();               // 0=Minggu..6=Sabtu
+    var diffToMon = (dow === 0) ? 6 : dow - 1;
+    var monday = new Date(now); monday.setDate(now.getDate() - diffToMon);
+    return {from: _ctDateStr(monday), to: _ctDateStr(now)};
+  }
+  if (mode === 'month') {
+    var first = new Date(now.getFullYear(), now.getMonth(), 1);
+    return {from: _ctDateStr(first), to: _ctDateStr(now)};
+  }
+  if (mode === 'custom') {
+    var f = document.getElementById('ct-filter-from');
+    var t = document.getElementById('ct-filter-to');
+    var fv = f ? f.value : '', tv = t ? t.value : '';
+    if (!fv && !tv) return null;
+    return {from: fv || null, to: tv || null};
+  }
+  return null;
+}
+
 function loadClosedTrades() {
   var strat = document.getElementById('ct-filter-strat').value;
   var pairSel = document.getElementById('ct-filter-pair');
@@ -8504,6 +8559,11 @@ function loadClosedTrades() {
   if (strat === '__exclude_hardstop__') params.push('exclude_hardstop=1');
   else if (strat) params.push('strategy=' + strat);
   if (pair) params.push('pair=' + encodeURIComponent(pair));
+  var range = ctTimeFilterRange();
+  if (range) {
+    if (range.from) params.push('date_from=' + range.from);
+    if (range.to) params.push('date_to=' + range.to);
+  }
   var url = '/api/closed_trades' + (params.length ? '?' + params.join('&') : '');
   fetch(url).then(function(r){return r.json();}).then(function(d){
     if (pairSel && pairSel.options.length <= 1 && (d.all_pairs || []).length) {
@@ -11174,6 +11234,8 @@ def run_web_dashboard():
                 strategy_filter = request.args.get("strategy", "")
                 exclude_hardstop = request.args.get("exclude_hardstop", "") in ("1", "true", "True")
                 pair_filter = request.args.get("pair", "").upper().replace("/", "")
+                date_from = request.args.get("date_from", "").strip()  # "YYYY-MM-DD", filter by close_time_wib
+                date_to   = request.args.get("date_to", "").strip()
                 rows = []
                 if os.path.exists(TRADES_CSV):
                     with trades_csv_lock:
@@ -11209,6 +11271,10 @@ def run_web_dashboard():
                     rows = [r for r in rows if not (r.get('exit_reason') or '').lower().startswith('hard stop volatilitas')]
                 if pair_filter:
                     rows = [r for r in rows if (r.get('symbol') or '').replace('/', '').upper() == pair_filter]
+                if date_from:
+                    rows = [r for r in rows if (r.get('close_time_wib') or '')[:10] >= date_from]
+                if date_to:
+                    rows = [r for r in rows if (r.get('close_time_wib') or '')[:10] <= date_to]
                 # Sort terbaru dulu
                 rows.sort(key=lambda r: r.get('close_time_wib',''), reverse=True)
                 # Hitung stats dan profit$
