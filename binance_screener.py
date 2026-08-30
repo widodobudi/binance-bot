@@ -3188,6 +3188,72 @@ def trailing_dist_progressive(atr_pct: float, current_profit_pct: float) -> floa
     return round(max(PROG_TRAIL_MIN, reduced), 4)
 
 
+def estimate_closest_deal_to_close(deals_display: dict):
+    """Heuristik (BUKAN prediksi harga pasti): tebak deal Active Deals mana yang paling
+    berpotensi closing lebih dulu, berdasar 3 tingkat urgensi (tier 1 paling mendesak):
+      1. Trailing sudah armed & harga sudah dekat (<5%) ke garis trailing stop -- bisa
+         closing kapan aja kalau harga sedikit koreksi.
+      2. Harga sudah dekat (<5%) ke level hard-stop -- berisiko closing rugi.
+      3. Fallback: sisa waktu menuju batas timeout candle strategi itu (garansi closing
+         paling lambat di titik ini kalau tidak ada trigger lain).
+    Return dict {sym, strategy, tier, urgency, note} punya deal paling mendesak, atau None
+    kalau tidak ada active deal yang bisa dihitung.
+    """
+    candidates = []
+    now = time.time()
+    for sym, d in deals_display.items():
+        strat = d.get("strategy", "brkX2")
+        entry = d.get("entry_price", 0) or 0
+        last  = d.get("last_price", entry) or entry
+        peak  = d.get("peak", entry) or entry
+        atrp  = d.get("atr_pct", 3.0) or 3.0
+        if entry <= 0 or last <= 0:
+            continue
+        is_akum = strat in ("akum_entry_a", "akum_entry_b")
+
+        opened_ts = (d.get("opened_candle_ts", 0) or 0) / 1000.0
+        if strat == "reversal":
+            hold_limit_sec = REVERSAL_MAX_HOLD_CANDLES * REVERSAL_SECONDS_PER_CANDLE
+        elif strat == "brkX2_4h":
+            hold_limit_sec = STRAT4H_MAX_HOLD_CANDLES * STRAT4H_SECONDS
+        elif strat in ("brkX2_crossema", "hunting_4h"):
+            hold_limit_sec = HUNTING_MAX_HOLD_CANDLES * STRAT4H_SECONDS
+        elif is_akum:
+            hold_limit_sec = (d.get("timeout_candles", AKUM_ENTRY_TIMEOUT) or AKUM_ENTRY_TIMEOUT) * STRAT4H_SECONDS
+        else:
+            hold_limit_sec = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
+        hours_to_timeout = max(0.0, (hold_limit_sec - (now - opened_ts)) / 3600) if opened_ts > 0 else None
+
+        if hours_to_timeout is not None:
+            tier, urgency, note = 3, hours_to_timeout, f"timeout ~{hours_to_timeout:.1f}j lagi"
+        else:
+            tier, urgency, note = 3, 999.0, "-"
+
+        if not is_akum:
+            if d.get("trailing_armed") and peak > 0:
+                prof_peak = (peak / entry - 1) * 100 - FEE_ROUND_TRIP_PCT
+                tdist = trailing_dist_progressive(atrp, prof_peak)
+                stop_price = peak * (1 - tdist / 100)
+                if stop_price > 0:
+                    gap_pct = (last / stop_price - 1) * 100
+                    if gap_pct < 5:
+                        tier, urgency, note = 1, gap_pct, f"trailing armed, jarak ke stop {gap_pct:.2f}%"
+            if tier == 3:
+                _, _, hs_full = hard_stop_pct(atrp)
+                hs_price = entry * (1 - hs_full / 100)
+                if hs_price > 0:
+                    gap_pct = (last / hs_price - 1) * 100
+                    if gap_pct < 5:
+                        tier, urgency, note = 2, gap_pct, f"mendekati hard-stop, jarak {gap_pct:.2f}%"
+
+        candidates.append({"sym": sym, "strategy": strat, "tier": tier, "urgency": urgency, "note": note})
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: (c["tier"], c["urgency"]))
+    return candidates[0]
+
+
 def get_hunting_trail_factor(stoch_k: float, st_dir: int, in_fomo: bool) -> float:
     """
     Return trailing factor variatif untuk Hunting-4h:
@@ -7437,6 +7503,9 @@ document.addEventListener('DOMContentLoaded', function() {
   <div class="card">
         <div class="card-header" onclick="toggleCard(this)">
             <h2>Active Deals ({{ active_count }}) <span class="card-toggle">&#9660;</span></h2>
+            {% if closest_to_close %}
+            <span class="scan-time" title="Estimasi heuristik (timeout/trailing/hard-stop), BUKAN prediksi harga pasti">Estimasi closing tercepat: <b>{{ closest_to_close.sym.replace("USDT","/USDT") }}</b> <span style="color:var(--muted)">({{ closest_to_close.note }})</span></span>
+            {% endif %}
             <span class="scan-time">Sisa USDT (blm terpakai): <b style="color:var(--accent)">${{ "%.2f"|format(free_usdt) }}</b></span>
     </div>
     <div class="card-body">
@@ -9946,6 +10015,7 @@ def run_web_dashboard():
                     _wallet_qty = _wallet_balances.get(_asset)
                     dd["needs_reconcile"] = bool(_wallet_qty is not None and _qty_expected > 0 and _wallet_qty <= _qty_expected * 0.05)
                 deals_display[sym] = dd
+            closest_to_close = estimate_closest_deal_to_close(deals_display)
             with _dashboard_lock:
                 nm = dict(_dashboard_state["near_miss"])
                 ls = dict(_dashboard_state["last_scan"])
@@ -10011,6 +10081,7 @@ def run_web_dashboard():
                 DASHBOARD_HTML,
                 active_deals=deals_display,
                 active_count=len(deals_display),
+                closest_to_close=closest_to_close,
                 near_miss=nm,
                 last_scan=ls,
                 overrides=overrides,
