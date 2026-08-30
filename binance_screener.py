@@ -4945,7 +4945,7 @@ def thread2_monitor():
             if armed and move_pct >= T2_FAST_TRIGGER_PCT:
                 want_fast = True
 
-        do_close=False; reason=""; hard_stop_triggered=False; trail_stop_triggered=False
+        do_close=False; reason=""; hard_stop_triggered=False; trail_stop_triggered=False; timeout_triggered=False
         # TP custom: tutup otomatis begitu U/PnL bersih (net -0.2% fee) sudah >= target $ per deal
         # (default $1.00 kalau belum diisi manual). Pakai estimate_deal_total_usd()
         # (qty_coin * entry_price aktual) supaya modal yang dipakai cek TP sama persis dengan
@@ -5082,7 +5082,7 @@ def thread2_monitor():
             hold_limit_sec = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
             hold_label = f"batas {MAX_HOLD_DAYS} candle"
         if opened_ts>0 and (time.time()-opened_ts) >= hold_limit_sec:
-            do_close=True; reason=hold_label+" tercapai"
+            do_close=True; reason=hold_label+" tercapai"; timeout_triggered=True
         elif opened_ts>0 and get_deal_override(sym, 'ai_call', True):
             # Tanya AI saat tersisa 2 candle menuju timeout
             elapsed_sec = time.time() - opened_ts
@@ -5144,10 +5144,13 @@ def thread2_monitor():
                 strat_label = "Akumulasi-4h Entry B"
             else:
                 strat_label = "Momentum brkX2 (12h)"
-            # Hold-no-sell: kalau ini hard-stop DAN checkbox "hold, jangan jual" aktif (default True)
-            # untuk deal ini -> tetap catat sebagai loss (statistik tetap jujur), tapi SKIP jual —
-            # koin tetap di wallet. Cooldown 96 jam berlaku ke symbol ini lintas semua strategi.
-            _hold_no_sell = hard_stop_triggered and get_deal_override(sym, 'hold_no_sell', True)
+            # Hold-no-sell: kalau ini hard-stop, ATAU timeout ("batas N candle tercapai") sementara
+            # deal lagi RUGI (semua strategi -- 30/08/2026, permintaan user), DAN checkbox "hold,
+            # jangan jual" aktif (default True) untuk deal ini -> tetap catat sebagai loss (statistik
+            # tetap jujur), tapi SKIP jual — koin tetap di wallet. Cooldown 96 jam berlaku ke symbol
+            # ini lintas semua strategi. Timeout yg closing UNTUNG tetap dijual normal seperti biasa.
+            _hold_no_sell = (hard_stop_triggered or (timeout_triggered and prof_from_entry < 0)) \
+                             and get_deal_override(sym, 'hold_no_sell', True)
             if _hold_no_sell:
                 reason += " [HOLD: koin tidak dijual, cooldown 96j]"
             if _hold_no_sell or send_close_long(sym, strat):
@@ -7558,7 +7561,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <td class="{{ "profit-pos" if d.get("upnl_pct",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_pct",0)) }}%</td>
         <td>
           {% if d.get("hardstop_warn_pct") is not none and d.get("upnl_pct",0) <= -1 * d.get("hardstop_warn_pct") %}
-          <form method="POST" action="/toggle" style="display:inline" title="Deal ini sudah dekat hard-stop ({{ '%.1f'|format(d.get('hardstop_full_pct',0)) }}%). Tercentang = kalau hard-stop kesulut, koin di-HOLD (tidak dijual), catat sebagai loss, cooldown 96j. Uncheck = tetap dijual seperti biasa.">
+          <form method="POST" action="/toggle" style="display:inline" title="Deal ini sudah dekat hard-stop ({{ '%.1f'|format(d.get('hardstop_full_pct',0)) }}%). Tercentang = kalau hard-stop ATAU timeout (batas candle) kesulut sementara deal lagi rugi, koin di-HOLD (tidak dijual), catat sebagai loss, cooldown 96j. Timeout yg closing untung tetap dijual normal. Uncheck = tetap dijual seperti biasa.">
             <input type="hidden" name="sym" value="{{ sym }}">
             <input type="hidden" name="key" value="hold_no_sell">
             <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("hold_no_sell",True) else "" }} style="width:16px;height:16px;cursor:pointer">
