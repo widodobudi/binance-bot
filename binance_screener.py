@@ -237,6 +237,11 @@ STRAT4H_STOCH_MAX       = 89
 STRAT4H_ATR_MAX_PCT     = 7.0   # batas atas ATR% brkX2-4h (08/08/2026): hindari entry puncak pump
 STRAT4H_VOL_MAX_MULT    = 5.0   # batas atas volume brkX2-4h (08/08/2026): simetris dengan brkX2-12h
 STRAT4H_CHG_MAX_PCT     = 3.0   # max price change% dari open candle (11/08/2026, backtest_elapsed_sweep_brkx2_4h: WR 72.7% avg +0.659% vs baseline -0.349%)
+STRAT4H_EMA20_BAND_MAX_PCT = 0.3   # harga wajib 0% s/d +0.3% di atas EMA20 (30/08/2026, keputusan Budi setelah
+# backtest sweep lebar pita 0.05%-2.0% pakai fungsi asli bot, 76 pair likuid ~83 hari data 4h: 0.3% adalah
+# titik terbaik (WR 57.5% avg +1.38% worst -13.06% n=87, vs baseline tanpa syarat EMA WR 45.9% avg +0.95%
+# worst -29.69% n=2389). MACD histogram TETAP >0 apa adanya -- backtest ATR-scaled/normalized MACD threshold
+# konsisten menunjukkan pelonggaran MACD selalu menurunkan kualitas, jadi tidak diubah.
 STRAT4H_RSI_MIN         = 40    # RSI minimum brkX2-4h (14/08/2026, backtest_brkx2_4h_comprehensive_sweep: RSI>40 sweet spot avg +3.785% WR 87%)
 STRAT4H_RSI_MAX         = 70    # RSI maximum brkX2-4h (diubah dari 60→70, 18/08/2026, keputusan Budi)
 STRAT4H_PERF_MIN        = 0.5    # Perf Grade minimum (sama dengan brkX2-12h)    # Stoch%K < 80 (backtest_4h_rsi_stoch_sweep.py, 31/07/2026): worst -48.39% vs -63.96%, delta avg -0.121%, wf6 OK
@@ -3527,6 +3532,13 @@ def blockers_entry_4h(df) -> list:
     chg = r.get("chg_from_open")
     if chg is not None and not pd.isna(chg) and chg > STRAT4H_CHG_MAX_PCT:
         failures.append("Change from open maximum")
+    ema20 = r.get("ema20")
+    if pd.isna(ema20) or ema20 <= 0:
+        failures.append("EMA20 tidak tersedia")
+    else:
+        gap_ema20_pct = (float(r["close"]) / float(ema20) - 1) * 100
+        if gap_ema20_pct < 0 or gap_ema20_pct > STRAT4H_EMA20_BAND_MAX_PCT:
+            failures.append("Harga di luar pita EMA20")
     return failures
 
 def check_entry_4h(df) -> bool:
@@ -3539,6 +3551,9 @@ def check_entry_4h(df) -> bool:
       - Vol24h >= $3jt
       - Stoch%K < 80 (backtest_4h_rsi_stoch_sweep.py, 31/07/2026)
       - RSI < 60 (07/08/2026, keputusan Budi): hindari entry saat harga sudah terlalu tinggi
+      - Harga 0% s/d +0.3% di atas EMA20 (30/08/2026, keputusan Budi, hasil backtest sweep lebar pita):
+        entry harus masih dekat EMA20 (baru saja cross-up / belum lari jauh), bukan momentum yang sudah
+        lama berjalan jauh dari EMA20
     """
     return not blockers_entry_4h(df)
 
@@ -10325,11 +10340,15 @@ def run_web_dashboard():
                     htf_r  = htf_vol_ratio(sym, STRAT4H_HTF_TF, STRAT4H_HTF_LIMIT, STRAT4H_HTF_VOL_MA)
                     perf   = calc_perf_score(sym, int(df['ct'].iloc[-1]))
                     if pd.isna(perf): perf = None
-                    p = [st_dir==1, macd_h is not None and macd_h>0, atr_pct is not None and atr_pct>=STRAT4H_ATR_MIN_PCT]
+                    ema20  = float(row['ema20']) if not pd.isna(row.get('ema20')) and row['ema20']>0 else None
+                    gap_ema20 = ((float(row['close'])/ema20-1)*100) if ema20 else None
+                    ema_band_ok = gap_ema20 is not None and 0 <= gap_ema20 <= STRAT4H_EMA20_BAND_MAX_PCT
+                    p = [st_dir==1, macd_h is not None and macd_h>0, atr_pct is not None and atr_pct>=STRAT4H_ATR_MIN_PCT, ema_band_ok]
                     return jsonify(_s({"strat": strat, "sym": sym,
                         "primary": [
                             {"label":"ST=+1","ok":p[0],"actual":f"ST={st_dir}"},
                             {"label":"MACD hist>0","ok":p[1],"actual":f"{macd_h:.4f}" if macd_h else "n/a"},
+                            {"label":f"Harga 0%-{STRAT4H_EMA20_BAND_MAX_PCT}% di atas EMA20 {ema20:.4g}" if ema20 else "Harga vs EMA20","ok":p[3],"actual":f"{gap_ema20:+.2f}%" if gap_ema20 is not None else "n/a"},
                             {"label":f"ATR%>={STRAT4H_ATR_MIN_PCT}%","ok":p[2],"actual":f"{atr_pct:.1f}%" if atr_pct else "n/a"},
                         ],
                         "secondary": [
