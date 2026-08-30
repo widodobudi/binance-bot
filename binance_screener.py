@@ -1909,7 +1909,12 @@ GMAIL_TO           = "widodobudi@gmail.com"
 GMAIL_FROM         = "widodobudi@gmail.com"
 
 def send_email_open_long(subject: str, body: str):
-    """Kirim email notifikasi open long ke widodobudi@gmail.com via Gmail SMTP."""
+    """Kirim email notifikasi open long ke widodobudi@gmail.com via Gmail SMTP.
+    Email OPEN LONG dimatikan (30/08/2026, permintaan user) -- fungsi TETAP dipertahankan
+    (tidak dihapus) karena masih dipakai buat notif lain (mis. "AI Decision kembali ON").
+    """
+    if subject.startswith("OPEN LONG"):
+        return
     if not GMAIL_APP_PASSWORD:
         log("WARN send_email: GMAIL_APP_PASSWORD belum diset, skip.")
         return
