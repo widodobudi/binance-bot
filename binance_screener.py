@@ -7627,59 +7627,6 @@ DASHBOARD_HTML = '''
     </div>
   </div>
 
-  <div class="section-title">Kandidat Terdekat per Strategi</div>
-    <div class="strategy-tabs" role="tablist" aria-label="Kandidat strategi">
-    {% set strategy_tab_index = namespace(value=0) %}
-    {% for strategi, items in near_miss.items() %}{% if strategi != "Akumulasi-4h" %}
-    <button type="button" class="strategy-tab{% if strategy_tab_index.value == 0 %} active{% endif %}" role="tab" aria-selected="{{ 'true' if strategy_tab_index.value == 0 else 'false' }}" data-strategy-tab="strategy-panel-{{ strategy_tab_index.value }}" onclick="selectStrategyTab(this)">{{ strategi }}</button>
-    {% set strategy_tab_index.value = strategy_tab_index.value + 1 %}
-    {% endif %}{% endfor %}
-    </div>
-    <div>
-    {% set strategy_panel_index = namespace(value=0) %}
-    {% for strategi, items in near_miss.items() %}{% if strategi != "Akumulasi-4h" %}
-    <div id="strategy-panel-{{ strategy_panel_index.value }}" class="strategy-panel{% if strategy_panel_index.value == 0 %} active{% endif %}" role="tabpanel">
-    <div class="card">
-    <div class="card-header" onclick="toggleCard(this)">
-      <h2>{{ strategi }} <span class="card-toggle">&#9660;</span></h2>
-      <span class="scan-time">Scan: {{ last_scan.get(strategi,"-") }}</span>
-    </div>
-    <div class="card-body">
-    {% if items %}
-    <table>
-      <thead><tr><th>Pair</th><th>Lolos</th><th>Belum</th></tr></thead>
-      <tbody>
-      {% for item in items %}
-      <tr>
-        <td class="sym">{{ item.sym.replace("USDT","/USDT") }}</td>
-        <td class="score">{{ item.n_pass }}/{{ item.total }}</td>
-        <td class="fails">{{ ("; ".join(item.fails[:2]))|e }}{% if item.fails|length > 2 %} +{{ item.fails|length - 2 }} lagi{% endif %}</td>
-      </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <div class="empty">{{ window_info.get(strategi, "Belum ada data scan")|e }}</div>
-    {% endif %}
-    </div>
-  </div>
-    </div>
-    {% set strategy_panel_index.value = strategy_panel_index.value + 1 %}
-    {% endif %}{% endfor %}
-  </div>
-    <script>
-    function selectStrategyTab(tab) {
-        document.querySelectorAll('.strategy-tab').forEach(function(button) {
-            var active = button === tab;
-            button.classList.toggle('active', active);
-            button.setAttribute('aria-selected', active ? 'true' : 'false');
-        });
-        document.querySelectorAll('.strategy-panel').forEach(function(panel) {
-            panel.classList.toggle('active', panel.id === tab.getAttribute('data-strategy-tab'));
-        });
-    }
-    </script>
-
   <!-- ═══════════════ AKUMULASI DETECTOR ═══════════════ -->
   <div class="section-title">⭐ Strategi #5 — Akumulasi Detector (4h)</div>
   <div class="card" style="margin-bottom:16px">
@@ -7848,6 +7795,59 @@ DASHBOARD_HTML = '''
     {% endif %}
     </div>
   </div>
+
+  <div class="section-title">Kandidat Terdekat per Strategi</div>
+    <div class="strategy-tabs" role="tablist" aria-label="Kandidat strategi">
+    {% set strategy_tab_index = namespace(value=0) %}
+    {% for strategi, items in near_miss.items() %}{% if strategi != "Akumulasi-4h" %}
+    <button type="button" class="strategy-tab{% if strategy_tab_index.value == 0 %} active{% endif %}" role="tab" aria-selected="{{ 'true' if strategy_tab_index.value == 0 else 'false' }}" data-strategy-tab="strategy-panel-{{ strategy_tab_index.value }}" onclick="selectStrategyTab(this)">{{ strategi }}</button>
+    {% set strategy_tab_index.value = strategy_tab_index.value + 1 %}
+    {% endif %}{% endfor %}
+    </div>
+    <div>
+    {% set strategy_panel_index = namespace(value=0) %}
+    {% for strategi, items in near_miss.items() %}{% if strategi != "Akumulasi-4h" %}
+    <div id="strategy-panel-{{ strategy_panel_index.value }}" class="strategy-panel{% if strategy_panel_index.value == 0 %} active{% endif %}" role="tabpanel">
+    <div class="card">
+    <div class="card-header" onclick="toggleCard(this)">
+      <h2>{{ strategi }} <span class="card-toggle">&#9660;</span></h2>
+      <span class="scan-time">Scan: {{ last_scan.get(strategi,"-") }}</span>
+    </div>
+    <div class="card-body">
+    {% if items %}
+    <table>
+      <thead><tr><th>Pair</th><th>Lolos</th><th>Belum</th></tr></thead>
+      <tbody>
+      {% for item in items %}
+      <tr>
+        <td class="sym">{{ item.sym.replace("USDT","/USDT") }}</td>
+        <td class="score">{{ item.n_pass }}/{{ item.total }}</td>
+        <td class="fails">{{ ("; ".join(item.fails[:2]))|e }}{% if item.fails|length > 2 %} +{{ item.fails|length - 2 }} lagi{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">{{ window_info.get(strategi, "Belum ada data scan")|e }}</div>
+    {% endif %}
+    </div>
+  </div>
+    </div>
+    {% set strategy_panel_index.value = strategy_panel_index.value + 1 %}
+    {% endif %}{% endfor %}
+  </div>
+    <script>
+    function selectStrategyTab(tab) {
+        document.querySelectorAll('.strategy-tab').forEach(function(button) {
+            var active = button === tab;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        document.querySelectorAll('.strategy-panel').forEach(function(panel) {
+            panel.classList.toggle('active', panel.id === tab.getAttribute('data-strategy-tab'));
+        });
+    }
+    </script>
 
 
   <!-- ═══════════════ HUNTING-4H ═══════════════ -->
