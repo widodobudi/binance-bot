@@ -11696,7 +11696,9 @@ def _anthropic_ai_call(prompt: str) -> str:
         import json as _json
         payload = _json.dumps({
             "model": AI_DECISION_MODEL,
-            "max_tokens": 200,
+            "max_tokens": 1024,  # dinaikkan dari 200 (30/08/2026) -- Sonnet 5 kadang isi block "thinking"
+            # dulu sebelum jawaban teks; budget 200 abis semua kepakai thinking, jawaban teksnya sendiri
+            # nggak pernah kebentuk (response cuma berisi block "thinking", 0 block "text").
             "messages": [{"role": "user", "content": prompt}]
         }).encode()
         req = _urllib_req.Request(
