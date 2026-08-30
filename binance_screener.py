@@ -111,10 +111,8 @@ STOCH_MAX         = 70      # syarat ke-7: Stoch %K < 70 (hindari entry terlalu 
 MIN_VOLUME_USD    = 3_000_000   # dinaikkan dari 1jt ke 3jt (backtest_entry_filter2)
 SYMBOL_BLACKLIST  = {'GIGGLEUSDT', 'SOXLBUSDT', 'KLAYUSDT'}  # pair blacklist — tidak akan di-scan sama sekali
 # KLAYUSDT ditambah 14/08/2026: KLAY sudah delisted dari Binance sejak 28/10/2024, rebranding jadi KAIA/USDT
-SYMBOL_BLACKLIST_HARDCODED = frozenset(SYMBOL_BLACKLIST)  # penanda: pair2 di atas dikunci developer, TIDAK
-# bisa di-unblock lewat menu Block Pair (29/08/2026) -- semua 9 titik scan yang sudah cek
-# "if sym in SYMBOL_BLACKLIST" otomatis ikut nge-block pair yang ditambah user lewat menu itu juga,
-# karena block_pair()/unblock_pair() cuma nambah/buang isi SET SYMBOL_BLACKLIST yang sama ini.
+# (SYMBOL_BLACKLIST_HARDCODED di-freeze belakangan, lihat setelah EXCLUDED_BASE_ASSETS -- fiat/stablecoin/
+# komoditas juga ikut digabung ke situ dulu sebelum di-freeze)
 
 # bStocks Binance (tokenized US stocks) — referensi untuk is_bstock_symbol()
 # TIDAK diblacklist dari scan — NYSE filter yang menjaga di level eksekusi
@@ -482,6 +480,19 @@ EXCLUDED_BASE_ASSETS = {
     # Komoditas (emas/perak) — bergerak ikut harga komoditas, bukan kripto:
     'PAXG','XAUT','XAU','XAUM','KAU','TGOLD','XAGT','XAG','KAG',
 }
+
+# Fiat/stablecoin/komoditas di atas juga digabung ke SYMBOL_BLACKLIST (30/08/2026), BUKAN cuma dipakai
+# get_usdt_spot_pairs() -- soalnya sejumlah scan loop per-strategi (mis. CrossEMA-4h, brkX2-4h intrabar)
+# nggak lewat get_usdt_spot_pairs(), langsung loop ticker mentah + cek "sym in SYMBOL_BLACKLIST" doang.
+# Trigger: EUR/USDT (base "EUR", sudah ada di EXCLUDED_BASE_ASSETS) tetap lolos ke-scan & ke-OPEN oleh
+# CrossEMA-4h karena loop-nya nggak pernah cek base asset, cuma cek endswith("USDT"). Gabungin ke sini
+# sekali biar otomatis kepakai di SEMUA titik scan yang sudah cek SYMBOL_BLACKLIST, tanpa perlu ubah
+# tiap loop satu-satu.
+for _base in EXCLUDED_BASE_ASSETS:
+    SYMBOL_BLACKLIST.add(_base + "USDT")
+SYMBOL_BLACKLIST_HARDCODED = frozenset(SYMBOL_BLACKLIST)  # kunci semua (manual + fiat/stablecoin/komoditas) --
+# TIDAK bisa di-unblock lewat menu Block Pairs. block_pair()/unblock_pair() cuma nambah/buang isi SET
+# SYMBOL_BLACKLIST yang sama ini, jadi semua titik scan yang cek "sym in SYMBOL_BLACKLIST" otomatis ikut.
 
 BASE = "https://data-api.binance.vision"
 DATA_DIR = os.environ.get("DATA_DIR", r"D:\tradingview")
@@ -8520,7 +8531,7 @@ window.addEventListener('load', function(){ loadClosedTrades(); });
 </div>
 <div class="container dash-section-start" data-tab="control" style="margin-top:12px">
     <div class="card">
-        <div class="card-header" onclick="toggleCard(this)"><h2>BLOCK PAIR <span class="card-toggle">&#9660;</span></h2></div>
+        <div class="card-header" onclick="toggleCard(this)"><h2>BLOCK PAIRS <span class="card-toggle">&#9660;</span></h2></div>
         <div class="card-body" style="font-size:11px">
             <div style="color:var(--muted);margin-bottom:8px">Pair yang diblok tidak akan di-scan/dibuka deal baru sama sekali (lintas semua strategi). Deal yang KEBETULAN sudah aktif di pair itu dibiarkan jalan normal sampai closed sendiri, tidak dipaksa tutup.</div>
             <div style="overflow-x:auto">
