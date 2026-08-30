@@ -8480,7 +8480,7 @@ function sortClosedTrades(key) {
 
 function renderClosedTradesRows() {
     var rows = closedTradesRows.slice();
-    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi',akum_entry_b:'Akumulasi'};
+    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B'};
     var searchBox = document.getElementById('ct-filter-search');
     var searchTerm = searchBox ? searchBox.value.trim().toUpperCase() : '';
     if (searchTerm) {
@@ -8540,7 +8540,7 @@ function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
     if (!el) return;
     if (!rows.length) { el.innerHTML = ''; return; }
-    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi',akum_entry_b:'Akumulasi'};
+    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B'};
     var groups = {};
     rows.forEach(function(r) {
         var key = r.strategy || 'brkX2';
@@ -8589,7 +8589,7 @@ function renderCtEquityCurve(rows) {
 function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
-    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi',akum_entry_b:'Akumulasi'};
+    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B'};
     var headers = ['Opened','Close','Pair','Strategi','Entry','Exit','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
