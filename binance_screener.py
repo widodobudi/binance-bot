@@ -7287,7 +7287,7 @@ DASHBOARD_HTML = '''
 </div>
 
 <!-- ═══════════════ DASHBOARD TABS ═══════════════ -->
-<div class="dash-tabs" style="display:flex;gap:6px;padding:10px 16px;flex-wrap:wrap;position:sticky;top:0;z-index:50;background:var(--bg);border-bottom:1px solid var(--border)">
+<div class="dash-tabs" style="display:flex;gap:6px;flex-wrap:wrap;position:sticky;top:0;z-index:50;background:var(--bg);border-bottom:1px solid var(--border);max-width:1200px;width:calc(100% - 40px);margin:0 auto;padding:10px 20px">
   <button type="button" class="dash-tab-btn" data-tab="monitor" onclick="selectDashTab('monitor')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">MONITOR</button>
   <button type="button" class="dash-tab-btn" data-tab="strategies" onclick="selectDashTab('strategies')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">STRATEGIES</button>
   <button type="button" class="dash-tab-btn" data-tab="history" onclick="selectDashTab('history')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">HISTORY</button>
@@ -7298,13 +7298,17 @@ DASHBOARD_HTML = '''
 function selectDashTab(tab) {
     var starts = document.querySelectorAll('.dash-section-start');
     starts.forEach(function(startEl) {
-        var show = startEl.getAttribute('data-tab') === tab;
-        var el = startEl;
-        while (el) {
-            if (el !== startEl && el.classList.contains('dash-section-start')) break;
-            el.style.display = show ? '' : 'none';
-            el = el.nextElementSibling;
-        }
+        try {
+            var show = startEl.getAttribute('data-tab') === tab;
+            var el = startEl;
+            var guard = 0;
+            while (el && guard < 3000) {
+                guard++;
+                if (el !== startEl && el.classList && el.classList.contains('dash-section-start')) break;
+                el.style.display = show ? '' : 'none';
+                el = el.nextElementSibling;
+            }
+        } catch (e) {}
     });
     document.querySelectorAll('.dash-tab-btn').forEach(function(btn) {
         var active = btn.getAttribute('data-tab') === tab;
