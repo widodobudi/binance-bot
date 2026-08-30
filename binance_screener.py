@@ -273,7 +273,10 @@ STRAT_CROSSEMA_VOLUME_MULT  = 0.25
 STRAT_CROSSEMA_VOLUME_MA    = 20
 STRAT_CROSSEMA_MIN_VOL_USD  = 1_000_000
 STRAT_CROSSEMA_HTF_VOL_MULT = 0.7     # dilonggarkan dari 1.0→0.7 (20/08/2026)
-STRAT_CROSSEMA_EMA20_TOL_PCT = 0.3    # close tertutup boleh sedikit di atas EMA20 sebelum cross live
+STRAT_CROSSEMA_EMA20_TOL_PCT = 1.0    # close tertutup boleh sedikit di atas EMA20 sebelum cross live (dilonggarkan dari 0.3%→1.0%, 30/08/2026, biar kandidat CrossEMA nggak 0 mulu)
+STRAT_CROSSEMA_ST_MULT = 2.5          # Supertrend KHUSUS CrossEMA, dilonggarkan dari shared 3.0 (30/08/2026) --
+                                       # dipakai lewat kolom st_dir_cx (compute_indicators_4h), TERPISAH dari st_dir/STRAT4H_ST_MULT=3.0
+                                       # yang masih dipakai brkX2-4h & Hunting-4h, jadi strategi lain tidak ikut kesenggol
 # PERF_ONLY lebih baik dari baseline: avg +2.711% vs +2.538%, worst -21.15% vs -25.79%, wf6 OK
 # Filter usia saja lebih buruk; usia+perf wf6 HATI-HATI → deploy PERF_ONLY saja
 # Update 25/07/2026: backtest_perf_weight_sweep → EQUAL_thr0.5 terbaik
@@ -3400,6 +3403,10 @@ def compute_indicators_4h(df):
     c, h, l = df["close"], df["high"], df["low"]
     st = _pta.supertrend(h, l, c, length=STRAT4H_ST_LENGTH, multiplier=STRAT4H_ST_MULT)
     df["st_dir"]     = st[[col for col in st.columns if "SUPERTd" in col][0]]
+    # Supertrend KHUSUS CrossEMA-4h (multiplier lebih sensitif, lihat STRAT_CROSSEMA_ST_MULT) --
+    # kolom terpisah biar brkX2-4h & Hunting-4h yang masih baca "st_dir" tidak ikut kesenggol
+    st_cx = _pta.supertrend(h, l, c, length=STRAT4H_ST_LENGTH, multiplier=STRAT_CROSSEMA_ST_MULT)
+    df["st_dir_cx"]  = st_cx[[col for col in st_cx.columns if "SUPERTd" in col][0]]
     macd = _pta.macd(c, fast=STRAT4H_MACD_FAST, slow=STRAT4H_MACD_SLOW,
                      signal=STRAT4H_MACD_SIGNAL)
     df["macd_hist"]  = macd[[col for col in macd.columns if "MACDh" in col][0]]
@@ -6317,11 +6324,11 @@ def thread_crossema_scan():
 
             # Lapis 1: candle n-1 tertutup — ST=-1, close<EMA20, vol>=VOLUME_MULT×MA
             r = df.iloc[-1]
-            sd = r.get("st_dir")
+            sd = r.get("st_dir_cx")   # ST khusus CrossEMA (lebih sensitif, lihat STRAT_CROSSEMA_ST_MULT)
             if pd.isna(sd) or sd != -1:
                 count_blocker(scan_blockers_cx, "Supertrend bearish", True)
                 continue
-            ef = r.get("ema_fast")
+            ef = r.get("ema20")
             if pd.isna(ef) or r["close"] > ef * (1 + STRAT_CROSSEMA_EMA20_TOL_PCT / 100):
                 count_blocker(scan_blockers_cx, "Close di bawah EMA20", True)
                 continue
