@@ -11325,7 +11325,22 @@ def _anthropic_ai_call(prompt: str) -> str:
         )
         with _urllib_req.urlopen(req, timeout=AI_DECISION_TIMEOUT) as resp:
             body = _json.loads(resp.read())
-            # Reset flag kalau API kembali normal
+            # content bisa berisi lebih dari satu block (mis. block "thinking" muncul
+            # sebelum block "text" tergantung request-nya) -- jangan asumsikan block
+            # pertama selalu berisi "text". Ini penyebab bug lama: KeyError('text')
+            # intermiten yang salah dikira "Anthropic API down" (bolak-balik notif ON/OFF)
+            # padahal response-nya sebenarnya valid, cuma block teksnya bukan di index 0.
+            blocks = body.get("content", []) or []
+            text = ""
+            for block in blocks:
+                if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+                    text = block["text"].strip()
+                    break
+            if not text:
+                block_types = [b.get("type", "?") for b in blocks if isinstance(b, dict)]
+                raise RuntimeError(f"Response tidak berisi block teks (block types: {block_types or 'kosong'})")
+            # Reset flag kalau API kembali normal -- taruh SETELAH berhasil ambil teks,
+            # supaya nggak kirim "kembali ON" untuk call yang ternyata masih gagal.
             if _ai_quota_notif_sent:
                 _ai_quota_notif_sent = False
                 _msg_ok = "✅ AI Decision kembali ON\nAnthropic API sudah normal kembali."
@@ -11335,7 +11350,7 @@ def _anthropic_ai_call(prompt: str) -> str:
                     args=("✅ AI Decision kembali ON", _msg_ok),
                     daemon=True
                 ).start()
-            return body["content"][0]["text"].strip()
+            return text
     except Exception:
         raise
 
