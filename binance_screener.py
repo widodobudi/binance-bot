@@ -7967,22 +7967,22 @@ document.addEventListener('DOMContentLoaded', function() {
         {% set es = akum_entry_status.get(item.sym, {}) %}
         <tr>
           <td class="sym" style="white-space:nowrap">{{ item.sym.replace("USDT","/USDT") }}</td>
-          <td style="text-align:center">
+          <td style="text-align:left;max-width:260px">
             {% if not es %}
               <span style="color:var(--muted);font-size:10px">menunggu scan</span>
             {% elif es.entry_a %}
               <span style="color:var(--green);font-weight:600">✓ SIAP</span>
             {% else %}
-              <span style="color:var(--muted);font-size:10px">✗ belum</span>
+              <span style="color:var(--red)">✗</span> <span style="color:var(--muted);font-size:10px">{{ es.get("reason_a", "belum") }}</span>
             {% endif %}
           </td>
-          <td style="text-align:center">
+          <td style="text-align:left;max-width:260px">
             {% if not es %}
               <span style="color:var(--muted);font-size:10px">menunggu scan</span>
             {% elif es.entry_b %}
               <span style="color:var(--green);font-weight:600">✓ SIAP</span>
             {% else %}
-              <span style="color:var(--muted);font-size:10px">✗ belum</span>
+              <span style="color:var(--red)">✗</span> <span style="color:var(--muted);font-size:10px">{{ es.get("reason_b", "belum") }}</span>
             {% endif %}
           </td>
           <td style="font-size:10px;color:var(--muted);white-space:nowrap">{{ es.get("ts", "-") if es else "-" }}</td>
@@ -9488,6 +9488,133 @@ def detect_entry_b_breakout(df, resistance: float, support: float, resistance_re
     return None
 
 
+def diagnose_entry_a_spring(df, support: float, support_reentry: float | None = None) -> str:
+    """Diagnosa (bukan trigger) -- jelasin syarat MANA yang masih ganjal buat Entry A,
+    dipakai buat tampilan dashboard "Entry Status" biar informatif (bukan cuma 'X belum').
+    Nyari kandidat spring yang paling JAUH kepenuhan syaratnya, lalu laporkan penghalangnya."""
+    if support_reentry is None:
+        support_reentry = support
+    if len(df) < 20:
+        return "data candle kurang"
+    try:
+        import pandas_ta as _pta
+        df = df.copy()
+        df['vol_ma'] = df['vol'].rolling(20).mean()
+        df['rsi'] = _pta.rsi(df['close'], length=14)
+        obv = [0.0]
+        for i in range(1, len(df)):
+            if df['close'].iloc[i] > df['close'].iloc[i-1]:
+                obv.append(obv[-1] + df['vol'].iloc[i])
+            elif df['close'].iloc[i] < df['close'].iloc[i-1]:
+                obv.append(obv[-1] - df['vol'].iloc[i])
+            else:
+                obv.append(obv[-1])
+        df['obv'] = obv
+
+        best = None  # (stage_reached, message)
+        for lookback in range(3, min(AKUM_A_REENTRY_CANDLES + 4, len(df) - 1)):
+            spring_idx = len(df) - 1 - lookback
+            if spring_idx < 5: break
+            row_s = df.iloc[spring_idx]
+            if row_s['low'] >= support * (1 + AKUM_A_SUPPORT_TOUCH_BUFFER):
+                continue
+            vol_ma = row_s.get('vol_ma', 0)
+            if pd.isna(vol_ma) or vol_ma <= 0:
+                continue
+            vol_ratio = float(row_s['vol']) / float(vol_ma)
+            if row_s['vol'] < AKUM_A_VOL_SPIKE_MULT * vol_ma:
+                cand = (1, f"low tembus support, vol cuma {vol_ratio:.2f}x (butuh >={AKUM_A_VOL_SPIKE_MULT}x)")
+                if best is None or cand[0] > best[0]: best = cand
+                continue
+            reentry_ok = False
+            for k in range(1, AKUM_A_REENTRY_CANDLES + 1):
+                if spring_idx + k >= len(df): break
+                if df.iloc[spring_idx + k]['close'] > support_reentry:
+                    reentry_ok = True; break
+            if not reentry_ok:
+                cand = (2, f"spring vol {vol_ratio:.2f}x OK, belum reclaim balik atas support")
+                if best is None or cand[0] > best[0]: best = cand
+                continue
+            rsi_window = df['rsi'].iloc[max(0, spring_idx-3):spring_idx+1]
+            if pd.isna(rsi_window.min()) or rsi_window.min() >= AKUM_A_RSI_MIN:
+                cand = (3, f"spring+reclaim OK, RSI nggak sempat <{AKUM_A_RSI_MIN}")
+                if best is None or cand[0] > best[0]: best = cand
+                continue
+            rsi_now = df['rsi'].iloc[-1]
+            if pd.isna(rsi_now) or rsi_now >= AKUM_A_RSI_MAX_ENTRY:
+                _rn = f"{rsi_now:.1f}" if not pd.isna(rsi_now) else "n/a"
+                cand = (4, f"tinggal RSI turun -- sekarang {_rn}, butuh <{AKUM_A_RSI_MAX_ENTRY}")
+                if best is None or cand[0] > best[0]: best = cand
+                continue
+            obv_recent = df['obv'].iloc[-AKUM_A_OBV_SLOPE_CANDLES:]
+            obv_slope = obv_recent.iloc[-1] - obv_recent.iloc[0]
+            if obv_slope <= 0:
+                cand = (5, "tinggal OBV slope positif -- masih negatif/flat")
+                if best is None or cand[0] > best[0]: best = cand
+                continue
+            return "siap trigger"
+        if best is None:
+            return "belum ada candle nembus support"
+        return best[1]
+    except Exception as e:
+        return f"error diagnosa: {e}"
+
+
+def diagnose_entry_b_breakout(df, resistance: float, support: float, resistance_retest_low: float | None = None) -> str:
+    """Diagnosa (bukan trigger) -- jelasin syarat MANA yang masih ganjal buat Entry B."""
+    if resistance_retest_low is None:
+        resistance_retest_low = resistance
+    if len(df) < 20:
+        return "data candle kurang"
+    try:
+        import pandas_ta as _pta
+        df = df.copy()
+        df['vol_ma'] = df['vol'].rolling(20).mean()
+        df['ema20']  = _pta.ema(df['close'], length=20)
+        df['ema50']  = _pta.ema(df['close'], length=50)
+        last = df.iloc[-1]
+        if pd.isna(last.get('ema20')) or pd.isna(last.get('ema50')):
+            return "data EMA kurang"
+        if last['ema20'] <= last['ema50']:
+            gap = (float(last['ema20'])/float(last['ema50'])-1)*100
+            return f"EMA20 masih di bawah EMA50 ({gap:+.2f}%), belum uptrend confirm"
+
+        breakout_idx = None; breakout_vol = 0.0; best_vol_ratio = None
+        for i in range(len(df) - 10, len(df) - 1):
+            if i < 5: continue
+            r = df.iloc[i]
+            vol_ma = r.get('vol_ma', 0)
+            if pd.isna(vol_ma) or vol_ma <= 0: continue
+            if r['close'] > resistance:
+                vol_ratio = float(r['vol']) / float(vol_ma)
+                if vol_ratio >= AKUM_B_VOL_BREAKOUT_MULT:
+                    breakout_idx = i; breakout_vol = float(r['vol']); break
+                elif best_vol_ratio is None or vol_ratio > best_vol_ratio:
+                    best_vol_ratio = vol_ratio
+        if breakout_idx is None:
+            price_now = float(df.iloc[-1]['close'])
+            gap_pct = (price_now / resistance - 1) * 100
+            if best_vol_ratio is not None:
+                return f"pernah tembus resistance tp vol cuma {best_vol_ratio:.2f}x (butuh >={AKUM_B_VOL_BREAKOUT_MULT}x), harga skrg {gap_pct:+.2f}% dari resistance"
+            return f"belum breakout, harga skrg {gap_pct:+.2f}% dari resistance"
+
+        retest_low = resistance_retest_low * (1 - AKUM_B_RETEST_TOL_PCT)
+        retest_high = resistance * (1 + AKUM_B_RETEST_TOL_PCT)
+        for j in range(breakout_idx + 1, len(df)):
+            r = df.iloc[j]
+            if r['low'] <= retest_high and r['low'] >= retest_low:
+                if r['low'] < retest_low: continue
+                if breakout_vol > 0 and r['vol'] >= AKUM_B_RETEST_VOL_MAX * breakout_vol:
+                    return "breakout + retest ketemu, tp volume retest kegedean"
+                if df.iloc[-1]['close'] < resistance:
+                    gap_pct = (float(df.iloc[-1]['close']) / resistance - 1) * 100
+                    return f"breakout+retest OK, tinggal harga balik di atas resistance ({gap_pct:+.2f}%)"
+                return "siap trigger"
+        return "sudah breakout, nunggu retest ke zona resistance"
+    except Exception as e:
+        return f"error diagnosa: {e}"
+
+
 def thread_akum_scan():
     """Scan Akumulasi Detector: cari pair dalam fase akumulasi (sideways post-downtrend)."""
     global _akum_near_miss, _akum_last_scan_ts
@@ -9659,11 +9786,17 @@ def thread_akum_entry_scan():
 
             sig_a = detect_entry_a_spring(df, support_break_ref, support_reentry_ref)
             sig_b = detect_entry_b_breakout(df, resistance_break_ref, support_break_ref, resistance_retest_low_ref)
+            # Diagnosa (bukan trigger) -- jelasin syarat mana yg masih ganjal, ditampilkan di
+            # dashboard "Entry Status" biar informatif ketimbang cuma "X belum" polos.
+            reason_a = "siap trigger" if sig_a is not None else diagnose_entry_a_spring(df, support_break_ref, support_reentry_ref)
+            reason_b = "siap trigger" if sig_b is not None else diagnose_entry_b_breakout(df, resistance_break_ref, support_break_ref, resistance_retest_low_ref)
             ts_entry = now_wib().strftime("%H:%M")
             with _akum_lock:
                 _akum_entry_status[sym] = {
                     "entry_a": sig_a is not None,
                     "entry_b": sig_b is not None,
+                    "reason_a": reason_a,
+                    "reason_b": reason_b,
                     "ts": ts_entry,
                 }
             log(f"[T_AKUM_ENTRY] {sym}: A={'✓' if sig_a else '✗'} B={'✓' if sig_b else '✗'}")
