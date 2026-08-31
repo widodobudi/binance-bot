@@ -11905,6 +11905,13 @@ def _anthropic_ai_call(prompt: str) -> str:
             "max_tokens": 1024,  # dinaikkan dari 200 (30/08/2026) -- Sonnet 5 kadang isi block "thinking"
             # dulu sebelum jawaban teks; budget 200 abis semua kepakai thinking, jawaban teksnya sendiri
             # nggak pernah kebentuk (response cuma berisi block "thinking", 0 block "text").
+            "output_config": {"effort": "low"},  # baru (01/09/2026) -- ROOT CAUSE asli: Sonnet 5 defaultnya
+            # ADAPTIVE THINKING SELALU AKTIF walau parameter "thinking" nggak pernah dikirim sama sekali,
+            # jadi kadang proses "mikir"-nya sendiri abisin seluruh max_tokens sebelum sempat nulis
+            # jawaban teks (masih kejadian lagi walau max_tokens udah dinaikkan ke 1024). Fix resmi yg
+            # direkomendasikan Anthropic: bukan matiin thinking total (bisa bikin model bocorin tag
+            # internal ke teks visible), tapi batasi KEDALAMAN-nya lewat effort="low" -- thinking tetap
+            # jalan tapi jauh lebih ringkas, cocok buat tugas sederhana kayak keputusan open/close ini.
             "messages": [{"role": "user", "content": prompt}]
         }).encode()
         req = _urllib_req.Request(
