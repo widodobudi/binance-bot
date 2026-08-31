@@ -205,7 +205,15 @@ def _candle_seconds_for_strategy(strat: str) -> float:
     return SECONDS_PER_CANDLE  # brkX2 (12h), default
 
 BASE_ORDER_VOLUME       = 8    # diubah ke $8 (17/08/2026, saldo $85, agar semua strategi bisa open)
-COMMAS_MAX_ACTIVE_DEALS = 4      # total kedua bot (brkX2 2 + reversal 2). Tiap bot 3Commas di-set max 2.
+# COMMAS_MAX_ACTIVE_DEALS DIHAPUS (31/08/2026, permintaan user) -- konstanta lama peninggalan era
+# 3Commas 2-strategi (brkX2+reversal), sudah lama nggak relevan begitu strategi nambah jadi 6 tapi
+# guard-nya nggak pernah diupdate konsisten: brkX2-12h/reversal/brkX2-4h/crossema/hunting masing2
+# ke-throttle silang sama nilai basi ini pakai kombinasi yang beda2 & sebagian ketuker (crossema
+# misalnya malah pakai STRAT4H_MAX_DEALS, bukan punya dia sendiri) -- padahal Akumulasi-4h sama
+# sekali nggak kena. Semua guard sekarang murni cek slot PER STRATEGI masing2 (lihat 6 konstanta
+# MAX_DEALS_*/di bawah, semua sudah bisa diatur lewat dashboard Strategy Control -> max_deals di
+# STRATEGY_CONFIG_DEFAULTS + sync_max_deals_globals()). Buat DISPLAY total gabungan, pakai
+# total_max_deals_all_strategies() yang otomatis jumlahin ke-6 slot per-strategi terkini.
 MAX_DEALS_BRKX2         = 2      # slot brkX2 (bot existing) — set Max active trades=2 di 3Commas
 MAX_DEALS_REVERSAL      = 2      # slot reversal (bot 16921019) — set Max active trades=2 di 3Commas
 
@@ -690,13 +698,18 @@ TRADES_CSV = os.path.join(DATA_DIR, "trades_forwardtest.csv")
 STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # Default values — edit hard-coded di sini untuk ubah nilai RESET
 STRATEGY_CONFIG_DEFAULTS = {
-    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 12, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True},
-    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True},
-    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True},
-    "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True},
-    "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True},
-    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True},
+    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 12, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
+    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
+    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True, "max_deals": 5},
+    "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
+    "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
+    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
 }
+# Nilai "max_deals" di atas SAMA PERSIS dengan default lama MAX_DEALS_BRKX2/MAX_DEALS_REVERSAL/
+# STRAT4H_MAX_DEALS/STRAT_CROSSEMA_MAX_DEALS/AKUM_ENTRY_MAX_DEALS/HUNTING_MAX_DEALS (31/08/2026,
+# permintaan user: bisa diatur lewat dashboard Strategy Control) -- lihat sync_max_deals_globals()
+# di bawah, yang nge-sync field ini KE 6 konstanta lama itu, supaya puluhan titik guard/log yang
+# sudah baca konstanta lama otomatis ikut nilai baru tanpa perlu diubah satu-satu.
 
 def load_strategy_config() -> dict:
     try:
@@ -739,6 +752,35 @@ def save_strategy_config(cfg: dict):
             json.dump(base, f, indent=2)
     except Exception as e:
         log(f"WARN save_strategy_config: {e}")
+
+def sync_max_deals_globals():
+    """Sinkronkan field "max_deals" per strategi (strategy_config.json, bisa diatur lewat
+    dashboard Strategy Control) KE 6 konstanta module-level lama (MAX_DEALS_BRKX2 dst) --
+    dipanggil sekali saat startup dan tiap kali user Save di dashboard, supaya SEMUA titik
+    guard slot & log yang sudah ada (puluhan tempat, sudah dipakai lama sebelum fitur ini)
+    otomatis ikut nilai terbaru tanpa perlu diubah manual satu-satu (jauh lebih aman daripada
+    ubah puluhan call-site sekaligus)."""
+    global MAX_DEALS_BRKX2, MAX_DEALS_REVERSAL, STRAT4H_MAX_DEALS
+    global STRAT_CROSSEMA_MAX_DEALS, HUNTING_MAX_DEALS, AKUM_ENTRY_MAX_DEALS
+    try:
+        cfg = load_strategy_config()
+        MAX_DEALS_BRKX2          = int(cfg.get('brkX2', {}).get('max_deals', MAX_DEALS_BRKX2) or MAX_DEALS_BRKX2)
+        MAX_DEALS_REVERSAL       = int(cfg.get('reversal', {}).get('max_deals', MAX_DEALS_REVERSAL) or MAX_DEALS_REVERSAL)
+        STRAT4H_MAX_DEALS        = int(cfg.get('brkX2_4h', {}).get('max_deals', STRAT4H_MAX_DEALS) or STRAT4H_MAX_DEALS)
+        STRAT_CROSSEMA_MAX_DEALS = int(cfg.get('brkX2_crossema', {}).get('max_deals', STRAT_CROSSEMA_MAX_DEALS) or STRAT_CROSSEMA_MAX_DEALS)
+        HUNTING_MAX_DEALS        = int(cfg.get('hunting_4h', {}).get('max_deals', HUNTING_MAX_DEALS) or HUNTING_MAX_DEALS)
+        AKUM_ENTRY_MAX_DEALS     = int(cfg.get('akum_entry_a', {}).get('max_deals', AKUM_ENTRY_MAX_DEALS) or AKUM_ENTRY_MAX_DEALS)
+        log(f"   Max deals per strategi: brkX2={MAX_DEALS_BRKX2} reversal={MAX_DEALS_REVERSAL} "
+            f"4h={STRAT4H_MAX_DEALS} crossema={STRAT_CROSSEMA_MAX_DEALS} "
+            f"hunting={HUNTING_MAX_DEALS} akum={AKUM_ENTRY_MAX_DEALS}")
+    except Exception as e:
+        log(f"WARN sync_max_deals_globals: {e}")
+
+def total_max_deals_all_strategies() -> int:
+    """Jumlah semua slot maks lintas 6 strategi -- dipakai murni buat DISPLAY (ganti
+    COMMAS_MAX_ACTIVE_DEALS yang lama & basi, lihat penjelasan di dekat definisinya)."""
+    return (MAX_DEALS_BRKX2 + MAX_DEALS_REVERSAL + STRAT4H_MAX_DEALS
+            + STRAT_CROSSEMA_MAX_DEALS + HUNTING_MAX_DEALS + AKUM_ENTRY_MAX_DEALS)
 
 def is_strategy_enabled(strategy: str) -> bool:
     cfg = load_strategy_config()
@@ -3968,7 +4010,7 @@ def heartbeat_general_tick():
                  f"Slot reversal-8h: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL}\n"
                  f"Slot brkX2-4h: {active_deal_count_4h()}/{STRAT4H_MAX_DEALS} | "
                  f"Slot crossema-4h: {n_cx}/{STRAT_CROSSEMA_MAX_DEALS} | "
-                 f"Total: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}")
+                 f"Total: {active_deal_count()}/{total_max_deals_all_strategies()}")
     # ── Near-miss gabungan semua strategi ────────────────────────────────────
     near_lines = []
     # brkX2-12h near-miss — format: (n_pass, sym, fails, total, *extra)
@@ -4202,9 +4244,9 @@ def thread1_scan():
     universe = [p for p in pairs if volmap.get(p,0) >= MIN_VOLUME_USD]
 
     # slot brkX2 penuh ATAU total pool penuh? jangan cari sinyal
-    if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2 or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
+    if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
         log(f"[T1] Slot brkX2 penuh ({deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2}) "
-            f"atau total ({active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}), tidak cari entry.")
+            f"atau total ({active_deal_count()}/{total_max_deals_all_strategies()}), tidak cari entry.")
         with active_deals_lock:
             syms = ", ".join(to_display_pair(s) for s in active_deals.keys()) or "-"
         return f"Slot brkX2/total penuh — deal aktif: {syms}. Tidak cari entry baru."
@@ -4289,7 +4331,7 @@ def thread1_scan():
 
     # urutkan kandidat: ATR% terkecil (paling stabil) dulu
     candidates.sort(key=lambda x: x[2])
-    log(f"[T1] {len(candidates)} kandidat lolos. Slot terpakai {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}")
+    log(f"[T1] {len(candidates)} kandidat lolos. Slot terpakai {active_deal_count()}/{total_max_deals_all_strategies()}")
 
     # GATING CANDLE BARU: hanya buka deal kalau candle terbaru BELUM pernah diproses.
     # Cegah entry dari candle lama yg sdh tutup berjam2 lalu (sinyal basi -> slippage besar,
@@ -4351,7 +4393,7 @@ def thread1_scan():
     cooldown_held = []   # (sym, sisa_detik) -- kandidat 7/7 valid tapi masih cooldown internal
     for sym, signal_price, atrp, score in candidates:
         # berhenti kalau slot brkX2 ATAU total sudah penuh
-        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2 or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
+        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
             log(f"[T1] Slot brkX2/total penuh, sisa kandidat tidak dibuka.")
             break
         with active_deals_lock:
@@ -4423,7 +4465,7 @@ def thread1_scan():
                 f"Selisih (lonjakan/slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
-                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}\n"
+                f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}\n"
                 f"{_ind_block}"
             )
             threading.Thread(target=send_email_open_long, args=("OPEN LONG brkX2-12h: " + to_display_pair(sym), 
@@ -4435,7 +4477,7 @@ def thread1_scan():
                 f"Selisih (lonjakan/slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
-                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}\n"
+                f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}\n"
                 f"{_ind_block}"
             ), daemon=True).start()
             
@@ -4519,9 +4561,9 @@ def thread1b_scan_reversal():
         try: volmap[t['symbol']] = float(t.get('quoteVolume',0))
         except: pass
     universe = [p for p in pairs if volmap.get(p,0) >= REVERSAL_MIN_VOL_USD]
-    if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
+    if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL:
         log(f"[T1b] Slot reversal penuh ({deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL}) "
-            f"atau total ({active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}).")
+            f"atau total ({active_deal_count()}/{total_max_deals_all_strategies()}).")
         return f"Slot reversal/total penuh. Tidak cari entry reversal."
 
     candidates = []
@@ -4597,7 +4639,7 @@ def thread1b_scan_reversal():
         if is_daily_loss_limit_breached():
             log(f"[T1b] Batas rugi harian tersulut, sisa kandidat reversal tidak dibuka.")
             break
-        if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
+        if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL:
             log(f"[T1b] Slot reversal/total penuh, sisa kandidat reversal tidak dibuka.")
             break
         with active_deals_lock:
@@ -4643,7 +4685,7 @@ def thread1b_scan_reversal():
                 f"Selisih (slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
-                f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}\n"
+                f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{total_max_deals_all_strategies()}\n"
                 f"{_fmt_indicators_open_block(_open_fields_rev)}"
             )
             threading.Thread(target=send_email_open_long, args=("OPEN LONG Reversal-8h: " + to_display_pair(sym), 
@@ -4655,7 +4697,7 @@ def thread1b_scan_reversal():
                 f"Selisih (slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
-                f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}\n"
+                f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{total_max_deals_all_strategies()}\n"
                 f"{_fmt_indicators_open_block(_open_fields_rev)}"
             ), daemon=True).start()
             
@@ -5389,7 +5431,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
     slot_rev  = f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL}"
     slot_4h   = f"Slot 4h: {active_deal_count_4h()}/{STRAT4H_MAX_DEALS}"
     slot_cx   = f"Slot crossema: {sum(1 for d in active_deals.values() if d.get('strategy')=='brkX2_crossema')}/{STRAT_CROSSEMA_MAX_DEALS}"
-    slot_total= f"Total: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+    slot_total= f"Total: {active_deal_count()}/{total_max_deals_all_strategies()}"
 
     msg = (
         f"{header}\n"
@@ -5482,7 +5524,7 @@ def thread1c_scan_intrabar():
         return None
     if candle_open_ms <= last_intrabar_candle_ts:
         return None
-    if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2 or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
+    if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
         return None
     log(f"[T1c] Intrabar scan ({elapsed_pct*100:.1f}% elapsed)...")
     pairs = get_usdt_spot_pairs()
@@ -5496,7 +5538,7 @@ def thread1c_scan_intrabar():
     if BTC_FILTER_ENABLED and not btc_filter_ok():
         return None
     for sym in universe:
-        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2 or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
+        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
             break
         with active_deals_lock:
             if sym in active_deals: continue
@@ -5576,7 +5618,7 @@ def thread1c_scan_intrabar():
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
-                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+                f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}"
             )
             threading.Thread(target=send_email_open_long, args=("OPEN LONG INTRABAR brkX2-12h: " + to_display_pair(sym), 
                 f"brkX2-12h | OPEN LONG INTRABAR\n"
@@ -5588,7 +5630,7 @@ def thread1c_scan_intrabar():
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
-                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+                f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}"
             ), daemon=True).start()
             csv_log_open({
                 'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
@@ -5663,7 +5705,7 @@ def thread1c_scan_intrabar_early():
     # Anti-double-entry: satu entry per candle per window
     if candle_open_ms <= last_intrabar_early_candle_ts:
         return None
-    if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2 or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
+    if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
         return None
 
     log(f"[T1c-E] Intrabar EARLY scan ({elapsed_pct*100:.1f}% elapsed)...")
@@ -5680,7 +5722,7 @@ def thread1c_scan_intrabar_early():
         return None
 
     for sym in universe:
-        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2 or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
+        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
             break
         with active_deals_lock:
             if sym in active_deals: continue
@@ -5773,7 +5815,7 @@ def thread1c_scan_intrabar_early():
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
-                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+                f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}"
             )
             threading.Thread(target=send_email_open_long, args=("OPEN LONG INTRABAR EARLY brkX2-12h: " + to_display_pair(sym), 
                 f"brkX2-12h | OPEN LONG INTRABAR EARLY\n"
@@ -5785,7 +5827,7 @@ def thread1c_scan_intrabar_early():
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
-                f"Slot terpakai: {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+                f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}"
             ), daemon=True).start()
             # Deal log
             _ind = _row_indicators(r12, vol_ma=float(r12.get('vol_ma', 0)) if not pd.isna(r12.get('vol_ma', 0)) else None)
@@ -5855,8 +5897,6 @@ def thread_rev_intrabar_scan():
     if not REVERSAL_ENABLED:
         return
     if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL:
-        return
-    if active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS:
         return
 
     now_ms = int(time.time() * 1000)
@@ -5980,7 +6020,7 @@ def thread_rev_intrabar_scan():
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
                 f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} "
-                f"| total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+                f"| total {active_deal_count()}/{total_max_deals_all_strategies()}"
             )
             threading.Thread(target=send_email_open_long, args=("OPEN LONG Reversal-8h: " + to_display_pair(sym),
                 f"Reversal-8h | OPEN LONG INTRABAR\n"
@@ -5992,7 +6032,7 @@ def thread_rev_intrabar_scan():
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
                 f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} "
-                f"| total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+                f"| total {active_deal_count()}/{total_max_deals_all_strategies()}"
             ), daemon=True).start()
             threading.Thread(target=send_email_open_long, args=("OPEN LONG INTRABAR Reversal-8h: " + to_display_pair(sym), 
                 f"Reversal-8h | OPEN LONG INTRABAR\n"
@@ -6004,7 +6044,7 @@ def thread_rev_intrabar_scan():
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
                 f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} "
-                f"| total {active_deal_count()}/{COMMAS_MAX_ACTIVE_DEALS}"
+                f"| total {active_deal_count()}/{total_max_deals_all_strategies()}"
             ), daemon=True).start()
             csv_log_open({
                 'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
@@ -6026,8 +6066,7 @@ def thread_rev_intrabar_scan():
             })
             last_rev_intrabar_candle_ts[sym] = candle_open_ms
 
-            if (deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL
-                    or active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS):
+            if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL:
                 break
 
 def run_thread_rev_intrabar():
@@ -6065,10 +6104,7 @@ def thread1d_scan_4h():
 
     # Cek slot tersedia
     n4h = active_deal_count_4h()
-    total = active_deal_count()
     if n4h >= STRAT4H_MAX_DEALS:
-        return
-    if total >= COMMAS_MAX_ACTIVE_DEALS + STRAT4H_MAX_DEALS:
         return
 
     log(f"[T1d] Scan 4h intrabar ({elapsed_pct*100:.1f}% elapsed)...")
@@ -6419,7 +6455,6 @@ def thread_crossema_scan():
     n_crossema = sum(1 for d in active_deals.values()
                      if d.get("strategy") == "brkX2_crossema")
     if n_crossema >= STRAT_CROSSEMA_MAX_DEALS: return
-    if active_deal_count() >= COMMAS_MAX_ACTIVE_DEALS + STRAT4H_MAX_DEALS: return
 
     # Hitung elapsed candle 4h saat ini
     now_ms       = int(time.time() * 1000)
@@ -6967,8 +7002,6 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
         _swapped = _try_swap_hunting_slot(symbol)
         if not _swapped:
             return False
-    if active_deal_count_4h() + active_deal_count_hunting() >= COMMAS_MAX_ACTIVE_DEALS:
-        return False
     if symbol in SYMBOL_BLACKLIST:
         return False
     if is_cooldown_enabled('hunting_4h') and cooldown_remaining(symbol) > 0:
@@ -7525,10 +7558,11 @@ document.addEventListener('DOMContentLoaded', function() {
           <th style="text-align:center;padding:5px 8px">Gunakan Setting Modal</th>
           <th style="text-align:center;padding:5px 8px">Base Order (USDT)</th>
           <th style="text-align:center;padding:5px 8px">Add Fund (USDT)</th>
+          <th style="text-align:center;padding:5px 8px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini">Max Deals</th>
           <th style="text-align:center;padding:5px 8px">Cooldown Re-entry</th>
                     <th style="text-align:center;padding:5px 8px">Action</th>
         </tr></thead>
-                <tbody id="sc-body"><tr><td colspan="8" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
+                <tbody id="sc-body"><tr><td colspan="9" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
     </table>
     </div>
     </div>
@@ -8196,7 +8230,7 @@ function loadStrategyConfig() {
             var tbody = document.getElementById('sc-body');
             if (!tbody) return;
             if (!keys.length || !Object.keys(d || {}).length) {
-                tbody.innerHTML = '<tr><td colspan="8" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
                 return;
             }
             for (var i = 0; i < keys.length; i++) {
@@ -8225,6 +8259,7 @@ function loadStrategyConfig() {
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-size-' + k + '" ' + (sizingEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>'
                     + addFundCell
+                    + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-maxdeals-' + k + '" value="' + (cfg.max_deals || 2) + '" min="1" step="1" style="width:50px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-cooldown-' + k + '" ' + (cooldownEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer" title="Skip re-entry pair yang sama selama masih cooldown"></td>'
                     + '<td style="text-align:center;padding:5px 8px">' + saveButton + '</td>'
                     + '</tr>';
@@ -8239,7 +8274,7 @@ function loadStrategyConfig() {
         .catch(function(e) {
             var tbody = document.getElementById('sc-body');
             if (tbody) {
-                tbody.innerHTML = '<tr><td colspan="8" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
             }
         });
 }
@@ -8260,6 +8295,7 @@ function saveStrategyConfig(button) {
     var data = {};
     var baseEl = document.getElementById('sc-base-' + key);
     var addEl = document.getElementById('sc-add-' + key);
+    var maxDealsEl = document.getElementById('sc-maxdeals-' + key);
     var strategyEnabledEl = document.getElementById('sc-run-' + key);
     var sizingEnabledEl = document.getElementById('sc-size-' + key);
     var cooldownEnabledEl = document.getElementById('sc-cooldown-' + key);
@@ -8270,6 +8306,7 @@ function saveStrategyConfig(button) {
         cooldown_enabled: cooldownEnabledEl ? cooldownEnabledEl.checked : true,
         ai_call_open: aiCallOpenEl ? aiCallOpenEl.checked : false,
         base_usd: parseFloat(baseEl ? baseEl.value : 8) || 8,
+        max_deals: parseInt(maxDealsEl ? maxDealsEl.value : 2) || 2,
     };
     if (SC_HAS_ADDFUND[key]) {
         data[key].add_usd = parseFloat(addEl ? addEl.value : 0) || 0;
@@ -10649,6 +10686,7 @@ def run_web_dashboard():
             if request.method == "GET":
                 return jsonify(load_strategy_config())
             save_strategy_config(request.get_json(force=True, silent=True) or {})
+            sync_max_deals_globals()  # biar perubahan max_deals langsung kepakai tanpa restart
             return jsonify({"ok": True})
 
         @app.route("/dash.js")
@@ -12562,7 +12600,7 @@ if __name__ == '__main__':
     log(f"  Entry syarat     : ST-up, >EMA20, 3bar-bullish, vol>={VOLUME_MULT}xMA, RSI<{RSI_MAX}" + (f", Stoch<{STOCH_MAX}" if STOCH_MAX is not None else "") + (f", ATR<{ATR_MAX_PCT}%" if ATR_MAX_PCT is not None else "") + f", HTF3D>{HTF_VOL_MULT}xMA")
     log(f"  Exit             : trailing adaptif (arm +{TRAIL_ARM_PCT}%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)")
     log(f"  Trailing FAKTOR  : {TRAILING_FAKTOR*100:.0f}% (jarak trailing = tabel ATR% x {TRAILING_FAKTOR})")
-    log(f"  Base order       : ${BASE_ORDER_VOLUME} | Max deal total: {COMMAS_MAX_ACTIVE_DEALS}")
+    log(f"  Base order       : ${BASE_ORDER_VOLUME} | Max deal total: {total_max_deals_all_strategies()}")
     log(f"  Slot per strategi: brkX2={MAX_DEALS_BRKX2}, reversal={MAX_DEALS_REVERSAL}, 4h={STRAT4H_MAX_DEALS}")
     log(f"  Bot 3Commas      : brkX2 #{COMMAS_BOT_ID} | reversal #{COMMAS_BOT_ID_REVERSAL} | 4h #{COMMAS_BOT_ID_4H}")
     log(f"  Filter choppy    : {'ON' if CHOPPY_FILTER_ENABLED else 'OFF'} (body/range < {CHOPPY_BODY_RANGE_MIN} avg {CHOPPY_LOOKBACK_CANDLES} candle -> exclude)")
@@ -12623,6 +12661,7 @@ if __name__ == '__main__':
     load_hold_no_sell_closed()
     load_hold_no_sell_price()
     load_blocked_pairs()
+    sync_max_deals_globals()
     load_scan_blockers()
     load_daily_loss_limit()
     load_trail_reentry()
