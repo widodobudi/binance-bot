@@ -7553,12 +7553,12 @@ document.addEventListener('DOMContentLoaded', function() {
     <table style="width:100%;min-width:760px;border-collapse:collapse;font-size:11px" id="sc-table">
         <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
           <th style="text-align:left;padding:5px 8px">Strategi</th>
+          <th style="text-align:center;padding:5px 8px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini">Max Deals</th>
           <th style="text-align:center;padding:5px 8px">Izinkan Open Long</th>
           <th style="text-align:center;padding:5px 8px">AI Call on Open</th>
           <th style="text-align:center;padding:5px 8px">Gunakan Setting Modal</th>
           <th style="text-align:center;padding:5px 8px">Base Order (USDT)</th>
           <th style="text-align:center;padding:5px 8px">Add Fund (USDT)</th>
-          <th style="text-align:center;padding:5px 8px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini">Max Deals</th>
           <th style="text-align:center;padding:5px 8px">Cooldown Re-entry</th>
                     <th style="text-align:center;padding:5px 8px">Action</th>
         </tr></thead>
@@ -8254,12 +8254,12 @@ function loadStrategyConfig() {
                 }
                 rows += '<tr data-strategy="' + k + '" style="border-bottom:1px solid rgba(255,255,255,0.04)">'
                     + '<td style="padding:5px 8px;font-weight:600">' + SC_LABELS[k] + '</td>'
+                    + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-maxdeals-' + k + '" value="' + (cfg.max_deals || 2) + '" min="1" step="1" style="width:50px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-run-' + k + '" ' + (strategyEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-aicall-' + k + '" ' + (aiCallOpenEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer" title="Kandidat OPEN yang lolos semua filter rule-based masih dikonsultasikan ke AI dulu sebelum dibuka. Default OFF -- ini nggak bisa di-backtest kayak parameter lain."></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-size-' + k + '" ' + (sizingEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>'
                     + addFundCell
-                    + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-maxdeals-' + k + '" value="' + (cfg.max_deals || 2) + '" min="1" step="1" style="width:50px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-cooldown-' + k + '" ' + (cooldownEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer" title="Skip re-entry pair yang sama selama masih cooldown"></td>'
                     + '<td style="text-align:center;padding:5px 8px">' + saveButton + '</td>'
                     + '</tr>';
