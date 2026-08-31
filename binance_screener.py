@@ -7959,6 +7959,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <th>Pair</th>
             <th>Entry A (Spring)</th>
             <th>Entry B (Breakout)</th>
+            <th title="Progress terjauh antara Entry A dan Entry B, 1 bintang = 20%">Rating</th>
             <th>Update</th>
           </tr>
         </thead>
@@ -7983,6 +7984,14 @@ document.addEventListener('DOMContentLoaded', function() {
               <span style="color:var(--green);font-weight:600">✓ SIAP</span>
             {% else %}
               <span style="color:var(--red)">✗</span> <span style="color:var(--muted);font-size:10px">{{ es.get("reason_b", "belum") }}</span>
+            {% endif %}
+          </td>
+          <td style="text-align:center;white-space:nowrap">
+            {% if es %}
+              {% set stars_filled = (es.get("rating_pct",0) / 20) | round | int %}
+              <span style="color:var(--accent);letter-spacing:1px" title="{{ es.get('rating_pct',0) }}%">{{ '★' * stars_filled }}{{ '☆' * (5 - stars_filled) }}</span>
+            {% else %}
+              <span style="color:var(--muted);font-size:10px">-</span>
             {% endif %}
           </td>
           <td style="font-size:10px;color:var(--muted);white-space:nowrap">{{ es.get("ts", "-") if es else "-" }}</td>
@@ -9488,14 +9497,15 @@ def detect_entry_b_breakout(df, resistance: float, support: float, resistance_re
     return None
 
 
-def diagnose_entry_a_spring(df, support: float, support_reentry: float | None = None) -> str:
+def diagnose_entry_a_spring(df, support: float, support_reentry: float | None = None) -> tuple:
     """Diagnosa (bukan trigger) -- jelasin syarat MANA yang masih ganjal buat Entry A,
     dipakai buat tampilan dashboard "Entry Status" biar informatif (bukan cuma 'X belum').
-    Nyari kandidat spring yang paling JAUH kepenuhan syaratnya, lalu laporkan penghalangnya."""
+    Nyari kandidat spring yang paling JAUH kepenuhan syaratnya, lalu laporkan penghalangnya.
+    Return (pct, msg): pct 0-100 = seberapa banyak dari 5 syarat sudah kepenuhan (20% per syarat)."""
     if support_reentry is None:
         support_reentry = support
     if len(df) < 20:
-        return "data candle kurang"
+        return (0, "data candle kurang")
     try:
         import pandas_ta as _pta
         df = df.copy()
@@ -9552,20 +9562,21 @@ def diagnose_entry_a_spring(df, support: float, support_reentry: float | None = 
                 cand = (5, "tinggal OBV slope positif -- masih negatif/flat")
                 if best is None or cand[0] > best[0]: best = cand
                 continue
-            return "siap trigger"
+            return (100, "siap trigger")
         if best is None:
-            return "belum ada candle nembus support"
-        return best[1]
+            return (0, "belum ada candle nembus support")
+        return ((best[0] - 1) * 20, best[1])
     except Exception as e:
-        return f"error diagnosa: {e}"
+        return (0, f"error diagnosa: {e}")
 
 
-def diagnose_entry_b_breakout(df, resistance: float, support: float, resistance_retest_low: float | None = None) -> str:
-    """Diagnosa (bukan trigger) -- jelasin syarat MANA yang masih ganjal buat Entry B."""
+def diagnose_entry_b_breakout(df, resistance: float, support: float, resistance_retest_low: float | None = None) -> tuple:
+    """Diagnosa (bukan trigger) -- jelasin syarat MANA yang masih ganjal buat Entry B.
+    Return (pct, msg): pct 0-100 = seberapa banyak dari 4 syarat sudah kepenuhan (25% per syarat)."""
     if resistance_retest_low is None:
         resistance_retest_low = resistance
     if len(df) < 20:
-        return "data candle kurang"
+        return (0, "data candle kurang")
     try:
         import pandas_ta as _pta
         df = df.copy()
@@ -9574,10 +9585,10 @@ def diagnose_entry_b_breakout(df, resistance: float, support: float, resistance_
         df['ema50']  = _pta.ema(df['close'], length=50)
         last = df.iloc[-1]
         if pd.isna(last.get('ema20')) or pd.isna(last.get('ema50')):
-            return "data EMA kurang"
+            return (0, "data EMA kurang")
         if last['ema20'] <= last['ema50']:
             gap = (float(last['ema20'])/float(last['ema50'])-1)*100
-            return f"EMA20 masih di bawah EMA50 ({gap:+.2f}%), belum uptrend confirm"
+            return (0, f"EMA20 masih di bawah EMA50 ({gap:+.2f}%), belum uptrend confirm")
 
         breakout_idx = None; breakout_vol = 0.0; best_vol_ratio = None
         for i in range(len(df) - 10, len(df) - 1):
@@ -9595,8 +9606,8 @@ def diagnose_entry_b_breakout(df, resistance: float, support: float, resistance_
             price_now = float(df.iloc[-1]['close'])
             gap_pct = (price_now / resistance - 1) * 100
             if best_vol_ratio is not None:
-                return f"pernah tembus resistance tp vol cuma {best_vol_ratio:.2f}x (butuh >={AKUM_B_VOL_BREAKOUT_MULT}x), harga skrg {gap_pct:+.2f}% dari resistance"
-            return f"belum breakout, harga skrg {gap_pct:+.2f}% dari resistance"
+                return (25, f"pernah tembus resistance tp vol cuma {best_vol_ratio:.2f}x (butuh >={AKUM_B_VOL_BREAKOUT_MULT}x), harga skrg {gap_pct:+.2f}% dari resistance")
+            return (25, f"belum breakout, harga skrg {gap_pct:+.2f}% dari resistance")
 
         retest_low = resistance_retest_low * (1 - AKUM_B_RETEST_TOL_PCT)
         retest_high = resistance * (1 + AKUM_B_RETEST_TOL_PCT)
@@ -9605,14 +9616,14 @@ def diagnose_entry_b_breakout(df, resistance: float, support: float, resistance_
             if r['low'] <= retest_high and r['low'] >= retest_low:
                 if r['low'] < retest_low: continue
                 if breakout_vol > 0 and r['vol'] >= AKUM_B_RETEST_VOL_MAX * breakout_vol:
-                    return "breakout + retest ketemu, tp volume retest kegedean"
+                    return (75, "breakout + retest ketemu, tp volume retest kegedean")
                 if df.iloc[-1]['close'] < resistance:
                     gap_pct = (float(df.iloc[-1]['close']) / resistance - 1) * 100
-                    return f"breakout+retest OK, tinggal harga balik di atas resistance ({gap_pct:+.2f}%)"
-                return "siap trigger"
-        return "sudah breakout, nunggu retest ke zona resistance"
+                    return (75, f"breakout+retest OK, tinggal harga balik di atas resistance ({gap_pct:+.2f}%)")
+                return (100, "siap trigger")
+        return (50, "sudah breakout, nunggu retest ke zona resistance")
     except Exception as e:
-        return f"error diagnosa: {e}"
+        return (0, f"error diagnosa: {e}")
 
 
 def thread_akum_scan():
@@ -9786,10 +9797,11 @@ def thread_akum_entry_scan():
 
             sig_a = detect_entry_a_spring(df, support_break_ref, support_reentry_ref)
             sig_b = detect_entry_b_breakout(df, resistance_break_ref, support_break_ref, resistance_retest_low_ref)
-            # Diagnosa (bukan trigger) -- jelasin syarat mana yg masih ganjal, ditampilkan di
-            # dashboard "Entry Status" biar informatif ketimbang cuma "X belum" polos.
-            reason_a = "siap trigger" if sig_a is not None else diagnose_entry_a_spring(df, support_break_ref, support_reentry_ref)
-            reason_b = "siap trigger" if sig_b is not None else diagnose_entry_b_breakout(df, resistance_break_ref, support_break_ref, resistance_retest_low_ref)
+            # Diagnosa (bukan trigger) -- jelasin syarat mana yg masih ganjal + persentase progress,
+            # ditampilkan di dashboard "Entry Status" biar informatif ketimbang cuma "X belum" polos.
+            pct_a, reason_a = (100, "siap trigger") if sig_a is not None else diagnose_entry_a_spring(df, support_break_ref, support_reentry_ref)
+            pct_b, reason_b = (100, "siap trigger") if sig_b is not None else diagnose_entry_b_breakout(df, resistance_break_ref, support_break_ref, resistance_retest_low_ref)
+            rating_pct = max(pct_a, pct_b)
             ts_entry = now_wib().strftime("%H:%M")
             with _akum_lock:
                 _akum_entry_status[sym] = {
@@ -9797,6 +9809,9 @@ def thread_akum_entry_scan():
                     "entry_b": sig_b is not None,
                     "reason_a": reason_a,
                     "reason_b": reason_b,
+                    "pct_a": pct_a,
+                    "pct_b": pct_b,
+                    "rating_pct": rating_pct,
                     "ts": ts_entry,
                 }
             log(f"[T_AKUM_ENTRY] {sym}: A={'✓' if sig_a else '✗'} B={'✓' if sig_b else '✗'}")
