@@ -375,16 +375,23 @@ AKUM_TP_STOCH_OB          = 75           # Stoch%K overbought threshold
 
 # Entry A — Spring/Fakeout
 AKUM_A_VOL_SPIKE_MULT     = 1.8          # volume spike saat breakdown > 1.8x vol MA (relax dari 2.5)
-AKUM_A_RSI_MIN            = 35           # RSI sempat < 35 (Spring oversold, fix dari 20)
-AKUM_A_RSI_MAX_ENTRY      = 50           # RSI sudah naik kembali < 50 saat entry
+AKUM_A_RSI_MIN            = 40           # RSI sempat < 40 (Spring oversold, dilonggarkan dari 35, 31/08/2026:
+# backtest score_akumulasi/detect_entry_a_spring asli, 164 pair ~167 hari, 590 titik primary_ok -- baseline
+# 35/50 cuma n=6 & avg return h60 NEGATIF -1.85%; RSI 40/55 n=11 (nyaris 2x) & avg h60 JADI POSITIF +1.06%)
+AKUM_A_RSI_MAX_ENTRY      = 55           # RSI sudah naik kembali < 55 saat entry (dilonggarkan dari 50, sama backtest di atas)
 AKUM_A_OBV_SLOPE_CANDLES  = 3           # OBV slope dihitung dari 3 candle terakhir (relax dari 5)
-AKUM_A_REENTRY_CANDLES    = 15          # max 15 candle (~60 jam) untuk deteksi spring
+AKUM_A_REENTRY_CANDLES    = 15          # max 15 candle (~60 jam) untuk deteksi spring -- TIDAK dilonggarkan,
+# backtest 31/08/2026 nunjukkin reentry_candles 20-25 malah menurunkan WR & avg, worst-case sampai -19.78%
 AKUM_A_SUPPORT_TOUCH_BUFFER = 0.004     # toleransi 0.4%: low < support*(1+buffer) dianggap spring
 
 # Entry B — Breakout + Retest
-AKUM_B_VOL_BREAKOUT_MULT  = 1.5         # volume breakout > 1.5x vol MA
-AKUM_B_RETEST_TOL_PCT     = 0.02        # retest dalam ±2% dari resistance
-AKUM_B_RETEST_VOL_MAX     = 0.8         # volume retest < 80% volume breakout
+AKUM_B_VOL_BREAKOUT_MULT  = 1.0         # volume breakout > 1.0x vol MA (dilonggarkan dari 1.5x, 31/08/2026:
+# backtest detect_entry_b_breakout asli, 164 pair ~167 hari -- baseline 1.5x n=30 avg h60 +3.14%, 1.0x n=35
+# (lebih banyak sinyal) avg h60 +4.66% (lebih baik) -- naik kualitas DAN kuantitas sekaligus)
+AKUM_B_RETEST_TOL_PCT     = 0.02        # retest dalam ±2% dari resistance -- backtest 31/08/2026 nunjukkin
+# ini BUKAN penghambat (loosening ke 3-4% sama sekali nggak nambah sinyal), dibiarkan
+AKUM_B_RETEST_VOL_MAX     = 0.8         # volume retest < 80% volume breakout -- sama kayak retest_tol,
+# backtest nunjukkin bukan penghambat (loosening ke 90-100% nggak nambah sinyal), dibiarkan
 
 PERF_FILTER_ENABLED = False   # Perf Grade: info saja, tidak memblokir open deal (07/08/2026)
 PERF_SCORE_MIN      = 0.5    # EQUAL_thr0.5: cukup 3 dari 6 TF positif
