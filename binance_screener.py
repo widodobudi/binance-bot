@@ -1249,7 +1249,7 @@ trades_csv_lock = threading.Lock()
 # Kolom CSV log forward-test (1 baris per trade; ditulis saat OPEN, dilengkapi saat CLOSE)
 CSV_FIELDS = [
     'open_time_wib','symbol','strategy','signal_price','entry_price','slip_pct','atr_pct',
-    'trail_dist_pct','base_usd','score',
+    'trail_dist_pct','base_usd','score','rsi_open',
     'close_time_wib','exit_price','profit_pct','exit_reason','status'
 ]
 
@@ -4529,6 +4529,10 @@ def thread1_scan():
         # AI decision jika toggle "AI Call on Open" aktif utk strategi brkX2 (Strategy Control)
         if is_ai_call_open_enabled('brkX2'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
+            _df_ai = all_dfs.get(sym)
+            if _df_ai is not None and len(_df_ai) > 0:
+                _rsi_ai = _df_ai.iloc[-1].get('rsi')
+                if _rsi_ai is not None and not pd.isna(_rsi_ai): _ai_ind['rsi'] = f"{float(_rsi_ai):.1f}"
             if not ai_decision_open(sym, 'brkX2-12h', _ai_ind, active_deal_count()):
                 log(f"[T1] {sym} OPEN di-skip oleh AI decision")
                 continue
@@ -4612,6 +4616,7 @@ def thread1_scan():
                 'trail_dist_pct': f"{trailing_dist(atrp)}",
                 'base_usd': target_usd,
                 'score': score,
+                'rsi_open': f"{_open_fields['rsi_open']:.1f}" if _open_fields.get('rsi_open') is not None else '',
                 'strategy': 'brkX2',
             })
             _r12 = df.iloc[-1]
@@ -4858,6 +4863,7 @@ def thread1b_scan_reversal():
                 'base_usd': target_usd,
                 'score': 0,
                 'strategy': 'reversal',
+                'rsi_open': f"{_open_fields_rev['rsi_open']:.1f}" if _open_fields_rev.get('rsi_open') is not None else '',
             })
             log_oac('OPEN', sym, 'Reversal-8h', {
                 'entry_price': _fmt_price(entry_price),
@@ -5737,6 +5743,8 @@ def thread1c_scan_intrabar():
         log(f"[T1c] SINYAL INTRABAR: {sym} elapsed={elapsed_pct*100:.1f}% price={price_now:.6g} skor={score}")
         if is_ai_call_open_enabled('brkX2'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
+            _rsi_ai = r12.get('rsi') if 'rsi' in r12.index else None
+            if _rsi_ai is not None and not pd.isna(_rsi_ai): _ai_ind['rsi'] = f"{float(_rsi_ai):.1f}"
             if not ai_decision_open(sym, 'brkX2-12h', _ai_ind, active_deal_count()):
                 log(f"[T1c] {sym} OPEN di-skip oleh AI decision")
                 continue
@@ -5789,6 +5797,7 @@ def thread1c_scan_intrabar():
                 'base_usd':       target_usd,
                 'score':          score,
                 'strategy':       'brkX2',
+                'rsi_open':       f"{float(r12['rsi']):.1f}" if 'rsi' in r12.index and not pd.isna(r12.get('rsi')) else '',
             })
             # ── DEAL LOG lengkap T1c ──────────────────────────────────────
             _ind = _row_indicators(r12, vol_ma=float(r12.get('vol_ma', 0)) if not pd.isna(r12.get('vol_ma', 0)) else None)
@@ -5933,7 +5942,7 @@ def thread1c_scan_intrabar_early():
         log(f"[T1c-E] SINYAL EARLY: {sym} elapsed={elapsed_pct*100:.1f}% price={price_now:.6g} skor={score}")
 
         if is_ai_call_open_enabled('brkX2'):
-            _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
+            _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price), 'rsi': f"{rsi_now:.1f}"}
             if not ai_decision_open(sym, 'brkX2-12h', _ai_ind, active_deal_count()):
                 log(f"[T1c-E] {sym} OPEN di-skip oleh AI decision")
                 continue
@@ -6229,6 +6238,7 @@ def thread_rev_intrabar_scan():
                 'base_usd':       target_usd,
                 'score':          0,
                 'strategy':       'reversal',
+                'rsi_open':       f"{float(df_closed['rsi'].iloc[i1]):.1f}" if 'rsi' in df_closed.columns and not pd.isna(df_closed['rsi'].iloc[i1]) else '',
             })
             log_oac('OPEN', sym, 'Reversal-8h', {
                 'entry_price': _fmt_price(entry_price),
@@ -6382,6 +6392,13 @@ def thread1d_scan_4h():
                 continue
         if is_ai_call_open_enabled('brkX2_4h'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
+            try:
+                _df_ai4 = get_ohlcv_4h(sym, limit=60)
+                if _df_ai4 is not None and len(_df_ai4) >= 20:
+                    _rsi_ai4 = ta.rsi(_df_ai4['close'], length=14).iloc[-1]
+                    if not pd.isna(_rsi_ai4): _ai_ind['rsi'] = f"{float(_rsi_ai4):.1f}"
+            except Exception:
+                pass
             if not ai_decision_open(sym, 'brkX2-4h', _ai_ind, active_deal_count()):
                 log(f"[T1d] {sym} OPEN di-skip oleh AI decision")
                 continue
@@ -6477,6 +6494,7 @@ def thread1d_scan_4h():
             'base_usd':       target_usd,
             'score':          score,
             'strategy':       'brkX2_4h',
+            'rsi_open':       f"{_rsi_val:.1f}" if _rsi_val == _rsi_val else '',
         })
         _df4 = get_ohlcv_4h(sym, limit=50)
         if _df4 is not None and len(_df4) > 0:
@@ -6720,6 +6738,8 @@ def thread_crossema_scan():
 
             if is_ai_call_open_enabled('brkX2_crossema'):
                 _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'signal_price': _fmt_price(signal_price)}
+                _rsi_ai_cx = r.get('rsi') if 'rsi' in r.index else None
+                if _rsi_ai_cx is not None and not pd.isna(_rsi_ai_cx): _ai_ind['rsi'] = f"{float(_rsi_ai_cx):.1f}"
                 if not ai_decision_open(sym, 'CrossEMA-4h', _ai_ind, active_deal_count()):
                     log(f"[T_CROSSEMA] {sym} OPEN di-skip oleh AI decision")
                     continue
@@ -6782,6 +6802,7 @@ def thread_crossema_scan():
                 "base_usd":       BASE_ORDER_VOLUME,
                 "score":          0,
                 "strategy":       "brkX2_crossema",
+                "rsi_open":       f"{float(r['rsi']):.1f}" if 'rsi' in r.index and not pd.isna(r.get('rsi')) else '',
             })
             log_oac('OPEN', sym, 'CrossEMA-4h', {
                 'entry_price': _fmt_price(entry_price),
@@ -7274,6 +7295,14 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
         return False
     if is_ai_call_open_enabled('hunting_4h'):
         _ai_ind = {'atr_pct': f"{atrp:.2f}%"}
+        try:
+            if 'rsi' in df.columns:
+                _rsi_hunt = df['rsi'].iloc[-1]
+            else:
+                _rsi_hunt = ta.rsi(df['close'], length=14).iloc[-1]
+            if not pd.isna(_rsi_hunt): _ai_ind['rsi'] = f"{float(_rsi_hunt):.1f}"
+        except Exception:
+            pass
         if not ai_decision_open(symbol, 'Hunting-4h', _ai_ind, active_deal_count()):
             log(f"[T1d-HUNT] {symbol} OPEN di-skip oleh AI decision")
             return False
@@ -7394,6 +7423,7 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
         'atr_pct':        f"{atrp:.2f}",
         'trail_dist_pct': f"{trail_d}",
         'base_usd':       HUNTING_ORDER_VOLUME,
+        'rsi_open':       f"{_rsi_open:.1f}" if _rsi_open is not None else '',
         'score':          score,
         'strategy':       'hunting_4h',
     })
@@ -8779,6 +8809,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <th data-sort-key="symbol" onclick="sortClosedTrades('symbol')" style="text-align:left;padding:5px 8px;cursor:pointer">Pair</th>
         <th data-sort-key="strategy" onclick="sortClosedTrades('strategy')" style="text-align:left;padding:5px 8px;cursor:pointer">Strategi</th>
         <th style="text-align:right;padding:5px 8px">Entry</th>
+        <th data-sort-key="rsi_open" onclick="sortClosedTrades('rsi_open')" style="text-align:right;padding:5px 8px;cursor:pointer" title="RSI(14) saat open long">RSI@Open</th>
         <th style="text-align:right;padding:5px 8px">Exit</th>
         <th data-sort-key="profit_pct" onclick="sortClosedTrades('profit_pct')" style="text-align:right;padding:5px 8px;cursor:pointer">Profit%</th>
         <th data-sort-key="profit_usd" onclick="sortClosedTrades('profit_usd')" style="text-align:right;padding:5px 8px;cursor:pointer">Profit$</th>
@@ -8786,7 +8817,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <th data-sort-key="duration" onclick="sortClosedTrades('duration')" style="text-align:right;padding:5px 8px;cursor:pointer">Durasi</th>
         <th style="text-align:left;padding:5px 8px">Alasan</th>
       </tr></thead>
-      <tbody id="ct-body"><tr><td colspan="11" style="color:var(--muted);padding:12px 8px;text-align:center">Klik Refresh untuk muat data</td></tr></tbody>
+      <tbody id="ct-body"><tr><td colspan="12" style="color:var(--muted);padding:12px 8px;text-align:center">Klik Refresh untuk muat data</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -8839,7 +8870,7 @@ function renderClosedTradesRows() {
     renderCtSummary(rows);
     renderCtEquityCurve(rows);
     var tbody = document.getElementById('ct-body');
-    if (!rows.length) { tbody.innerHTML = '<tr><td colspan="11" style="color:var(--muted);padding:12px 8px;text-align:center">Belum ada data closed trades</td></tr>'; return; }
+    if (!rows.length) { tbody.innerHTML = '<tr><td colspan="12" style="color:var(--muted);padding:12px 8px;text-align:center">Belum ada data closed trades</td></tr>'; return; }
     tbody.innerHTML = rows.map(function(r) {
             var pct = parseFloat(r.profit_pct||0);
             var usd = parseFloat(r.profit_usd||0);
@@ -8850,6 +8881,7 @@ function renderClosedTradesRows() {
                 '<td style="padding:5px 8px;font-weight:600">' + (r.symbol||'-') + '</td>' +
                 '<td style="padding:5px 8px;color:var(--muted)">' + (strat_map[r.strategy]||r.strategy||'-') + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.entry_price||'-') + '</td>' +
+                '<td style="padding:5px 8px;text-align:right;font-size:10px;color:var(--muted)">' + (r.rsi_open||'-') + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.exit_price||'-') + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;color:' + clr + '">' + (pct>=0?'+':'') + pct.toFixed(2) + '%</td>' +
                 '<td style="padding:5px 8px;text-align:right;color:' + clr + '">' + (usd>=0?'+':'') + usd.toFixed(2) + '</td>' +
@@ -8914,7 +8946,7 @@ function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
     var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B'};
-    var headers = ['Opened','Close','Pair','Strategi','Entry','Exit','Profit%','Profit$','Modal','Durasi','Alasan'];
+    var headers = ['Opened','Close','Pair','Strategi','Entry','RSI@Open','Exit','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
         if (v.indexOf(',') !== -1 || v.indexOf('"') !== -1 || v.indexOf('\\n') !== -1) { v = '"' + v.replace(/"/g, '""') + '"'; }
@@ -8923,7 +8955,7 @@ function exportCtCsv() {
     var lines = [headers.join(',')];
     rows.forEach(function(r) {
         lines.push([r.open_time||'', r.close_time||'', r.symbol||'', strat_map[r.strategy]||r.strategy||'',
-            r.entry_price||'', r.exit_price||'', r.profit_pct||'', r.profit_usd||'', r.base_usd||'',
+            r.entry_price||'', r.rsi_open||'', r.exit_price||'', r.profit_pct||'', r.profit_usd||'', r.base_usd||'',
             r.duration||'', r.exit_reason||''].map(csvEsc).join(','));
     });
     var blob = new Blob([lines.join('\\n')], {type: 'text/csv;charset=utf-8;'});
@@ -10096,8 +10128,19 @@ def thread_akum_entry_scan():
             if is_cooldown_enabled(strat_key) and cooldown_remaining(sym) > 0:
                 log(f"[T_AKUM_ENTRY] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
                 continue
+            # RSI di titik sinyal ini (01/09/2026) -- df['close'] sudah tersedia dari scan
+            # score_akumulasi() di atas, cukup buat RSI(14) langsung, dipakai utk konteks AI +
+            # log CSV permanen (Akumulasi sebelumnya TIDAK PERNAH tercatat rsi_open sama sekali).
+            try:
+                _rsi_akum = float(ta.rsi(df['close'], length=14).iloc[-1])
+                if pd.isna(_rsi_akum): _rsi_akum = None
+            except Exception:
+                _rsi_akum = None
+
             if is_ai_call_open_enabled('akum_entry_a'):
-                _ai_ind = {'entry_type': entry_type, 'price_now': _fmt_price(price_now)}
+                _ai_ind = {'entry_type': entry_type, 'price_now': _fmt_price(price_now),
+                           'atr_pct': f"{item.get('atr_pct', 3.0):.2f}%"}
+                if _rsi_akum is not None: _ai_ind['rsi'] = f"{_rsi_akum:.1f}"
                 if not ai_decision_open(sym, f'Akumulasi-4h Entry {entry_type}', _ai_ind, active_deal_count()):
                     log(f"[T_AKUM_ENTRY] {sym} OPEN di-skip oleh AI decision")
                     continue
@@ -10141,6 +10184,20 @@ def thread_akum_entry_scan():
                 'support_ref':     support_reentry_ref,
                 'resistance_ref':  resistance_break_ref,
                 'timeout_candles': AKUM_ENTRY_TIMEOUT,
+                'rsi_open':        _rsi_akum,
+            })
+            csv_log_open({
+                'open_time_wib':  ts,
+                'symbol':         to_display_pair(sym),
+                'signal_price':   f"{_fmt_price(price_now)}",
+                'entry_price':    f"{_fmt_price(price_now)}",
+                'slip_pct':       '0.00',
+                'atr_pct':        f"{item.get('atr_pct', 3.0):.2f}",
+                'trail_dist_pct': f"{trailing_dist(item.get('atr_pct', 3.0))}",
+                'base_usd':       target_usd,
+                'score':          score,
+                'strategy':       strat_key,
+                'rsi_open':       f"{_rsi_akum:.1f}" if _rsi_akum is not None else '',
             })
             log(f"[T_AKUM_ENTRY] {sym} OPEN Entry {entry_type} @ {_fmt_price(price_now)} "
                 f"SL={_fmt_price(sig['sl_price'])} score={score}")
@@ -11999,6 +12056,7 @@ def run_web_dashboard():
                         "exit_reason":  r.get('exit_reason',''),
                         "reason_category": categorize_exit_reason(r.get('exit_reason','')),
                         "duration":     dur,
+                        "rsi_open":     r.get('rsi_open',''),
                     })
                 total = wins + losses
                 wr = round(wins / total * 100, 1) if total else 0
@@ -12714,12 +12772,17 @@ def ai_decision_close(symbol: str, strategy: str, d: dict, price: float, peak: f
     profit_now  = (price/entry - 1)*100 if entry > 0 else 0
     profit_peak = (peak/entry - 1)*100  if entry > 0 else 0
     tdist  = trailing_dist_progressive(atrp, profit_peak)
+    # Konteks indikator (termasuk RSI) -- sebelumnya fungsi ini kosong sama sekali dari
+    # indikator, cuma harga/ATR%/reason (01/09/2026, permintaan Budi setelah kasus TLM/BICO).
+    ind4h_str = get_full_4h_indicator_context(symbol)
+    ind4h_section = f"\n{ind4h_str}\n" if ind4h_str else ""
     prompt = (
         f"Kamu adalah AI assistant untuk trading bot crypto.\n\n"
         f"Deal: {to_display_pair(symbol)} | Strategi: {strategy}\n"
         f"Entry: {_fmt_price(entry)} | Peak: {_fmt_price(peak)} | Harga skrg: {_fmt_price(price)}\n"
         f"Profit dari entry: {profit_now:+.2f}% | Profit dari peak: {(price/peak-1)*100:+.2f}%\n"
         f"ATR%: {atrp:.2f}% | Trail dist: {tdist:.2f}% | Armed: {armed}\n"
+        f"{ind4h_section}"
         f"Alasan close: {reason}\n\n"
         f"Apakah CLOSE sekarang atau HOLD (tahan, skip close ini)?\n"
         f"Jawab hanya: CLOSE atau HOLD"
