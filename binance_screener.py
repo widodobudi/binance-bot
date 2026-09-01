@@ -103,6 +103,11 @@ ATR_MAX_PCT       = 9.0   # diubah dari 10 → 9 (backtest_no_ema_no_macd_filter
 VOLUME_MULT       = 0.6   # turun dari 0.8 → backtest_vol_lower_sweep (22/07/2026): delta avg -0.042% (dalam noise), wf6 OK
 VOL_MAX_MULT      = 5.0   # batas ATAS vol (backtest_vol_max_sweep.py, 01/08/2026): <=5.0x delta -0.345% tapi dipakai untuk filter visual cosmetic
 MACD_FILTER_ENABLED = False   # dimatikan 30/07/2026 — backtest_no_ema_no_macd: tanpa MACD+close>EMA50 avg=+3.074% wf6 OK
+EMA20_BAND_MAX_PCT = 0.3   # ditambah 01/09/2026 (Roadmap Uji Pita EMA20, Fase 1): dulu cuma close>EMA20
+                           # (tanpa batas atas), sekarang wajib pita 0% s/d +0.3% -- backtest full-lifecycle
+                           # (86 pair): baseline n=3688 WR=66.0% avg=+1.09%, pita 0-0.3% n=103 WR=68.9%
+                           # avg=+1.27% (dipilih: sample seimbang & uplift terbaik, tren makin sempit makin
+                           # baik s/d 0.3%, di atas itu turun lagi ke arah baseline/lebih jelek).
 
 VOLUME_MA_PERIOD  = 20
 RSI_LENGTH        = 14
@@ -239,6 +244,12 @@ HUNTING_LIVE_BASELINE    = 7       # closed deals saat Hunting dipromosikan ke L
 HUNTING_PHASE2_TARGET    = 15      # target fase-2 (counter "2nd") setelah LIVE, 28/08/2026
 HUNTING_MIN_ATR_PCT      = 0.5     # ATR% minimum — filter koin stagnan
 HUNTING_RSI_MAX          = 60      # RSI < 60 (backtest_hunting_filter_sweep: +0.714% vs baseline)
+HUNTING_EMA20_BAND_PCT   = 0.3     # ditambah 01/09/2026 (Roadmap Uji Pita EMA20, Fase 4): dulu wajib DI ATAS
+                                    # EMA20 jarak 0-0.75% (satu sisi), sekarang pita simetris -0.3% s/d +0.3%.
+                                    # Backtest full-lifecycle (163 pair): baseline (0-0.75%) n=209 WR=70.3%
+                                    # avg=+0.88%, pita simetris ±0.3% n=38 WR=78.9% avg=+1.30% (dipilih --
+                                    # sample seimbang & uplift terbaik; 4 varian asimetris tambahan
+                                    # -0.3/+0.5,+0.6,+0.75 semua lebih jelek, dikonfirmasi ulang).
 HUNTING_CAPITAL_USD      = float(os.environ.get("HUNTING_CAPITAL_USD", "90.0"))  # estimasi total kapital bot (update manual kalau top-up)
 HUNTING_ORDER_VOLUME     = 20      # base order hunting-4h ($20, 14/08/2026)
 # Entry conditions 4h
@@ -3123,13 +3134,16 @@ def check_entry(df) -> bool:
     ATR<9% (dari <10%), tambah close>EMA50.
     Backtest: backtest_no_ema_no_macd_filter_sweep.py — ATR<9+close>EMA50:
     avg=+3.074% worst=-29.10% wf6 OK.
+    Update 01/09/2026: close>EMA20 diganti pita 0% s/d +EMA20_BAND_MAX_PCT%
+    (Roadmap Uji Pita EMA20 Fase 1, lihat komentar konstantanya).
     """
     if is_choppy(df): return False
     row = df.iloc[-1]
     if pd.isna(row['ema_fast']) or pd.isna(row['ema_slow']) or pd.isna(row['vol_ma']):
         return False
     if row['st_dir'] != 1: return False
-    if not (row['close'] > row['ema_fast']): return False
+    _gap_ema20_pct = (row['close'] / row['ema_fast'] - 1) * 100 if row['ema_fast'] > 0 else -999
+    if not (0 <= _gap_ema20_pct <= EMA20_BAND_MAX_PCT): return False
     # HH3 diganti minimal 2 dari 3 bar bullish
     if not row.get('bull2of3', False): return False
     if row['vol'] < VOLUME_MULT * row['vol_ma']: return False
@@ -3150,7 +3164,9 @@ def entry_detail(df):
         return None
     checks = []  # (lolos?, label_gagal)
     checks.append((row['st_dir']==1, "Supertrend (masih Downtrend)"))
-    checks.append((row['close']>row['ema_fast'], f"close>EMA20 (close {_fmt_price(row['close'])} vs EMA20 {_fmt_price(row['ema_fast'])})"))
+    _gap_ema20_pct_d = (row['close']/row['ema_fast']-1)*100 if row['ema_fast'] > 0 else -999
+    ema20_band_ok = 0 <= _gap_ema20_pct_d <= EMA20_BAND_MAX_PCT
+    checks.append((ema20_band_ok, f"pita EMA20 0%-{EMA20_BAND_MAX_PCT}% (skrg {_gap_ema20_pct_d:+.2f}%, close {_fmt_price(row['close'])} vs EMA20 {_fmt_price(row['ema_fast'])})"))
     # Minimal 2 dari 3 bar bullish
     bull_count = sum(bool(df['close'].iloc[idx] > df['open'].iloc[idx]) for idx in (-1, -2, -3))
     checks.append((bull_count >= 2, f"minimal 2/3 bar bullish ({bull_count}/3)"))
@@ -6926,7 +6942,8 @@ def check_hunting_strategy(df, r, config, blocker_counts=None):
     Strategi Hunting-4h: cari koin yang baru saja breakout tipis di atas EMA zona kompresi.
     Syarat wajib:
       - Quote USDT, base bukan fiat
-      - price > EMA20, jarak 0-3%
+      - price dalam pita EMA20 -HUNTING_EMA20_BAND_PCT% s/d +HUNTING_EMA20_BAND_PCT% (01/09/2026,
+        dulu satu sisi 0-0.75%, lihat komentar konstantanya)
     Syarat opsional (via config):
       - EMA20 < EMA50, jarak 0-1.5%              (hunting_ema_gap)
       - price_change% antara 0%-2.0%              (hunting_price_change)
@@ -6995,8 +7012,8 @@ def check_hunting_strategy(df, r, config, blocker_counts=None):
     # Uptrend proxy: close sekarang > close 5 candle lalu
     uptrend = (close > float(df["close"].iloc[-6])) if len(df) >= 6 else False
 
-    # --- Syarat WAJIB 4: price di atas EMA20, jarak 0-0.75% ---
-    if dist_ema20 is None or not (0.0 <= dist_ema20 <= 0.75):
+    # --- Syarat WAJIB 4: price dalam pita EMA20 -HUNTING_EMA20_BAND_PCT% s/d +HUNTING_EMA20_BAND_PCT% ---
+    if dist_ema20 is None or not (-HUNTING_EMA20_BAND_PCT <= dist_ema20 <= HUNTING_EMA20_BAND_PCT):
         return reject("Jarak harga ke EMA20")
 
     # --- Tolak hanya Supertrend bearish; +1 bullish dan 0 transisi diterima ---
