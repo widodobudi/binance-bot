@@ -4650,6 +4650,31 @@ def thread1b_scan_reversal():
         log(f"[T1b] SINYAL REVERSAL: {sym} close_candle={_fmt_price(signal_price)} atr%={atrp:.2f}")
         if is_ai_call_open_enabled('reversal'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'signal_price': _fmt_price(signal_price)}
+            # Perkaya konteks TF sendiri (8h) buat AI -- sebelumnya cuma atr_pct+signal_price,
+            # padahal compute_indicators_reversal() sudah hitung RSI/Stoch/MACD/BB%b/Williams%R/
+            # CCI/OBV/EMA20 (dipakai utk _open_fields_rev SETELAH open, tapi tidak pernah dikirim
+            # ke AI). Reuse df yg sudah ada di all_dfs_rev (tanpa fetch tambahan). 01/09/2026.
+            _dfr_ai = all_dfs_rev.get(sym)
+            if _dfr_ai is not None and len(_dfr_ai) >= 2:
+                _rr_ai = _dfr_ai.iloc[-1]; _rp_ai = _dfr_ai.iloc[-2]
+                def _aiv(col):
+                    v = _rr_ai.get(col) if col in _rr_ai.index else None
+                    return None if v is None or pd.isna(v) else float(v)
+                _rsi = _aiv('rsi'); _sk = _aiv('stoch_k'); _sd = _aiv('stoch_d')
+                _mh = _aiv('macd_hist'); _bb = _aiv('bb_pct'); _wr = _aiv('williams_r'); _cci = _aiv('cci')
+                _ema20 = _aiv('ema_fast')
+                if _rsi is not None: _ai_ind['rsi'] = f"{_rsi:.1f}"
+                if _sk is not None and _sd is not None: _ai_ind['stoch'] = f"K={_sk:.1f} D={_sd:.1f}"
+                if _mh is not None: _ai_ind['macd_hist'] = f"{_mh:+.6f}"
+                if _bb is not None: _ai_ind['bb_pct'] = f"{_bb:.2f}"
+                if _wr is not None: _ai_ind['williams_r'] = f"{_wr:.1f}"
+                if _cci is not None: _ai_ind['cci'] = f"{_cci:.1f}"
+                if _ema20 is not None and _ema20 > 0:
+                    _ai_ind['gap_ema20'] = f"{(signal_price/_ema20-1)*100:+.2f}%"
+                _obv_now = _aiv('obv')
+                _obv_prv = _rp_ai.get('obv') if 'obv' in _rp_ai.index else None
+                if _obv_now is not None and _obv_prv is not None and not pd.isna(_obv_prv):
+                    _ai_ind['obv'] = '↑' if _obv_now > float(_obv_prv) else '↓'
             if not ai_decision_open(sym, 'Reversal-8h', _ai_ind, active_deal_count()):
                 log(f"[T1b] {sym} OPEN di-skip oleh AI decision")
                 continue
