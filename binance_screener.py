@@ -6017,6 +6017,28 @@ def thread_rev_intrabar_scan():
 
         if is_ai_call_open_enabled('reversal'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'signal_price': _fmt_price(signal_price)}
+            # Sama seperti thread1b_scan_reversal() (01/09/2026): perkaya konteks TF sendiri
+            # (8h) buat AI pakai indikator yg sudah dihitung compute_indicators_reversal() di
+            # row c+1 (df_closed.iloc[i1]) -- termasuk gap_ema20 pakai price_now LIVE (bukan
+            # cuma close candle) krn di jalur intrabar ini price_now-lah yg jadi harga entry.
+            _rr_ai = df_closed.iloc[i1]; _rp_ai = df_closed.iloc[i0]
+            def _aiv(col):
+                v = _rr_ai.get(col) if col in _rr_ai.index else None
+                return None if v is None or pd.isna(v) else float(v)
+            _rsi = _aiv('rsi'); _sk = _aiv('stoch_k'); _sd = _aiv('stoch_d')
+            _mh = _aiv('macd_hist'); _bb = _aiv('bb_pct'); _wr = _aiv('williams_r'); _cci = _aiv('cci')
+            if _rsi is not None: _ai_ind['rsi'] = f"{_rsi:.1f}"
+            if _sk is not None and _sd is not None: _ai_ind['stoch'] = f"K={_sk:.1f} D={_sd:.1f}"
+            if _mh is not None: _ai_ind['macd_hist'] = f"{_mh:+.6f}"
+            if _bb is not None: _ai_ind['bb_pct'] = f"{_bb:.2f}"
+            if _wr is not None: _ai_ind['williams_r'] = f"{_wr:.1f}"
+            if _cci is not None: _ai_ind['cci'] = f"{_cci:.1f}"
+            if ema20_now > 0 and price_now > 0:
+                _ai_ind['gap_ema20'] = f"{(price_now/ema20_now-1)*100:+.2f}%"
+            _obv_now = _aiv('obv')
+            _obv_prv = _rp_ai.get('obv') if 'obv' in _rp_ai.index else None
+            if _obv_now is not None and _obv_prv is not None and not pd.isna(_obv_prv):
+                _ai_ind['obv'] = '↑' if _obv_now > float(_obv_prv) else '↓'
             if not ai_decision_open(sym, 'Reversal-8h', _ai_ind, active_deal_count()):
                 log(f"[T3-REV] {sym} OPEN di-skip oleh AI decision")
                 continue
