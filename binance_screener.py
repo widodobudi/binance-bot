@@ -3020,6 +3020,103 @@ def calc_perf_score(sym: str, query_ts_ms: int) -> float:
         score += weight if current >= past else -weight
     return score
 
+
+# ── ATH distance filter (jarak harga ke All-Time-High) ───────────────────────
+# Dipicu kasus BICOUSDT (01/09/2026): entry Reversal-8h di harga -97.8% dari ATH
+# (turun -93% sejak listing, -49% YTD) -- calc_perf_score() TIDAK menangkap ini krn
+# equal-weight count TF positif (BICO tetap skor 0.667 >= 0.5 walau 1Y -77.7%, krn
+# 1D/1W/1M/3M/6M semua sempat positif). Backtest full-lifecycle Reversal-8h (180
+# trade, ~333 hari) BUKTIKAN jarak-ke-ATH itu sinyal beda -- konsisten & monoton:
+# makin dekat ATH, makin bagus rata2 hasil (+2.27% di cap -95% naik ke +4.11% di
+# cap -70%; sisi yg diblok konsisten lebih jelek). Threshold dipilih -85% (n=72,
+# WR 83.3%, avg +2.99% vs baseline 81.7%/+2.29%) -- keseimbangan sample vs uplift.
+REVERSAL_ATH_DIST_MIN_PCT = -85.0   # tolak kalau harga <= 85% di bawah ATH-nya
+
+_ath_cache_1d: dict = {}   # sym -> (ts_arr, high_cummax_arr) — di-load lazy per symbol
+
+def _get_ath_data_1d(sym: str):
+    """Load histori HIGH 1D (cummax causal) utk symbol. Cache lokal dulu, fallback fetch Binance.
+    Cache file terpisah dari _get_perf_data_1d() (itu cuma simpan close, ini butuh high)."""
+    if sym in _ath_cache_1d:
+        return _ath_cache_1d[sym]
+    candidates = [
+        "/data/_cache_ath_1D",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "_cache_ath_1D"),
+    ]
+    cache_dir = None
+    for d in candidates:
+        if os.path.isdir(d):
+            cache_dir = d; break
+    if cache_dir is None:
+        try:
+            cache_dir = "/data/_cache_ath_1D"
+            os.makedirs(cache_dir, exist_ok=True)
+        except:
+            cache_dir = None
+    best = None; best_len = 0
+    if cache_dir and os.path.isdir(cache_dir):
+        for fname in os.listdir(cache_dir):
+            if not fname.startswith(sym) or not fname.endswith(".pkl"): continue
+            try:
+                df = pickle.load(open(os.path.join(cache_dir, fname), "rb"))
+                if df is not None and len(df) > best_len and "ts" in df.columns:
+                    best = df; best_len = len(df)
+            except: pass
+    if best is None or best_len < 700:
+        try:
+            r = _binance_get("/api/v3/klines", {"symbol": sym, "interval": "1d", "limit": 1000})
+            if r is not None:
+                try: r = r.json()
+                except: r = None
+            if r and isinstance(r, list) and len(r) >= 30:
+                df_new = pd.DataFrame(r, columns=["ts","open","high","low","close","vol",
+                                                   "ct","qv","nt","tb","tq","ig"])
+                df_new["ts"]   = df_new["ts"].astype(np.int64)
+                df_new["high"] = df_new["high"].astype(float)
+                if cache_dir:
+                    try:
+                        with open(os.path.join(cache_dir, f"{sym}_1d_1000.pkl"), "wb") as f:
+                            pickle.dump(df_new[["ts","high"]], f)
+                    except: pass
+                best = df_new[["ts","high"]]
+        except: pass
+    if best is None or len(best) < 30:
+        _ath_cache_1d[sym] = None; return None
+    ts_arr   = best["ts"].values.astype(np.int64)
+    high_arr = best["high"].values.astype(float)
+    cummax_arr = np.maximum.accumulate(high_arr)
+    result = (ts_arr, cummax_arr)
+    _ath_cache_1d[sym] = result
+    return result
+
+def get_ath_before(sym: str, query_ts_ms: int) -> float:
+    """All-Time-High SEBELUM/PADA query_ts_ms (no lookahead). Return nan kalau data tidak ada."""
+    data = _get_ath_data_1d(sym)
+    if data is None:
+        return float('nan')
+    ts_arr, cummax_arr = data
+    idx_now = int(np.searchsorted(ts_arr, query_ts_ms, side='right')) - 1
+    if idx_now < 0: return float('nan')
+    ath = float(cummax_arr[idx_now])
+    return ath if ath > 0 else float('nan')
+
+def ath_distance_pct(sym: str, current_price: float, query_ts_ms: int) -> float:
+    """Jarak current_price ke ATH-nya, dalam %. Negatif = di bawah ATH (mis. -85.0 artinya
+    harga cuma 15% dari ATH). Return nan kalau data tidak ada."""
+    ath = get_ath_before(sym, query_ts_ms)
+    if pd.isna(ath) or ath <= 0 or current_price <= 0:
+        return float('nan')
+    return (current_price / ath - 1) * 100
+
+def ath_distance_ok(sym: str, current_price: float, query_ts_ms: int, min_pct: float) -> bool:
+    """True kalau current_price masih dalam batas min_pct dari ATH (mis. min_pct=-85 →
+    harga harus >= 15% dari ATH). True juga kalau data ATH tidak tersedia (fail-open,
+    konsisten dgn filter lain di bot ini)."""
+    dist = ath_distance_pct(sym, current_price, query_ts_ms)
+    if pd.isna(dist):
+        return True   # fail-open
+    return dist > min_pct
+
 def check_entry(df) -> bool:
     """Evaluasi pada candle TERTUTUP terakhir (mode a).
     Update 30/07/2026: hapus EMA20>EMA50, hapus MACD hist>0,
@@ -3128,8 +3225,9 @@ def _cross_up(df, idx, ema_col):
     if pd.isna(p[ema_col]) or pd.isna(cur[ema_col]): return False
     return p['close'] < p[ema_col] and cur['close'] >= cur[ema_col]
 
-def reversal_blockers(df) -> list:
-    """Return all Reversal conditions that fail for the current closed-candle setup."""
+def reversal_blockers(df, sym: str | None = None) -> list:
+    """Return all Reversal conditions that fail for the current closed-candle setup.
+    `sym` opsional -- kalau dikasih, ikut cek jarak-ke-ATH (lihat REVERSAL_ATH_DIST_MIN_PCT)."""
     failures = []
     if len(df) < 6:
         return ["Data candle kurang"]
@@ -3158,9 +3256,16 @@ def reversal_blockers(df) -> list:
         failures.append("HA bullish")
     if not (_cross_up(df, i1, 'ema_fast') or _cross_up(df, i2, 'ema_fast')):
         failures.append("Cross up EMA20")
+    if sym:
+        last = df.iloc[-1]
+        entry_price = float(last['close'])
+        entry_ts_ms = int(last['ct']) if 'ct' in last.index and not pd.isna(last.get('ct')) else None
+        if entry_ts_ms is not None:
+            if not ath_distance_ok(sym, entry_price, entry_ts_ms, REVERSAL_ATH_DIST_MIN_PCT):
+                failures.append(f"Jarak ke ATH (min {REVERSAL_ATH_DIST_MIN_PCT:.0f}%)")
     return failures
 
-def check_entry_reversal(df) -> bool:
+def check_entry_reversal(df, sym: str | None = None) -> bool:
     """Setup reversal pada candle TERTUTUP terakhir sbg c+2 (titik entry).
     Pola: c-5,c-4,c-3,c-2,c-1 (sebelum doji), c0=doji, c+1 HA bull, c+2=entry.
     Indeks: c-5=df[-8], c-4=df[-7], c-3=df[-6], c-2=df[-5], c-1=df[-4],
@@ -3174,7 +3279,7 @@ def check_entry_reversal(df) -> bool:
       - c+1 HA bullish (1 candle konfirmasi)
       - c+1 ATAU c+2 crossing-up EMA20
     Entry di candle c+2 yg baru tutup (mode a)."""
-    return not reversal_blockers(df)
+    return not reversal_blockers(df, sym)
 
 def entry_detail_reversal(df):
     """Untuk heartbeat: (n_lolos, 5, list_gagal) tanpa mempengaruhi keputusan. None kalau choppy/data kurang.
@@ -4590,7 +4695,7 @@ def thread1b_scan_reversal():
                 continue
         df = compute_indicators_reversal(df)
         all_dfs_rev[sym] = df   # simpan utk isi indikator notif OPEN
-        failures = reversal_blockers(df)
+        failures = reversal_blockers(df, sym)
         for failure in failures:
             count_blocker(scan_blockers, failure, True)
         if not failures:
@@ -6007,6 +6112,10 @@ def thread_rev_intrabar_scan():
         ema20_now = float(df_closed['ema_fast'].iloc[i1])
         if price_now <= 0 or price_now <= ema20_now:
             continue   # belum cross-up EMA20
+
+        # Jarak ke ATH (01/09/2026, kasus BICOUSDT -- lihat REVERSAL_ATH_DIST_MIN_PCT)
+        if not ath_distance_ok(sym, price_now, now_ms, REVERSAL_ATH_DIST_MIN_PCT):
+            continue
 
         # ── LOLOS → OPEN DEAL ─────────────────────────────────────────────────
         signal_price = float(df_closed['close'].iloc[i1])
