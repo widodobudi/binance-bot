@@ -11507,6 +11507,86 @@ def run_web_dashboard():
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)})
 
+        @app.route("/admin/backfill_rsi_open", methods=["POST"])
+        def admin_backfill_rsi_open():
+            """
+            One-off backfill: isi kolom rsi_open utk baris trades_forwardtest.csv
+            yang dibuka SEBELUM fitur persistensi RSI di-deploy (commit a318b5e,
+            01/09/2026 23:42 WIB) sehingga kolomnya masih kosong.
+
+            RSI(14) dihitung ULANG dari candle historis Binance asli (endTime =
+            open_time_wib trade - 1 detik, biar candle yg baru saja closed saat
+            entry yang kepilih, bukan candle berikutnya yg baru mulai), interval
+            sesuai timeframe strategi masing2. Ini rekonstruksi, bukan nilai live
+            otentik dari momen keputusan -- tapi metode sama persis dgn yg dipakai
+            utk laporan manual RSI 12 coin rugi minggu lalu.
+
+            Idempotent: baris yg rsi_open-nya sudah terisi DILEWATI -- aman
+            dipanggil ulang berkali-kali (mis. kalau sebagian gagal krn rate
+            limit, tinggal panggil lagi utk melengkapi sisanya).
+            """
+            STRAT_INTERVAL = {
+                'brkX2': '12h', 'brkX2_4h': '4h', 'reversal': '8h',
+                'hunting_4h': '4h', 'brkX2_crossema': '4h',
+                'akum_entry_a': '4h', 'akum_entry_b': '4h',
+            }
+            filled, skipped, errors = 0, 0, 0
+            skip_reasons = {}
+            try:
+                with trades_csv_lock:
+                    if not os.path.exists(TRADES_CSV):
+                        return jsonify({"ok": False, "error": "CSV tidak ditemukan"})
+                    with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                        rows = list(csv.DictReader(f))
+
+                    for row in rows:
+                        if str(row.get('rsi_open', '')).strip():
+                            continue  # sudah terisi -- idempotent skip
+                        strat    = row.get('strategy', '')
+                        interval = STRAT_INTERVAL.get(strat)
+                        open_wib = str(row.get('open_time_wib', '')).strip()
+                        sym_disp = row.get('symbol', '')
+                        if not interval or not open_wib or not sym_disp:
+                            skipped += 1
+                            skip_reasons[strat or '?'] = skip_reasons.get(strat or '?', 0) + 1
+                            continue
+                        sym_raw = sym_disp.replace('/', '').upper()
+                        try:
+                            dt_wib = datetime.strptime(open_wib, '%Y-%m-%d %H:%M:%S')
+                            dt_utc = dt_wib - timedelta(hours=7)
+                            end_ms = int(dt_utc.timestamp() * 1000) - 1000
+                            r = _binance_get("/api/v3/klines", params={
+                                'symbol': sym_raw, 'interval': interval,
+                                'endTime': end_ms, 'limit': 100,
+                            }, timeout=15)
+                            if r is None or r.status_code != 200:
+                                errors += 1; continue
+                            d = r.json()
+                            if not isinstance(d, list) or len(d) < 20:
+                                errors += 1; continue
+                            closes = [float(k[4]) for k in d]
+                            rsi_series = ta.rsi(pd.Series(closes), length=14)
+                            rsi_val = rsi_series.iloc[-1]
+                            if pd.isna(rsi_val):
+                                errors += 1; continue
+                            row['rsi_open'] = f"{float(rsi_val):.1f}"
+                            filled += 1
+                        except Exception:
+                            errors += 1
+                            continue
+
+                    with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
+                        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+                        w.writeheader()
+                        w.writerows(rows)
+                log(f"[ADMIN] backfill_rsi_open: filled={filled} skipped={skipped} errors={errors} skip_reasons={skip_reasons}")
+                sync_trades_csv_to_drive()
+                return jsonify({"ok": True, "filled": filled, "skipped": skipped,
+                                 "errors": errors, "skip_reasons": skip_reasons,
+                                 "total_rows": len(rows)})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)})
+
         @app.route("/admin/test_buy", methods=["POST"])
         def admin_test_buy():
             """
