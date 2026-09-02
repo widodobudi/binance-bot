@@ -8863,7 +8863,7 @@ function renderClosedTradesRows() {
     }
     document.querySelectorAll('#ct-table th[data-sort-key]').forEach(function(th) {
         var label = th.getAttribute('data-sort-key');
-        var text = {open_time:'Opened',close_time:'Close',symbol:'Pair',strategy:'Strategi',profit_pct:'Profit%',profit_usd:'Profit$',duration:'Durasi'}[label];
+        var text = {open_time:'Opened',close_time:'Close',symbol:'Pair',strategy:'Strategi',rsi_open:'RSI@Open',profit_pct:'Profit%',profit_usd:'Profit$',duration:'Durasi'}[label];
         th.textContent = text + (closedTradesSortKey === label ? (closedTradesSortDirection === 1 ? ' ▲' : ' ▼') : '');
     });
     window._ctFilteredRows = rows;
