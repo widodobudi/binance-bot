@@ -354,6 +354,18 @@ TRENDCONFIRM_RSI_MAX          = 75.0     # syarat wajib BARU (03/09/2026, koreks
 TRENDCONFIRM_BB_PCT_SECONDARY= 0.65      # syarat SEKUNDER (skor/ranking, bukan gerbang wajib)
 TRENDCONFIRM_CLOSE_HARD_CEILING_EXTRA_PCT = 5.0  # batas absolut close = hard_stop_pct(atr) + ini,
                                           # TIDAK BISA di-override AI (Fase 2, permintaan Mas Budi 03/09/2026)
+TRENDCONFIRM_BATCH_POOL_SIZE = 15        # (03/09/2026, permintaan Mas Budi, direvisi setelah
+                                          # koreksi beliau) batas JUMLAH kandidat yg dievaluasi AI
+                                          # individual sebelum babak 2 -- BUKAN batas waktu. Versi
+                                          # awal (batas 45 detik) ternyata cuma sempat memproses
+                                          # ~5-6 kandidat krn latensi AI individual (~7-9 detik/
+                                          # kandidat), jadi babak 2 nyaris tidak menyaring apa-apa.
+                                          # Dengan batas JUMLAH, kumpulan kandidat yg masuk ke
+                                          # babak 2 benar-benar besar (s/d 15) tidak peduli berapa
+                                          # lama prosesnya.
+TRENDCONFIRM_BATCH_MAX_APPROVE = 5       # batas atas yg diloloskan babak KEDUA (AI batch re-analysis)
+                                          # -- Max Deals (3) tetap jadi batas akhir yg benar2 dibuka,
+                                          # angka 5 ini kasih sedikit ruang kalau Max Deals dinaikkan
 
 # ── STRATEGI #5: Akumulasi Detector (4h, scan periodik) ───────────────────────
 # Deteksi cryptopair yang sedang berada di fase AKUMULASI (sideways setelah downtrend).
@@ -7062,16 +7074,19 @@ def thread_trendconfirm_scan():
     candidates.sort(key=lambda x: (x[3], x[4].get('gap_ema20_pct', 0)), reverse=True)
     log(f"[T_TRENDCONFIRM] {len(candidates)} kandidat. Buka deal terbaik (slot {n_active}/{TRENDCONFIRM_MAX_DEALS})...")
 
-    for sym, signal_price, atrp, score, detail, df in candidates:
-        n_active = deal_count_by_strategy('trend_confirm_4h')
-        if n_active >= TRENDCONFIRM_MAX_DEALS: break
+    # ============ BABAK 1: AI individual per-kandidat (notify=False), kumpulkan yg lolos ============
+    # (03/09/2026, permintaan Mas Budi) -- dievaluasi s/d TRENDCONFIRM_BATCH_POOL_SIZE kandidat
+    # teratas (ranking), BUKAN dibuka langsung begitu lolos -- ditahan dulu, dikumpulkan, baru
+    # dibandingkan sekaligus di babak 2 di bawah. notify=False supaya user tidak dapat notif
+    # "OPEN" individual yg belum final (bisa saja dibuang di babak 2).
+    pool = candidates[:TRENDCONFIRM_BATCH_POOL_SIZE]
+    held = {}   # symbol -> (signal_price, atrp, score, detail, df, rsi_val)
+    for sym, signal_price, atrp, score, detail, df in pool:
         with active_deals_lock:
             if sym in active_deals: continue
-
         if is_cooldown_enabled('trend_confirm_4h') and cooldown_remaining(sym) > 0:
             log(f"[T_TRENDCONFIRM] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
             continue
-
         r = df.iloc[-1]
         rsi_val = r.get('rsi', float('nan'))
         if is_ai_call_open_enabled('trend_confirm_4h'):
@@ -7079,9 +7094,46 @@ def thread_trendconfirm_scan():
                        'rvol': f"{detail.get('rvol',0):.2f}x", 'bb_pct': f"{detail.get('bb_pct',0):.2f}",
                        'gap_ema20': f"{detail.get('gap_ema20_pct',0):+.2f}%"}
             if not pd.isna(rsi_val): _ai_ind['rsi'] = f"{float(rsi_val):.1f}"
-            if not ai_decision_open(sym, 'TrenKonfirmasi-4h', _ai_ind, active_deal_count()):
-                log(f"[T_TRENDCONFIRM] {sym} OPEN di-skip oleh AI decision")
+            if not ai_decision_open(sym, 'TrenKonfirmasi-4h', _ai_ind, active_deal_count(), notify=False):
+                log(f"[T_TRENDCONFIRM] {sym} babak-1 di-skip oleh AI individual")
                 continue
+        held[sym] = (signal_price, atrp, score, detail, df, rsi_val)
+
+    if not held:
+        log(f"[T_TRENDCONFIRM] Babak 1 selesai: 0/{len(pool)} lolos AI individual — tidak lanjut ke babak 2.")
+        send_telegram(
+            f"🤖 AI Babak 1 | TrenKonfirmasi-4h\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Dievaluasi: {len(pool)} kandidat | Lolos AI individual: 0\n"
+            f"Tidak lanjut ke babak 2 (tidak ada kandidat).",
+            parse_mode=None
+        )
+        return
+    log(f"[T_TRENDCONFIRM] Babak 1 selesai: {len(held)}/{len(pool)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+    send_telegram(
+        f"🤖 AI Babak 1 | TrenKonfirmasi-4h\n"
+        f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+        f"Dievaluasi: {len(pool)} kandidat | Lolos AI individual: {len(held)}\n"
+        f"Lolos: {', '.join(to_display_pair(s) for s in held.keys())}\n"
+        f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {TRENDCONFIRM_BATCH_MAX_APPROVE} diloloskan)...",
+        parse_mode=None
+    )
+
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus, pangkas ke maks 5 ============
+    batch_input = [{'symbol': sym, 'strategy': 'trend_confirm_4h', 'score': v[2], 'detail': v[3]}
+                   for sym, v in held.items()]
+    approved_syms = ai_decision_batch_rank(batch_input, max_approve=TRENDCONFIRM_BATCH_MAX_APPROVE)
+    if not approved_syms:
+        log(f"[T_TRENDCONFIRM] Babak 2: 0 dari {len(held)} kandidat diloloskan.")
+        return
+
+    # ============ BUKA DEAL utk yg lolos babak 2, urut prioritas AI, tetap dibatasi Max Deals ============
+    for sym in approved_syms:
+        n_active = deal_count_by_strategy('trend_confirm_4h')
+        if n_active >= TRENDCONFIRM_MAX_DEALS: break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        signal_price, atrp, score, detail, df, rsi_val = held[sym]
 
         ok, target_usd, add_usd = open_deal_with_sizing(sym, score, strategy="trend_confirm_4h")
         if not ok: continue
@@ -12923,13 +12975,17 @@ def get_full_4h_indicator_context(symbol: str) -> str:
         return ""
 
 
-def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int) -> bool:
+def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int, notify: bool = True) -> bool:
     """
     AI decide: buka deal atau skip.
     Return True = buka, False = skip.
     Default True jika AI tidak tersedia / error.
     Fetch HTF 1D/3D/1W dan LTF 1h untuk konteks tambahan (tidak time-critical).
     (29/08/2026: nambah 1D + LTF 1h, plus fix bug lama HTF yg selalu kosong.)
+    notify=False (03/09/2026, dipakai TrenKonfirmasi-4h babak 1/batch): skip kirim
+    Telegram di sini -- dipakai saat keputusan ini BELUM final (masih akan direview
+    ulang di babak 2/batch), supaya user tidak dapat notif "OPEN" yang lalu ternyata
+    dibuang di babak berikutnya. Caller yang tanggung jawab kirim notif final sendiri.
     """
     ind_str  = "\n".join(f"- {k}: {v}" for k, v in indicators.items())
     htf_str  = fetch_htf_context_for_ai(symbol)
@@ -12963,7 +13019,7 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     decision = "OPEN" in first_line
     reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
     log(f"[AI] OPEN decision {symbol}: {first_line} → {'BUKA' if decision else 'SKIP'}")
-    if not decision:
+    if notify and not decision:
         send_telegram(
             f"🤖 AI Decision | {to_display_pair(symbol)}\n"
             f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
@@ -12974,7 +13030,7 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
             f"{reasoning}",
             parse_mode=None
         )
-    else:
+    elif notify and decision:
         if reasoning:
             send_telegram(
                 f"🤖 AI Analysis | {to_display_pair(symbol)}\n"
@@ -12985,6 +13041,109 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
                 parse_mode=None
             )
     return decision
+
+
+def ai_decision_batch_rank(candidates: list, max_approve: int = None) -> list:
+    """
+    Babak KEDUA (03/09/2026, permintaan Mas Budi, khusus TrenKonfirmasi-4h): dipanggil
+    SETELAH sejumlah kandidat lolos AI individual (ai_decision_open, notify=False) dan
+    ditahan (hold window TRENDCONFIRM_BATCH_HOLD_SEC) -- di sini SEMUA kandidat yg
+    ditahan itu dibandingkan bersamaan oleh AI, bukan dinilai satu-satu terpisah,
+    supaya keputusan akhir "siapa yang benar2 dibuka" mempertimbangkan kandidat lain
+    yg lolos di jendela waktu yang sama (bukan cuma first-come-first-served).
+
+    candidates: list of dict, masing2 minimal punya 'symbol','strategy','score','detail'
+    (detail = {'atr_pct','rvol','bb_pct','gap_ema20_pct','rsi'}), sudah dalam URUTAN
+    RANKING asli (skor+kekuatan sinyal) dari scan -- urutan ini dipakai sbg fallback
+    kalau AI gagal/tidak tersedia.
+
+    Return: list of symbol (subset dari candidates, urutan = prioritas terbaik dulu),
+    MAKS max_approve (default TRENDCONFIRM_BATCH_MAX_APPROVE). Fail-open: kalau AI
+    tidak tersedia/error/jawaban tidak bisa di-parse, fallback ke urutan ranking asli
+    (bukan buka semua tanpa seleksi, dan bukan tolak semua) -- dipotong max_approve.
+    """
+    if max_approve is None:
+        max_approve = TRENDCONFIRM_BATCH_MAX_APPROVE
+    if not candidates:
+        return []
+    valid_symbols = {c['symbol'] for c in candidates}
+    fallback = [c['symbol'] for c in candidates[:max_approve]]
+
+    lines_desc = []
+    for i, c in enumerate(candidates, 1):
+        det = c.get('detail', {})
+        lines_desc.append(
+            f"{i}. {to_display_pair(c['symbol'])} | skor={c.get('score','?')} | "
+            f"ATR%={det.get('atr_pct',0):.2f} | RVOL={det.get('rvol',0):.2f}x | "
+            f"BB%b={det.get('bb_pct',0):.2f} | vs EMA20={det.get('gap_ema20_pct',0):+.2f}% | "
+            f"RSI={det.get('rsi',0):.1f}"
+        )
+    daftar_str = "\n".join(lines_desc)
+
+    prompt = (
+        f"Kamu adalah AI analyst trading crypto. Ada {len(candidates)} kandidat OPEN LONG "
+        f"strategi TrenKonfirmasi-4h (momentum-confirmation) yang SEMUA sudah lolos syarat "
+        f"wajib teknikal DAN sudah lolos penilaian AI individual masing-masing. Sekarang "
+        f"bandingkan SEMUA kandidat ini satu sama lain dan pilih maksimal {max_approve} yang "
+        f"KUALITASNYA PALING BAIK (bukan sekadar lolos, tapi paling meyakinkan dibanding "
+        f"yang lain di daftar ini) -- kandidat yg lebih lemah dibuang meski tadinya lolos "
+        f"penilaian individual.\n\n"
+        f"Daftar kandidat:\n{daftar_str}\n\n"
+        f"Format jawaban (ikuti persis):\n"
+        f"PILIH: <daftar pair dipisah koma, urutan dari paling bagus, mis. BTC/USDT, ETH/USDT>\n"
+        f"Alasan: alasan singkat kenapa yang lain tidak dipilih\n\n"
+        f"Baris pertama HARUS diawali 'PILIH:'. Kalau tidak ada yang layak sama sekali, "
+        f"tulis 'PILIH: TIDAK ADA'."
+    )
+    result = _ai_call(prompt)
+    if not result:
+        log(f"[AI] BATCH rank: AI tidak tersedia, fallback ke urutan ranking asli ({len(fallback)}/{len(candidates)})")
+        return fallback
+
+    lines = result.strip().split("\n")
+    first_line = lines[0].strip()
+    reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+    if not first_line.upper().startswith("PILIH"):
+        log(f"[AI] BATCH rank: format jawaban tidak dikenali, fallback ke urutan ranking asli")
+        return fallback
+
+    picked_raw = first_line.split(":", 1)[1].strip() if ":" in first_line else ""
+    if not picked_raw or "TIDAK ADA" in picked_raw.upper():
+        log(f"[AI] BATCH rank: AI memilih TIDAK ADA dari {len(candidates)} kandidat")
+        send_telegram(
+            f"🤖 AI Batch Analysis | TrenKonfirmasi-4h\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"{ai_provider_note()}\n"
+            f"Dievaluasi: {len(candidates)} kandidat | Diloloskan: 0\n"
+            f"{reasoning}",
+            parse_mode=None
+        )
+        return []
+
+    picked_syms = []
+    for tok in picked_raw.split(","):
+        tok = tok.strip().upper().replace("/", "").replace("-", "")
+        for sym in valid_symbols:
+            if sym.upper() == tok or sym.upper().replace("USDT", "") == tok.replace("USDT", ""):
+                if sym not in picked_syms:
+                    picked_syms.append(sym)
+                break
+    if not picked_syms:
+        log(f"[AI] BATCH rank: gagal parse simbol dari jawaban AI, fallback ke urutan ranking asli")
+        return fallback
+    picked_syms = picked_syms[:max_approve]
+
+    log(f"[AI] BATCH rank: {len(picked_syms)}/{len(candidates)} diloloskan → {picked_syms}")
+    send_telegram(
+        f"🤖 AI Batch Analysis | TrenKonfirmasi-4h\n"
+        f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+        f"{ai_provider_note()}\n"
+        f"Dievaluasi: {len(candidates)} kandidat | Diloloskan: {len(picked_syms)}\n"
+        f"Terpilih: {', '.join(to_display_pair(s) for s in picked_syms)}\n"
+        f"{reasoning}",
+        parse_mode=None
+    )
+    return picked_syms
 
 
 def ai_decision_armed(symbol: str, strategy: str, d: dict, price: float, peak: float) -> bool:
