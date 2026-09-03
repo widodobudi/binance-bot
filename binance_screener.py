@@ -7000,6 +7000,18 @@ def thread_trendconfirm_scan():
     global _trendconfirm_last_candle_ts
     if not TRENDCONFIRM_ENABLED: return
 
+    # Cek circuit breaker rugi harian DI SINI, SEBELUM evaluasi kandidat apa pun (fix
+    # 03/09/2026, permintaan Mas Budi): sebelumnya breaker cuma dicek di dalam
+    # open_deal_with_sizing() SETELAH AI dipanggil per-kandidat -- kalau breaker aktif,
+    # setiap kandidat GAGAL dibuka jadi n_active tidak pernah nambah, jadi guard
+    # "n_active>=Max Deals: break" di loop bawah nggak pernah kepicu, dan loop
+    # menghabiskan SEMUA kandidat lewat AI (bisa belasan) walau semuanya pasti gagal.
+    # Cek di sini = 0 AI call & 0 notifikasi kalau breaker aktif, bukan menunggu gagal
+    # satu-satu di akhir.
+    if is_daily_loss_limit_breached():
+        log(f"[T_TRENDCONFIRM] Scan di-skip -- batas rugi harian tersulut (cek di awal, bukan per-kandidat)")
+        return
+
     n_active = deal_count_by_strategy('trend_confirm_4h')
     if n_active >= TRENDCONFIRM_MAX_DEALS: return
 
