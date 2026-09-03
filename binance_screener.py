@@ -13024,18 +13024,13 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     decision = "OPEN" in first_line
     reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
     log(f"[AI] OPEN decision {symbol}: {first_line} → {'BUKA' if decision else 'SKIP'}")
-    if notify and not decision:
-        send_telegram(
-            f"🤖 AI Decision | {to_display_pair(symbol)}\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"{ai_provider_note()}\n"
-            f"Strategi : {strategy}\n"
-            f"Event    : OPEN LONG\n"
-            f"Keputusan: ❌ SKIP\n"
-            f"{reasoning}",
-            parse_mode=None
-        )
-    elif notify and decision:
+    # SKIP TIDAK PERNAH kirim Telegram lagi (03/09/2026, permintaan Mas Budi, berlaku ke SEMUA
+    # 7 strategi -- bukan cuma TrenKonfirmasi-4h): SKIP artinya tidak ada tindakan, notifnya jauh
+    # lebih sering & kurang bernilai dibanding OPEN (yg berarti sesuatu benar2 terjadi), dan
+    # volume-nya kebukti bikin spam. Tetap dicatat di log() di atas utk audit/debug, cuma
+    # dihapus dari Telegram. OPEN tetap gated `notify` spt sebelumnya (TrenKonfirmasi-4h babak 1
+    # masih notify=False di situ, 6 strategi lain tetap default notify=True).
+    if notify and decision:
         if reasoning:
             send_telegram(
                 f"🤖 AI Analysis | {to_display_pair(symbol)}\n"
