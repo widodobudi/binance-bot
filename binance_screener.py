@@ -498,7 +498,13 @@ HTF_VOL_MA_PERIOD   = 20
 REVERSAL_ENABLED      = True
 # Reversal pakai bot 3Commas terpisah (split). Kalau env var-nya belum diset, matikan reversal
 # supaya tidak salah kirim sinyal reversal ke bot brkX2.
-if REVERSAL_ENABLED and (COMMAS_BOT_ID_REVERSAL == 0 or not COMMAS_EMAIL_TOKEN_REVERSAL):
+# 03/09/2026: syarat kredensial 3Commas di atas HANYA relevan kalau send_open_long() benar2
+# lewat jalur 3Commas (USE_BINANCE_DIRECT=False). Saat USE_BINANCE_DIRECT=True (jalur eksekusi
+# skrg, direct-Binance), send_open_long() sama sekali tidak baca COMMAS_BOT_ID_REVERSAL/
+# COMMAS_EMAIL_TOKEN_REVERSAL -- itu cuma dipakai jalur fallback 3Commas lama yg sudah tidak
+# aktif. Gate lama ini jadi mematikan Reversal-8h total di produksi tanpa alasan yg relevan lagi
+# secara arsitektur. Diperbaiki: syarat kredensial hanya berlaku kalau BUKAN direct-Binance.
+if REVERSAL_ENABLED and not USE_BINANCE_DIRECT and (COMMAS_BOT_ID_REVERSAL == 0 or not COMMAS_EMAIL_TOKEN_REVERSAL):
     print("WARN: REVERSAL aktif tapi COMMAS_BOT_ID_REVERSAL/COMMAS_EMAIL_TOKEN_REVERSAL "
           "belum diset di Railway > Variables. REVERSAL DIMATIKAN sampai env var diisi.")
     REVERSAL_ENABLED = False
@@ -4894,8 +4900,80 @@ def thread1b_scan_reversal():
         return (f"REVERSAL: {len(candidates)} kandidat LOLOS tapi candle sudah diproses "
                 f"(tunggu candle 8h baru): {lolos_syms}")
 
-    opened_any = False
+    held_rev = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
     for sym, signal_price, atrp, cts in candidates:
+        if len(held_rev) >= AI_BATCH_POOL_SIZE:
+            log(f"[T1b] Kolam babak-1 penuh ({AI_BATCH_POOL_SIZE}), berhenti kumpulkan kandidat baru siklus ini.")
+            break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        if is_cooldown_enabled('reversal') and cooldown_remaining(sym) > 0:
+            log(f"[T1b] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
+            continue
+        log(f"[T1b] SINYAL REVERSAL: {sym} close_candle={_fmt_price(signal_price)} atr%={atrp:.2f}")
+
+        # Perkaya konteks TF sendiri (8h) buat AI -- sebelumnya cuma atr_pct+signal_price,
+        # padahal compute_indicators_reversal() sudah hitung RSI/Stoch/MACD/BB%b/Williams%R/
+        # CCI/OBV/EMA20 (dipakai utk _open_fields_rev SETELAH open, tapi tidak pernah dikirim
+        # ke AI). Reuse df yg sudah ada di all_dfs_rev (tanpa fetch tambahan). 01/09/2026.
+        _dfr_ai = all_dfs_rev.get(sym)
+        _rsi = _sk = _sd = _mh = _bb = _wr = _cci = _ema20 = None
+        if _dfr_ai is not None and len(_dfr_ai) >= 2:
+            _rr_ai = _dfr_ai.iloc[-1]; _rp_ai = _dfr_ai.iloc[-2]
+            def _aiv(col):
+                v = _rr_ai.get(col) if col in _rr_ai.index else None
+                return None if v is None or pd.isna(v) else float(v)
+            _rsi = _aiv('rsi'); _sk = _aiv('stoch_k'); _sd = _aiv('stoch_d')
+            _mh = _aiv('macd_hist'); _bb = _aiv('bb_pct'); _wr = _aiv('williams_r'); _cci = _aiv('cci')
+            _ema20 = _aiv('ema_fast')
+
+        if is_ai_call_open_enabled('reversal'):
+            _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'signal_price': _fmt_price(signal_price)}
+            if _rsi is not None: _ai_ind['rsi'] = f"{_rsi:.1f}"
+            if _sk is not None and _sd is not None: _ai_ind['stoch'] = f"K={_sk:.1f} D={_sd:.1f}"
+            if _mh is not None: _ai_ind['macd_hist'] = f"{_mh:+.6f}"
+            if _bb is not None: _ai_ind['bb_pct'] = f"{_bb:.2f}"
+            if _wr is not None: _ai_ind['williams_r'] = f"{_wr:.1f}"
+            if _cci is not None: _ai_ind['cci'] = f"{_cci:.1f}"
+            if _ema20 is not None and _ema20 > 0:
+                _ai_ind['gap_ema20'] = f"{(signal_price/_ema20-1)*100:+.2f}%"
+            if _dfr_ai is not None and len(_dfr_ai) >= 2:
+                _obv_now = _aiv('obv')
+                _obv_prv = _rp_ai.get('obv') if 'obv' in _rp_ai.index else None
+                if _obv_now is not None and _obv_prv is not None and not pd.isna(_obv_prv):
+                    _ai_ind['obv'] = '↑' if _obv_now > float(_obv_prv) else '↓'
+            if not ai_decision_open(sym, 'Reversal-8h', _ai_ind, active_deal_count(), notify=False):
+                log(f"[T1b] {sym} babak-1 di-skip oleh AI individual")
+                continue
+
+        _gap_rev = (signal_price / _ema20 - 1) * 100 if _ema20 and _ema20 > 0 else 0.0
+        held_rev[sym] = {
+            'signal_price': signal_price, 'atrp': atrp, 'cts': cts,
+            'detail': {'atr_pct': atrp, 'rvol': 0.0, 'bb_pct': _bb or 0.0,
+                       'gap_ema20_pct': _gap_rev, 'rsi': _rsi or 0.0},
+        }
+
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+    approved_rev = []
+    if held_rev:
+        log(f"[T1b] Babak 1 selesai: {len(held_rev)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+        send_telegram(
+            f"🤖 AI Babak 1 | Reversal-8h\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Lolos AI individual: {len(held_rev)}\n"
+            f"Lolos: {', '.join(to_display_pair(s) for s in held_rev.keys())}\n"
+            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
+            parse_mode=None
+        )
+        batch_input_rev = [{'symbol': s, 'strategy': 'reversal', 'score': 0, 'detail': v['detail']}
+                            for s, v in held_rev.items()]
+        approved_rev = ai_decision_batch_rank(
+            batch_input_rev, strategy_label='Reversal-8h', max_approve=AI_BATCH_MAX_APPROVE,
+            criteria_note="Kriteria: ATR%, BB%b, jarak EMA20, RSI (reversal 8h tidak hitung RVOL)",
+        )
+
+    opened_any = False
+    for sym in approved_rev:
         if is_daily_loss_limit_breached():
             log(f"[T1b] Batas rugi harian tersulut, sisa kandidat reversal tidak dibuka.")
             break
@@ -4904,41 +4982,18 @@ def thread1b_scan_reversal():
             break
         with active_deals_lock:
             if sym in active_deals: continue
-        if is_cooldown_enabled('reversal') and cooldown_remaining(sym) > 0:
-            log(f"[T1b] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
-            continue
-        log(f"[T1b] SINYAL REVERSAL: {sym} close_candle={_fmt_price(signal_price)} atr%={atrp:.2f}")
-        if is_ai_call_open_enabled('reversal'):
-            _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'signal_price': _fmt_price(signal_price)}
-            # Perkaya konteks TF sendiri (8h) buat AI -- sebelumnya cuma atr_pct+signal_price,
-            # padahal compute_indicators_reversal() sudah hitung RSI/Stoch/MACD/BB%b/Williams%R/
-            # CCI/OBV/EMA20 (dipakai utk _open_fields_rev SETELAH open, tapi tidak pernah dikirim
-            # ke AI). Reuse df yg sudah ada di all_dfs_rev (tanpa fetch tambahan). 01/09/2026.
-            _dfr_ai = all_dfs_rev.get(sym)
-            if _dfr_ai is not None and len(_dfr_ai) >= 2:
-                _rr_ai = _dfr_ai.iloc[-1]; _rp_ai = _dfr_ai.iloc[-2]
-                def _aiv(col):
-                    v = _rr_ai.get(col) if col in _rr_ai.index else None
-                    return None if v is None or pd.isna(v) else float(v)
-                _rsi = _aiv('rsi'); _sk = _aiv('stoch_k'); _sd = _aiv('stoch_d')
-                _mh = _aiv('macd_hist'); _bb = _aiv('bb_pct'); _wr = _aiv('williams_r'); _cci = _aiv('cci')
-                _ema20 = _aiv('ema_fast')
-                if _rsi is not None: _ai_ind['rsi'] = f"{_rsi:.1f}"
-                if _sk is not None and _sd is not None: _ai_ind['stoch'] = f"K={_sk:.1f} D={_sd:.1f}"
-                if _mh is not None: _ai_ind['macd_hist'] = f"{_mh:+.6f}"
-                if _bb is not None: _ai_ind['bb_pct'] = f"{_bb:.2f}"
-                if _wr is not None: _ai_ind['williams_r'] = f"{_wr:.1f}"
-                if _cci is not None: _ai_ind['cci'] = f"{_cci:.1f}"
-                if _ema20 is not None and _ema20 > 0:
-                    _ai_ind['gap_ema20'] = f"{(signal_price/_ema20-1)*100:+.2f}%"
-                _obv_now = _aiv('obv')
-                _obv_prv = _rp_ai.get('obv') if 'obv' in _rp_ai.index else None
-                if _obv_now is not None and _obv_prv is not None and not pd.isna(_obv_prv):
-                    _ai_ind['obv'] = '↑' if _obv_now > float(_obv_prv) else '↓'
-            if not ai_decision_open(sym, 'Reversal-8h', _ai_ind, active_deal_count()):
-                log(f"[T1b] {sym} OPEN di-skip oleh AI decision")
-                continue
+        v = held_rev[sym]
+        signal_price = v['signal_price']; atrp = v['atrp']; cts = v['cts']
+
         if send_open_long(sym, 'reversal'):
+            # 03/09/2026: target_usd tidak pernah didefinisikan di fungsi ini (beda dari
+            # brkX2 yg pakai open_deal_with_sizing() yg return target_usd -- reversal pakai
+            # send_open_long() yg cuma return bool) -- csv_log_open() di bawah baca
+            # 'base_usd': target_usd dan akan NameError begitu reversal berhasil buka deal.
+            # Belum pernah ketahuan krn REVERSAL_ENABLED selalu False di produksi sampai
+            # perbaikan gate 3Commas di atas. Nilai sama dgn yg dipakai send_open_long()
+            # sendiri (get_strategy_base_usd) supaya CSV konsisten dgn modal riil terpakai.
+            target_usd = get_strategy_base_usd('reversal')
             entry_price = get_price_now(sym)
             if entry_price <= 0: entry_price = signal_price
             slip_pct = (entry_price/signal_price - 1) * 100 if signal_price > 0 else 0.0
@@ -6359,6 +6414,7 @@ def thread_rev_intrabar_scan():
         except: pass
     universe = [p for p in pairs if volmap.get(p, 0) >= REVERSAL_MIN_VOL_USD]
 
+    held_rev2 = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
     for sym in universe:
         if is_daily_loss_limit_breached():
             log(f"[T3-REV] Batas rugi harian tersulut, scan intrabar reversal dihentikan.")
@@ -6442,18 +6498,19 @@ def thread_rev_intrabar_scan():
         log(f"[T3-REV] SINYAL REVERSAL INTRABAR: {sym} price_now={price_now:.6g} "
             f"EMA20={ema20_now:.6g} atr%={atrp:.2f}")
 
+        # Sama seperti thread1b_scan_reversal() (01/09/2026): perkaya konteks TF sendiri
+        # (8h) buat AI pakai indikator yg sudah dihitung compute_indicators_reversal() di
+        # row c+1 (df_closed.iloc[i1]) -- termasuk gap_ema20 pakai price_now LIVE (bukan
+        # cuma close candle) krn di jalur intrabar ini price_now-lah yg jadi harga entry.
+        _rr_ai = df_closed.iloc[i1]; _rp_ai = df_closed.iloc[i0]
+        def _aiv(col):
+            v = _rr_ai.get(col) if col in _rr_ai.index else None
+            return None if v is None or pd.isna(v) else float(v)
+        _rsi = _aiv('rsi'); _sk = _aiv('stoch_k'); _sd = _aiv('stoch_d')
+        _mh = _aiv('macd_hist'); _bb = _aiv('bb_pct'); _wr = _aiv('williams_r'); _cci = _aiv('cci')
+
         if is_ai_call_open_enabled('reversal'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'signal_price': _fmt_price(signal_price)}
-            # Sama seperti thread1b_scan_reversal() (01/09/2026): perkaya konteks TF sendiri
-            # (8h) buat AI pakai indikator yg sudah dihitung compute_indicators_reversal() di
-            # row c+1 (df_closed.iloc[i1]) -- termasuk gap_ema20 pakai price_now LIVE (bukan
-            # cuma close candle) krn di jalur intrabar ini price_now-lah yg jadi harga entry.
-            _rr_ai = df_closed.iloc[i1]; _rp_ai = df_closed.iloc[i0]
-            def _aiv(col):
-                v = _rr_ai.get(col) if col in _rr_ai.index else None
-                return None if v is None or pd.isna(v) else float(v)
-            _rsi = _aiv('rsi'); _sk = _aiv('stoch_k'); _sd = _aiv('stoch_d')
-            _mh = _aiv('macd_hist'); _bb = _aiv('bb_pct'); _wr = _aiv('williams_r'); _cci = _aiv('cci')
             if _rsi is not None: _ai_ind['rsi'] = f"{_rsi:.1f}"
             if _sk is not None and _sd is not None: _ai_ind['stoch'] = f"K={_sk:.1f} D={_sd:.1f}"
             if _mh is not None: _ai_ind['macd_hist'] = f"{_mh:+.6f}"
@@ -6466,10 +6523,53 @@ def thread_rev_intrabar_scan():
             _obv_prv = _rp_ai.get('obv') if 'obv' in _rp_ai.index else None
             if _obv_now is not None and _obv_prv is not None and not pd.isna(_obv_prv):
                 _ai_ind['obv'] = '↑' if _obv_now > float(_obv_prv) else '↓'
-            if not ai_decision_open(sym, 'Reversal-8h', _ai_ind, active_deal_count()):
-                log(f"[T3-REV] {sym} OPEN di-skip oleh AI decision")
+            if not ai_decision_open(sym, 'Reversal-8h', _ai_ind, active_deal_count(), notify=False):
+                log(f"[T3-REV] {sym} babak-1 di-skip oleh AI individual")
                 continue
+
+        # LOLOS syarat teknikal -> babak 1: TAHAN dulu (jangan langsung buka)
+        _gap_rev2 = (price_now / ema20_now - 1) * 100 if ema20_now > 0 and price_now > 0 else 0.0
+        held_rev2[sym] = {
+            'signal_price': signal_price, 'atrp': atrp, 'price_now': price_now, 'rsi_open': _rsi,
+            'detail': {'atr_pct': atrp, 'rvol': 0.0, 'bb_pct': _bb or 0.0,
+                       'gap_ema20_pct': _gap_rev2, 'rsi': _rsi or 0.0},
+        }
+        if len(held_rev2) >= AI_BATCH_POOL_SIZE:
+            log(f"[T3-REV] Kolam babak-1 penuh ({AI_BATCH_POOL_SIZE}), berhenti kumpulkan kandidat baru siklus ini.")
+            break
+
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+    approved_rev2 = []
+    if held_rev2:
+        log(f"[T3-REV] Babak 1 selesai: {len(held_rev2)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+        send_telegram(
+            f"🤖 AI Babak 1 | Reversal-8h (intrabar)\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Lolos AI individual: {len(held_rev2)}\n"
+            f"Lolos: {', '.join(to_display_pair(s) for s in held_rev2.keys())}\n"
+            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
+            parse_mode=None
+        )
+        batch_input_rev2 = [{'symbol': s, 'strategy': 'reversal', 'score': 0, 'detail': v['detail']}
+                             for s, v in held_rev2.items()]
+        approved_rev2 = ai_decision_batch_rank(
+            batch_input_rev2, strategy_label='Reversal-8h', max_approve=AI_BATCH_MAX_APPROVE,
+            criteria_note="Kriteria: ATR%, BB%b, jarak EMA20, RSI (reversal 8h tidak hitung RVOL)",
+        )
+
+    for sym in approved_rev2:
+        if is_daily_loss_limit_breached():
+            log(f"[T3-REV] Batas rugi harian tersulut, sisa kandidat reversal intrabar tidak dibuka.")
+            break
+        if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL:
+            break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        v = held_rev2[sym]
+        signal_price = v['signal_price']; atrp = v['atrp']; price_now = v['price_now']
+
         if send_open_long(sym, 'reversal'):
+            target_usd = get_strategy_base_usd('reversal')
             entry_price = get_price_now(sym)
             if entry_price <= 0:
                 entry_price = price_now
@@ -6531,7 +6631,7 @@ def thread_rev_intrabar_scan():
                 'base_usd':       target_usd,
                 'score':          0,
                 'strategy':       'reversal',
-                'rsi_open':       f"{float(df_closed['rsi'].iloc[i1]):.1f}" if 'rsi' in df_closed.columns and not pd.isna(df_closed['rsi'].iloc[i1]) else '',
+                'rsi_open':       f"{v['rsi_open']:.1f}" if v.get('rsi_open') is not None else '',
             })
             log_oac('OPEN', sym, 'Reversal-8h', {
                 'entry_price': _fmt_price(entry_price),
