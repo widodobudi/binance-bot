@@ -205,7 +205,7 @@ def _candle_seconds_for_strategy(strat: str) -> float:
     brkX2-12h/43200, salah buat strategi 4h/8h)."""
     if strat == 'reversal':
         return REVERSAL_SECONDS_PER_CANDLE
-    if strat in ('brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'akum_entry_a', 'akum_entry_b'):
+    if strat in ('brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
         return STRAT4H_SECONDS
     return SECONDS_PER_CANDLE  # brkX2 (12h), default
 
@@ -317,6 +317,31 @@ STRAT_CROSSEMA_CROSS_TOL_PCT = 0.5     # toleransi Lapis 2 (live cross EMA20): p
 # Update 25/07/2026: backtest_perf_weight_sweep → EQUAL_thr0.5 terbaik
 #   avg +3.052% WR 77.7% n=1316 vs PINE_thr1.0 avg +2.711% WR 75.5% n=955
 #   Semua TF bobot sama (1/6), threshold 0.5 = cukup 3 dari 6 TF positif
+
+# ── STRATEGI #7: TrenKonfirmasi-4h ("tren sudah jalan", 4h) ──────────────────
+# Basis: backtest 03/09/2026 -- "R6" (4 syarat) dedup 1-deal/koin, full-lifecycle
+# simulate_trade() real hard_stop/trailing. Menang jelas vs syarat live existing
+# di brkX2-4h (avg +2.40% vs +1.23%), CrossEMA-4h (avg +2.00% vs +0.95%, WR 75.5%
+# vs 71.6%) & brkX2-12h (avg +2.90% vs +1.28%), setara di Reversal-8h. Lihat
+# memory project_momentum_confirmation_finding.md utk detail lengkap.
+# Filosofi: BUKAN memprediksi breakout sebelum terjadi (backtest gap-EMA20 di
+# titik open candle menolak itu -- kondisi 4 aset yg diuji tidak seragam), TAPI
+# konfirmasi tren yg SUDAH mulai bergerak (ATR sudah terangkat, harga sudah di
+# atas EMA20, volume sudah naik) -- gaya momentum-continuation, bukan reversal.
+TRENDCONFIRM_ENABLED         = True
+TRENDCONFIRM_TIMEFRAME       = "4h"
+TRENDCONFIRM_MAX_DEALS       = 3        # mulai konservatif -- frekuensi sinyal mentah jauh
+                                          # lebih tinggi dari strategi lain (lihat memory)
+TRENDCONFIRM_MAX_HOLD_CANDLES= 15        # timeout 15 candle 4h = 2.5 hari, sama spt brkX2-4h/hunting
+TRENDCONFIRM_SCAN_INTERVAL   = 180       # scan tiap 3 menit, sama spt brkX2-4h
+TRENDCONFIRM_MIN_VOL_USD     = 2_000_000 # sama spt brkX2-4h (STRAT4H_MIN_VOL_USD)
+TRENDCONFIRM_ATR_MEDIAN_WINDOW = 100     # "ATR tinggi" = relatif thd median ATR% 100 candle terakhir
+                                          # koin itu sendiri (self-relative, bukan angka mutlak)
+TRENDCONFIRM_RVOL_MIN        = 1.0       # syarat wajib
+TRENDCONFIRM_BB_PCT_SECONDARY= 0.65      # syarat SEKUNDER (skor/ranking, bukan gerbang wajib)
+TRENDCONFIRM_CLOSE_HARD_CEILING_EXTRA_PCT = 5.0  # batas absolut close = hard_stop_pct(atr) + ini,
+                                          # TIDAK BISA di-override AI (Fase 2, permintaan Mas Budi 03/09/2026)
+
 # ── STRATEGI #5: Akumulasi Detector (4h, scan periodik) ───────────────────────
 # Deteksi cryptopair yang sedang berada di fase AKUMULASI (sideways setelah downtrend).
 # Indikator PRIMARY (semua harus lolos):
@@ -715,6 +740,7 @@ STRATEGY_CONFIG_DEFAULTS = {
     "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
     "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
     "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
+    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
 }
 # Nilai "max_deals" di atas SAMA PERSIS dengan default lama MAX_DEALS_BRKX2/MAX_DEALS_REVERSAL/
 # STRAT4H_MAX_DEALS/STRAT_CROSSEMA_MAX_DEALS/AKUM_ENTRY_MAX_DEALS/HUNTING_MAX_DEALS (31/08/2026,
@@ -773,6 +799,7 @@ def sync_max_deals_globals():
     ubah puluhan call-site sekaligus)."""
     global MAX_DEALS_BRKX2, MAX_DEALS_REVERSAL, STRAT4H_MAX_DEALS
     global STRAT_CROSSEMA_MAX_DEALS, HUNTING_MAX_DEALS, AKUM_ENTRY_MAX_DEALS
+    global TRENDCONFIRM_MAX_DEALS
     try:
         cfg = load_strategy_config()
         MAX_DEALS_BRKX2          = int(cfg.get('brkX2', {}).get('max_deals', MAX_DEALS_BRKX2) or MAX_DEALS_BRKX2)
@@ -781,9 +808,10 @@ def sync_max_deals_globals():
         STRAT_CROSSEMA_MAX_DEALS = int(cfg.get('brkX2_crossema', {}).get('max_deals', STRAT_CROSSEMA_MAX_DEALS) or STRAT_CROSSEMA_MAX_DEALS)
         HUNTING_MAX_DEALS        = int(cfg.get('hunting_4h', {}).get('max_deals', HUNTING_MAX_DEALS) or HUNTING_MAX_DEALS)
         AKUM_ENTRY_MAX_DEALS     = int(cfg.get('akum_entry_a', {}).get('max_deals', AKUM_ENTRY_MAX_DEALS) or AKUM_ENTRY_MAX_DEALS)
+        TRENDCONFIRM_MAX_DEALS   = int(cfg.get('trend_confirm_4h', {}).get('max_deals', TRENDCONFIRM_MAX_DEALS) or TRENDCONFIRM_MAX_DEALS)
         log(f"   Max deals per strategi: brkX2={MAX_DEALS_BRKX2} reversal={MAX_DEALS_REVERSAL} "
             f"4h={STRAT4H_MAX_DEALS} crossema={STRAT_CROSSEMA_MAX_DEALS} "
-            f"hunting={HUNTING_MAX_DEALS} akum={AKUM_ENTRY_MAX_DEALS}")
+            f"hunting={HUNTING_MAX_DEALS} akum={AKUM_ENTRY_MAX_DEALS} trendconfirm={TRENDCONFIRM_MAX_DEALS}")
     except Exception as e:
         log(f"WARN sync_max_deals_globals: {e}")
 
@@ -4896,7 +4924,7 @@ def enrich_deal_open_indicators(symbol: str, deal: dict) -> dict:
         return deal
     try:
         strategy = deal.get('strategy', 'brkX2')
-        if strategy in ('brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'akum_entry_a', 'akum_entry_b'):
+        if strategy in ('brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
             frame = get_ohlcv_4h(symbol, limit=120)
             frame = compute_indicators_4h(frame) if frame is not None else None
         else:
@@ -5185,7 +5213,7 @@ def thread2_monitor():
                 trail_reason = f"trailing (turun ke {_fmt_price(price)} dari puncak {_fmt_price(peak)}, dev {tdist}%)"
                 trail_grace_started = float(d.get('trail_htf_grace_started_at', 0) or 0)
                 trail_grace_age = time.time() - trail_grace_started if trail_grace_started > 0 else 0
-                grace_strategy = strat in ('brkX2', 'brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'reversal')
+                grace_strategy = strat in ('brkX2', 'brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'reversal', 'trend_confirm_4h')
                 if (grace_strategy and prof_from_entry > 0
                         and trail_grace_age < TRAIL_HTF_GRACE_SECONDS
                         and trailing_htf_is_healthy(sym)):
@@ -5220,6 +5248,9 @@ def thread2_monitor():
             hold_label = (f"batas {HUNTING_MAX_HOLD_CANDLES} candle 4h (crossema)"
                           if d.get('strategy') == 'brkX2_crossema'
                           else f"batas {HUNTING_MAX_HOLD_CANDLES} candle 4h (hunting)")
+        elif d.get('strategy','brkX2') == 'trend_confirm_4h':
+            hold_limit_sec = TRENDCONFIRM_MAX_HOLD_CANDLES * STRAT4H_SECONDS
+            hold_label = f"batas {TRENDCONFIRM_MAX_HOLD_CANDLES} candle 4h (trendconfirm)"
         elif d.get('strategy','') in ('akum_entry_a', 'akum_entry_b'):
             timeout_c = d.get('timeout_candles', AKUM_ENTRY_TIMEOUT)
             hold_limit_sec = timeout_c * STRAT4H_SECONDS
@@ -5291,6 +5322,7 @@ def thread2_monitor():
                 REVERSAL_MAX_HOLD_CANDLES if d.get('strategy') == 'reversal'
                 else STRAT4H_MAX_HOLD_CANDLES if d.get('strategy') == 'brkX2_4h'
                 else HUNTING_MAX_HOLD_CANDLES if d.get('strategy') in ('brkX2_crossema', 'hunting_4h')
+                else TRENDCONFIRM_MAX_HOLD_CANDLES if d.get('strategy') == 'trend_confirm_4h'
                 else d.get('timeout_candles', AKUM_ENTRY_TIMEOUT) if d.get('strategy','') in ('akum_entry_a','akum_entry_b')
                 else MAX_HOLD_DAYS
             )
@@ -5343,6 +5375,8 @@ def thread2_monitor():
                 strat_label = "Akumulasi-4h Entry A"
             elif strat == 'akum_entry_b':
                 strat_label = "Akumulasi-4h Entry B"
+            elif strat == 'trend_confirm_4h':
+                strat_label = "TrenKonfirmasi-4h"
             else:
                 strat_label = "Momentum brkX2 (12h)"
             # Hold-no-sell: kalau ini hard-stop, ATAU timeout ("batas N candle tercapai") sementara
@@ -5414,7 +5448,7 @@ def thread2_monitor():
                     'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
                 })
                 remove_from_active_deals(sym)
-                if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b'): record_closed(sym)
+                if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'): record_closed(sym)
                 if strat == 'brkX2_4h' and trail_stop_triggered: record_trail_close(sym, price)
                 if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof_from_entry)
                 if _hold_no_sell:
@@ -6835,6 +6869,204 @@ def run_thread_crossema():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# STRATEGI #7: TrenKonfirmasi-4h — konfirmasi tren yang SUDAH bergerak (4h)
+# Basis: backtest 03/09/2026, lihat konstanta TRENDCONFIRM_* & memory
+# project_momentum_confirmation_finding.md. Scan candle-closed periodik (BUKAN
+# intrabar live-cross spt CrossEMA-4h) -- lebih mirip pola thread1d_scan_4h.
+# ══════════════════════════════════════════════════════════════════════════════
+_trendconfirm_last_candle_ts: dict = {}
+
+def check_trendconfirm_entry(df):
+    """Cek syarat TrenKonfirmasi-4h di candle TERAKHIR df (sudah closed & sudah
+    lewat compute_indicators_4h()). Return (lolos, score, detail) -- score
+    1=cuma syarat wajib, 2=+syarat sekunder (BB%b, dipakai buat ranking bukan gerbang)."""
+    if df is None or len(df) < TRENDCONFIRM_ATR_MEDIAN_WINDOW + 20:
+        return False, 0, {}
+    r = df.iloc[-1]
+    ema20 = r.get('ema20')
+    if pd.isna(ema20) or ema20 <= 0:
+        return False, 0, {}
+    atrp = r.get('atr_pct'); bbp = r.get('bb_pct')
+    vol_ma20 = df['vol'].rolling(20).mean().iloc[-1]
+    if pd.isna(atrp) or pd.isna(bbp) or pd.isna(vol_ma20) or vol_ma20 <= 0:
+        return False, 0, {}
+    rvol = float(r['vol']) / float(vol_ma20)
+    atr_med = df['atr_pct'].rolling(TRENDCONFIRM_ATR_MEDIAN_WINDOW).median().iloc[-1]
+    if pd.isna(atr_med):
+        return False, 0, {}
+    gap_ema20 = (float(r['close']) / float(ema20) - 1) * 100
+
+    # --- Syarat WAJIB (ketiganya harus lolos) ---
+    if not (float(atrp) >= float(atr_med)): return False, 0, {}
+    if not (gap_ema20 >= 0.0): return False, 0, {}
+    if not (rvol >= TRENDCONFIRM_RVOL_MIN): return False, 0, {}
+
+    # --- Syarat SEKUNDER (dipakai utk skor/ranking, BUKAN gerbang wajib) ---
+    score = 2 if float(bbp) >= TRENDCONFIRM_BB_PCT_SECONDARY else 1
+
+    detail = {'atr_pct': float(atrp), 'atr_median100': float(atr_med), 'rvol': rvol,
+               'bb_pct': float(bbp), 'gap_ema20_pct': gap_ema20}
+    return True, score, detail
+
+def thread_trendconfirm_scan():
+    """Scan sinyal TrenKonfirmasi-4h. Dipanggil periodik tiap TRENDCONFIRM_SCAN_INTERVAL detik."""
+    global _trendconfirm_last_candle_ts
+    if not TRENDCONFIRM_ENABLED: return
+
+    n_active = deal_count_by_strategy('trend_confirm_4h')
+    if n_active >= TRENDCONFIRM_MAX_DEALS: return
+
+    now_ms = int(time.time() * 1000)
+    sec4h  = STRAT4H_SECONDS
+    candle_open_ms = (now_ms // (sec4h * 1000)) * (sec4h * 1000)
+
+    ticker = get_ticker_24h()
+    if not ticker: return
+    vol_map = {t["symbol"]: float(t.get("quoteVolume", 0)) for t in ticker}
+
+    with active_deals_lock:
+        existing = set(active_deals.keys())
+
+    candidates = []
+    scan_blockers_tc = {}
+    scan_total_tc = 0
+    for sym_info in ticker:
+        sym = sym_info.get("symbol", "")
+        if not sym.endswith("USDT"): continue
+        if sym in existing: continue
+        if sym in SYMBOL_BLACKLIST: continue
+        if _trendconfirm_last_candle_ts.get(sym) == candle_open_ms: continue
+        if vol_map.get(sym, 0) < TRENDCONFIRM_MIN_VOL_USD: continue
+
+        try:
+            scan_total_tc += 1
+            df = get_ohlcv_4h(sym, limit=max(TRENDCONFIRM_ATR_MEDIAN_WINDOW + 20, 200))
+            if df is None or len(df) < TRENDCONFIRM_ATR_MEDIAN_WINDOW + 20:
+                count_blocker(scan_blockers_tc, "Data OHLCV kurang", True)
+                continue
+            df = compute_indicators_4h(df)
+            ok, score, detail = check_trendconfirm_entry(df)
+            if not ok:
+                count_blocker(scan_blockers_tc, "Syarat wajib belum lolos", True)
+                continue
+            r = df.iloc[-1]
+            candidates.append((sym, float(r['close']), float(r['atr_pct']), score, detail, df))
+        except Exception as e:
+            log(f"  [T_TRENDCONFIRM] error {sym}: {e}")
+
+    record_scan_blockers("TrenKonfirmasi-4h", scan_total_tc, len(candidates), scan_blockers_tc)
+    if not candidates:
+        log(f"[T_TRENDCONFIRM] Tidak ada kandidat ({scan_total_tc} discan).")
+        return
+
+    # Ranking: skor (syarat sekunder) dulu, lalu kekuatan sinyal (gap-EMA20 makin besar makin kuat)
+    candidates.sort(key=lambda x: (x[3], x[4].get('gap_ema20_pct', 0)), reverse=True)
+    log(f"[T_TRENDCONFIRM] {len(candidates)} kandidat. Buka deal terbaik (slot {n_active}/{TRENDCONFIRM_MAX_DEALS})...")
+
+    for sym, signal_price, atrp, score, detail, df in candidates:
+        n_active = deal_count_by_strategy('trend_confirm_4h')
+        if n_active >= TRENDCONFIRM_MAX_DEALS: break
+        with active_deals_lock:
+            if sym in active_deals: continue
+
+        if is_cooldown_enabled('trend_confirm_4h') and cooldown_remaining(sym) > 0:
+            log(f"[T_TRENDCONFIRM] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
+            continue
+
+        r = df.iloc[-1]
+        rsi_val = r.get('rsi', float('nan'))
+        if is_ai_call_open_enabled('trend_confirm_4h'):
+            _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price),
+                       'rvol': f"{detail.get('rvol',0):.2f}x", 'bb_pct': f"{detail.get('bb_pct',0):.2f}",
+                       'gap_ema20': f"{detail.get('gap_ema20_pct',0):+.2f}%"}
+            if not pd.isna(rsi_val): _ai_ind['rsi'] = f"{float(rsi_val):.1f}"
+            if not ai_decision_open(sym, 'TrenKonfirmasi-4h', _ai_ind, active_deal_count()):
+                log(f"[T_TRENDCONFIRM] {sym} OPEN di-skip oleh AI decision")
+                continue
+
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, strategy="trend_confirm_4h")
+        if not ok: continue
+
+        try:
+            entry_price = get_price_now(sym)
+            if entry_price <= 0: entry_price = signal_price
+        except Exception:
+            entry_price = signal_price
+        slip_pct = (entry_price / signal_price - 1) * 100 if signal_price > 0 else 0.0
+
+        add_to_active_deals(sym, {
+            "strategy":         "trend_confirm_4h",
+            "entry_price":      entry_price,
+            "peak":             entry_price,
+            "signal_price":     signal_price,
+            "atr_pct":          atrp,
+            "score":            score,
+            "opened_ts":        time.time(),
+            "opened_candle_ts": int(candle_open_ms),
+            "trailing_armed":   False,
+            "opened_at":        now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+            "target_usd":       target_usd,
+            "add_usd":          add_usd,
+            "tf":               TRENDCONFIRM_TIMEFRAME,
+            "rsi_open":         float(rsi_val) if not pd.isna(rsi_val) else None,
+        })
+        _trendconfirm_last_candle_ts[sym] = candle_open_ms
+
+        trail_arm = get_arm_pct(atrp)
+        trail_d   = trailing_dist(atrp)
+        msg = (
+            f"TrenKonfirmasi-4h | OPEN LONG\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Pair  : {to_display_pair(sym)}\n"
+            f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+            f"Harga sinyal (4h closed): {_fmt_price(signal_price)}\n"
+            f"Selisih (slippage): {slip_pct:+.2f}%\n"
+            f"ATR%  : {atrp:.2f}  (trailing {trail_d}% stlh +{trail_arm}%)\n"
+            f"RVOL  : {detail.get('rvol',0):.2f}x  |  BB%b: {detail.get('bb_pct',0):.2f}  |  vs EMA20: {detail.get('gap_ema20_pct',0):+.2f}%\n"
+            f"Skor sinyal: {score}/2 -> modal ${target_usd:.0f}"
+            + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else "") + "\n"
+            f"Slot terpakai: {n_active+1}/{TRENDCONFIRM_MAX_DEALS}"
+        )
+        send_telegram(msg)
+
+        csv_log_open({
+            'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+            'symbol':         to_display_pair(sym),
+            'signal_price':   f"{_fmt_price(signal_price)}",
+            'entry_price':    f"{_fmt_price(entry_price)}",
+            'slip_pct':       f"{slip_pct:+.2f}",
+            'atr_pct':        f"{atrp:.2f}",
+            'trail_dist_pct': f"{trailing_dist(atrp)}",
+            'base_usd':       target_usd,
+            'score':          score,
+            'strategy':       'trend_confirm_4h',
+            'rsi_open':       f"{float(rsi_val):.1f}" if not pd.isna(rsi_val) else '',
+        })
+        log_oac('OPEN', sym, 'TrenKonfirmasi-4h', {
+            'entry_price': _fmt_price(entry_price),
+            'slip_pct':    f"{slip_pct:+.2f}%",
+            'atr_pct':     f"{atrp:.2f}%",
+            'rvol':        f"{detail.get('rvol',0):.2f}x",
+            'bb_pct':      f"{detail.get('bb_pct',0):.2f}",
+            'gap_ema20':   f"{detail.get('gap_ema20_pct',0):+.2f}%",
+            'score':       score,
+            'trail_dist':  f"{trailing_dist(atrp)}%",
+        })
+
+        n_active += 1
+        if n_active >= TRENDCONFIRM_MAX_DEALS: break
+
+def run_thread_trendconfirm():
+    """Thread T_TRENDCONFIRM: scan TrenKonfirmasi-4h tiap TRENDCONFIRM_SCAN_INTERVAL detik."""
+    while True:
+        try:
+            thread_trendconfirm_scan()
+        except Exception as e:
+            log(f"WARN T_TRENDCONFIRM error: {e}")
+        time.sleep(TRENDCONFIRM_SCAN_INTERVAL)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # STRATEGI #6: Momentum Filter 4h (observasi, tidak buka deal)
 # Kondisi: price_live >= EMA20 AND price_live >= EMA50 AND ST dir == +1
 # Output : append ke tes6.txt di folder proyek + notifikasi Telegram ringkas
@@ -7791,7 +8023,7 @@ document.addEventListener('DOMContentLoaded', function() {
       {% for sym, d in active_deals.items() %}
       <tr>
         <td class="sym">{{ sym.replace("USDT","/USDT") }}</td>
-        <td>{% set _sm = {"brkX2":"brkX2-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h"} %}{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</td>
+        <td>{% set _sm = {"brkX2":"brkX2-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h"} %}{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</td>
         <td style="font-size:10px;color:var(--muted);white-space:nowrap">{{ d.get("opened_at","")[:16] if d.get("opened_at") else "-" }}</td>
         <td><button type="button" onclick="openTradingViewChart('{{ sym }}','{{ _sm.get(d.get('strategy',''),d.get('strategy','-')) }}')" style="background:#2962ff;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Open Chart</button></td>
         <td>
@@ -8386,9 +8618,10 @@ var SC_LABELS = {
     brkX2_4h: 'brkX2-4h',
     brkX2_crossema: 'CrossEMA-4h',
     akum_entry_a: 'Akumulasi-4h',
-    hunting_4h: 'Hunting-4h'
+    hunting_4h: 'Hunting-4h',
+    trend_confirm_4h: 'TrenKonfirmasi-4h'
 };
-var SC_HAS_ADDFUND = {brkX2: true, brkX2_4h: true};
+var SC_HAS_ADDFUND = {brkX2: true, brkX2_4h: true, trend_confirm_4h: true};
 var SC_ADDFUND_LABEL = {brkX2: 'auto (score-based)'};
 var _scData = {};
 
@@ -8759,6 +8992,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="hunting_4h">Hunting-4h</option>
         <option value="brkX2_crossema">CrossEMA-4h</option>
         <option value="akumulasi">Akumulasi-4h</option>
+        <option value="trend_confirm_4h">TrenKonfirmasi-4h</option>
         <option value="__exclude_hardstop__">Semua strategi, exclude hardstop volatilitas</option>
       </select>
     <select id="ct-filter-pair" onclick="event.stopPropagation()" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
@@ -8835,7 +9069,7 @@ function sortClosedTrades(key) {
 
 function renderClosedTradesRows() {
     var rows = closedTradesRows.slice();
-    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B'};
+    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h'};
     var searchBox = document.getElementById('ct-filter-search');
     var searchTerm = searchBox ? searchBox.value.trim().toUpperCase() : '';
     if (searchTerm) {
@@ -8896,7 +9130,7 @@ function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
     if (!el) return;
     if (!rows.length) { el.innerHTML = ''; return; }
-    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B'};
+    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h'};
     var groups = {};
     rows.forEach(function(r) {
         var key = r.strategy || 'brkX2';
@@ -8945,7 +9179,7 @@ function renderCtEquityCurve(rows) {
 function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
-    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B'};
+    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h'};
     var headers = ['Opened','Close','Pair','Strategi','Entry','RSI@Open','Exit','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
@@ -10676,7 +10910,7 @@ def run_web_dashboard():
                         'total_usd':     d.get('target_usd', ''),
                     })
                     remove_from_active_deals(sym)
-                    if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b'): record_closed(sym)
+                    if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'): record_closed(sym)
                     if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof)
                     log(f"[MANUAL-CLOSE] {sym} @ {price_now:.6g} profit={prof:.2f}%")
                     send_telegram(
@@ -10769,7 +11003,7 @@ def run_web_dashboard():
                           "manual reconcile (koin sudah terjual di luar jalur normal)",
                           strategy=strat, base_usd=total_usd)
             remove_from_active_deals(sym)
-            if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b'):
+            if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
                 record_closed(sym)
             log(f"[RECONCILE] {sym} dibersihkan dari active_deals + dicatat ke Closed Trades (harga estimasi {price}, profit {prof_pct:+.2f}%)")
             send_telegram(
@@ -10795,6 +11029,7 @@ def run_web_dashboard():
                 "brkX2_4h": "brkX2-4h", "brkX2_crossema": "CrossEMA-4h",
                 "hunting_4h": "Hunting-4h",
                 "akum_entry_a": "Akumulasi-4h", "akum_entry_b": "Akumulasi-4h",
+                "trend_confirm_4h": "TrenKonfirmasi-4h",
             }
             strategy_display = _STRAT_DISPLAY.get(strategy, strategy)
             opened_at = deal.get("opened_at") or deal.get("opened_at_wib") or "-"
@@ -10811,6 +11046,7 @@ def run_web_dashboard():
                     "reversal": 8 * 3600,
                     "brkX2_4h": 4 * 3600, "brkX2_crossema": 4 * 3600,
                     "hunting_4h": 4 * 3600, "akum_entry_a": 4 * 3600, "akum_entry_b": 4 * 3600,
+                    "trend_confirm_4h": 4 * 3600,
                 }.get(strategy, 12 * 3600)
                 hold_candles = int((time.time() - float(_opened_ts) / 1000) / _candle_secs)
             else:
@@ -11529,6 +11765,7 @@ def run_web_dashboard():
                 'brkX2': '12h', 'brkX2_4h': '4h', 'reversal': '8h',
                 'hunting_4h': '4h', 'brkX2_crossema': '4h',
                 'akum_entry_a': '4h', 'akum_entry_b': '4h',
+                'trend_confirm_4h': '4h',
             }
             filled, skipped, errors = 0, 0, 0
             skip_reasons = {}
@@ -11817,6 +12054,7 @@ def run_web_dashboard():
                 "brkx2-4h": "brkX2_4h", "crossema-4h": "brkX2_crossema",
                 "hunting-4h": "hunting_4h",
                 "akumulasi-4h-a": "akum_entry_a", "akumulasi-4h-b": "akum_entry_b",
+                "trenkonfirmasi-4h": "trend_confirm_4h",
             }.get(strategy, strategy)
             if action not in {"open_long", "add_fund", "start_trailing", "close_deal"} or not symbol.endswith("USDT"):
                 return jsonify({"ok": False, "error": "action atau symbol tidak valid"}), 400
@@ -11868,7 +12106,7 @@ def run_web_dashboard():
                     csv_log_close(symbol, now_wib().strftime('%Y-%m-%d %H:%M:%S'), wh_price, wh_prof_pct,
                                   "close via TradingView webhook", strategy=strategy, base_usd=wh_total_usd)
                     remove_from_active_deals(symbol)
-                    if strategy in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b'):
+                    if strategy in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
                         record_closed(symbol)
                     send_telegram(
                         f"{strategy} | CLOSE LONG (TradingView webhook)\n"
@@ -13008,6 +13246,10 @@ if __name__ == '__main__':
     if STRAT_CROSSEMA_ENABLED:
         t_cx = threading.Thread(target=run_thread_crossema, daemon=True, name="T-CrossEMA")
         threads.append(t_cx)
+        n_threads += 1
+    if TRENDCONFIRM_ENABLED:
+        t_tc = threading.Thread(target=run_thread_trendconfirm, daemon=True, name="T-TrendConfirm")
+        threads.append(t_tc)
         n_threads += 1
     if STRAT_AKUM_ENABLED:
         t_akum = threading.Thread(target=run_thread_akum, daemon=True, name="T-Akum")
