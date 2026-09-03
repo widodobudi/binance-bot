@@ -8878,7 +8878,7 @@ function renderClosedTradesRows() {
             return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">' +
                 '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.open_time ? r.open_time.substring(0,16) : '-') + '</td>' +
                 '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.close_time||'').substring(0,16) + '</td>' +
-                '<td style="padding:5px 8px;font-weight:600">' + (r.symbol||'-') + '</td>' +
+                '<td style="padding:5px 8px;font-weight:600">' + (r.symbol ? ('<a href="javascript:void(0)" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="color:#2962ff;text-decoration:none;cursor:pointer" title="Buka chart TradingView">' + r.symbol + '</a>') : '-') + '</td>' +
                 '<td style="padding:5px 8px;color:var(--muted)">' + (strat_map[r.strategy]||r.strategy||'-') + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.entry_price||'-') + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;font-size:10px;color:var(--muted)">' + (r.rsi_open||'-') + '</td>' +
