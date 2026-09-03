@@ -6514,10 +6514,11 @@ def thread1d_scan_4h():
     log(f"[T1d] {len(candidates)} kandidat 4h. Buka deal terbaik...")
     candidates.sort(key=lambda x: x[3], reverse=True)
 
-    opened_any = False
+    held_bx = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
     for sym, signal_price, atrp, score in candidates:
-        n4h = active_deal_count_4h()
-        if n4h >= STRAT4H_MAX_DEALS: break
+        if len(held_bx) >= AI_BATCH_POOL_SIZE:
+            log(f"[T1d] Kolam babak-1 penuh ({AI_BATCH_POOL_SIZE}), berhenti kumpulkan kandidat baru siklus ini.")
+            break
         if sym in (set(active_deals.keys())): continue
         _quick_reentry = False
         if is_cooldown_enabled('brkX2_4h') and cooldown_remaining(sym) > 0:
@@ -6529,26 +6530,82 @@ def thread1d_scan_4h():
             else:
                 log(f"[T1d] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
                 continue
+
+        # Data tambahan (RSI/RVOL/BB%b/gap-EMA20) untuk AI individual + babak 2 nanti
+        _rsi_val_bx = None
+        _rvol_bx = 0.0; _bb_bx = 0.0; _gap_bx = 0.0
+        try:
+            _df_ai4 = get_ohlcv_4h(sym, limit=100)
+            if _df_ai4 is not None and len(_df_ai4) >= 30:
+                _df_ai4 = compute_indicators_4h(_df_ai4)
+                _r_ai4 = _df_ai4.iloc[-1]
+                if not pd.isna(_r_ai4.get('rsi')): _rsi_val_bx = float(_r_ai4['rsi'])
+                _vm_bx = _r_ai4.get('vol_ma')
+                if not pd.isna(_vm_bx) and _vm_bx > 0: _rvol_bx = float(_r_ai4['vol']) / float(_vm_bx)
+                if not pd.isna(_r_ai4.get('bb_pct')): _bb_bx = float(_r_ai4['bb_pct'])
+                _ema20_bx = _r_ai4.get('ema20')
+                if not pd.isna(_ema20_bx) and _ema20_bx > 0:
+                    _gap_bx = (signal_price / float(_ema20_bx) - 1) * 100
+        except Exception:
+            pass
+
         if is_ai_call_open_enabled('brkX2_4h'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
-            try:
-                _df_ai4 = get_ohlcv_4h(sym, limit=60)
-                if _df_ai4 is not None and len(_df_ai4) >= 20:
-                    _rsi_ai4 = ta.rsi(_df_ai4['close'], length=14).iloc[-1]
-                    if not pd.isna(_rsi_ai4): _ai_ind['rsi'] = f"{float(_rsi_ai4):.1f}"
-            except Exception:
-                pass
-            if not ai_decision_open(sym, 'brkX2-4h', _ai_ind, active_deal_count()):
-                log(f"[T1d] {sym} OPEN di-skip oleh AI decision")
+            if _rsi_val_bx is not None: _ai_ind['rsi'] = f"{_rsi_val_bx:.1f}"
+            if not ai_decision_open(sym, 'brkX2-4h', _ai_ind, active_deal_count(), notify=False):
+                log(f"[T1d] {sym} babak-1 di-skip oleh AI individual")
                 continue
+
+        held_bx[sym] = {
+            'signal_price': signal_price, 'atrp': atrp, 'score': score,
+            'quick_reentry': _quick_reentry,
+            'detail': {'atr_pct': atrp, 'rvol': _rvol_bx, 'bb_pct': _bb_bx,
+                       'gap_ema20_pct': _gap_bx, 'rsi': _rsi_val_bx or 0.0},
+        }
+
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+    approved_bx = []
+    if held_bx:
+        log(f"[T1d] Babak 1 selesai: {len(held_bx)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+        send_telegram(
+            f"🤖 AI Babak 1 | brkX2-4h\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Lolos AI individual: {len(held_bx)}\n"
+            f"Lolos: {', '.join(to_display_pair(s) for s in held_bx.keys())}\n"
+            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
+            parse_mode=None
+        )
+        batch_input_bx = [{'symbol': s, 'strategy': 'brkX2_4h', 'score': v['score'], 'detail': v['detail']}
+                           for s, v in held_bx.items()]
+        approved_bx = ai_decision_batch_rank(
+            batch_input_bx, strategy_label='brkX2-4h', max_approve=AI_BATCH_MAX_APPROVE,
+            criteria_note="Kriteria: skor, ATR%, RVOL, BB%b, jarak EMA20, RSI",
+        )
+
+    opened_any = False
+    for sym in approved_bx:
+        n4h = active_deal_count_4h()
+        if n4h >= STRAT4H_MAX_DEALS: break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        v = held_bx[sym]
+        signal_price = v['signal_price']; atrp = v['atrp']; score = v['score']
+        _quick_reentry = v['quick_reentry']
 
         ok, target_usd, add_usd = open_deal_with_sizing(sym, score, strategy="brkX2_4h")
         if not ok: continue
 
         # Konfirmasi real-time: price_now harus cross EMA20 ke atas, jarak 0–0.75%
+        # (fetch fresh per-simbol -- babak 2 bisa berjarak waktu dari babak 1, dan ini
+        #  juga dipakai ulang sbg _r4msg utk indikator open, ganti fetch _df4 terpisah)
+        _r4msg = pd.Series(dtype=float)
         try:
             _pnow = get_price_now(sym)
-            _ema20_rt = float(df.iloc[-1].get("ema20", 0))
+            _dfx = get_ohlcv_4h(sym, limit=60)
+            if _dfx is not None and len(_dfx) >= 20:
+                _dfx = compute_indicators_4h(_dfx)
+                _r4msg = _dfx.iloc[-1]
+            _ema20_rt = float(_r4msg.get("ema20", 0)) if not pd.isna(_r4msg.get("ema20", float('nan'))) else 0.0
             if _pnow > 0 and _ema20_rt > 0:
                 _dist_rt = (_pnow - _ema20_rt) / _ema20_rt * 100
                 if not (0.0 <= _dist_rt <= 0.75):
@@ -6563,8 +6620,6 @@ def thread1d_scan_4h():
         except: entry_price = signal_price
 
         slip_pct = (entry_price / signal_price - 1) * 100 if signal_price > 0 else 0
-
-        _r4msg = df.iloc[-1]
 
         add_to_active_deals(sym, {
             "strategy":      "brkX2_4h",
@@ -6635,22 +6690,19 @@ def thread1d_scan_4h():
             'strategy':       'brkX2_4h',
             'rsi_open':       f"{_rsi_val:.1f}" if _rsi_val == _rsi_val else '',
         })
-        _df4 = get_ohlcv_4h(sym, limit=50)
-        if _df4 is not None and len(_df4) > 0:
-            _df4 = compute_indicators_4h(_df4)
-            _r4 = _df4.iloc[-1]
+        if not _r4msg.empty:
             log_oac('OPEN', sym, 'brkX2-4h', {
                 'entry_price': _fmt_price(entry_price),
                 'slip_pct':    f"{slip_pct:+.2f}%",
                 'atr_pct':     f"{atrp:.2f}%",
-                'rsi':         f"{_r4.get('rsi', float('nan')):.1f}" if hasattr(_r4.get('rsi', None), '__float__') else 'n/a',
-                'stoch_k':     f"{_r4.get('stoch_k', float('nan')):.1f}",
-                'macd_hist':   f"{_r4.get('macd_hist', 0):.4f}",
-                'vol_ratio':   f"{(_r4['vol']/_r4['vol_ma']):.2f}x" if _r4.get('vol_ma') else 'n/a',
+                'rsi':         f"{_r4msg.get('rsi', float('nan')):.1f}" if hasattr(_r4msg.get('rsi', None), '__float__') else 'n/a',
+                'stoch_k':     f"{_r4msg.get('stoch_k', float('nan')):.1f}",
+                'macd_hist':   f"{_r4msg.get('macd_hist', 0):.4f}",
+                'vol_ratio':   f"{(_r4msg['vol']/_r4msg['vol_ma']):.2f}x" if _r4msg.get('vol_ma') else 'n/a',
                 'score':       score,
                 'trail_dist':  f"{trailing_dist(atrp)}%",
             })
-        
+
         deal_log_write({
             "timestamp_wib":  now_wib().strftime("%Y-%m-%d %H:%M:%S"),
             "event_type":     "OPEN",
