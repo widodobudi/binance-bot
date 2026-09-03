@@ -5033,40 +5033,59 @@ def thread2_monitor():
                     log(f"[T2] {sym} add fund di-skip: volatilitas tinggi atau data ATR tidak tersedia "
                         f"(ATR sekarang={current_atr if current_atr is not None else 'n/a'})")
                 else:
-                    log(f"[T2] {sym} kirim add fund ${add_usd} (deal confirmed aktif, ATR={current_atr:.2f}%)")
-                    add_ok = send_add_funds(sym, add_usd, strat, delay=0)
-                    if not add_ok:
-                        log(f"[T2] {sym} add fund gagal; akan dicoba lagi pada siklus berikutnya")
-                    else:
-                        log_oac('ADD_FUND', sym, strat, {
-                            'add_usd':      f"${add_usd:.0f}",
-                            'total_usd':    f"${BASE_ORDER_VOLUME + add_usd:.0f}",
-                            'entry_price':  _fmt_price(d.get('entry_price', 0)),
-                            'atr_pct':      f"{d.get('atr_pct', 0):.2f}%",
-                            'rsi':          f"{d['rsi_open']:.1f}"        if d.get('rsi_open')        is not None else "—",
-                            'stoch_k':      f"{d['stoch_k_open']:.1f}"   if d.get('stoch_k_open')    is not None else "—",
-                            'stoch_d':      f"{d['stoch_d_open']:.1f}"   if d.get('stoch_d_open')    is not None else "—",
-                            'macd_hist':    f"{d['macd_hist_open']:.5f}" if d.get('macd_hist_open')  is not None else "—",
-                            'bb_pct':       f"{d['bb_pct_open']:.3f}"    if d.get('bb_pct_open')     is not None else "—",
-                            'williams_r':   f"{d['williams_r_open']:.1f}"if d.get('williams_r_open') is not None else "—",
-                            'cci':          f"{d['cci_open']:.1f}"        if d.get('cci_open')        is not None else "—",
-                            'obv':          f"{d['obv_open']:.0f}"        if d.get('obv_open')        is not None else "—",
-                            'ema20':        f"{d['ema20_open']:.6f}"      if d.get('ema20_open')      is not None else "—",
-                            'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
-                        })
-                        deal_log_write({
-                            'timestamp_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
-                            'event_type':    'ADD_FUND',
-                            'strategy':      strat,
-                            'symbol':        to_display_pair(sym),
-                            'thread':        'T2',
-                            'add_usd':       add_usd,
-                            'total_usd':     BASE_ORDER_VOLUME + add_usd,
-                        })
-                        with active_deals_lock:
-                            if sym in active_deals:
-                                active_deals[sym]['add_fund_sent'] = True
-                        save_active_deals()
+                    # AI-gate add-fund (Fase 2, 03/09/2026, permintaan Mas Budi) -- HANYA
+                    # TrenKonfirmasi-4h, 5 strategi lain tetap add-fund otomatis murni tanpa
+                    # perubahan. Kalau AI TUNDA, dicoba lagi setelah cooldown 15 menit (bukan
+                    # ditandai add_fund_sent -- add_usd tetap >0, jadi otomatis dicek ulang
+                    # siklus T2 berikutnya begitu cooldown lewat).
+                    _addfund_ai_ok = True
+                    if strat == 'trend_confirm_4h':
+                        _af_hold_until = float(d.get('add_fund_ai_hold_until', 0) or 0)
+                        if time.time() < _af_hold_until:
+                            _addfund_ai_ok = False
+                            log(f"[T2] {sym} add fund AI-gate: masih cooldown ({(_af_hold_until - time.time())/60:.1f} menit lagi)")
+                        elif not ai_decision_add_fund(sym, strat, d, add_usd, current_atr):
+                            _addfund_ai_ok = False
+                            with active_deals_lock:
+                                if sym in active_deals:
+                                    active_deals[sym]['add_fund_ai_hold_until'] = time.time() + 15 * 60
+                            save_active_deals()
+                            log(f"[T2] {sym} add fund di-TUNDA oleh AI decision (cooldown 15 menit)")
+                    if _addfund_ai_ok:
+                        log(f"[T2] {sym} kirim add fund ${add_usd} (deal confirmed aktif, ATR={current_atr:.2f}%)")
+                        add_ok = send_add_funds(sym, add_usd, strat, delay=0)
+                        if not add_ok:
+                            log(f"[T2] {sym} add fund gagal; akan dicoba lagi pada siklus berikutnya")
+                        else:
+                            log_oac('ADD_FUND', sym, strat, {
+                                'add_usd':      f"${add_usd:.0f}",
+                                'total_usd':    f"${BASE_ORDER_VOLUME + add_usd:.0f}",
+                                'entry_price':  _fmt_price(d.get('entry_price', 0)),
+                                'atr_pct':      f"{d.get('atr_pct', 0):.2f}%",
+                                'rsi':          f"{d['rsi_open']:.1f}"        if d.get('rsi_open')        is not None else "—",
+                                'stoch_k':      f"{d['stoch_k_open']:.1f}"   if d.get('stoch_k_open')    is not None else "—",
+                                'stoch_d':      f"{d['stoch_d_open']:.1f}"   if d.get('stoch_d_open')    is not None else "—",
+                                'macd_hist':    f"{d['macd_hist_open']:.5f}" if d.get('macd_hist_open')  is not None else "—",
+                                'bb_pct':       f"{d['bb_pct_open']:.3f}"    if d.get('bb_pct_open')     is not None else "—",
+                                'williams_r':   f"{d['williams_r_open']:.1f}"if d.get('williams_r_open') is not None else "—",
+                                'cci':          f"{d['cci_open']:.1f}"        if d.get('cci_open')        is not None else "—",
+                                'obv':          f"{d['obv_open']:.0f}"        if d.get('obv_open')        is not None else "—",
+                                'ema20':        f"{d['ema20_open']:.6f}"      if d.get('ema20_open')      is not None else "—",
+                                'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
+                            })
+                            deal_log_write({
+                                'timestamp_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                                'event_type':    'ADD_FUND',
+                                'strategy':      strat,
+                                'symbol':        to_display_pair(sym),
+                                'thread':        'T2',
+                                'add_usd':       add_usd,
+                                'total_usd':     BASE_ORDER_VOLUME + add_usd,
+                            })
+                            with active_deals_lock:
+                                if sym in active_deals:
+                                    active_deals[sym]['add_fund_sent'] = True
+                            save_active_deals()
 
         # update peak
         peak = max(d.get('peak',entry), price)
@@ -5356,8 +5375,22 @@ def thread2_monitor():
             if not get_deal_override(sym, 'auto_close', True):
                 log(f"[T2] {sym} close di-skip (auto_close=OFF via dashboard)")
                 continue
+            # Batas absolut TrenKonfirmasi-4h (Fase 2, 03/09/2026, permintaan Mas Budi):
+            # begitu rugi >= hard-stop normal + TRENDCONFIRM_CLOSE_HARD_CEILING_EXTRA_PCT
+            # poin, AI TIDAK BOLEH menahan lagi -- lewati gerbang ai_decision_close supaya
+            # deal ini DIPUTUSKAN (lanjut ke pipeline close normal di bawah, yg masih bisa
+            # kena hold_no_sell kalau toggle itu aktif -- ceiling ini bukan maksa JUAL,
+            # tapi maksa deal-nya berhenti "digantung" AI tanpa batas berkali-kali).
+            _ai_override_bypassed = False
+            if do_close and d.get('strategy') == 'trend_confirm_4h' and not _is_akum:
+                _hs_label_c, _hs_base_c, _hs_pct_c = hard_stop_pct(atrp)
+                _absolute_ceiling_pct = _hs_pct_c + TRENDCONFIRM_CLOSE_HARD_CEILING_EXTRA_PCT
+                if entry > 0 and price <= entry * (1 - _absolute_ceiling_pct / 100):
+                    _ai_override_bypassed = True
+                    log(f"[T2] {sym} BATAS ABSOLUT tercapai (rugi >= {_absolute_ceiling_pct:.2f}%) -- AI tidak bisa menahan lagi")
+                    reason += f" [BATAS ABSOLUT {_absolute_ceiling_pct:.2f}%: AI override dilewati]"
             # AI decision jika ai_call=True untuk deal ini
-            if get_deal_override(sym, 'ai_call', True):
+            if not _ai_override_bypassed and get_deal_override(sym, 'ai_call', True):
                 if not ai_decision_close(sym, d.get('strategy', 'brkX2'), d, price, peak, reason):
                     log(f"[T2] {sym} CLOSE di-hold oleh AI decision (reason: {reason})")
                     continue
@@ -12949,6 +12982,60 @@ def ai_decision_armed(symbol: str, strategy: str, d: dict, price: float, peak: f
                 f"{reasoning}",
                 parse_mode=None
             )
+    return decision
+
+
+def ai_decision_add_fund(symbol: str, strategy: str, d: dict, add_usd: float, current_atr: float) -> bool:
+    """
+    AI decide: kirim add-fund sekarang atau tunda. Return True = kirim, False = tunda
+    (dicoba lagi setelah cooldown 15 menit, lihat titik panggil di T2). Default True
+    (fail-open) jika AI tidak tersedia / error -- sama spt semua ai_decision_* lain.
+
+    Fase 2 TrenKonfirmasi-4h (03/09/2026, permintaan Mas Budi) -- HANYA dipakai strategi
+    ini. 6 strategi lain TETAP add-fund otomatis murni (skor-based, tanpa AI-gate di
+    titik ini), tidak diubah.
+    """
+    entry = d.get('entry_price', 0)
+    price = get_price_now(symbol)
+    profit_now = (price/entry - 1)*100 if entry > 0 and price > 0 else 0
+    ind4h_str = get_full_4h_indicator_context(symbol)
+    ind4h_section = f"\n{ind4h_str}\n" if ind4h_str else ""
+    prompt = (
+        f"Kamu adalah AI analyst trading crypto. Berikan analisis singkat.\n\n"
+        f"Deal: {to_display_pair(symbol)} | Strategi: {strategy}\n"
+        f"Entry: {_fmt_price(entry)} | Harga skrg: {_fmt_price(price)}\n"
+        f"Profit dari entry: {profit_now:+.2f}%\n"
+        f"ATR% skrg: {current_atr:.2f}%\n"
+        f"Rencana tambah modal (add-fund): ${add_usd:.0f}\n"
+        f"{ind4h_section}\n"
+        f"Bot akan menambah modal ke posisi ini sekarang (bukan reaksi rugi -- ini murni\n"
+        f"penambahan modal berbasis skor sinyal awal). Apakah kondisi pasar saat ini masih\n"
+        f"mendukung penambahan modal, atau sebaiknya ditunda dulu?\n\n"
+        f"Format jawaban (ikuti persis):\n"
+        f"ADD atau TUNDA\n"
+        f"Alasan: alasan singkat\n\n"
+        f"Baris pertama HARUS hanya kata ADD atau TUNDA."
+    )
+    result = _ai_call(prompt)
+    if not result:
+        return True
+    lines = result.strip().split("\n")
+    first_line = lines[0].strip().upper()
+    decision = "ADD" in first_line
+    reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+    log(f"[AI] ADD-FUND decision {symbol}: {first_line} -> {'ADD' if decision else 'TUNDA'}")
+    if not decision:
+        send_telegram(
+            f"🤖 AI Decision | {to_display_pair(symbol)}\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"{ai_provider_note()}\n"
+            f"Strategi : {strategy}\n"
+            f"Event    : ADD FUND\n"
+            f"Profit   : {profit_now:+.2f}%\n"
+            f"Keputusan: ⏸ TUNDA (dicoba lagi ~15 menit)\n"
+            f"{reasoning}",
+            parse_mode=None
+        )
     return decision
 
 
