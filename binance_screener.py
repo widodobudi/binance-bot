@@ -6981,6 +6981,7 @@ def thread1d_scan_4h():
     # ── Hunting-4h: scan semua pair USDT setelah loop brkX2-4h selesai ──
     # ── Hunting-4h: scan + auto open deal ──────────────────────────────────
     hunting_display = []   # untuk update dashboard (pair yang lolos filter)
+    held_hunt = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
     with _hunting_lock:
         _cfg_hunt = dict(_hunting_config)
     for sym_info2 in (ticker or []):
@@ -6993,8 +6994,11 @@ def thread1d_scan_4h():
             hit = check_hunting_strategy(df2, sym_info2, _cfg_hunt)
             if hit:
                 hunting_display.append(hit)
-                # Auto open deal jika slot tersedia
-                open_hunting_if_signal(sym_info2, df2, _cfg_hunt)
+                # Babak 1: tahan dulu kalau pool belum penuh (jangan langsung buka)
+                if len(held_hunt) < AI_BATCH_POOL_SIZE:
+                    _cand = check_hunting_candidate(sym_info2, df2, _cfg_hunt, notify=False)
+                    if _cand is not None:
+                        held_hunt[sym2] = _cand
         except Exception as _he:
             pass
     ts_hunt = now_wib().strftime("%d/%m/%Y %H:%M:%S")
@@ -7005,6 +7009,26 @@ def thread1d_scan_4h():
     if hunting_display:
         log(f"[T1d-HUNT] {len(hunting_display)} kandidat lolos filter, slot hunting: {active_deal_count_hunting()}/{HUNTING_MAX_DEALS}")
 
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+    if held_hunt:
+        log(f"[T1d-HUNT] Babak 1 selesai: {len(held_hunt)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+        send_telegram(
+            f"🤖 AI Babak 1 | Hunting-4h\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Lolos AI individual: {len(held_hunt)}\n"
+            f"Lolos: {', '.join(to_display_pair(s) for s in held_hunt.keys())}\n"
+            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
+            parse_mode=None
+        )
+        batch_input_hunt = [{'symbol': s, 'strategy': 'hunting_4h', 'score': v['score'], 'detail': v['detail']}
+                             for s, v in held_hunt.items()]
+        approved_hunt = ai_decision_batch_rank(
+            batch_input_hunt, strategy_label='Hunting-4h', max_approve=AI_BATCH_MAX_APPROVE,
+            criteria_note="Kriteria: ATR%, BB%b, jarak EMA20, RSI (hunting-4h tidak hitung RVOL)",
+        )
+        for sym in approved_hunt:
+            open_hunting_candidate(held_hunt[sym])
+
 def scan_hunting_signals_only():
     """Scan Hunting-4h independen — tidak diblokir gating window intrabar brkX2-4h.
     Dipanggil tiap loop run_thread1d_4h() agar dashboard selalu update."""
@@ -7013,6 +7037,7 @@ def scan_hunting_signals_only():
         if not ticker:
             return
         hunting_display = []
+        held_hunt2 = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
         hunting_blockers = {}
         hunting_scanned = 0
         with _hunting_lock:
@@ -7029,7 +7054,10 @@ def scan_hunting_signals_only():
                 hit = check_hunting_strategy(df2, sym_info2, _cfg_hunt, hunting_blockers)
                 if hit:
                     hunting_display.append(hit)
-                    open_hunting_if_signal(sym_info2, df2, _cfg_hunt)
+                    if len(held_hunt2) < AI_BATCH_POOL_SIZE:
+                        _cand2 = check_hunting_candidate(sym_info2, df2, _cfg_hunt, notify=False)
+                        if _cand2 is not None:
+                            held_hunt2[sym2] = _cand2
             except Exception as _he:
                 pass
         ts_hunt = now_wib().strftime("%d/%m/%Y %H:%M:%S")
@@ -7038,6 +7066,26 @@ def scan_hunting_signals_only():
             _hunting_signals.extend(hunting_display[:50])
             globals()["_hunting_scan_ts"] = ts_hunt
         record_scan_blockers("Hunting-4h", hunting_scanned, len(hunting_display), hunting_blockers)
+
+        # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+        if held_hunt2:
+            log(f"[T1d-HUNT] Babak 1 selesai: {len(held_hunt2)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+            send_telegram(
+                f"🤖 AI Babak 1 | Hunting-4h\n"
+                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                f"Lolos AI individual: {len(held_hunt2)}\n"
+                f"Lolos: {', '.join(to_display_pair(s) for s in held_hunt2.keys())}\n"
+                f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
+                parse_mode=None
+            )
+            batch_input_hunt2 = [{'symbol': s, 'strategy': 'hunting_4h', 'score': v['score'], 'detail': v['detail']}
+                                  for s, v in held_hunt2.items()]
+            approved_hunt2 = ai_decision_batch_rank(
+                batch_input_hunt2, strategy_label='Hunting-4h', max_approve=AI_BATCH_MAX_APPROVE,
+                criteria_note="Kriteria: ATR%, BB%b, jarak EMA20, RSI (hunting-4h tidak hitung RVOL)",
+            )
+            for sym in approved_hunt2:
+                open_hunting_candidate(held_hunt2[sym])
         log(f"[T1d-HUNT] scan selesai: {len(hunting_display)} kandidat | slot {active_deal_count_hunting()}/{HUNTING_MAX_DEALS}")
     except Exception as e:
         log(f"WARN scan_hunting_signals_only: {e}")
@@ -7932,31 +7980,35 @@ def _try_swap_hunting_slot(incoming_symbol: str) -> bool:
     return True
 
 
-def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
+def check_hunting_candidate(sym_info: dict, df, cfg: dict, notify: bool = True):
     """
-    Evaluasi 6 syarat Hunting-4h lalu langsung open long jika lolos.
-    Syarat opsional diabaikan jika cfg[key] = False (bypass dari checkbox web).
-    Return True jika deal berhasil dibuka.
+    Babak 1 Hunting-4h (03/09/2026, pola 2-babak): evaluasi 6 syarat teknikal + AI
+    individual. Return dict data kandidat kalau lolos (BELUM dibuka -- lihat
+    open_hunting_candidate() utk babak 2), None kalau gagal di syarat manapun.
+    Di-split dari open_hunting_if_signal() lama supaya kandidat bisa ditahan dulu
+    (ditampung di pool) sebelum dibandingkan sekaligus oleh AI di babak 2, alih-alih
+    langsung dibuka begitu lolos AI individual (first-come-first-served lama).
+    Guard slot/swap SENGAJA tidak di sini -- itu dicek ulang fresh di babak 2 (open
+    loop), sama seperti strategi lain, krn kondisi slot bisa berubah antar babak.
+    notify: diteruskan ke ai_decision_open() -- pemanggil OTOMATIS (thread1d_scan_4h,
+    scan_hunting_signals_only) HARUS pass notify=False (babak-1, jangan spam Telegram
+    per kandidat). Default True supaya pemanggil MANUAL (open_hunting_if_signal, tombol
+    "Open Long" dashboard) tetap dapat notifikasi OPEN/SKIP spt perilaku asli sebelum
+    fungsi ini di-split -- jangan diubah ke False tanpa juga mengubah caller manualnya.
     """
     symbol = sym_info.get("symbol", "")
 
-    # ── Guard: slot & existing deal ──────────────────────────────────────────
     with active_deals_lock:
         if symbol in active_deals:
-            return False
-    if active_deal_count_hunting() >= HUNTING_MAX_DEALS:
-        # Slot penuh — coba swap: close deal hunting yang sudah arm dan profit positif terendah
-        _swapped = _try_swap_hunting_slot(symbol)
-        if not _swapped:
-            return False
+            return None
     if symbol in SYMBOL_BLACKLIST:
-        return False
+        return None
     if is_cooldown_enabled('hunting_4h') and cooldown_remaining(symbol) > 0:
-        return False
+        return None
 
     # ── Data indikator ────────────────────────────────────────────────────────
     if df is None or len(df) < 51:
-        return False
+        return None
     # df yang masuk cuma OHLCV mentah — lengkapi dulu (rsi/stoch/macd/bb/williams/cci/obv/
     # ema20/st_dir) supaya field itu terisi asli, bukan "—" terus di notif OPEN.
     df = compute_indicators_4h(df)
@@ -7968,7 +8020,7 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
         _st = _pta.supertrend(df["high"], df["low"], df["close"], length=10, multiplier=3)
         _st_dir_col = [column for column in _st.columns if "SUPERTd" in column]
         if _st_dir_col and int(_st[_st_dir_col[0]].iloc[-1]) == -1:
-            return False
+            return None
     except Exception:
         pass
 
@@ -7986,29 +8038,29 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
     # 1. Quote USDT, base bukan fiat
     FIAT_LIST = {"USDT","BUSD","USDC","TUSD","DAI","EUR","GBP","BRL","RUB","TRY","AUD"}
     if not symbol.endswith("USDT"):
-        return False
+        return None
     if symbol[:-4] in FIAT_LIST:
-        return False
+        return None
 
     # 4. Price > EMA20, jarak 0-0.75% (WAJIB) — backtest_hunting_sweep optimal
     if dist_ema20 is None or not (0.0 <= dist_ema20 <= 0.75):
-        return False
+        return None
 
     # ── Syarat OPSIONAL — diabaikan jika cfg[key] = False ────────────────────
     # 2. EMA20 < EMA50, gap 0-2.5%
     if cfg.get("hunting_ema_gap", True):
         if ema_gap is None or not (0.0 <= ema_gap <= 2.5):
-            return False
+            return None
 
     # 3. Price change 0%-2.0% (dilonggarkan 18/08/2026)
     if cfg.get("hunting_price_change", True):
         if not (0.0 < price_change_pct <= 2.0):
-            return False
+            return None
 
     # 5. Price > EMA50, jarak 0-3%
     if cfg.get("hunting_above_ema50", True):
         if dist_ema50 is None or not (0.0 <= dist_ema50 <= 3.0):
-            return False
+            return None
 
     # 6. Bullish candlestick: Hammer OR Strong Bull OR Bullish Engulfing OR Doji Bullish
     if cfg.get("hunting_uptrend", True):
@@ -8027,11 +8079,11 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
             bullish_engulfing = (close > _open) and (_prev_close < _prev_open) and (_body > _prev_body)
             doji_bullish      = (_body / _range < 0.2) and (close > _open) if _range > 0 else False
             if not (strong_bull or hammer or bullish_engulfing or doji_bullish):
-                return False
+                return None
         except Exception:
-            return False
+            return None
 
-    # ── Semua syarat lolos — eksekusi open long ───────────────────────────────
+    # ── Semua syarat teknikal lolos ───────────────────────────────────────────
     try:
         atrp = float(df["atr_pct"].iloc[-1]) if "atr_pct" in df.columns else float(
             (df["high"] - df["low"]).rolling(14).mean().iloc[-1] / close * 100
@@ -8045,7 +8097,9 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
     # Cek estimasi saldo sebelum open — cegah ghost deal karena insufficient balance
     if not has_enough_balance_for_hunting(HUNTING_ORDER_VOLUME, HUNTING_CAPITAL_USD):
         log(f"[T1d-HUNT] {symbol} skip: estimasi saldo tidak cukup untuk open ${HUNTING_ORDER_VOLUME}")
-        return False
+        return None
+
+    _rsi_hunt_val = None
     if is_ai_call_open_enabled('hunting_4h'):
         _ai_ind = {'atr_pct': f"{atrp:.2f}%"}
         try:
@@ -8053,12 +8107,46 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
                 _rsi_hunt = df['rsi'].iloc[-1]
             else:
                 _rsi_hunt = ta.rsi(df['close'], length=14).iloc[-1]
-            if not pd.isna(_rsi_hunt): _ai_ind['rsi'] = f"{float(_rsi_hunt):.1f}"
+            if not pd.isna(_rsi_hunt):
+                _rsi_hunt_val = float(_rsi_hunt)
+                _ai_ind['rsi'] = f"{_rsi_hunt_val:.1f}"
         except Exception:
             pass
-        if not ai_decision_open(symbol, 'Hunting-4h', _ai_ind, active_deal_count()):
-            log(f"[T1d-HUNT] {symbol} OPEN di-skip oleh AI decision")
+        if not ai_decision_open(symbol, 'Hunting-4h', _ai_ind, active_deal_count(), notify=notify):
+            log(f"[T1d-HUNT] {symbol} " + ("babak-1 di-skip oleh AI individual" if not notify else "OPEN di-skip oleh AI decision"))
+            return None
+
+    _bb_hunt  = float(r.get('bb_pct')) if 'bb_pct' in r.index and not pd.isna(r.get('bb_pct')) else 0.0
+    _gap_hunt = dist_ema20 if dist_ema20 is not None else 0.0
+    return {
+        'symbol': symbol, 'df': df, 'r': r, 'close': close, 'atrp': atrp, 'score': score,
+        'dist_ema20': dist_ema20, 'dist_ema50': dist_ema50, 'ema_gap': ema_gap,
+        'price_change_pct': price_change_pct, 'uptrend': uptrend,
+        'detail': {'atr_pct': atrp, 'rvol': 0.0, 'bb_pct': _bb_hunt,
+                   'gap_ema20_pct': _gap_hunt, 'rsi': _rsi_hunt_val or 0.0},
+    }
+
+def open_hunting_candidate(held: dict) -> bool:
+    """
+    Babak 2 Hunting-4h (03/09/2026, pola 2-babak): eksekusi open long utk kandidat yg
+    sudah lolos check_hunting_candidate() DAN diloloskan ai_decision_batch_rank().
+    Guard slot/swap dicek fresh di sini (bukan babak 1) krn kondisi slot bisa berubah
+    antar babak. Sisanya sama persis dgn open_hunting_if_signal() lama.
+    """
+    symbol = held['symbol']; df = held['df']; r = held['r']
+    close = held['close']; atrp = held['atrp']; score = held['score']
+    dist_ema20 = held['dist_ema20']; dist_ema50 = held['dist_ema50']; ema_gap = held['ema_gap']
+    price_change_pct = held['price_change_pct']; uptrend = held['uptrend']
+
+    with active_deals_lock:
+        if symbol in active_deals:
             return False
+    if active_deal_count_hunting() >= HUNTING_MAX_DEALS:
+        # Slot penuh — coba swap: close deal hunting yang sudah arm dan profit positif terendah
+        _swapped = _try_swap_hunting_slot(symbol)
+        if not _swapped:
+            return False
+
     ok, target_usd, add_usd = open_deal_with_sizing(symbol, score, strategy="hunting_4h")
     if not ok:
         log(f"[T1d-HUNT] {symbol} " + ("Binance order ditolak" if USE_BINANCE_DIRECT else "3Commas TOLAK") + " open hunting")
@@ -8207,6 +8295,24 @@ def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
             )
             log(f"WARN [T1d-HUNT] {symbol} ghost deal — tidak masuk active_deals!")
     return True
+
+def open_hunting_if_signal(sym_info: dict, df, cfg: dict) -> bool:
+    """
+    Evaluasi 6 syarat Hunting-4h lalu langsung open long jika lolos -- SATU langkah,
+    TANPA babak 2 (tidak ditahan/dibandingkan AI dgn kandidat lain). Dipertahankan
+    persis spt semula (03/09/2026: sekarang tinggal wrapper tipis di atas
+    check_hunting_candidate()+open_hunting_candidate()) KHUSUS utk pemanggil manual
+    (tombol "Open Long" dashboard, /manual_open) -- itu sudah 1 keputusan eksplisit
+    dari Mas Budi sendiri per klik, tidak perlu lewat pola 2-babak. Pemanggil
+    OTOMATIS (thread1d_scan_4h, scan_hunting_signals_only) TIDAK lagi lewat sini --
+    mereka panggil check_hunting_candidate()/open_hunting_candidate() langsung supaya
+    bisa ditampung ke pool & dibandingkan AI sekaligus (lihat komentar di masing2).
+    Return True jika deal berhasil dibuka.
+    """
+    held = check_hunting_candidate(sym_info, df, cfg)
+    if held is None:
+        return False
+    return open_hunting_candidate(held)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # WEB DASHBOARD — Flask server untuk monitoring dan kontrol deal
