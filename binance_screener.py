@@ -1212,6 +1212,39 @@ def cooldown_remaining(symbol: str) -> float:
 def is_in_cooldown(symbol: str) -> bool:
     return cooldown_remaining(symbol) > 0
 
+# ── Cooldown per-simbol setelah gagal sizing/open (04/09/2026, permintaan Mas Budi) ──
+# Kasus nyata semalam: NVDABUSDT lolos AI individual + AI batch TrenKonfirmasi-4h berulang
+# ~55x dalam ~3 jam (tiap siklus scan ~3-4 menit), SELALU gagal di send_open_long() dgn
+# "Account has insufficient balance for requested action" (saldo Spot USDT free $6, kurang
+# dari modal minimum) -- krn kandidat yg gagal dibuka TIDAK PERNAH masuk active_deals, dia
+# selalu lolos scan ulang dari nol tiap siklus: AI individual dipanggil lagi, AI batch
+# dipanggil lagi (2x biaya API tiap kali), 2 notif Telegram terkirim lagi (Babak 1 + Batch
+# Analysis), lalu gagal lagi -- 217 notif dalam 1 malam. Ini berlaku utk SEMUA strategi
+# (bukan cuma TrenKonfirmasi-4h) krn semua lewat open_deal_with_sizing()/send_open_long().
+# Cooldown ini per-SIMBOL (bukan per-strategi) krn penyebab paling umum (saldo kurang)
+# adalah kendala akun yg sama utk simbol apapun -- kalaupun penyebabnya spesifik simbol
+# (lot size/min-notional/bStock NYSE tutup), tetap wajar utk tidak dicoba ulang tiap 3
+# menit. Dicatat di send_open_long() (gagal order riil) dan open_deal_with_sizing() (bStock
+# NYSE tutup) -- BUKAN di guard daily-loss-breach/strategy-disabled, krn itu sudah punya
+# throttle/notifikasi bot-wide sendiri (per-simbol di sini jadi berlebihan utk kasus itu).
+SIZING_FAIL_COOLDOWN_SEC = 1800   # 30 menit -- cukup redam spam ulang tiap 3-4 menit,
+                                  # tapi tetap otomatis coba lagi kalau kondisinya sudah membaik
+                                  # (mis. Mas Budi topup saldo) tanpa perlu restart bot
+_sizing_fail_ts   = {}   # symbol -> epoch detik gagal sizing/open terakhir
+_sizing_fail_lock = threading.Lock()
+
+def record_sizing_fail(symbol: str):
+    with _sizing_fail_lock:
+        _sizing_fail_ts[symbol] = time.time()
+
+def sizing_fail_remaining(symbol: str) -> float:
+    """Sisa detik cooldown gagal-sizing utk symbol ini. 0 kalau tidak ada cooldown aktif."""
+    with _sizing_fail_lock:
+        ts = _sizing_fail_ts.get(symbol)
+    if ts is None:
+        return 0.0
+    return max(0.0, SIZING_FAIL_COOLDOWN_SEC - (time.time() - ts))
+
 # ── Trend-Continuation Quick Re-entry (khusus brkX2-4h, backtest 28/08/2026) ──
 # Kasus nyata: CHIP/USDT closed via trailing 18:00 (+2.16%) lalu price lanjut rally
 # tapi bot nggak bisa masuk lagi krn brkX2_4h waktu itu nggak pernah dicatat ke
@@ -2741,9 +2774,11 @@ def send_open_long(symbol: str, strategy: str = 'brkX2') -> bool:
                 _binance_pending_price[symbol] = result.get("price_avg", 0)
                 log(f"[BINANCE] OPEN {symbol}: qty={result['qty']} avg={result['price_avg']:.6f}")
                 return True
+            record_sizing_fail(symbol)
             return False
         except Exception as e:
             log(f"WARN [BINANCE] send_open_long {symbol}: {e}")
+            record_sizing_fail(symbol)
             return False
     bid, tok = commas_creds(strategy)
     return send_3commas({"message_type":"bot","bot_id":bid,
@@ -2875,6 +2910,7 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
     # Guard: bStocks hanya boleh open saat NYSE buka
     if is_bstock_symbol(symbol) and not is_nyse_open():
         log(f"[SIZING] {symbol} adalah bStock, NYSE tutup — open long DIBATALKAN")
+        record_sizing_fail(symbol)
         return False, _cfg_base, 0
     if is_bstock_symbol(symbol):
         log(f"[SIZING] {symbol} adalah bStock, NYSE BUKA — open long DIIZINKAN")
@@ -4616,6 +4652,9 @@ def thread1_scan():
             log(f"[T1] {sym} LOLOS 7/7 tapi masih cooldown internal (sisa {sisa/3600:.1f} jam) -> skip, tidak kirim sinyal.")
             cooldown_held.append((sym, sisa))
             continue  # jangan kirim webhook yg pasti ditolak 3Commas (cegah deal hantu)
+        if sizing_fail_remaining(sym) > 0:
+            log(f"[T1] {sym} baru gagal sizing/open (sisa {sizing_fail_remaining(sym)/60:.0f} menit) — skip, jangan coba lagi dulu.")
+            continue
         log(f"[T1] SINYAL: {sym} close_candle={_fmt_price(signal_price)} atr%={atrp:.2f} skor={score}")
 
         _df_ai = all_dfs.get(sym)
@@ -4909,6 +4948,9 @@ def thread1b_scan_reversal():
             if sym in active_deals: continue
         if is_cooldown_enabled('reversal') and cooldown_remaining(sym) > 0:
             log(f"[T1b] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
+            continue
+        if sizing_fail_remaining(sym) > 0:
+            log(f"[T1b] {sym} baru gagal sizing/open (sisa {sizing_fail_remaining(sym)/60:.0f} menit) — skip, jangan coba lagi dulu.")
             continue
         log(f"[T1b] SINYAL REVERSAL: {sym} close_candle={_fmt_price(signal_price)} atr%={atrp:.2f}")
 
@@ -5941,6 +5983,7 @@ def thread1c_scan_intrabar():
         with active_deals_lock:
             if sym in active_deals: continue
         if is_cooldown_enabled('brkX2') and cooldown_remaining(sym) > 0: continue
+        if sizing_fail_remaining(sym) > 0: continue   # baru gagal sizing/open, jangan coba lagi dulu
         # LAPIS 1: candle 12h n-1
         df12 = get_ohlcv(sym, interval=TIMEFRAME, limit=120)
         if df12 is None: continue
@@ -6185,6 +6228,7 @@ def thread1c_scan_intrabar_early():
         with active_deals_lock:
             if sym in active_deals: continue
         if is_cooldown_enabled('brkX2') and cooldown_remaining(sym) > 0: continue
+        if sizing_fail_remaining(sym) > 0: continue   # baru gagal sizing/open, jangan coba lagi dulu
 
         # LAPIS 1: indikator dari candle 12h yang sudah tutup (n-1)
         df12 = get_ohlcv(sym, interval=TIMEFRAME, limit=120)
@@ -6424,6 +6468,8 @@ def thread_rev_intrabar_scan():
                 continue
         if is_cooldown_enabled('reversal') and cooldown_remaining(sym) > 0:
             continue
+        if sizing_fail_remaining(sym) > 0:
+            continue   # baru gagal sizing/open, jangan coba lagi dulu
         # Gating: jangan entry 2x di candle 8h yang sama untuk symbol ini
         if last_rev_intrabar_candle_ts.get(sym) == candle_open_ms:
             continue
@@ -6784,6 +6830,9 @@ def thread1d_scan_4h():
             else:
                 log(f"[T1d] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
                 continue
+        if sizing_fail_remaining(sym) > 0:
+            log(f"[T1d] {sym} baru gagal sizing/open (sisa {sizing_fail_remaining(sym)/60:.0f} menit) — skip, jangan coba lagi dulu.")
+            continue
 
         # Data tambahan (RSI/RVOL/BB%b/gap-EMA20) untuk AI individual + babak 2 nanti
         _rsi_val_bx = None
@@ -7227,6 +7276,9 @@ def thread_crossema_scan():
             if is_cooldown_enabled('brkX2_crossema') and cooldown_remaining(sym) > 0:
                 log(f"[T_CROSSEMA] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
                 continue
+            if sizing_fail_remaining(sym) > 0:
+                log(f"[T_CROSSEMA] {sym} baru gagal sizing/open (sisa {sizing_fail_remaining(sym)/60:.0f} menit) — skip, jangan coba lagi dulu.")
+                continue
 
             log(f"[T_CROSSEMA] SINYAL: {sym} price={price_now:.6g} "
                 f"EMA20={ef:.6g} atr%={atrp:.2f} elapsed={elapsed_pct*100:.1f}%")
@@ -7494,6 +7546,9 @@ def thread_trendconfirm_scan():
             if sym in active_deals: continue
         if is_cooldown_enabled('trend_confirm_4h') and cooldown_remaining(sym) > 0:
             log(f"[T_TRENDCONFIRM] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
+            continue
+        if sizing_fail_remaining(sym) > 0:
+            log(f"[T_TRENDCONFIRM] {sym} baru gagal sizing/open (sisa {sizing_fail_remaining(sym)/60:.0f} menit) — skip, jangan coba lagi dulu.")
             continue
         r = df.iloc[-1]
         rsi_val = r.get('rsi', float('nan'))
@@ -8004,6 +8059,11 @@ def check_hunting_candidate(sym_info: dict, df, cfg: dict, notify: bool = True):
     if symbol in SYMBOL_BLACKLIST:
         return None
     if is_cooldown_enabled('hunting_4h') and cooldown_remaining(symbol) > 0:
+        return None
+    # notify=False = pemanggil OTOMATIS (babak-1) -- pemanggil MANUAL (notify=True, tombol
+    # dashboard) TIDAK kena cooldown ini, krn itu 1 keputusan eksplisit per klik (mis. Mas
+    # Budi baru topup saldo terus langsung coba manual -- jangan diblokir tanpa alasan jelas).
+    if not notify and sizing_fail_remaining(symbol) > 0:
         return None
 
     # ── Data indikator ────────────────────────────────────────────────────────
@@ -10992,6 +11052,9 @@ def thread_akum_entry_scan():
             strat_key = f'akum_entry_{entry_type.lower()}'
             if is_cooldown_enabled(strat_key) and cooldown_remaining(sym) > 0:
                 log(f"[T_AKUM_ENTRY] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
+                continue
+            if sizing_fail_remaining(sym) > 0:
+                log(f"[T_AKUM_ENTRY] {sym} baru gagal sizing/open (sisa {sizing_fail_remaining(sym)/60:.0f} menit) — skip, jangan coba lagi dulu.")
                 continue
             # RSI di titik sinyal ini (01/09/2026) -- df['close'] sudah tersedia dari scan
             # score_akumulasi() di atas, cukup buat RSI(14) langsung, dipakai utk konteks AI +
