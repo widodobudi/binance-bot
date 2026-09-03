@@ -2767,6 +2767,10 @@ def send_add_funds(symbol: str, volume, strategy: str = 'brkX2', delay: int = 15
         "delay_seconds":delay,"pair":to_commas_pair(symbol),
         "volume":volume}, "add_funds")
 
+_daily_loss_notify_lock = threading.Lock()
+_daily_loss_last_notify_ts = 0.0
+_DAILY_LOSS_NOTIFY_COOLDOWN_SEC = 30 * 60  # maks 1x notifikasi klarifikasi tiap 30 menit
+
 # ===================== SIZING BERBASIS SKOR SINYAL (brkX2) =====================
 # Ambang TETAP tiap dimensi (dari backtest signal_strength, tersil-tinggi).
 SCORE_THRESHOLDS = {'brk':3.82, 'vol':2.69, 'rsi':66.98, 'ema':11.49, 'atr':6.16}
@@ -2801,6 +2805,27 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
     # Guard: circuit breaker rugi harian (lintas SEMUA strategi) -- lihat is_daily_loss_limit_breached()
     if is_daily_loss_limit_breached():
         log(f"[RISK] {symbol} ({strategy}) skip open -- batas rugi harian tersulut")
+        # Notifikasi klarifikasi (03/09/2026, permintaan Mas Budi) -- supaya notif "AI Decision:
+        # OPEN" yg terkirim SEBELUM guard ini (dari ai_decision_open, gerbang terpisah) tidak
+        # membingungkan: kelihatan "disetujui AI" tapi nyatanya tidak pernah benar2 kebuka.
+        # Di-throttle max 1x/30menit (global, lintas symbol/strategi) -- breach ini kondisi
+        # bot-wide yg bisa nge-block puluhan kandidat sekaligus, jangan sampai jadi spam baru.
+        global _daily_loss_last_notify_ts
+        with _daily_loss_notify_lock:
+            _now_ts = time.time()
+            if _now_ts - _daily_loss_last_notify_ts > _DAILY_LOSS_NOTIFY_COOLDOWN_SEC:
+                _daily_loss_last_notify_ts = _now_ts
+                _dls = get_daily_loss_status()
+                send_telegram(
+                    f"⛔ Batas Rugi Harian Tersulut\n"
+                    f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                    f"P&L hari ini: {_dls['pnl_pct']:+.2f}% (${_dls['pnl_usd']:+.2f}) | Batas: -{_dls['limit_pct']:.1f}%\n"
+                    f"SEMUA open long baru diblokir lintas strategi sampai reset jam 00:00 WIB\n"
+                    f"(atau P&L membaik). Contoh yg baru diblokir: {to_display_pair(symbol)} ({strategy}).\n"
+                    f"Kalau ada notif 'AI Decision: OPEN' SETELAH pesan ini, itu tetap TIDAK akan\n"
+                    f"benar-benar kebuka selama blokir ini masih aktif.",
+                    parse_mode=None
+                )
         return False, BASE_ORDER_VOLUME, 0
     # Guard: strategi disabled via Strategy Control panel
     if not is_strategy_enabled(strategy):
