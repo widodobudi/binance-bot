@@ -369,6 +369,12 @@ TRENDCONFIRM_BATCH_MAX_APPROVE = 5       # batas atas yg diloloskan babak KEDUA 
                                           # -- Max Deals (3) tetap jadi batas akhir yg benar2 dibuka,
                                           # angka 5 ini kasih sedikit ruang kalau Max Deals dinaikkan
 
+# Konstanta generik pola 2-babak AI (03/09/2026) -- dipakai strategi LAIN selain TrenKonfirmasi-4h
+# yg konstanta batch-nya sendiri sudah di atas (TRENDCONFIRM_BATCH_*). Nilai sama, dipisah supaya
+# tuning salah satu strategi nggak ikut mengubah yg lain.
+AI_BATCH_POOL_SIZE   = 15
+AI_BATCH_MAX_APPROVE = 5
+
 # ── STRATEGI #5: Akumulasi Detector (4h, scan periodik) ───────────────────────
 # Deteksi cryptopair yang sedang berada di fase AKUMULASI (sideways setelah downtrend).
 # Indikator PRIMARY (semua harus lolos):
@@ -6801,6 +6807,7 @@ def thread_crossema_scan():
     _crossema_near_miss.clear()  # reset tiap scan
     scan_blockers_cx = {}
     scan_total_cx = 0
+    held_cx = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
 
     for sym_info in ticker:
         sym = sym_info.get("symbol", "")
@@ -6858,7 +6865,8 @@ def thread_crossema_scan():
                     _crossema_near_miss.append((5, sym, [f"candle belum bullish (price {_fmt_price(price_now)} vs open {_fmt_price(open_now)})"], 6))
                 continue
 
-            # LOLOS → OPEN DEAL
+            # LOLOS syarat teknikal -> babak 1: AI individual (notify=False), TAHAN dulu
+            # (03/09/2026, pola 2-babak, permintaan Mas Budi -- sama spt TrenKonfirmasi-4h)
             atrp         = float(r["atr_pct"]) if not pd.isna(r.get("atr_pct")) else 3.0
             signal_price = float(r["close"])
 
@@ -6869,89 +6877,130 @@ def thread_crossema_scan():
             log(f"[T_CROSSEMA] SINYAL: {sym} price={price_now:.6g} "
                 f"EMA20={ef:.6g} atr%={atrp:.2f} elapsed={elapsed_pct*100:.1f}%")
 
+            _rsi_ai_cx = r.get('rsi') if 'rsi' in r.index else None
+            _rsi_val_cx = float(_rsi_ai_cx) if _rsi_ai_cx is not None and not pd.isna(_rsi_ai_cx) else None
             if is_ai_call_open_enabled('brkX2_crossema'):
                 _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'signal_price': _fmt_price(signal_price)}
-                _rsi_ai_cx = r.get('rsi') if 'rsi' in r.index else None
-                if _rsi_ai_cx is not None and not pd.isna(_rsi_ai_cx): _ai_ind['rsi'] = f"{float(_rsi_ai_cx):.1f}"
-                if not ai_decision_open(sym, 'CrossEMA-4h', _ai_ind, active_deal_count()):
-                    log(f"[T_CROSSEMA] {sym} OPEN di-skip oleh AI decision")
+                if _rsi_val_cx is not None: _ai_ind['rsi'] = f"{_rsi_val_cx:.1f}"
+                if not ai_decision_open(sym, 'CrossEMA-4h', _ai_ind, active_deal_count(), notify=False):
+                    log(f"[T_CROSSEMA] {sym} babak-1 di-skip oleh AI individual")
                     continue
-            ok, target_usd, add_usd = open_deal_with_sizing(sym, 0, strategy="brkX2_crossema")
-            if not ok:
-                count_blocker(scan_blockers_cx, "Order open", True)
-                continue
 
-            entry_price = get_price_now(sym)
-            if entry_price <= 0: entry_price = price_now
-            slip_pct = (entry_price / signal_price - 1) * 100 if signal_price > 0 else 0.0
-
-            add_to_active_deals(sym, {
-                "strategy":         "brkX2_crossema",
-                "entry_price":      entry_price,
-                "peak":             entry_price,
-                "signal_price":     signal_price,
-                "atr_pct":          atrp,
-                "opened_candle_ts": int(candle_open_ms),
-                "trailing_armed":   False,
-                "opened_at":        now_wib().strftime('%Y-%m-%d %H:%M:%S'),
-                "target_usd":       target_usd,
-                "add_usd":          add_usd,
-                "tf":               "4h",
-            })
-
-            prog = csv_progress("brkX2_crossema")
-            send_telegram(
-                f"CrossEMA-4h | OPEN LONG INTRABAR\n"
-                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-                f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
-                f"Harga sinyal (EMA20 cross): {_fmt_price(signal_price)}\n"
-                f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
-                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
-                f"Base  : ${BASE_ORDER_VOLUME}\n"
-                f"Elapsed: {elapsed_pct*100:.1f}% (menit ke {int(elapsed_pct*240)})\n"
-                f"Slot crossema: {n_crossema+1}/{STRAT_CROSSEMA_MAX_DEALS}"
-            )
-            threading.Thread(target=send_email_open_long, args=("OPEN LONG INTRABAR CrossEMA-4h: " + to_display_pair(sym), 
-                f"CrossEMA-4h | OPEN LONG INTRABAR\n"
-                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-                f"Pair  : {to_display_pair(sym)}\n"
-                f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
-                f"Harga sinyal (EMA20 cross): {_fmt_price(signal_price)}\n"
-                f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
-                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
-                f"Base  : ${BASE_ORDER_VOLUME}\n"
-                f"Elapsed: {elapsed_pct*100:.1f}% (menit ke {int(elapsed_pct*240)})\n"
-                f"Slot crossema: {n_crossema+1}/{STRAT_CROSSEMA_MAX_DEALS}"
-            ), daemon=True).start()
-            csv_log_open({
-                "open_time_wib":  now_wib().strftime("%Y-%m-%d %H:%M:%S"),
-                "symbol":         to_display_pair(sym),
-                "signal_price":   f"{_fmt_price(signal_price)}",
-                "entry_price":    f"{_fmt_price(entry_price)}",
-                "slip_pct":       f"{slip_pct:+.2f}",
-                "atr_pct":        f"{atrp:.2f}",
-                "trail_dist_pct": f"{trailing_dist(atrp)}",
-                "base_usd":       BASE_ORDER_VOLUME,
-                "score":          0,
-                "strategy":       "brkX2_crossema",
-                "rsi_open":       f"{float(r['rsi']):.1f}" if 'rsi' in r.index and not pd.isna(r.get('rsi')) else '',
-            })
-            log_oac('OPEN', sym, 'CrossEMA-4h', {
-                'entry_price': _fmt_price(entry_price),
-                'slip_pct':    f"{slip_pct:+.2f}%",
-                'atr_pct':     f"{atrp:.2f}%",
-                'elapsed':     f"{elapsed_pct*100:.1f}%",
-                'trail_dist':  f"{trailing_dist(atrp)}%",
-            })
-            _crossema_last_candle_ts[sym] = candle_open_ms
-
-            n_crossema += 1
-            if n_crossema >= STRAT_CROSSEMA_MAX_DEALS: break
+            _vm_cx = r.get('vol_ma')
+            _rvol_cx = float(r['vol']) / float(_vm_cx) if not pd.isna(_vm_cx) and _vm_cx > 0 else 0.0
+            _bb_cx = float(r.get('bb_pct')) if not pd.isna(r.get('bb_pct')) else 0.0
+            _gap_cx = (price_now / float(ef) - 1) * 100 if ef and float(ef) > 0 else 0.0
+            held_cx[sym] = {
+                'atrp': atrp, 'signal_price': signal_price, 'price_now': price_now,
+                'elapsed_pct': elapsed_pct, 'rsi': _rsi_val_cx,
+                'detail': {'atr_pct': atrp, 'rvol': _rvol_cx, 'bb_pct': _bb_cx,
+                           'gap_ema20_pct': _gap_cx, 'rsi': _rsi_val_cx or 0.0},
+            }
+            if len(held_cx) >= AI_BATCH_POOL_SIZE:
+                log(f"[T_CROSSEMA] Kolam babak-1 penuh ({AI_BATCH_POOL_SIZE}), berhenti scan simbol baru siklus ini.")
+                break
 
         except Exception as e:
             log(f"  [T_CROSSEMA] error {sym}: {e}")
 
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+    if held_cx:
+        log(f"[T_CROSSEMA] Babak 1 selesai: {len(held_cx)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+        send_telegram(
+            f"🤖 AI Babak 1 | CrossEMA-4h\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Lolos AI individual: {len(held_cx)}\n"
+            f"Lolos: {', '.join(to_display_pair(s) for s in held_cx.keys())}\n"
+            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
+            parse_mode=None
+        )
+        batch_input_cx = [{'symbol': s, 'strategy': 'brkX2_crossema', 'score': 1, 'detail': v['detail']}
+                           for s, v in held_cx.items()]
+        approved_cx = ai_decision_batch_rank(
+            batch_input_cx, strategy_label='CrossEMA-4h', max_approve=AI_BATCH_MAX_APPROVE,
+            criteria_note="Kriteria: ATR%, RVOL, BB%b, jarak EMA20 (live), RSI",
+        )
+        for sym in approved_cx:
+            n_crossema = sum(1 for d in active_deals.values() if d.get("strategy") == "brkX2_crossema")
+            if n_crossema >= STRAT_CROSSEMA_MAX_DEALS: break
+            with active_deals_lock:
+                if sym in active_deals: continue
+            v = held_cx[sym]
+            atrp = v['atrp']; signal_price = v['signal_price']; price_now = v['price_now']
+            elapsed_pct = v['elapsed_pct']; _rsi_val_cx = v['rsi']
+            try:
+                ok, target_usd, add_usd = open_deal_with_sizing(sym, 0, strategy="brkX2_crossema")
+                if not ok:
+                    count_blocker(scan_blockers_cx, "Order open", True)
+                    continue
+
+                entry_price = get_price_now(sym)
+                if entry_price <= 0: entry_price = price_now
+                slip_pct = (entry_price / signal_price - 1) * 100 if signal_price > 0 else 0.0
+
+                add_to_active_deals(sym, {
+                    "strategy":         "brkX2_crossema",
+                    "entry_price":      entry_price,
+                    "peak":             entry_price,
+                    "signal_price":     signal_price,
+                    "atr_pct":          atrp,
+                    "opened_candle_ts": int(candle_open_ms),
+                    "trailing_armed":   False,
+                    "opened_at":        now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                    "target_usd":       target_usd,
+                    "add_usd":          add_usd,
+                    "tf":               "4h",
+                })
+
+                send_telegram(
+                    f"CrossEMA-4h | OPEN LONG INTRABAR\n"
+                    f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                    f"Pair  : {to_display_pair(sym)}\n"
+                    f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                    f"Harga sinyal (EMA20 cross): {_fmt_price(signal_price)}\n"
+                    f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
+                    f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                    f"Base  : ${BASE_ORDER_VOLUME}\n"
+                    f"Elapsed: {elapsed_pct*100:.1f}% (menit ke {int(elapsed_pct*240)})\n"
+                    f"Slot crossema: {n_crossema+1}/{STRAT_CROSSEMA_MAX_DEALS}"
+                )
+                threading.Thread(target=send_email_open_long, args=("OPEN LONG INTRABAR CrossEMA-4h: " + to_display_pair(sym),
+                    f"CrossEMA-4h | OPEN LONG INTRABAR\n"
+                    f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                    f"Pair  : {to_display_pair(sym)}\n"
+                    f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
+                    f"Harga sinyal (EMA20 cross): {_fmt_price(signal_price)}\n"
+                    f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
+                    f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                    f"Base  : ${BASE_ORDER_VOLUME}\n"
+                    f"Elapsed: {elapsed_pct*100:.1f}% (menit ke {int(elapsed_pct*240)})\n"
+                    f"Slot crossema: {n_crossema+1}/{STRAT_CROSSEMA_MAX_DEALS}"
+                ), daemon=True).start()
+                csv_log_open({
+                    "open_time_wib":  now_wib().strftime("%Y-%m-%d %H:%M:%S"),
+                    "symbol":         to_display_pair(sym),
+                    "signal_price":   f"{_fmt_price(signal_price)}",
+                    "entry_price":    f"{_fmt_price(entry_price)}",
+                    "slip_pct":       f"{slip_pct:+.2f}",
+                    "atr_pct":        f"{atrp:.2f}",
+                    "trail_dist_pct": f"{trailing_dist(atrp)}",
+                    "base_usd":       BASE_ORDER_VOLUME,
+                    "score":          0,
+                    "strategy":       "brkX2_crossema",
+                    "rsi_open":       f"{_rsi_val_cx:.1f}" if _rsi_val_cx is not None else '',
+                })
+                log_oac('OPEN', sym, 'CrossEMA-4h', {
+                    'entry_price': _fmt_price(entry_price),
+                    'slip_pct':    f"{slip_pct:+.2f}%",
+                    'atr_pct':     f"{atrp:.2f}%",
+                    'elapsed':     f"{elapsed_pct*100:.1f}%",
+                    'trail_dist':  f"{trailing_dist(atrp)}%",
+                })
+                _crossema_last_candle_ts[sym] = candle_open_ms
+            except Exception as e:
+                log(f"  [T_CROSSEMA] error buka {sym}: {e}")
+
+    n_crossema = sum(1 for d in active_deals.values() if d.get("strategy") == "brkX2_crossema")
     record_scan_blockers("CrossEMA-4h", scan_total_cx, n_crossema, scan_blockers_cx)
     if _crossema_near_miss:
         log_near_miss("CrossEMA-4h", _crossema_near_miss, 3)
@@ -7127,7 +7176,17 @@ def thread_trendconfirm_scan():
     # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus, pangkas ke maks 5 ============
     batch_input = [{'symbol': sym, 'strategy': 'trend_confirm_4h', 'score': v[2], 'detail': v[3]}
                    for sym, v in held.items()]
-    approved_syms = ai_decision_batch_rank(batch_input, max_approve=TRENDCONFIRM_BATCH_MAX_APPROVE)
+    approved_syms = ai_decision_batch_rank(
+        batch_input, strategy_label='TrenKonfirmasi-4h', max_approve=TRENDCONFIRM_BATCH_MAX_APPROVE,
+        extra_guidance=(
+            f"Panduan tambahan: ATR% >= {TRENDCONFIRM_ATR_ABS_MIN:.1f}% adalah level yang tervalidasi "
+            f"backtest untuk strategi ini (momentum/volatilitas cukup kuat) -- prioritaskan kandidat "
+            f"dengan ATR% di atas level itu, tapi ini BUKAN syarat mutlak: kandidat dengan ATR% sedikit "
+            f"di bawah itu tetap boleh dipilih kalau sisi lain (RVOL, BB%b, jarak EMA20, RSI) jauh lebih "
+            f"meyakinkan dibanding kandidat lain di daftar ini."
+        ),
+        criteria_note=f"Kriteria: skor, ATR%, RVOL, BB%b, jarak EMA20, RSI (ATR>={TRENDCONFIRM_ATR_ABS_MIN:.1f}% diprioritaskan, bukan wajib)",
+    )
     if not approved_syms:
         log(f"[T_TRENDCONFIRM] Babak 2: 0 dari {len(held)} kandidat diloloskan.")
         return
@@ -13043,27 +13102,33 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     return decision
 
 
-def ai_decision_batch_rank(candidates: list, max_approve: int = None) -> list:
+def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: int = 5,
+                            extra_guidance: str = "", criteria_note: str = "") -> list:
     """
-    Babak KEDUA (03/09/2026, permintaan Mas Budi, khusus TrenKonfirmasi-4h): dipanggil
-    SETELAH sejumlah kandidat lolos AI individual (ai_decision_open, notify=False) dan
-    ditahan (hold window TRENDCONFIRM_BATCH_HOLD_SEC) -- di sini SEMUA kandidat yg
-    ditahan itu dibandingkan bersamaan oleh AI, bukan dinilai satu-satu terpisah,
-    supaya keputusan akhir "siapa yang benar2 dibuka" mempertimbangkan kandidat lain
-    yg lolos di jendela waktu yang sama (bukan cuma first-come-first-served).
+    Babak KEDUA (03/09/2026, permintaan Mas Budi -- awalnya khusus TrenKonfirmasi-4h,
+    digeneralisasi 03/09/2026 supaya dipakai ULANG strategi lain juga tanpa duplikasi
+    kode): dipanggil SETELAH sejumlah kandidat lolos AI individual (ai_decision_open,
+    notify=False) dan ditahan -- di sini SEMUA kandidat yg ditahan itu dibandingkan
+    bersamaan oleh AI, bukan dinilai satu-satu terpisah, supaya keputusan akhir "siapa
+    yang benar2 dibuka" mempertimbangkan kandidat lain yg lolos di jendela yg sama
+    (bukan cuma first-come-first-served).
 
     candidates: list of dict, masing2 minimal punya 'symbol','strategy','score','detail'
     (detail = {'atr_pct','rvol','bb_pct','gap_ema20_pct','rsi'}), sudah dalam URUTAN
-    RANKING asli (skor+kekuatan sinyal) dari scan -- urutan ini dipakai sbg fallback
-    kalau AI gagal/tidak tersedia.
+    RANKING asli dari scan -- urutan ini dipakai sbg fallback kalau AI gagal/tidak
+    tersedia.
+    strategy_label: nama strategi utk ditampilkan di prompt & notifikasi (WAJIB diisi
+    caller -- tidak ada default, supaya tidak ada strategi yg salah label krn lupa).
+    extra_guidance: paragraf tambahan opsional di prompt (mis. panduan ATR khusus
+    TrenKonfirmasi-4h) -- kosongkan kalau strategi tsb tidak butuh panduan tambahan.
+    criteria_note: baris "Kriteria: ..." opsional di notifikasi Telegram, ringkasan
+    dimensi yg dibandingkan -- kosongkan utk skip baris ini.
 
     Return: list of symbol (subset dari candidates, urutan = prioritas terbaik dulu),
-    MAKS max_approve (default TRENDCONFIRM_BATCH_MAX_APPROVE). Fail-open: kalau AI
-    tidak tersedia/error/jawaban tidak bisa di-parse, fallback ke urutan ranking asli
-    (bukan buka semua tanpa seleksi, dan bukan tolak semua) -- dipotong max_approve.
+    MAKS max_approve. Fail-open: kalau AI tidak tersedia/error/jawaban tidak bisa
+    di-parse, fallback ke urutan ranking asli (bukan buka semua tanpa seleksi, dan
+    bukan tolak semua) -- dipotong max_approve.
     """
-    if max_approve is None:
-        max_approve = TRENDCONFIRM_BATCH_MAX_APPROVE
     if not candidates:
         return []
     valid_symbols = {c['symbol'] for c in candidates}
@@ -13079,20 +13144,16 @@ def ai_decision_batch_rank(candidates: list, max_approve: int = None) -> list:
             f"RSI={det.get('rsi',0):.1f}"
         )
     daftar_str = "\n".join(lines_desc)
+    guidance_section = f"{extra_guidance}\n\n" if extra_guidance else ""
 
     prompt = (
         f"Kamu adalah AI analyst trading crypto. Ada {len(candidates)} kandidat OPEN LONG "
-        f"strategi TrenKonfirmasi-4h (momentum-confirmation) yang SEMUA sudah lolos syarat "
-        f"wajib teknikal DAN sudah lolos penilaian AI individual masing-masing. Sekarang "
-        f"bandingkan SEMUA kandidat ini satu sama lain dan pilih maksimal {max_approve} yang "
-        f"KUALITASNYA PALING BAIK (bukan sekadar lolos, tapi paling meyakinkan dibanding "
-        f"yang lain di daftar ini) -- kandidat yg lebih lemah dibuang meski tadinya lolos "
-        f"penilaian individual.\n\n"
-        f"Panduan tambahan: ATR% >= {TRENDCONFIRM_ATR_ABS_MIN:.1f}% adalah level yang tervalidasi "
-        f"backtest untuk strategi ini (momentum/volatilitas cukup kuat) -- prioritaskan kandidat "
-        f"dengan ATR% di atas level itu, tapi ini BUKAN syarat mutlak: kandidat dengan ATR% sedikit "
-        f"di bawah itu tetap boleh dipilih kalau sisi lain (RVOL, BB%b, jarak EMA20, RSI) jauh lebih "
-        f"meyakinkan dibanding kandidat lain di daftar ini.\n\n"
+        f"strategi {strategy_label} yang SEMUA sudah lolos syarat wajib teknikal DAN sudah "
+        f"lolos penilaian AI individual masing-masing. Sekarang bandingkan SEMUA kandidat "
+        f"ini satu sama lain dan pilih maksimal {max_approve} yang KUALITASNYA PALING BAIK "
+        f"(bukan sekadar lolos, tapi paling meyakinkan dibanding yang lain di daftar ini) "
+        f"-- kandidat yg lebih lemah dibuang meski tadinya lolos penilaian individual.\n\n"
+        f"{guidance_section}"
         f"Daftar kandidat:\n{daftar_str}\n\n"
         f"Format jawaban (ikuti persis):\n"
         f"PILIH: <daftar pair dipisah koma, urutan dari paling bagus, mis. BTC/USDT, ETH/USDT>\n"
@@ -13102,25 +13163,26 @@ def ai_decision_batch_rank(candidates: list, max_approve: int = None) -> list:
     )
     result = _ai_call(prompt)
     if not result:
-        log(f"[AI] BATCH rank: AI tidak tersedia, fallback ke urutan ranking asli ({len(fallback)}/{len(candidates)})")
+        log(f"[AI] BATCH rank {strategy_label}: AI tidak tersedia, fallback ke urutan ranking asli ({len(fallback)}/{len(candidates)})")
         return fallback
 
     lines = result.strip().split("\n")
     first_line = lines[0].strip()
     reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
     if not first_line.upper().startswith("PILIH"):
-        log(f"[AI] BATCH rank: format jawaban tidak dikenali, fallback ke urutan ranking asli")
+        log(f"[AI] BATCH rank {strategy_label}: format jawaban tidak dikenali, fallback ke urutan ranking asli")
         return fallback
 
+    criteria_line = f"{criteria_note}\n" if criteria_note else ""
     picked_raw = first_line.split(":", 1)[1].strip() if ":" in first_line else ""
     if not picked_raw or "TIDAK ADA" in picked_raw.upper():
-        log(f"[AI] BATCH rank: AI memilih TIDAK ADA dari {len(candidates)} kandidat")
+        log(f"[AI] BATCH rank {strategy_label}: AI memilih TIDAK ADA dari {len(candidates)} kandidat")
         send_telegram(
-            f"🤖 AI Batch Analysis | TrenKonfirmasi-4h\n"
+            f"🤖 AI Batch Analysis | {strategy_label}\n"
             f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
             f"{ai_provider_note()}\n"
             f"Dievaluasi: {len(candidates)} kandidat | Diloloskan: 0\n"
-            f"Kriteria: skor, ATR%, RVOL, BB%b, jarak EMA20, RSI (ATR>={TRENDCONFIRM_ATR_ABS_MIN:.1f}% diprioritaskan, bukan wajib)\n"
+            f"{criteria_line}"
             f"{reasoning}",
             parse_mode=None
         )
@@ -13135,18 +13197,18 @@ def ai_decision_batch_rank(candidates: list, max_approve: int = None) -> list:
                     picked_syms.append(sym)
                 break
     if not picked_syms:
-        log(f"[AI] BATCH rank: gagal parse simbol dari jawaban AI, fallback ke urutan ranking asli")
+        log(f"[AI] BATCH rank {strategy_label}: gagal parse simbol dari jawaban AI, fallback ke urutan ranking asli")
         return fallback
     picked_syms = picked_syms[:max_approve]
 
-    log(f"[AI] BATCH rank: {len(picked_syms)}/{len(candidates)} diloloskan → {picked_syms}")
+    log(f"[AI] BATCH rank {strategy_label}: {len(picked_syms)}/{len(candidates)} diloloskan → {picked_syms}")
     send_telegram(
-        f"🤖 AI Batch Analysis | TrenKonfirmasi-4h\n"
+        f"🤖 AI Batch Analysis | {strategy_label}\n"
         f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
         f"{ai_provider_note()}\n"
         f"Dievaluasi: {len(candidates)} kandidat | Diloloskan: {len(picked_syms)}\n"
         f"Terpilih: {', '.join(to_display_pair(s) for s in picked_syms)}\n"
-        f"Kriteria: skor, ATR%, RVOL, BB%b, jarak EMA20, RSI (ATR>={TRENDCONFIRM_ATR_ABS_MIN:.1f}% diprioritaskan, bukan wajib)\n"
+        f"{criteria_line}"
         f"{reasoning}",
         parse_mode=None
     )
