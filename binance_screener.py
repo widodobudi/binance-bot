@@ -338,13 +338,15 @@ TRENDCONFIRM_MIN_VOL_USD     = 2_000_000 # sama spt brkX2-4h (STRAT4H_MIN_VOL_US
 TRENDCONFIRM_ATR_MEDIAN_WINDOW = 100     # "ATR tinggi" = relatif thd median ATR% 100 candle terakhir
                                           # koin itu sendiri (self-relative, bukan angka mutlak)
 TRENDCONFIRM_RVOL_MIN        = 1.0       # syarat wajib
-TRENDCONFIRM_ATR_ABS_MIN     = 3.0       # syarat wajib TAMBAHAN (03/09/2026, koreksi Mas Budi):
-                                          # angka MUTLAK yg benar2 divalidasi backtest 4h (Step
-                                          # 2/3) -- versi self-relative (rolling median) di atas
+TRENDCONFIRM_ATR_ABS_MIN     = 3.0       # angka MUTLAK yg benar2 divalidasi backtest 4h (Step 2/3)
+                                          # -- versi self-relative (rolling median) di syarat wajib
                                           # dipakai buat generalisasi lintas timeframe di Step 4,
-                                          # TERNYATA lebih longgar dari yg divalidasi. Sekarang
-                                          # syarat ATR wajib lolos KEDUANYA (self-relative DAN
-                                          # mutlak), bukan salah satu saja.
+                                          # TERNYATA lebih longgar dari yg divalidasi. Sempat jadi
+                                          # syarat wajib TAMBAHAN (03/09/2026), TAPI direvisi lagi
+                                          # (03/09/2026, permintaan Mas Budi): dipindah jadi PANDUAN
+                                          # EKSPLISIT utk AI di babak 2 (ai_decision_batch_rank),
+                                          # BUKAN gerbang wajib keras -- AI yg menimbang, kandidat
+                                          # ATR<3.0 boleh tetap dipertimbangkan kalau sisi lain kuat.
 TRENDCONFIRM_RSI_MAX          = 75.0     # syarat wajib BARU (03/09/2026, koreksi Mas Budi):
                                           # kandidat live ketahuan lolos dgn RSI 77-89 (overbought
                                           # ekstrem, ADX lemah, BB%b>1 -- ciri exhaustion), padahal
@@ -6994,8 +6996,11 @@ def check_trendconfirm_entry(df):
     gap_ema20 = (float(r['close']) / float(ema20) - 1) * 100
 
     # --- Syarat WAJIB (semuanya harus lolos) ---
+    # ATR% dikembalikan ke self-relative SAJA (03/09/2026, permintaan Mas Budi) -- TRENDCONFIRM_ATR_ABS_MIN
+    # (3.0, angka tervalidasi backtest) TIDAK lagi jadi gerbang wajib keras di sini, dipindah jadi
+    # panduan eksplisit utk AI di babak 2 (ai_decision_batch_rank) supaya AI yg menimbang, bukan
+    # gerbang mutlak yg langsung mencoret kandidat lain yg mungkin masih bagus meski ATR<3.0.
     if not (float(atrp) >= float(atr_med)): return False, 0, {}
-    if not (float(atrp) >= TRENDCONFIRM_ATR_ABS_MIN): return False, 0, {}
     if not (gap_ema20 >= 0.0): return False, 0, {}
     if not (rvol >= TRENDCONFIRM_RVOL_MIN): return False, 0, {}
     if not (float(rsi) < TRENDCONFIRM_RSI_MAX): return False, 0, {}
@@ -13088,6 +13093,11 @@ def ai_decision_batch_rank(candidates: list, max_approve: int = None) -> list:
         f"KUALITASNYA PALING BAIK (bukan sekadar lolos, tapi paling meyakinkan dibanding "
         f"yang lain di daftar ini) -- kandidat yg lebih lemah dibuang meski tadinya lolos "
         f"penilaian individual.\n\n"
+        f"Panduan tambahan: ATR% >= {TRENDCONFIRM_ATR_ABS_MIN:.1f}% adalah level yang tervalidasi "
+        f"backtest untuk strategi ini (momentum/volatilitas cukup kuat) -- prioritaskan kandidat "
+        f"dengan ATR% di atas level itu, tapi ini BUKAN syarat mutlak: kandidat dengan ATR% sedikit "
+        f"di bawah itu tetap boleh dipilih kalau sisi lain (RVOL, BB%b, jarak EMA20, RSI) jauh lebih "
+        f"meyakinkan dibanding kandidat lain di daftar ini.\n\n"
         f"Daftar kandidat:\n{daftar_str}\n\n"
         f"Format jawaban (ikuti persis):\n"
         f"PILIH: <daftar pair dipisah koma, urutan dari paling bagus, mis. BTC/USDT, ETH/USDT>\n"
