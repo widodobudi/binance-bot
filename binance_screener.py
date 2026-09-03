@@ -5389,9 +5389,23 @@ def thread2_monitor():
                     _ai_override_bypassed = True
                     log(f"[T2] {sym} BATAS ABSOLUT tercapai (rugi >= {_absolute_ceiling_pct:.2f}%) -- AI tidak bisa menahan lagi")
                     reason += f" [BATAS ABSOLUT {_absolute_ceiling_pct:.2f}%: AI override dilewati]"
-            # AI decision jika ai_call=True untuk deal ini
+            # AI decision jika ai_call=True untuk deal ini -- pakai cooldown 10 menit (bug
+            # fix 03/09/2026, permintaan Mas Budi): SEBELUMNYA ai_decision_close() ditanya
+            # ULANG tiap siklus T2 (~15 detik) selama do_close masih terpicu & AI masih
+            # HOLD -- kalau 1 deal nyangkut di zona itu berjam-jam bisa spam 300-400+
+            # notifikasi Telegram + boros API call AI utk keputusan yg pada dasarnya sama
+            # berulang-ulang. Generik lintas SEMUA strategi (bukan cuma trend_confirm_4h),
+            # krn ini bug pemborosan, bukan pilihan desain per-strategi.
             if not _ai_override_bypassed and get_deal_override(sym, 'ai_call', True):
+                _close_ai_hold_until = float(d.get('close_ai_hold_until', 0) or 0)
+                if time.time() < _close_ai_hold_until:
+                    log(f"[T2] {sym} CLOSE di-hold (cooldown AI {(_close_ai_hold_until - time.time())/60:.1f} menit lagi, reason: {reason})")
+                    continue
                 if not ai_decision_close(sym, d.get('strategy', 'brkX2'), d, price, peak, reason):
+                    with active_deals_lock:
+                        if sym in active_deals:
+                            active_deals[sym]['close_ai_hold_until'] = time.time() + 10 * 60
+                    save_active_deals()
                     log(f"[T2] {sym} CLOSE di-hold oleh AI decision (reason: {reason})")
                     continue
             log(f"[T2] CLOSE {sym}: {reason} | profit {prof_from_entry:.2f}%")
