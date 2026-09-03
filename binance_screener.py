@@ -13125,6 +13125,7 @@ def ai_decision_batch_rank(candidates: list, max_approve: int = None) -> list:
             f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
             f"{ai_provider_note()}\n"
             f"Dievaluasi: {len(candidates)} kandidat | Diloloskan: 0\n"
+            f"Kriteria: skor, ATR%, RVOL, BB%b, jarak EMA20, RSI (ATR>={TRENDCONFIRM_ATR_ABS_MIN:.1f}% diprioritaskan, bukan wajib)\n"
             f"{reasoning}",
             parse_mode=None
         )
@@ -13150,6 +13151,7 @@ def ai_decision_batch_rank(candidates: list, max_approve: int = None) -> list:
         f"{ai_provider_note()}\n"
         f"Dievaluasi: {len(candidates)} kandidat | Diloloskan: {len(picked_syms)}\n"
         f"Terpilih: {', '.join(to_display_pair(s) for s in picked_syms)}\n"
+        f"Kriteria: skor, ATR%, RVOL, BB%b, jarak EMA20, RSI (ATR>={TRENDCONFIRM_ATR_ABS_MIN:.1f}% diprioritaskan, bukan wajib)\n"
         f"{reasoning}",
         parse_mode=None
     )
