@@ -338,6 +338,19 @@ TRENDCONFIRM_MIN_VOL_USD     = 2_000_000 # sama spt brkX2-4h (STRAT4H_MIN_VOL_US
 TRENDCONFIRM_ATR_MEDIAN_WINDOW = 100     # "ATR tinggi" = relatif thd median ATR% 100 candle terakhir
                                           # koin itu sendiri (self-relative, bukan angka mutlak)
 TRENDCONFIRM_RVOL_MIN        = 1.0       # syarat wajib
+TRENDCONFIRM_ATR_ABS_MIN     = 3.0       # syarat wajib TAMBAHAN (03/09/2026, koreksi Mas Budi):
+                                          # angka MUTLAK yg benar2 divalidasi backtest 4h (Step
+                                          # 2/3) -- versi self-relative (rolling median) di atas
+                                          # dipakai buat generalisasi lintas timeframe di Step 4,
+                                          # TERNYATA lebih longgar dari yg divalidasi. Sekarang
+                                          # syarat ATR wajib lolos KEDUANYA (self-relative DAN
+                                          # mutlak), bukan salah satu saja.
+TRENDCONFIRM_RSI_MAX          = 75.0     # syarat wajib BARU (03/09/2026, koreksi Mas Budi):
+                                          # kandidat live ketahuan lolos dgn RSI 77-89 (overbought
+                                          # ekstrem, ADX lemah, BB%b>1 -- ciri exhaustion), padahal
+                                          # syarat wajib sebelumnya sama sekali tidak mengecek RSI.
+                                          # 5 dari 6 strategi lain SEMUA punya RSI_MAX, ini yg
+                                          # ketinggalan waktu strategi baru ini dibangun.
 TRENDCONFIRM_BB_PCT_SECONDARY= 0.65      # syarat SEKUNDER (skor/ranking, bukan gerbang wajib)
 TRENDCONFIRM_CLOSE_HARD_CEILING_EXTRA_PCT = 5.0  # batas absolut close = hard_stop_pct(atr) + ini,
                                           # TIDAK BISA di-override AI (Fase 2, permintaan Mas Budi 03/09/2026)
@@ -6958,9 +6971,9 @@ def check_trendconfirm_entry(df):
     ema20 = r.get('ema20')
     if pd.isna(ema20) or ema20 <= 0:
         return False, 0, {}
-    atrp = r.get('atr_pct'); bbp = r.get('bb_pct')
+    atrp = r.get('atr_pct'); bbp = r.get('bb_pct'); rsi = r.get('rsi')
     vol_ma20 = df['vol'].rolling(20).mean().iloc[-1]
-    if pd.isna(atrp) or pd.isna(bbp) or pd.isna(vol_ma20) or vol_ma20 <= 0:
+    if pd.isna(atrp) or pd.isna(bbp) or pd.isna(vol_ma20) or vol_ma20 <= 0 or pd.isna(rsi):
         return False, 0, {}
     rvol = float(r['vol']) / float(vol_ma20)
     atr_med = df['atr_pct'].rolling(TRENDCONFIRM_ATR_MEDIAN_WINDOW).median().iloc[-1]
@@ -6968,16 +6981,18 @@ def check_trendconfirm_entry(df):
         return False, 0, {}
     gap_ema20 = (float(r['close']) / float(ema20) - 1) * 100
 
-    # --- Syarat WAJIB (ketiganya harus lolos) ---
+    # --- Syarat WAJIB (semuanya harus lolos) ---
     if not (float(atrp) >= float(atr_med)): return False, 0, {}
+    if not (float(atrp) >= TRENDCONFIRM_ATR_ABS_MIN): return False, 0, {}
     if not (gap_ema20 >= 0.0): return False, 0, {}
     if not (rvol >= TRENDCONFIRM_RVOL_MIN): return False, 0, {}
+    if not (float(rsi) < TRENDCONFIRM_RSI_MAX): return False, 0, {}
 
     # --- Syarat SEKUNDER (dipakai utk skor/ranking, BUKAN gerbang wajib) ---
     score = 2 if float(bbp) >= TRENDCONFIRM_BB_PCT_SECONDARY else 1
 
     detail = {'atr_pct': float(atrp), 'atr_median100': float(atr_med), 'rvol': rvol,
-               'bb_pct': float(bbp), 'gap_ema20_pct': gap_ema20}
+               'bb_pct': float(bbp), 'gap_ema20_pct': gap_ema20, 'rsi': float(rsi)}
     return True, score, detail
 
 def thread_trendconfirm_scan():
@@ -7094,7 +7109,7 @@ def thread_trendconfirm_scan():
             f"Harga sinyal (4h closed): {_fmt_price(signal_price)}\n"
             f"Selisih (slippage): {slip_pct:+.2f}%\n"
             f"ATR%  : {atrp:.2f}  (trailing {trail_d}% stlh +{trail_arm}%)\n"
-            f"RVOL  : {detail.get('rvol',0):.2f}x  |  BB%b: {detail.get('bb_pct',0):.2f}  |  vs EMA20: {detail.get('gap_ema20_pct',0):+.2f}%\n"
+            f"RVOL  : {detail.get('rvol',0):.2f}x  |  BB%b: {detail.get('bb_pct',0):.2f}  |  vs EMA20: {detail.get('gap_ema20_pct',0):+.2f}%  |  RSI: {detail.get('rsi',0):.1f}\n"
             f"Skor sinyal: {score}/2 -> modal ${target_usd:.0f}"
             + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else "") + "\n"
             f"Slot terpakai: {n_active+1}/{TRENDCONFIRM_MAX_DEALS}"
