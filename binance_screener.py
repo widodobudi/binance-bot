@@ -10940,7 +10940,11 @@ def thread_akum_entry_scan():
         log(f"[T_AKUM_ENTRY] Slot penuh {n_akum}/{AKUM_ENTRY_MAX_DEALS}, skip open.")
         return
 
+    held_akum = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
     for item in kandidat:
+        if len(held_akum) >= AI_BATCH_POOL_SIZE:
+            log(f"[T_AKUM_ENTRY] Kolam babak-1 penuh ({AI_BATCH_POOL_SIZE}), berhenti kumpulkan kandidat baru siklus ini.")
+            break
         sym   = item.get('sym', '')
         score = item.get('weighted_score') or item.get('total_score') or item.get('score', 0)
         support    = item.get('support')
@@ -11002,9 +11006,61 @@ def thread_akum_entry_scan():
                 _ai_ind = {'entry_type': entry_type, 'price_now': _fmt_price(price_now),
                            'atr_pct': f"{item.get('atr_pct', 3.0):.2f}%"}
                 if _rsi_akum is not None: _ai_ind['rsi'] = f"{_rsi_akum:.1f}"
-                if not ai_decision_open(sym, f'Akumulasi-4h Entry {entry_type}', _ai_ind, active_deal_count()):
-                    log(f"[T_AKUM_ENTRY] {sym} OPEN di-skip oleh AI decision")
+                if not ai_decision_open(sym, f'Akumulasi-4h Entry {entry_type}', _ai_ind, active_deal_count(), notify=False):
+                    log(f"[T_AKUM_ENTRY] {sym} babak-1 di-skip oleh AI individual")
                     continue
+
+            held_akum[sym] = {
+                'entry_type': entry_type, 'strat_key': strat_key, 'sig': sig, 'score': score,
+                'support': support, 'resistance': resistance,
+                'support_zone_low': support_zone_low, 'support_zone_high': support_zone_high,
+                'resistance_zone_low': resistance_zone_low, 'resistance_zone_high': resistance_zone_high,
+                'support_reentry_ref': support_reentry_ref, 'resistance_break_ref': resistance_break_ref,
+                'has_struct': has_struct, 'atrp_item': item.get('atr_pct', 3.0),
+                'price_now': price_now, 'rsi_akum': _rsi_akum, 'df_ct_last': int(df['ct'].iloc[-1]),
+                'detail': {'atr_pct': item.get('atr_pct', 3.0), 'rvol': 0.0, 'bb_pct': 0.0,
+                           'gap_ema20_pct': 0.0, 'rsi': _rsi_akum or 0.0},
+            }
+        except Exception as e:
+            log(f"[T_AKUM_ENTRY] error {sym}: {e}")
+
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+    approved_akum = []
+    if held_akum:
+        log(f"[T_AKUM_ENTRY] Babak 1 selesai: {len(held_akum)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+        _lolos_str = ', '.join(f"{to_display_pair(s)} ({v['entry_type']})" for s, v in held_akum.items())
+        send_telegram(
+            f"🤖 AI Babak 1 | Akumulasi-4h\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Lolos AI individual: {len(held_akum)}\n"
+            f"Lolos: {_lolos_str}\n"
+            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
+            parse_mode=None
+        )
+        batch_input_akum = [{'symbol': s, 'strategy': v['strat_key'], 'score': v['score'], 'detail': v['detail']}
+                             for s, v in held_akum.items()]
+        approved_akum = ai_decision_batch_rank(
+            batch_input_akum, strategy_label='Akumulasi-4h', max_approve=AI_BATCH_MAX_APPROVE,
+            criteria_note="Kriteria: skor, ATR%, RSI (Akumulasi-4h tidak hitung RVOL/BB%b/EMA20 -- basis Wyckoff S/R, bukan EMA)",
+        )
+
+    for sym in approved_akum:
+        n_akum = active_deal_count_akum()
+        if n_akum >= AKUM_ENTRY_MAX_DEALS:
+            log(f"[T_AKUM_ENTRY] Slot penuh {n_akum}/{AKUM_ENTRY_MAX_DEALS}, sisa kandidat tidak dibuka.")
+            break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        v = held_akum[sym]
+        entry_type = v['entry_type']; strat_key = v['strat_key']; sig = v['sig']; score = v['score']
+        support = v['support']; resistance = v['resistance']
+        support_zone_low = v['support_zone_low']; support_zone_high = v['support_zone_high']
+        resistance_zone_low = v['resistance_zone_low']; resistance_zone_high = v['resistance_zone_high']
+        support_reentry_ref = v['support_reentry_ref']; resistance_break_ref = v['resistance_break_ref']
+        has_struct = v['has_struct']; price_now = v['price_now']; _rsi_akum = v['rsi_akum']
+        _atrp_item = v['atrp_item']
+
+        try:
             ok, target_usd, add_usd = open_deal_with_sizing(sym, score, strat_key)
             if not ok:
                 reject_reason = "Binance order ditolak (cek saldo/lot size)" if USE_BINANCE_DIRECT else "3Commas tolak (cek saldo/slot)"
@@ -11027,8 +11083,8 @@ def thread_akum_entry_scan():
                 'peak':            price_now,
                 'signal_price':    price_now,
                 'sl_price':        sig['sl_price'],
-                'atr_pct':         item.get('atr_pct', 3.0),
-                'opened_candle_ts': int(df['ct'].iloc[-1]),
+                'atr_pct':         _atrp_item,
+                'opened_candle_ts': v['df_ct_last'],
                 'trailing_armed':  False,
                 'opened_at':       ts,
                 'target_usd':      target_usd,
@@ -11053,8 +11109,8 @@ def thread_akum_entry_scan():
                 'signal_price':   f"{_fmt_price(price_now)}",
                 'entry_price':    f"{_fmt_price(price_now)}",
                 'slip_pct':       '0.00',
-                'atr_pct':        f"{item.get('atr_pct', 3.0):.2f}",
-                'trail_dist_pct': f"{trailing_dist(item.get('atr_pct', 3.0))}",
+                'atr_pct':        f"{_atrp_item:.2f}",
+                'trail_dist_pct': f"{trailing_dist(_atrp_item)}",
                 'base_usd':       target_usd,
                 'score':          score,
                 'strategy':       strat_key,
@@ -11085,8 +11141,6 @@ def thread_akum_entry_scan():
                 'score':        score,
                 'target_usd':   f"${target_usd}",
             })
-            n_akum = active_deal_count_akum()
-            if n_akum >= AKUM_ENTRY_MAX_DEALS: break
 
         except Exception as e:
             log(f"[T_AKUM_ENTRY] error {sym}: {e}")
