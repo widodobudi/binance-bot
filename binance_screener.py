@@ -4596,12 +4596,11 @@ def thread1_scan():
         log(f"[T1] {len(reentry_ok)} kandidat diizinkan re-entry (indikator sama/lebih baik).")
         candidates = [(sym, sp, atr, sc) for sym, sp, atr, sc, _ in reentry_ok]
 
-    opened_any = False
+    held_bx12 = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
     cooldown_held = []   # (sym, sisa_detik) -- kandidat 7/7 valid tapi masih cooldown internal
     for sym, signal_price, atrp, score in candidates:
-        # berhenti kalau slot brkX2 ATAU total sudah penuh
-        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
-            log(f"[T1] Slot brkX2/total penuh, sisa kandidat tidak dibuka.")
+        if len(held_bx12) >= AI_BATCH_POOL_SIZE:
+            log(f"[T1] Kolam babak-1 penuh ({AI_BATCH_POOL_SIZE}), berhenti kumpulkan kandidat baru siklus ini.")
             break
         with active_deals_lock:
             if sym in active_deals:
@@ -4612,16 +4611,65 @@ def thread1_scan():
             cooldown_held.append((sym, sisa))
             continue  # jangan kirim webhook yg pasti ditolak 3Commas (cegah deal hantu)
         log(f"[T1] SINYAL: {sym} close_candle={_fmt_price(signal_price)} atr%={atrp:.2f} skor={score}")
+
+        _df_ai = all_dfs.get(sym)
+        _rsi_ai_val = None
+        _rvol_bx12 = 0.0; _bb_bx12 = 0.0; _gap_bx12 = 0.0
+        if _df_ai is not None and len(_df_ai) > 0:
+            _r_ai = _df_ai.iloc[-1]
+            if not pd.isna(_r_ai.get('rsi')): _rsi_ai_val = float(_r_ai['rsi'])
+            _vm_bx12 = _r_ai.get('vol_ma')
+            if not pd.isna(_vm_bx12) and _vm_bx12 > 0: _rvol_bx12 = float(_r_ai['vol']) / float(_vm_bx12)
+            if not pd.isna(_r_ai.get('bb_pct')): _bb_bx12 = float(_r_ai['bb_pct'])
+            _ef_bx12 = _r_ai.get('ema_fast')
+            if not pd.isna(_ef_bx12) and _ef_bx12 > 0:
+                _gap_bx12 = (signal_price / float(_ef_bx12) - 1) * 100
+
         # AI decision jika toggle "AI Call on Open" aktif utk strategi brkX2 (Strategy Control)
         if is_ai_call_open_enabled('brkX2'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
-            _df_ai = all_dfs.get(sym)
-            if _df_ai is not None and len(_df_ai) > 0:
-                _rsi_ai = _df_ai.iloc[-1].get('rsi')
-                if _rsi_ai is not None and not pd.isna(_rsi_ai): _ai_ind['rsi'] = f"{float(_rsi_ai):.1f}"
-            if not ai_decision_open(sym, 'brkX2-12h', _ai_ind, active_deal_count()):
-                log(f"[T1] {sym} OPEN di-skip oleh AI decision")
+            if _rsi_ai_val is not None: _ai_ind['rsi'] = f"{_rsi_ai_val:.1f}"
+            if not ai_decision_open(sym, 'brkX2-12h', _ai_ind, active_deal_count(), notify=False):
+                log(f"[T1] {sym} babak-1 di-skip oleh AI individual")
                 continue
+
+        held_bx12[sym] = {
+            'signal_price': signal_price, 'atrp': atrp, 'score': score,
+            'detail': {'atr_pct': atrp, 'rvol': _rvol_bx12, 'bb_pct': _bb_bx12,
+                       'gap_ema20_pct': _gap_bx12, 'rsi': _rsi_ai_val or 0.0},
+        }
+
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+    approved_bx12 = []
+    if held_bx12:
+        log(f"[T1] Babak 1 selesai: {len(held_bx12)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+        send_telegram(
+            f"🤖 AI Babak 1 | brkX2-12h\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Lolos AI individual: {len(held_bx12)}\n"
+            f"Lolos: {', '.join(to_display_pair(s) for s in held_bx12.keys())}\n"
+            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
+            parse_mode=None
+        )
+        batch_input_bx12 = [{'symbol': s, 'strategy': 'brkX2', 'score': v['score'], 'detail': v['detail']}
+                             for s, v in held_bx12.items()]
+        approved_bx12 = ai_decision_batch_rank(
+            batch_input_bx12, strategy_label='brkX2-12h', max_approve=AI_BATCH_MAX_APPROVE,
+            criteria_note="Kriteria: skor, ATR%, RVOL, BB%b, jarak EMA20, RSI",
+        )
+
+    opened_any = False
+    for sym in approved_bx12:
+        # berhenti kalau slot brkX2 ATAU total sudah penuh
+        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
+            log(f"[T1] Slot brkX2/total penuh, sisa kandidat tidak dibuka.")
+            break
+        with active_deals_lock:
+            if sym in active_deals:
+                continue  # sudah punya deal di pair ini
+        v = held_bx12[sym]
+        signal_price = v['signal_price']; atrp = v['atrp']; score = v['score']
+
         ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2')
         if ok:
             entry_price = get_price_now(sym)
@@ -4705,7 +4753,7 @@ def thread1_scan():
                 'rsi_open': f"{_open_fields['rsi_open']:.1f}" if _open_fields.get('rsi_open') is not None else '',
                 'strategy': 'brkX2',
             })
-            _r12 = df.iloc[-1]
+            _r12 = r   # r == df_saved.iloc[-1] (dihitung di atas), bukan df.iloc[-1] (sisa loop scan simbol lain)
             log_oac('OPEN', sym, 'brkX2-12h', {
                 'entry_price':  _fmt_price(entry_price),
                 'slip_pct':     f"{slip_pct:+.2f}%",
@@ -4720,7 +4768,7 @@ def thread1_scan():
             })
             
             # ── DEAL LOG lengkap ──────────────────────────────────────────
-            _ind = _row_indicators(df.iloc[-1], vol_ma=float(df['vol_ma'].iloc[-1]) if 'vol_ma' in df.columns else None)
+            _ind = _row_indicators(r, vol_ma=float(df_saved['vol_ma'].iloc[-1]) if df_saved is not None and 'vol_ma' in df_saved.columns else None)
             _htf = _get_htf_values(sym)
             deal_log_write({
                 'timestamp_wib':    now_wib().strftime('%Y-%m-%d %H:%M:%S'),
@@ -5828,8 +5876,12 @@ def thread1c_scan_intrabar():
     universe = [p for p in pairs if volmap.get(p, 0) >= MIN_VOLUME_USD]
     if BTC_FILTER_ENABLED and not btc_filter_ok():
         return None
+    held_bx12c = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
     for sym in universe:
         if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
+            break
+        if len(held_bx12c) >= AI_BATCH_POOL_SIZE:
+            log(f"[T1c] Kolam babak-1 penuh ({AI_BATCH_POOL_SIZE}), berhenti kumpulkan kandidat baru siklus ini.")
             break
         with active_deals_lock:
             if sym in active_deals: continue
@@ -5846,13 +5898,25 @@ def thread1c_scan_intrabar():
         if pd.isna(r12.get('ema_fast')) or pd.isna(r12.get('ema_slow')): continue
         # EMA20>EMA50 dihapus 30/07/2026 — diganti close>EMA50
         if r12['close'] <= r12['ema_slow']: continue
-        if pd.isna(r12.get('hh')) or pd.isna(r12.get('br')): continue
-        br_avg = df12['br'].iloc[-CHOPPY_LOOK:].mean()
-        if pd.isna(br_avg) or br_avg < CHOPPY_MIN: continue
+        if pd.isna(r12.get('hh')): continue
+        # 03/09/2026: syarat choppy lama pakai kolom 'br' + CHOPPY_LOOK/CHOPPY_MIN yang
+        # TIDAK PERNAH ada di codebase (df12['br'] tidak pernah di-set, CHOPPY_LOOK/CHOPPY_MIN
+        # tidak pernah didefinisikan) -- akibatnya r12.get('br') selalu None, pd.isna(None)
+        # selalu True, baris ini selalu `continue` utk SEMUA kandidat sejak kode ini ada.
+        # T1c (scan intrabar baseline) akibatnya tidak pernah meloloskan satupun kandidat.
+        # Diganti is_choppy(df12) -- fungsi choppy-filter asli yg benar & valid, sudah dipakai
+        # T1c-E (intrabar EARLY). Ditemukan & diperbaiki saat dry-run restrukturisasi 2-babak.
+        if is_choppy(df12): continue
         # LAPIS 2: data 15m candle aktif
-        df15 = get_ohlcv(sym, interval='15m', limit=50)
+        # 03/09/2026: limit dinaikkan dari 50 -> 100 (get_ohlcv() menolak & return None
+        # kalau hasil < 60 baris, jadi limit=50 bikin baris ini SELALU None -> selalu
+        # `continue` di semua kandidat, LAPIS 2 tidak pernah tercapai). Kolom df15['ts']
+        # diganti df15['ot'] (open time) -- get_ohlcv() tidak pernah punya kolom 'ts',
+        # cuma 'ot'/'ct', jadi baris ini juga selalu KeyError kalau df15 sempat non-None.
+        # Ditemukan & diperbaiki saat dry-run restrukturisasi 2-babak.
+        df15 = get_ohlcv(sym, interval='15m', limit=100)
         if df15 is None: continue
-        intra = df15[df15['ts'] >= candle_open_ms]
+        intra = df15[df15['ot'] >= candle_open_ms]
         if len(intra) == 0: continue
         price_now    = float(intra['close'].iloc[-1])
         vol_so_far   = float(intra['vol'].sum())
@@ -5875,18 +5939,59 @@ def thread1c_scan_intrabar():
         if HTF_FILTER_ENABLED and not htf_filter_ok(sym):
             log(f"  [T1c] {sym} lolos intrabar tapi DITOLAK HTF 3D filter (price<EMA50 atau MACD<0)")
             continue
-        # LOLOS → ENTRY
+        # LOLOS syarat teknikal -> babak 1: AI individual (notify=False), TAHAN dulu
         atrp         = float(r12['atr_pct']) if not pd.isna(r12.get('atr_pct')) else 3.0
         score        = signal_score(r12)
         signal_price = float(r12['close'])
         log(f"[T1c] SINYAL INTRABAR: {sym} elapsed={elapsed_pct*100:.1f}% price={price_now:.6g} skor={score}")
+
+        _rsi_ai = r12.get('rsi') if 'rsi' in r12.index else None
+        _rsi_ai_val = float(_rsi_ai) if _rsi_ai is not None and not pd.isna(_rsi_ai) else None
         if is_ai_call_open_enabled('brkX2'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
-            _rsi_ai = r12.get('rsi') if 'rsi' in r12.index else None
-            if _rsi_ai is not None and not pd.isna(_rsi_ai): _ai_ind['rsi'] = f"{float(_rsi_ai):.1f}"
-            if not ai_decision_open(sym, 'brkX2-12h', _ai_ind, active_deal_count()):
-                log(f"[T1c] {sym} OPEN di-skip oleh AI decision")
+            if _rsi_ai_val is not None: _ai_ind['rsi'] = f"{_rsi_ai_val:.1f}"
+            if not ai_decision_open(sym, 'brkX2-12h', _ai_ind, active_deal_count(), notify=False):
+                log(f"[T1c] {sym} babak-1 di-skip oleh AI individual")
                 continue
+
+        _rvol_bx12c = float(r12['vol']) / vol_ma12 if vol_ma12 > 0 else 0.0
+        _bb_bx12c = float(r12.get('bb_pct')) if not pd.isna(r12.get('bb_pct')) else 0.0
+        _gap_bx12c = (signal_price / float(r12['ema_fast']) - 1) * 100 if r12.get('ema_fast') else 0.0
+        held_bx12c[sym] = {
+            'signal_price': signal_price, 'atrp': atrp, 'score': score,
+            'price_now': price_now, 'r12': r12,
+            'detail': {'atr_pct': atrp, 'rvol': _rvol_bx12c, 'bb_pct': _bb_bx12c,
+                       'gap_ema20_pct': _gap_bx12c, 'rsi': _rsi_ai_val or 0.0},
+        }
+
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+    approved_bx12c = []
+    if held_bx12c:
+        log(f"[T1c] Babak 1 selesai: {len(held_bx12c)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+        send_telegram(
+            f"🤖 AI Babak 1 | brkX2-12h (intrabar)\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Lolos AI individual: {len(held_bx12c)}\n"
+            f"Lolos: {', '.join(to_display_pair(s) for s in held_bx12c.keys())}\n"
+            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
+            parse_mode=None
+        )
+        batch_input_bx12c = [{'symbol': s, 'strategy': 'brkX2', 'score': v['score'], 'detail': v['detail']}
+                              for s, v in held_bx12c.items()]
+        approved_bx12c = ai_decision_batch_rank(
+            batch_input_bx12c, strategy_label='brkX2-12h', max_approve=AI_BATCH_MAX_APPROVE,
+            criteria_note="Kriteria: skor, ATR%, RVOL, BB%b, jarak EMA20, RSI",
+        )
+
+    for sym in approved_bx12c:
+        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
+            break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        v = held_bx12c[sym]
+        signal_price = v['signal_price']; atrp = v['atrp']; score = v['score']
+        price_now = v['price_now']; r12 = v['r12']
+
         ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2')
         if ok:
             entry_price = get_price_now(sym)
@@ -6015,8 +6120,12 @@ def thread1c_scan_intrabar_early():
     if BTC_FILTER_ENABLED and not btc_filter_ok():
         return None
 
+    held_bx12e = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
     for sym in universe:
         if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
+            break
+        if len(held_bx12e) >= AI_BATCH_POOL_SIZE:
+            log(f"[T1c-E] Kolam babak-1 penuh ({AI_BATCH_POOL_SIZE}), berhenti kumpulkan kandidat baru siklus ini.")
             break
         with active_deals_lock:
             if sym in active_deals: continue
@@ -6044,9 +6153,15 @@ def thread1c_scan_intrabar_early():
             if mh is None or pd.isna(mh) or mh <= 0: continue
 
         # LAPIS 2: konfirmasi harga live dari data 15m
-        df15 = get_ohlcv(sym, interval='15m', limit=50)
+        # 03/09/2026: limit dinaikkan dari 50 -> 100 (get_ohlcv() menolak & return None
+        # kalau hasil < 60 baris, jadi limit=50 bikin baris ini SELALU None -> selalu
+        # `continue` di semua kandidat, LAPIS 2 tidak pernah tercapai). Kolom df15['ts']
+        # diganti df15['ot'] (open time) -- get_ohlcv() tidak pernah punya kolom 'ts',
+        # cuma 'ot'/'ct', jadi baris ini juga selalu KeyError kalau df15 sempat non-None.
+        # Ditemukan & diperbaiki saat dry-run restrukturisasi 2-babak.
+        df15 = get_ohlcv(sym, interval='15m', limit=100)
         if df15 is None: continue
-        intra = df15[df15['ts'] >= candle_open_ms]
+        intra = df15[df15['ot'] >= candle_open_ms]
         if len(intra) == 0: continue
         price_now  = float(intra['close'].iloc[-1])
         vol_so_far = float(intra['vol'].sum())
@@ -6074,7 +6189,7 @@ def thread1c_scan_intrabar_early():
             log(f"  [T1c-E] {sym} lolos early tapi DITOLAK HTF 3D filter")
             continue
 
-        # LOLOS → ENTRY
+        # LOLOS syarat teknikal -> babak 1: AI individual (notify=False), TAHAN dulu
         atrp         = float(r12['atr_pct']) if not pd.isna(r12.get('atr_pct')) else 3.0
         score        = signal_score(r12)
         signal_price = float(r12['close'])
@@ -6082,9 +6197,48 @@ def thread1c_scan_intrabar_early():
 
         if is_ai_call_open_enabled('brkX2'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price), 'rsi': f"{rsi_now:.1f}"}
-            if not ai_decision_open(sym, 'brkX2-12h', _ai_ind, active_deal_count()):
-                log(f"[T1c-E] {sym} OPEN di-skip oleh AI decision")
+            if not ai_decision_open(sym, 'brkX2-12h', _ai_ind, active_deal_count(), notify=False):
+                log(f"[T1c-E] {sym} babak-1 di-skip oleh AI individual")
                 continue
+
+        _rvol_bx12e = float(r12['vol']) / vol_ma12 if vol_ma12 > 0 else 0.0
+        _bb_bx12e = float(r12.get('bb_pct')) if not pd.isna(r12.get('bb_pct')) else 0.0
+        _gap_bx12e = (signal_price / float(r12['ema_fast']) - 1) * 100 if r12.get('ema_fast') else 0.0
+        held_bx12e[sym] = {
+            'signal_price': signal_price, 'atrp': atrp, 'score': score,
+            'price_now': price_now, 'r12': r12,
+            'detail': {'atr_pct': atrp, 'rvol': _rvol_bx12e, 'bb_pct': _bb_bx12e,
+                       'gap_ema20_pct': _gap_bx12e, 'rsi': rsi_now},
+        }
+
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+    approved_bx12e = []
+    if held_bx12e:
+        log(f"[T1c-E] Babak 1 selesai: {len(held_bx12e)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+        send_telegram(
+            f"🤖 AI Babak 1 | brkX2-12h (intrabar EARLY)\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Lolos AI individual: {len(held_bx12e)}\n"
+            f"Lolos: {', '.join(to_display_pair(s) for s in held_bx12e.keys())}\n"
+            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
+            parse_mode=None
+        )
+        batch_input_bx12e = [{'symbol': s, 'strategy': 'brkX2', 'score': v['score'], 'detail': v['detail']}
+                              for s, v in held_bx12e.items()]
+        approved_bx12e = ai_decision_batch_rank(
+            batch_input_bx12e, strategy_label='brkX2-12h', max_approve=AI_BATCH_MAX_APPROVE,
+            criteria_note="Kriteria: skor, ATR%, RVOL, BB%b, jarak EMA20, RSI",
+        )
+
+    for sym in approved_bx12e:
+        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
+            break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        v = held_bx12e[sym]
+        signal_price = v['signal_price']; atrp = v['atrp']; score = v['score']
+        price_now = v['price_now']; r12 = v['r12']
+
         ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2')
         if ok:
             entry_price = get_price_now(sym)
