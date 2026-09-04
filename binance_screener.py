@@ -9046,8 +9046,25 @@ document.addEventListener('DOMContentLoaded', function() {
      overflow:hidden, yang MEMOTONG rendering position:fixed di dalamnya (dibuktikan
      lewat screenshot Mas Budi: modal kepotong kecil, numpuk sama isi card lain,
      bukan menutup layar penuh spt seharusnya). Diletakkan sejajar/sibling dgn
-     .container, bukan nested di dalamnya, supaya position:fixed;inset:0 beneran full-screen. -->
-<div id="convert-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center">
+     .container, bukan nested di dalamnya, supaya position:fixed;inset:0 beneran full-screen.
+
+     AKAR MASALAH ASLI "modal kebuka sendiri di tab Monitor" (04/09/2026, ditemukan
+     SETELAH fix di atas): selectDashTab() (lihat dash.js) TIDAK jalan berdasarkan
+     nesting DOM (parent/child) -- dia jalan-jalan lewat NEXT SIBLING mulai dari tiap
+     .dash-section-start sampai ketemu .dash-section-start berikutnya, lalu nge-set
+     display semua sibling di antaranya sesuai tab aktif. Modal ini duduk sbg sibling
+     PERSIS setelah container .dash-section-start[data-tab="monitor"] -- jadi ikut
+     "tersapu": tiap tab Monitor aktif, display:none bawaannya DIHAPUS (bukan diisi
+     flex, tapi dikosongkan -- balik ke default block, makanya nongol kepojok kiri
+     atas bukan flex-center), dan tiap tab LAIN aktif dia malah eksplisit ditutup lagi
+     -- match persis laporan Mas Budi ("cuma di menu Monitor") dan kenapa Incognito
+     aman (belum ada cookie dash_active_tab, default balik ke tab 'strategies').
+     Fix permanen: modal ini SENDIRI dijadikan .dash-section-start (data-tab tidak
+     match tab manapun yg nyata) -- ini bikin walk dari section Monitor BERHENTI
+     tepat di sini (bukan lanjut nyentuh modal), dan walk modal ini sendiri cuma
+     nyentuh dirinya sendiri lalu langsung berhenti di section berikutnya (Tools) --
+     jadi modal ini TIDAK PERNAH lagi ikut dikelola tab manapun, titik. -->
+<div id="convert-modal" class="dash-section-start" data-tab="__none__" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center">
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;max-width:640px;width:92%;max-height:80vh;overflow-y:auto">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <h3 id="convert-modal-title" style="margin:0;font-size:13px;color:var(--accent)">Convert Aset</h3>
