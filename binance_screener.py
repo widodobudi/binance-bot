@@ -2775,6 +2775,57 @@ def remove_auto_sell_asset(asset: str) -> dict:
     return config
 
 
+def sell_to_usdt(symbol: str, qty=None) -> dict:
+    """Jual 1 asset jadi USDT MURNI (market sell, TANPA beli koin lain -- beda dari
+    execute_convert()). Dibuat 04/09/2026 buat trigger via /tradingview_webhook
+    action='sell_usdt' (Mas Budi minta bisa "convert BICO ke USDT langsung" lewat
+    webhook, mis. utk hold_no_sell asset yg mau dilepas ke cash, bukan ditukar koin).
+    qty: None/kosong -> jual SELURUH saldo bebas asset itu (default). Kalau diisi
+    -> jual sejumlah itu saja (partial).
+    Return {'ok','symbol','qty_sold','price_avg','proceeds_usdt','error'}.
+    Sama seperti execute_convert(), entry Auto Sell Asset lama utk asset ini otomatis
+    dihapus kalau saldo sisa nyaris habis (toleransi dust 2%)."""
+    symbol = str(symbol).upper()
+    asset = symbol.replace("USDT", "")
+    result = {"ok": False, "symbol": symbol, "error": None}
+    try:
+        qty_before = float(qty) if qty not in (None, "") else binance_get_asset_qty(asset)
+    except Exception:
+        qty_before = binance_get_asset_qty(asset)
+    if qty_before <= 0:
+        result["error"] = f"Saldo {asset} tidak ada / habis"
+        return result
+    try:
+        sell = binance_sell_market(symbol, qty_before)
+    except Exception as e:
+        result["error"] = str(e)
+        log(f"ERROR sell_to_usdt {symbol}: {e}")
+        return result
+    proceeds = sell.get("proceeds_usdt", 0)
+    if proceeds <= 0:
+        result["error"] = "Jual gagal / proceeds 0"
+        result["sell"] = sell
+        return result
+
+    try:
+        remaining_qty = binance_get_asset_qty(asset)
+    except Exception:
+        remaining_qty = 0.0
+    if remaining_qty <= 0 or remaining_qty < qty_before * 0.02:
+        remove_auto_sell_asset(asset)
+
+    log(f"[SELL-USDT] {asset}: jual {sell['qty']:.6f} @ {sell['price_avg']:.6f} "
+        f"(${proceeds:.2f}), sisa saldo {remaining_qty:.8f}")
+    log_ai_decision(f"[SELL-USDT] {asset}: jual {sell['qty']:.6f} @ {sell['price_avg']:.6f} "
+                     f"(${proceeds:.2f})")
+    send_telegram(f"💰 <b>Jual ke USDT</b>\n{asset} → USDT\n"
+                   f"Jual: {sell['qty']:.6f} {asset} @ {_fmt_price(sell['price_avg'])}\n"
+                   f"Proceeds: ${proceeds:.2f}")
+    result.update({"ok": True, "qty_sold": sell["qty"], "price_avg": sell["price_avg"],
+                    "proceeds_usdt": proceeds})
+    return result
+
+
 def get_binance_spot_assets() -> list:
     data = _binance_trading_request("GET", "/api/v3/account", {})
     result = []
@@ -13182,8 +13233,17 @@ def run_web_dashboard():
                 "akumulasi-4h-a": "akum_entry_a", "akumulasi-4h-b": "akum_entry_b",
                 "trenkonfirmasi-4h": "trend_confirm_4h",
             }.get(strategy, strategy)
-            if action not in {"open_long", "add_fund", "start_trailing", "close_deal"} or not symbol.endswith("USDT"):
+            if action not in {"open_long", "add_fund", "start_trailing", "close_deal", "sell_usdt"} or not symbol.endswith("USDT"):
                 return jsonify({"ok": False, "error": "action atau symbol tidak valid"}), 400
+            if action == "sell_usdt":
+                # 04/09/2026 (permintaan Mas Budi): jual asset (biasanya hold_no_sell, mis.
+                # BICO) jadi USDT MURNI lewat webhook -- BUKAN Convert Aset (yg selalu beli
+                # koin lain), murni market sell. Sengaja ditaruh SEBELUM blok active_deals
+                # di bawah (spt open_long) krn hold_no_sell asset TIDAK ada di active_deals
+                # -- kalau dipaksa lewat blok situ pasti 404.
+                qty_payload = payload.get("qty")
+                result = sell_to_usdt(symbol, qty=qty_payload)
+                return jsonify(result), (200 if result.get("ok") else 400)
             if action == "open_long":
                 with active_deals_lock:
                     if symbol in active_deals:
