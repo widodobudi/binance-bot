@@ -2332,6 +2332,34 @@ def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg
     return config
 
 
+def get_pivot_resistance_4h(symbol: str, N4: int = 4, df4=None):
+    """Resistance terdekat DI ATAS harga sekarang, TF 4h, via pivot-high N=4 candle
+    kiri-kanan. Diekstrak dari get_sell_suggestion() (04/09/2026) supaya bisa dipanggil
+    utk KOIN APA SAJA -- termasuk yang TIDAK sedang dipegang (avg_price=0) -- dipakai
+    ulang oleh fitur Convert Aset (cari kandidat convert dari hold_no_sell yang stagnan).
+    Return None kalau data kurang / tidak ada pivot di atas harga sekarang.
+    `df4` bisa dioper langsung (misal dari scan yang sudah fetch duluan) supaya tidak
+    fetch ulang; kalau None, fetch sendiri via get_ohlcv_4h(symbol, limit=100)."""
+    try:
+        if df4 is None:
+            df4 = get_ohlcv_4h(symbol, limit=100)
+        if df4 is None or len(df4) <= 20:
+            return None
+        price_now = float(df4["close"].iloc[-1])
+        hi_arr = df4["high"].values
+        pivots = []
+        for pi in range(N4, len(hi_arr) - N4):
+            ph = hi_arr[pi]
+            if (all(ph > hi_arr[pi - j] for j in range(1, N4 + 1)) and
+                    all(ph > hi_arr[pi + j] for j in range(1, N4 + 1))):
+                pivots.append(ph)
+        res_above = sorted(ph for ph in pivots if ph > price_now)
+        return float(res_above[0]) if res_above else None
+    except Exception as e:
+        log(f"WARN get_pivot_resistance_4h {symbol}: {e}")
+        return None
+
+
 def get_sell_suggestion(asset: str) -> dict:
     """Hitung suggested minimum sell price (breakeven) + konteks teknikal buat Auto Sell
     Asset: resistance terdekat TF 4h (reuse pivot-high N=4 candle, LOGIC SAMA PERSIS
@@ -2345,24 +2373,12 @@ def get_sell_suggestion(asset: str) -> dict:
     result["breakeven"] = round(avg_price * 1.002, 8)  # +0.2% buffer fee round-trip
 
     try:
-        df4 = get_ohlcv_4h(symbol, limit=100)
-        if df4 is not None and len(df4) > 20:
-            price_now = float(df4["close"].iloc[-1])
-            N4 = 4
-            hi_arr = df4["high"].values
-            pivots = []
-            for pi in range(N4, len(hi_arr) - N4):
-                ph = hi_arr[pi]
-                if (all(ph > hi_arr[pi - j] for j in range(1, N4 + 1)) and
-                        all(ph > hi_arr[pi + j] for j in range(1, N4 + 1))):
-                    pivots.append(ph)
-            res_above = sorted(ph for ph in pivots if ph > price_now)
-            if res_above:
-                resistance = float(res_above[0])
-                result["resistance"] = resistance
-                if result["breakeven"] >= resistance * 0.995:
-                    result["warning"] = (f"harga harus naik 2 tahap: tembus resistance {_fmt_price(resistance)} dulu, "
-                                          f"baru lanjut naik lagi sampai breakeven {_fmt_price(result['breakeven'])}")
+        resistance = get_pivot_resistance_4h(symbol)
+        if resistance is not None:
+            result["resistance"] = resistance
+            if result["breakeven"] >= resistance * 0.995:
+                result["warning"] = (f"harga harus naik 2 tahap: tembus resistance {_fmt_price(resistance)} dulu, "
+                                      f"baru lanjut naik lagi sampai breakeven {_fmt_price(result['breakeven'])}")
     except Exception as e:
         log(f"WARN get_sell_suggestion resistance {asset}: {e}")
 
@@ -2465,6 +2481,199 @@ def get_effective_avg_price(asset: str) -> float:
     if manual > 0:
         return manual
     return get_binance_avg_cost(asset)
+
+
+# ── Convert Aset Hold-No-Sell (04/09/2026, ide + desain penuh bareng Mas Budi) ─────
+# Latar: aset hold_no_sell yang stagnan rugi (mis. BICO -7% s/d -8%, lama tidak gerak)
+# di-"convert" (jual lalu beli koin lain) ke koin yang jarak-ke-resistance-nya >= magnitude
+# kerugian aset sumber (supaya realistis bisa dipakai buat nutup kerugian tsb) DAN ada
+# bukti momentum nyata (bukan cuma jarak jauh) -- pakai persis rule R5/R6 yang sudah
+# terbukti dari backtest (RVOL>=1.0, harga>EMA20, ATR% >= median rolling-100 milik
+# sendiri) -- SENGAJA TIDAK dilonggarkan meski scan riil awalnya 0 kandidat (keputusan
+# final Mas Budi 04/09/2026: "biarkan BICO tanpa perlu longgarkan syarat momentum").
+# Scope v1: HANYA asset hold_no_sell (BUKAN deal aktif 7 strategi -- sempat didiskusikan
+# lalu sengaja ditunda). Eksekusi: jual market lalu beli market berurutan TANPA jeda
+# manual (BUKAN Binance Convert API -- bot tidak pernah integrasi ke situ). Target akhir
+# = MAX(target_recover, resistance koin baru) supaya minimal balik modal asset sumber.
+# Trigger v1: tombol manual di dashboard; scan (find_convert_candidates) & eksekusi
+# (execute_convert) sengaja dipisah dari trigger-nya supaya versi scan-otomatis nanti
+# bisa reuse tanpa nulis ulang (pola sama seperti check_hunting_candidate/open_hunting_candidate).
+CONVERT_MIN_VOL_USD_24H = 5_000_000   # likuiditas minimum kandidat -- cegah slippage besar
+CONVERT_GAP_MARGIN_PCT  = 1.0         # margin tambahan di atas syarat murni jarak-ke-resistance (jaga2 fee)
+CONVERT_RVOL_MIN        = 1.0         # SENGAJA TIDAK dilonggarkan, lihat catatan di atas
+CONVERT_SELL_FEE_PCT    = 0.1         # estimasi fee taker sisi jual di masa depan, dipakai hitung target_recover
+CONVERT_COOLDOWN_SEC    = 86400       # cooldown ringan 24 jam -- cegah convert-ulang beruntun ke asset yang sama
+_convert_cooldown_ts: dict = {}
+_convert_cooldown_lock = threading.Lock()
+
+def record_converted(asset: str):
+    """Catat waktu convert -- cooldown ringan supaya asset hasil convert tidak langsung
+    di-convert lagi kalau kebetulan kandidat baru juga jelek."""
+    with _convert_cooldown_lock:
+        _convert_cooldown_ts[str(asset).upper()] = time.time()
+
+def convert_cooldown_remaining(asset: str) -> float:
+    with _convert_cooldown_lock:
+        ts = _convert_cooldown_ts.get(str(asset).upper())
+    if not ts:
+        return 0.0
+    return max(0.0, CONVERT_COOLDOWN_SEC - (time.time() - ts))
+
+
+def find_convert_candidates(source_asset: str, max_results: int = 10) -> dict:
+    """Scan seluruh pair USDT likuid (exclude asset yang sudah dipegang + blacklist + yang
+    masih cooldown) cari kandidat convert utk source_asset yang sedang stagnan rugi.
+    Syarat WAJIB kedua-duanya:
+      1. Jarak (gap%) harga sekarang -> resistance pivot 4h >= |loss_pct source| + margin.
+      2. Momentum nyata (rule R5/R6): RVOL(vol_ma20)>=1.0 AND harga>EMA20 AND
+         ATR% >= median rolling-100 ATR% miliknya sendiri.
+    Return {'ok','source_asset','loss_pct','min_gap_pct','candidates':[...],'error'}
+    candidates diurutkan dari gap% terbesar, tiap item:
+      {'symbol','asset','price','resistance','gap_pct','rvol','rsi','vol24h_usd'}"""
+    source_asset = str(source_asset).upper()
+    avg_price = get_effective_avg_price(source_asset)
+    price_now_src = get_price_now(source_asset + "USDT")
+    if avg_price <= 0 or price_now_src <= 0:
+        return {"ok": False, "error": f"avg_price/harga {source_asset} tidak diketahui", "candidates": []}
+    loss_pct = max(0.0, (1 - price_now_src / avg_price) * 100)   # magnitude kerugian, 0 kalau lagi untung
+    min_gap_pct = loss_pct + CONVERT_GAP_MARGIN_PCT
+
+    try:
+        held = {a["asset"] + "USDT" for a in get_binance_spot_assets()}
+    except Exception:
+        held = set()
+    held.add(source_asset + "USDT")
+
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+    except Exception as e:
+        return {"ok": False, "error": f"gagal ambil data pasar: {e}", "candidates": []}
+
+    volmap = {}
+    for t in ticker:
+        try:
+            volmap[t["symbol"]] = float(t.get("quoteVolume", 0))
+        except Exception:
+            pass
+
+    universe = [p for p in pairs
+                if p not in held and p not in SYMBOL_BLACKLIST and p not in blocked_pairs_meta
+                and volmap.get(p, 0) >= CONVERT_MIN_VOL_USD_24H]
+
+    candidates = []
+    for sym in universe:
+        asset = sym[:-4]  # strip "USDT"
+        if convert_cooldown_remaining(asset) > 0:
+            continue
+        try:
+            df4 = get_ohlcv_4h(sym, limit=100)
+            if df4 is None or len(df4) < 60:
+                continue
+            df4 = compute_indicators_4h(df4)
+            r = df4.iloc[-1]
+            price_now = float(r["close"])
+            resistance = get_pivot_resistance_4h(sym, df4=df4)
+            if resistance is None or price_now <= 0:
+                continue
+            gap_pct = (resistance / price_now - 1) * 100
+            if gap_pct < min_gap_pct:
+                continue
+            ema20 = float(r["ema20"]) if pd.notna(r.get("ema20")) else None
+            vol_ma = float(r["vol_ma"]) if pd.notna(r.get("vol_ma")) else None
+            vol_now = float(r["vol"]) if pd.notna(r.get("vol")) else None
+            rvol = (vol_now / vol_ma) if vol_ma and vol_ma > 0 else None
+            atrp = float(r["atr_pct"]) if pd.notna(r.get("atr_pct")) else None
+            atr_med = df4["atr_pct"].rolling(100).median().iloc[-1] if len(df4) >= 100 else None
+            rsi = float(r["rsi"]) if pd.notna(r.get("rsi")) else None
+            above_ema20 = bool(ema20 and price_now > ema20)
+            atr_ok = bool(atrp is not None and pd.notna(atr_med) and atrp >= atr_med)
+            momentum_ok = bool(above_ema20 and rvol is not None and rvol >= CONVERT_RVOL_MIN and atr_ok)
+            if not momentum_ok:
+                continue
+            candidates.append({
+                "symbol": sym, "asset": asset, "price": price_now, "resistance": resistance,
+                "gap_pct": round(gap_pct, 2), "rvol": round(rvol, 2) if rvol else None,
+                "rsi": round(rsi, 1) if rsi else None, "vol24h_usd": volmap.get(sym, 0),
+            })
+        except Exception as e:
+            log(f"WARN find_convert_candidates {sym}: {e}")
+            continue
+
+    candidates.sort(key=lambda c: c["gap_pct"], reverse=True)
+    return {"ok": True, "source_asset": source_asset, "loss_pct": round(loss_pct, 2),
+            "min_gap_pct": round(min_gap_pct, 2), "candidates": candidates[:max_results], "error": None}
+
+
+def execute_convert(source_asset: str, target_symbol: str) -> dict:
+    """Eksekusi convert: JUAL source_asset (market, seluruh saldo bebas) lalu BELI
+    target_symbol (market, pakai seluruh proceeds) BERURUTAN TANPA JEDA MANUAL (bukan
+    Binance Convert API). Target jual final auto-registrasi ke Auto Sell Asset
+    (hold_no_sell tracking) = MAX(target_recover, resistance koin baru) --
+    target_recover dihitung supaya modal awal source_asset (avg_price x qty) balik penuh
+    setelah dikurangi estimasi fee jual di masa depan. Cooldown ringan dicatat di akhir
+    supaya asset hasil convert ini tidak langsung di-convert lagi dalam waktu dekat."""
+    source_asset = str(source_asset).upper()
+    target_symbol = str(target_symbol).upper()
+    target_asset = target_symbol.replace("USDT", "")
+    result = {"ok": False, "step": None, "error": None}
+    try:
+        qty = binance_get_asset_qty(source_asset)
+        if qty <= 0:
+            result["error"] = f"Saldo {source_asset} tidak ada / habis"
+            return result
+        avg_price_src = get_effective_avg_price(source_asset)
+        invested_usdt = avg_price_src * qty if avg_price_src > 0 else None
+
+        result["step"] = "sell"
+        sell = binance_sell_market(source_asset + "USDT", qty)
+        proceeds = sell.get("proceeds_usdt", 0)
+        if proceeds <= 0:
+            result["error"] = f"Jual {source_asset} gagal / proceeds 0"
+            result["sell"] = sell
+            return result
+
+        result["step"] = "buy"
+        buy = binance_buy_market(target_symbol, proceeds)
+        if buy.get("qty", 0) <= 0:
+            result["error"] = f"Beli {target_symbol} gagal / qty 0 (dana {source_asset} SUDAH terjual!)"
+            result["sell"] = sell
+            result["buy"] = buy
+            return result
+
+        # target_recover: harga target_asset yang, kalau qty hasil beli dijual di situ
+        # (dikurangi estimasi fee jual), proceeds-nya >= modal awal source_asset.
+        target_recover = None
+        if invested_usdt and buy["qty"] > 0:
+            target_recover = invested_usdt / (buy["qty"] * (1 - CONVERT_SELL_FEE_PCT / 100))
+        resistance = get_pivot_resistance_4h(target_symbol)
+        candidates_final = [v for v in (target_recover, resistance) if v]
+        target_final = max(candidates_final) if candidates_final else None
+
+        if target_final:
+            upsert_auto_sell_asset(target_asset, True, target_final, avg_price=buy["price_avg"])
+        record_converted(target_asset)
+        log(f"[CONVERT] {source_asset}->{target_asset}: sold {sell['qty']:.6f} {source_asset} "
+            f"@{sell['price_avg']:.6f} (${proceeds:.2f}) -> bought {buy['qty']:.6f} {target_asset} "
+            f"@{buy['price_avg']:.6f} | target_recover={target_recover} resistance={resistance} "
+            f"target_final={target_final}")
+        log_ai_decision(f"[CONVERT] {source_asset} -> {target_asset}: jual {sell['qty']:.6f} "
+                         f"@{sell['price_avg']:.6f} (${proceeds:.2f}), beli {buy['qty']:.6f} "
+                         f"@{buy['price_avg']:.6f}. target_recover={target_recover} "
+                         f"resistance={resistance} target_final={target_final}")
+        send_telegram(f"🔄 <b>Convert Aset</b>\n{source_asset} → {target_asset}\n"
+                       f"Jual: {sell['qty']:.6f} {source_asset} @ {_fmt_price(sell['price_avg'])} (${proceeds:.2f})\n"
+                       f"Beli: {buy['qty']:.6f} {target_asset} @ {_fmt_price(buy['price_avg'])}\n"
+                       f"Target jual baru: {_fmt_price(target_final) if target_final else '-'}")
+
+        result.update({"ok": True, "step": "done", "sell": sell, "buy": buy,
+                        "target_recover": target_recover, "resistance": resistance,
+                        "target_final": target_final})
+        return result
+    except Exception as e:
+        result["error"] = str(e)
+        log(f"ERROR execute_convert {source_asset}->{target_symbol}: {e}")
+        return result
 
 
 def remove_auto_sell_asset(asset: str) -> dict:
@@ -8800,6 +9009,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 <tbody id="auto-sell-tbody"><tr><td colspan="10" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
             </table>
             </div>
+            <!-- ═══ Convert Aset (04/09/2026): jual asset stagnan/rugi lalu beli koin lain
+                 yang jarak-ke-resistance-nya >= magnitude kerugian DAN ada momentum riil ═══ -->
+            <div id="convert-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center">
+                <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 20px;max-width:640px;width:92%;max-height:80vh;overflow-y:auto">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                        <h3 id="convert-modal-title" style="margin:0;font-size:13px;color:var(--accent)">Convert Aset</h3>
+                        <button type="button" onclick="closeConvertModal()" style="background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer">✕</button>
+                    </div>
+                    <div id="convert-modal-body" style="font-size:11px;color:var(--muted)">Memuat...</div>
+                </div>
+            </div>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
                 <label>+ Tambah asset <select id="auto-sell-new-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option>Memuat...</option></select></label>
                 <label>Avg beli, USDT per coin (opsional) <input id="auto-sell-new-avg" type="number" min="0" step="0.00000001" placeholder="kalau tahu" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><div id="auto-sell-new-avgsrc" style="color:var(--muted);font-size:9px"></div></label>
@@ -9525,6 +9745,7 @@ function renderAutoSellTable(assets) {
             '<td style="padding:5px 6px" title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB (buat diskon fee trading 25%)"><input type="checkbox" ' + (cfg.convert_leftover_bnb ? 'checked' : '') + ' id="auto-sell-bnb-' + asset + '"></td>' +
             '<td style="padding:5px 6px;white-space:nowrap">' +
                 '<button type="button" onclick="saveAutoSellRow(\\'' + asset + '\\')" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;margin-right:4px;font-weight:600">SAVE</button>' +
+                '<button type="button" onclick="openConvertModal(\\'' + asset + '\\')" title="Cari koin lain buat convert (jual asset ini, beli koin lain yang lebih bertenaga)" style="background:#7c5cff;color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;margin-right:4px;font-weight:600">CONVERT</button>' +
                 '<button type="button" onclick="removeAutoSellRow(\\'' + asset + '\\')" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer">Hapus</button>' +
             '</td>';
         tbody.appendChild(tr);
@@ -9623,6 +9844,55 @@ function addAutoSellAsset() {
             renderAutoSellTable(d.assets || {});
         });
 }
+function openConvertModal(asset) {
+    var modal = document.getElementById('convert-modal');
+    var body = document.getElementById('convert-modal-body');
+    var title = document.getElementById('convert-modal-title');
+    title.textContent = 'Convert Aset — ' + asset;
+    body.innerHTML = 'Mencari kandidat (scan pasar, bisa 1-2 menit)...';
+    modal.style.display = 'flex';
+    fetch('/api/convert_candidates?asset=' + encodeURIComponent(asset)).then(function(r){ return r.json(); }).then(function(d) {
+        if (!d.ok) { body.innerHTML = '<span style="color:var(--red)">Gagal: ' + (d.error || 'tidak diketahui') + '</span>'; return; }
+        var html = '<div style="margin-bottom:8px">Kerugian ' + asset + ' saat ini: <b>' + d.loss_pct + '%</b> — kandidat butuh jarak ke resistance minimal <b>' + d.min_gap_pct + '%</b> DAN momentum riil (RVOL≥1, harga>EMA20, ATR% ≥ median sendiri).</div>';
+        if (!d.candidates || !d.candidates.length) {
+            html += '<div style="color:var(--muted)">Tidak ada kandidat yang lolos kedua syarat saat ini. Coba lagi nanti — syarat momentum sengaja tidak dilonggarkan.</div>';
+        } else {
+            html += '<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--border)">' +
+                '<th style="padding:4px">Koin</th><th style="padding:4px">Harga</th><th style="padding:4px">Resistance</th><th style="padding:4px">Gap%</th><th style="padding:4px">RVOL</th><th style="padding:4px">RSI</th><th style="padding:4px"></th></tr></thead><tbody>';
+            d.candidates.forEach(function(c) {
+                html += '<tr style="border-bottom:1px solid var(--border)">' +
+                    '<td style="padding:4px;font-weight:600">' + c.asset + '</td>' +
+                    '<td style="padding:4px">' + c.price + '</td>' +
+                    '<td style="padding:4px">' + c.resistance + '</td>' +
+                    '<td style="padding:4px;color:var(--accent)">+' + c.gap_pct + '%</td>' +
+                    '<td style="padding:4px">' + (c.rvol != null ? c.rvol : '-') + '</td>' +
+                    '<td style="padding:4px">' + (c.rsi != null ? c.rsi : '-') + '</td>' +
+                    '<td style="padding:4px"><button type="button" onclick="runConvert(\\'' + asset + '\\',\\'' + c.symbol + '\\')" style="background:#7c5cff;color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-weight:600">Convert</button></td>' +
+                '</tr>';
+            });
+            html += '</tbody></table>';
+        }
+        body.innerHTML = html;
+    }).catch(function(e){ body.innerHTML = '<span style="color:var(--red)">Gagal: ' + e + '</span>'; });
+}
+
+function closeConvertModal() {
+    document.getElementById('convert-modal').style.display = 'none';
+}
+
+function runConvert(sourceAsset, targetSymbol) {
+    if (!confirm('Yakin JUAL ' + sourceAsset + ' (semua saldo bebas) lalu BELI ' + targetSymbol + ' sekarang? Order market dikirim langsung ke Binance, tidak bisa dibatalkan.')) return;
+    var body = document.getElementById('convert-modal-body');
+    body.innerHTML = 'Mengeksekusi convert (jual lalu beli, market order)...';
+    fetch('/api/convert_execute', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({source_asset:sourceAsset, target_symbol:targetSymbol})})
+        .then(function(r){ return r.json(); }).then(function(d) {
+            if (!d.ok) { alert('Gagal convert: ' + (d.error || 'tidak diketahui')); closeConvertModal(); return; }
+            alert('Convert berhasil: ' + sourceAsset + ' → ' + targetSymbol.replace('USDT','') + '\\nTarget jual baru: ' + (d.target_final || '-'));
+            closeConvertModal();
+            loadAutoSellConfig();
+        }).catch(function(e){ alert('Gagal convert: ' + e); closeConvertModal(); });
+}
+
 if (typeof STRAT_SECONDARY !== 'undefined') {
     STRAT_SECONDARY['Hunting-4h'] = [{key: 'rsi', label: 'RSI<60'}];
 }
@@ -12946,6 +13216,34 @@ def run_web_dashboard():
                         convert_bnb = bool(convert_bnb) if convert_bnb is not None else None
                         upsert_auto_sell_asset(asset, enabled, threshold, avg_price, convert_bnb)
                 return jsonify({"ok": True, **load_auto_sell_config()})
+            except Exception as error:
+                return jsonify({"ok": False, "error": str(error)}), 500
+
+        @app.route("/api/convert_candidates")
+        def api_convert_candidates():
+            """Scan kandidat convert utk 1 asset hold_no_sell (04/09/2026, fitur Convert)."""
+            asset = str(request.args.get("asset", "")).upper().strip()
+            if not asset.isalnum():
+                return jsonify({"ok": False, "error": "Asset tidak valid"}), 400
+            try:
+                data = find_convert_candidates(asset)
+                status = 200 if data.get("ok") else 400
+                return jsonify(data), status
+            except Exception as error:
+                return jsonify({"ok": False, "error": str(error), "candidates": []}), 500
+
+        @app.route("/api/convert_execute", methods=["POST"])
+        def api_convert_execute():
+            """Eksekusi convert asset (jual source lalu beli target market, berurutan).
+            Outward-facing / mengirim order Binance sungguhan -- trigger manual dari dashboard."""
+            try:
+                payload = request.get_json(force=True, silent=True) or {}
+                source_asset = str(payload.get("source_asset", "")).upper().strip()
+                target_symbol = str(payload.get("target_symbol", "")).upper().strip()
+                if not source_asset or not target_symbol:
+                    return jsonify({"ok": False, "error": "source_asset & target_symbol wajib diisi"}), 400
+                data = execute_convert(source_asset, target_symbol)
+                return jsonify(data), (200 if data.get("ok") else 400)
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
 
