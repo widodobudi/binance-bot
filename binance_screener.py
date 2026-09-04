@@ -13513,6 +13513,15 @@ AI_LAST_PROVIDER = "Belum ada keputusan AI"
 
 _ai_quota_notif_sent = False  # flag agar notif quota habis tidak berulang
 
+# 04/09/2026: model yg mendukung "adaptive thinking" (makanya "output_config":{"effort":...}
+# valid dikirim ke situ) -- dokumentasi resmi Anthropic: Claude Sonnet 4.5, Opus 4.5, Haiku 4.5
+# dan model Claude 4 ke bawah TIDAK dukung adaptive thinking sama sekali ("extended-thinking-only"),
+# kirim "effort" ke model2 itu DITOLAK 400 Bad Request. Ketauan pas AI_DECISION_MODEL_BABAK1
+# (Haiku 4.5) mulai dipakai -- payload lama kirim "effort" ke SEMUA model tanpa pandang bulu,
+# jadi tiap panggilan babak 1 (Haiku) gagal 400 terus-menerus (babak 1 diam2 fail-open jadi
+# selalu OPEN tanpa evaluasi AI beneran) + spam notif Telegram ON/OFF bolak-balik (128+ notif).
+_ADAPTIVE_THINKING_MODELS = {"claude-sonnet-5"}
+
 def _anthropic_ai_call(prompt: str, model: str = None) -> str:
     """Panggil Anthropic sebagai provider utama.
     model: override model per-panggilan (04/09/2026, dipakai babak 1 -> Haiku 4.5
@@ -13522,20 +13531,26 @@ def _anthropic_ai_call(prompt: str, model: str = None) -> str:
         raise RuntimeError("ANTHROPIC_API_KEY belum di-set")
     try:
         import json as _json
-        payload = _json.dumps({
-            "model": model or AI_DECISION_MODEL,
+        effective_model = model or AI_DECISION_MODEL
+        body = {
+            "model": effective_model,
             "max_tokens": 1024,  # dinaikkan dari 200 (30/08/2026) -- Sonnet 5 kadang isi block "thinking"
             # dulu sebelum jawaban teks; budget 200 abis semua kepakai thinking, jawaban teksnya sendiri
             # nggak pernah kebentuk (response cuma berisi block "thinking", 0 block "text").
-            "output_config": {"effort": "low"},  # baru (01/09/2026) -- ROOT CAUSE asli: Sonnet 5 defaultnya
-            # ADAPTIVE THINKING SELALU AKTIF walau parameter "thinking" nggak pernah dikirim sama sekali,
-            # jadi kadang proses "mikir"-nya sendiri abisin seluruh max_tokens sebelum sempat nulis
-            # jawaban teks (masih kejadian lagi walau max_tokens udah dinaikkan ke 1024). Fix resmi yg
-            # direkomendasikan Anthropic: bukan matiin thinking total (bisa bikin model bocorin tag
-            # internal ke teks visible), tapi batasi KEDALAMAN-nya lewat effort="low" -- thinking tetap
-            # jalan tapi jauh lebih ringkas, cocok buat tugas sederhana kayak keputusan open/close ini.
-            "messages": [{"role": "user", "content": prompt}]
-        }).encode()
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if effective_model in _ADAPTIVE_THINKING_MODELS:
+            # baru (01/09/2026) -- ROOT CAUSE asli: Sonnet 5 defaultnya ADAPTIVE THINKING SELALU
+            # AKTIF walau parameter "thinking" nggak pernah dikirim sama sekali, jadi kadang proses
+            # "mikir"-nya sendiri abisin seluruh max_tokens sebelum sempat nulis jawaban teks (masih
+            # kejadian lagi walau max_tokens udah dinaikkan ke 1024). Fix resmi yg direkomendasikan
+            # Anthropic: bukan matiin thinking total (bisa bikin model bocorin tag internal ke teks
+            # visible), tapi batasi KEDALAMAN-nya lewat effort="low" -- thinking tetap jalan tapi jauh
+            # lebih ringkas, cocok buat tugas sederhana kayak keputusan open/close ini. HANYA valid
+            # utk model yg dukung adaptive thinking (lihat _ADAPTIVE_THINKING_MODELS di atas) --
+            # JANGAN dikirim ke model lain (mis. Haiku 4.5), ditolak 400 Bad Request.
+            body["output_config"] = {"effort": "low"}
+        payload = _json.dumps(body).encode()
         req = _urllib_req.Request(
             "https://api.anthropic.com/v1/messages",
             data=payload,
