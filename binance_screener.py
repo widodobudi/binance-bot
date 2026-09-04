@@ -2540,16 +2540,29 @@ def convert_cooldown_remaining(asset: str) -> float:
     return max(0.0, CONVERT_COOLDOWN_SEC - (time.time() - ts))
 
 
-def find_convert_candidates(source_asset: str, max_results: int = 10) -> dict:
+def find_convert_candidates(source_asset: str, max_results: int = 10, max_near_miss: int = 3) -> dict:
     """Scan seluruh pair USDT likuid (exclude asset yang sudah dipegang + blacklist + yang
     masih cooldown) cari kandidat convert utk source_asset yang sedang stagnan rugi.
     Syarat WAJIB kedua-duanya:
       1. Jarak (gap%) harga sekarang -> resistance pivot 4h >= |loss_pct source| + margin.
       2. Momentum nyata (rule R5/R6): RVOL(vol_ma20)>=1.0 AND harga>EMA20 AND
          ATR% >= median rolling-100 ATR% miliknya sendiri.
-    Return {'ok','source_asset','loss_pct','min_gap_pct','candidates':[...],'error'}
+    Return {'ok','source_asset','loss_pct','min_gap_pct','candidates':[...],
+            'near_miss_momentum':[...],'near_miss_gap':[...],'error'}
     candidates diurutkan dari gap% terbesar, tiap item:
-      {'symbol','asset','price','resistance','gap_pct','rvol','rsi','vol24h_usd'}"""
+      {'symbol','asset','price','resistance','gap_pct','rvol','rsi','vol24h_usd'}
+
+    04/09/2026 (permintaan Mas Budi -- scan 1-3 menit tapi hasil "0 kandidat" kerasa
+    percuma): SEBELUM ini, kandidat yg gagal salah satu syarat langsung dibuang --
+    sekarang direkam sbg "near miss" (murni informasi, TIDAK ada tombol Convert --
+    syarat momentum tetap TIDAK dilonggarkan, ini cuma referensi mana yg paling dekat):
+      - near_miss_momentum: sudah lolos syarat JARAK, tapi momentum belum lengkap
+        (maks max_near_miss, diurutkan dari yg paling dekat lolos momentum).
+      - near_miss_gap: momentum SUDAH lolos penuh, tapi jarak ke resistance masih
+        kurang sedikit dari syarat minimal (maks max_near_miss, diurutkan dari yg
+        paling dekat lolos jarak).
+    Kandidat yg gagal KEDUANYA tidak masuk kategori mana pun (tidak actionable/tidak
+    relevan ditampilkan)."""
     source_asset = str(source_asset).upper()
     avg_price = get_effective_avg_price(source_asset)
     price_now_src = get_price_now(source_asset + "USDT")
@@ -2582,6 +2595,8 @@ def find_convert_candidates(source_asset: str, max_results: int = 10) -> dict:
                 and volmap.get(p, 0) >= CONVERT_MIN_VOL_USD_24H]
 
     candidates = []
+    near_miss_momentum = []  # lolos jarak, momentum belum lengkap
+    near_miss_gap = []       # momentum lengkap, jarak kurang sedikit
     for sym in universe:
         asset = sym[:-4]  # strip "USDT"
         if convert_cooldown_remaining(asset) > 0:
@@ -2597,8 +2612,6 @@ def find_convert_candidates(source_asset: str, max_results: int = 10) -> dict:
             if resistance is None or price_now <= 0:
                 continue
             gap_pct = (resistance / price_now - 1) * 100
-            if gap_pct < min_gap_pct:
-                continue
             ema20 = float(r["ema20"]) if pd.notna(r.get("ema20")) else None
             vol_ma = float(r["vol_ma"]) if pd.notna(r.get("vol_ma")) else None
             vol_now = float(r["vol"]) if pd.notna(r.get("vol")) else None
@@ -2608,21 +2621,53 @@ def find_convert_candidates(source_asset: str, max_results: int = 10) -> dict:
             rsi = float(r["rsi"]) if pd.notna(r.get("rsi")) else None
             above_ema20 = bool(ema20 and price_now > ema20)
             atr_ok = bool(atrp is not None and pd.notna(atr_med) and atrp >= atr_med)
-            momentum_ok = bool(above_ema20 and rvol is not None and rvol >= CONVERT_RVOL_MIN and atr_ok)
-            if not momentum_ok:
-                continue
-            candidates.append({
+            rvol_ok = bool(rvol is not None and rvol >= CONVERT_RVOL_MIN)
+            momentum_ok = bool(above_ema20 and rvol_ok and atr_ok)
+            gap_ok = gap_pct >= min_gap_pct
+
+            base = {
                 "symbol": sym, "asset": asset, "price": price_now, "resistance": resistance,
-                "gap_pct": round(gap_pct, 2), "rvol": round(rvol, 2) if rvol else None,
-                "rsi": round(rsi, 1) if rsi else None, "vol24h_usd": volmap.get(sym, 0),
-            })
+                "gap_pct": round(gap_pct, 2), "rvol": round(rvol, 2) if rvol is not None else None,
+                "rsi": round(rsi, 1) if rsi is not None else None, "vol24h_usd": volmap.get(sym, 0),
+            }
+
+            if gap_ok and momentum_ok:
+                candidates.append(base)
+            elif gap_ok and not momentum_ok:
+                kurang = []
+                score = 0.0
+                if not rvol_ok:
+                    kurang.append(f"RVOL {rvol:.2f} (butuh ≥{CONVERT_RVOL_MIN:.1f})" if rvol is not None else "data RVOL tidak ada")
+                    score += max(0.0, CONVERT_RVOL_MIN - (rvol or 0.0))
+                if not above_ema20:
+                    d = (ema20 / price_now - 1) * 100 if ema20 else None
+                    kurang.append(f"harga {d:+.2f}% dari EMA20" if d is not None else "di bawah EMA20")
+                    score += abs(d) if d is not None else 5.0
+                if not atr_ok:
+                    kurang.append(f"ATR% {atrp:.2f} (median {atr_med:.2f})" if atrp is not None and pd.notna(atr_med) else "data ATR% tidak ada")
+                    score += max(0.0, (atr_med or 0.0) - (atrp or 0.0))
+                near_miss_momentum.append({**base, "kurang": ", ".join(kurang), "_score": score})
+            elif momentum_ok and not gap_ok:
+                near_miss_gap.append({
+                    **base,
+                    "kurang": f"jarak {gap_pct:.2f}% (butuh {min_gap_pct:.2f}%)",
+                    "_score": min_gap_pct - gap_pct,
+                })
+            # else: gagal keduanya -- tidak relevan ditampilkan sama sekali
         except Exception as e:
             log(f"WARN find_convert_candidates {sym}: {e}")
             continue
 
     candidates.sort(key=lambda c: c["gap_pct"], reverse=True)
+    near_miss_momentum.sort(key=lambda c: c["_score"])
+    near_miss_gap.sort(key=lambda c: c["_score"])
+    for c in near_miss_momentum: c.pop("_score", None)
+    for c in near_miss_gap: c.pop("_score", None)
+
     return {"ok": True, "source_asset": source_asset, "loss_pct": round(loss_pct, 2),
-            "min_gap_pct": round(min_gap_pct, 2), "candidates": candidates[:max_results], "error": None}
+            "min_gap_pct": round(min_gap_pct, 2), "candidates": candidates[:max_results],
+            "near_miss_momentum": near_miss_momentum[:max_near_miss],
+            "near_miss_gap": near_miss_gap[:max_near_miss], "error": None}
 
 
 def execute_convert(source_asset: str, target_symbol: str) -> dict:
@@ -9914,8 +9959,30 @@ function openConvertModal(asset) {
             });
             html += '</tbody></table>';
         }
+        // 04/09/2026: kandidat "hampir lolos" -- murni referensi/petunjuk, TIDAK ada
+        // tombol Convert (syarat momentum sengaja tetap tidak dilonggarkan).
+        html += renderConvertNearMiss('Sudah lolos jarak, momentum belum pas', d.near_miss_momentum);
+        html += renderConvertNearMiss('Momentum sudah pas, jarak masih kurang dikit', d.near_miss_gap);
         body.innerHTML = html;
     }).catch(function(e){ body.innerHTML = '<span style="color:var(--red)">Gagal: ' + e + '</span>'; });
+}
+
+function renderConvertNearMiss(judul, items) {
+    if (!items || !items.length) return '';
+    var html = '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">' +
+        '<div style="color:var(--muted);font-size:10px;margin-bottom:4px">' + judul + ' (referensi saja, bukan rekomendasi):</div>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--border)">' +
+        '<th style="padding:4px">Koin</th><th style="padding:4px">Gap%</th><th style="padding:4px">RVOL</th><th style="padding:4px">Kurang</th></tr></thead><tbody>';
+    items.forEach(function(c) {
+        html += '<tr style="border-bottom:1px solid var(--border)">' +
+            '<td style="padding:4px;font-weight:600">' + c.asset + '</td>' +
+            '<td style="padding:4px">+' + c.gap_pct + '%</td>' +
+            '<td style="padding:4px">' + (c.rvol != null ? c.rvol : '-') + '</td>' +
+            '<td style="padding:4px;color:var(--yellow)">' + c.kurang + '</td>' +
+        '</tr>';
+    });
+    html += '</tbody></table></div>';
+    return html;
 }
 
 function closeConvertModal() {
