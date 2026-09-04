@@ -1886,6 +1886,45 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
     tg_msg = f"📋 *{event}* {to_display_pair(symbol)} `{strategy}`\n" + ind_lines
     send_telegram(tg_msg, parse_mode="Markdown")
 
+# ── Riwayat keputusan AI (04/09/2026, permintaan Mas Budi) ──────────────────────────
+# SKIP individual, ringkasan Babak 1, dan hasil AI Batch Analysis TIDAK LAGI kirim
+# Telegram (SKIP sudah sejak 03/09/2026; Babak 1 + Batch Analysis sekarang, respon
+# 217 notif dalam 1 malam -- lihat commit "fix: add per-symbol cooldown..."). Supaya
+# riwayatnya tetap ada utk investigasi/penyelidikan nanti (bukan cuma ephemeral di
+# log() console Railway), semua keputusan AI (OPEN, SKIP, Babak 1, Batch Analysis)
+# dicatat ke sini -- sama persis polanya dgn near_miss_log.txt/open-arm-close.txt
+# (append lokal + mirror Google Drive, tidak pernah overwrite).
+AI_DECISIONS_LOG = "/data/ai_decisions_log.txt"
+
+def log_ai_decision(text: str):
+    """Append 1 entri riwayat keputusan AI ke ai_decisions_log.txt + mirror Drive."""
+    try:
+        with open(AI_DECISIONS_LOG, "a", encoding="utf-8") as f:
+            f.write(text)
+        threading.Thread(target=drive_append, args=("ai_decisions_log.txt", text), daemon=True).start()
+    except Exception as e:
+        log(f"WARN log_ai_decision: {e}")
+
+def log_ai_babak1(strategy_label: str, symbols_display: list, max_approve: int,
+                   total_evaluated: int | None = None):
+    """Catat ringkasan Babak 1 (pool kandidat yg lolos AI individual, blm final -- masih
+    akan dibandingkan ulang di babak 2) ke ai_decisions_log.txt. GANTI kirim Telegram
+    per-siklus scan (04/09/2026) -- riwayatnya tetap ada, tapi tidak spam. total_evaluated
+    opsional: dipakai strategi yg juga mau lapor total pool yg dievaluasi (termasuk kasus
+    0 lolos), spt TrenKonfirmasi-4h."""
+    ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+    n = len(symbols_display)
+    eval_line = f"Dievaluasi: {total_evaluated} kandidat | " if total_evaluated is not None else ""
+    if n == 0:
+        body = f"{eval_line}Lolos AI individual: 0\nTidak lanjut ke babak 2 (tidak ada kandidat).\n"
+    else:
+        body = (
+            f"{eval_line}Lolos AI individual: {n}\n"
+            f"Lolos: {', '.join(symbols_display)}\n"
+            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {max_approve} diloloskan)...\n"
+        )
+    log_ai_decision(f"[{ts} WIB] AI-BABAK-1 | {strategy_label}\n{body}{'─'*36}\n")
+
 def normalize_binance_symbol(symbol: str) -> str:
     """Standardize symbol ke raw Binance: ONDOUSDT.
     Menerima ONDOUSDT, ONDO/USDT, USDT_ONDO.
@@ -4688,14 +4727,7 @@ def thread1_scan():
     approved_bx12 = []
     if held_bx12:
         log(f"[T1] Babak 1 selesai: {len(held_bx12)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
-        send_telegram(
-            f"🤖 AI Babak 1 | brkX2-12h\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"Lolos AI individual: {len(held_bx12)}\n"
-            f"Lolos: {', '.join(to_display_pair(s) for s in held_bx12.keys())}\n"
-            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
-            parse_mode=None
-        )
+        log_ai_babak1('brkX2-12h', [to_display_pair(s) for s in held_bx12.keys()], AI_BATCH_MAX_APPROVE)
         batch_input_bx12 = [{'symbol': s, 'strategy': 'brkX2', 'score': v['score'], 'detail': v['detail']}
                              for s, v in held_bx12.items()]
         approved_bx12 = ai_decision_batch_rank(
@@ -4999,14 +5031,7 @@ def thread1b_scan_reversal():
     approved_rev = []
     if held_rev:
         log(f"[T1b] Babak 1 selesai: {len(held_rev)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
-        send_telegram(
-            f"🤖 AI Babak 1 | Reversal-8h\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"Lolos AI individual: {len(held_rev)}\n"
-            f"Lolos: {', '.join(to_display_pair(s) for s in held_rev.keys())}\n"
-            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
-            parse_mode=None
-        )
+        log_ai_babak1('Reversal-8h', [to_display_pair(s) for s in held_rev.keys()], AI_BATCH_MAX_APPROVE)
         batch_input_rev = [{'symbol': s, 'strategy': 'reversal', 'score': 0, 'detail': v['detail']}
                             for s, v in held_rev.items()]
         approved_rev = ai_decision_batch_rank(
@@ -6066,14 +6091,7 @@ def thread1c_scan_intrabar():
     approved_bx12c = []
     if held_bx12c:
         log(f"[T1c] Babak 1 selesai: {len(held_bx12c)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
-        send_telegram(
-            f"🤖 AI Babak 1 | brkX2-12h (intrabar)\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"Lolos AI individual: {len(held_bx12c)}\n"
-            f"Lolos: {', '.join(to_display_pair(s) for s in held_bx12c.keys())}\n"
-            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
-            parse_mode=None
-        )
+        log_ai_babak1('brkX2-12h (intrabar)', [to_display_pair(s) for s in held_bx12c.keys()], AI_BATCH_MAX_APPROVE)
         batch_input_bx12c = [{'symbol': s, 'strategy': 'brkX2', 'score': v['score'], 'detail': v['detail']}
                               for s, v in held_bx12c.items()]
         approved_bx12c = ai_decision_batch_rank(
@@ -6314,14 +6332,7 @@ def thread1c_scan_intrabar_early():
     approved_bx12e = []
     if held_bx12e:
         log(f"[T1c-E] Babak 1 selesai: {len(held_bx12e)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
-        send_telegram(
-            f"🤖 AI Babak 1 | brkX2-12h (intrabar EARLY)\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"Lolos AI individual: {len(held_bx12e)}\n"
-            f"Lolos: {', '.join(to_display_pair(s) for s in held_bx12e.keys())}\n"
-            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
-            parse_mode=None
-        )
+        log_ai_babak1('brkX2-12h (intrabar EARLY)', [to_display_pair(s) for s in held_bx12e.keys()], AI_BATCH_MAX_APPROVE)
         batch_input_bx12e = [{'symbol': s, 'strategy': 'brkX2', 'score': v['score'], 'detail': v['detail']}
                               for s, v in held_bx12e.items()]
         approved_bx12e = ai_decision_batch_rank(
@@ -6588,14 +6599,7 @@ def thread_rev_intrabar_scan():
     approved_rev2 = []
     if held_rev2:
         log(f"[T3-REV] Babak 1 selesai: {len(held_rev2)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
-        send_telegram(
-            f"🤖 AI Babak 1 | Reversal-8h (intrabar)\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"Lolos AI individual: {len(held_rev2)}\n"
-            f"Lolos: {', '.join(to_display_pair(s) for s in held_rev2.keys())}\n"
-            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
-            parse_mode=None
-        )
+        log_ai_babak1('Reversal-8h (intrabar)', [to_display_pair(s) for s in held_rev2.keys()], AI_BATCH_MAX_APPROVE)
         batch_input_rev2 = [{'symbol': s, 'strategy': 'reversal', 'score': 0, 'detail': v['detail']}
                              for s, v in held_rev2.items()]
         approved_rev2 = ai_decision_batch_rank(
@@ -6870,14 +6874,7 @@ def thread1d_scan_4h():
     approved_bx = []
     if held_bx:
         log(f"[T1d] Babak 1 selesai: {len(held_bx)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
-        send_telegram(
-            f"🤖 AI Babak 1 | brkX2-4h\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"Lolos AI individual: {len(held_bx)}\n"
-            f"Lolos: {', '.join(to_display_pair(s) for s in held_bx.keys())}\n"
-            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
-            parse_mode=None
-        )
+        log_ai_babak1('brkX2-4h', [to_display_pair(s) for s in held_bx.keys()], AI_BATCH_MAX_APPROVE)
         batch_input_bx = [{'symbol': s, 'strategy': 'brkX2_4h', 'score': v['score'], 'detail': v['detail']}
                            for s, v in held_bx.items()]
         approved_bx = ai_decision_batch_rank(
@@ -7061,14 +7058,7 @@ def thread1d_scan_4h():
     # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
     if held_hunt:
         log(f"[T1d-HUNT] Babak 1 selesai: {len(held_hunt)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
-        send_telegram(
-            f"🤖 AI Babak 1 | Hunting-4h\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"Lolos AI individual: {len(held_hunt)}\n"
-            f"Lolos: {', '.join(to_display_pair(s) for s in held_hunt.keys())}\n"
-            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
-            parse_mode=None
-        )
+        log_ai_babak1('Hunting-4h', [to_display_pair(s) for s in held_hunt.keys()], AI_BATCH_MAX_APPROVE)
         batch_input_hunt = [{'symbol': s, 'strategy': 'hunting_4h', 'score': v['score'], 'detail': v['detail']}
                              for s, v in held_hunt.items()]
         approved_hunt = ai_decision_batch_rank(
@@ -7119,14 +7109,7 @@ def scan_hunting_signals_only():
         # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
         if held_hunt2:
             log(f"[T1d-HUNT] Babak 1 selesai: {len(held_hunt2)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
-            send_telegram(
-                f"🤖 AI Babak 1 | Hunting-4h\n"
-                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-                f"Lolos AI individual: {len(held_hunt2)}\n"
-                f"Lolos: {', '.join(to_display_pair(s) for s in held_hunt2.keys())}\n"
-                f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
-                parse_mode=None
-            )
+            log_ai_babak1('Hunting-4h', [to_display_pair(s) for s in held_hunt2.keys()], AI_BATCH_MAX_APPROVE)
             batch_input_hunt2 = [{'symbol': s, 'strategy': 'hunting_4h', 'score': v['score'], 'detail': v['detail']}
                                   for s, v in held_hunt2.items()]
             approved_hunt2 = ai_decision_batch_rank(
@@ -7312,14 +7295,7 @@ def thread_crossema_scan():
     # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
     if held_cx:
         log(f"[T_CROSSEMA] Babak 1 selesai: {len(held_cx)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
-        send_telegram(
-            f"🤖 AI Babak 1 | CrossEMA-4h\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"Lolos AI individual: {len(held_cx)}\n"
-            f"Lolos: {', '.join(to_display_pair(s) for s in held_cx.keys())}\n"
-            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
-            parse_mode=None
-        )
+        log_ai_babak1('CrossEMA-4h', [to_display_pair(s) for s in held_cx.keys()], AI_BATCH_MAX_APPROVE)
         batch_input_cx = [{'symbol': s, 'strategy': 'brkX2_crossema', 'score': 1, 'detail': v['detail']}
                            for s, v in held_cx.items()]
         approved_cx = ai_decision_batch_rank(
@@ -7564,23 +7540,11 @@ def thread_trendconfirm_scan():
 
     if not held:
         log(f"[T_TRENDCONFIRM] Babak 1 selesai: 0/{len(pool)} lolos AI individual — tidak lanjut ke babak 2.")
-        send_telegram(
-            f"🤖 AI Babak 1 | TrenKonfirmasi-4h\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"Dievaluasi: {len(pool)} kandidat | Lolos AI individual: 0\n"
-            f"Tidak lanjut ke babak 2 (tidak ada kandidat).",
-            parse_mode=None
-        )
+        log_ai_babak1('TrenKonfirmasi-4h', [], TRENDCONFIRM_BATCH_MAX_APPROVE, total_evaluated=len(pool))
         return
     log(f"[T_TRENDCONFIRM] Babak 1 selesai: {len(held)}/{len(pool)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
-    send_telegram(
-        f"🤖 AI Babak 1 | TrenKonfirmasi-4h\n"
-        f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-        f"Dievaluasi: {len(pool)} kandidat | Lolos AI individual: {len(held)}\n"
-        f"Lolos: {', '.join(to_display_pair(s) for s in held.keys())}\n"
-        f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {TRENDCONFIRM_BATCH_MAX_APPROVE} diloloskan)...",
-        parse_mode=None
-    )
+    log_ai_babak1('TrenKonfirmasi-4h', [to_display_pair(s) for s in held.keys()],
+                  TRENDCONFIRM_BATCH_MAX_APPROVE, total_evaluated=len(pool))
 
     # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus, pangkas ke maks 5 ============
     batch_input = [{'symbol': sym, 'strategy': 'trend_confirm_4h', 'score': v[2], 'detail': v[3]}
@@ -11091,15 +11055,8 @@ def thread_akum_entry_scan():
     approved_akum = []
     if held_akum:
         log(f"[T_AKUM_ENTRY] Babak 1 selesai: {len(held_akum)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
-        _lolos_str = ', '.join(f"{to_display_pair(s)} ({v['entry_type']})" for s, v in held_akum.items())
-        send_telegram(
-            f"🤖 AI Babak 1 | Akumulasi-4h\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"Lolos AI individual: {len(held_akum)}\n"
-            f"Lolos: {_lolos_str}\n"
-            f"Lanjut ke babak 2 (AI bandingkan semua sekaligus, maks {AI_BATCH_MAX_APPROVE} diloloskan)...",
-            parse_mode=None
-        )
+        _lolos_disp = [f"{to_display_pair(s)} ({v['entry_type']})" for s, v in held_akum.items()]
+        log_ai_babak1('Akumulasi-4h', _lolos_disp, AI_BATCH_MAX_APPROVE)
         batch_input_akum = [{'symbol': s, 'strategy': v['strat_key'], 'score': v['score'], 'detail': v['detail']}
                              for s, v in held_akum.items()]
         approved_akum = ai_decision_batch_rank(
@@ -13606,18 +13563,34 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     )
     result = _ai_call(prompt)
     if not result:
+        # AI tidak tersedia sama sekali -- fail-open ke OPEN, tapi tetap dicatat (04/09/2026)
+        # supaya kelihatan di riwayat kalau ada open yg terjadi TANPA analisis AI riil.
+        log_ai_decision(
+            f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] OPEN-DECISION | {strategy} | "
+            f"{to_display_pair(symbol)} | OPEN (fail-open, AI tidak tersedia) | notify={notify}\n"
+            f"{'─'*36}\n"
+        )
         return True
     lines = result.strip().split("\n")
     first_line = lines[0].strip().upper()
     decision = "OPEN" in first_line
     reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
     log(f"[AI] OPEN decision {symbol}: {first_line} → {'BUKA' if decision else 'SKIP'}")
+    # Riwayat lengkap semua keputusan (OPEN maupun SKIP) ke ai_decisions_log.txt (04/09/2026,
+    # permintaan Mas Budi -- utk investigasi/penyelidikan nanti, terlepas dari notify Telegram).
+    log_ai_decision(
+        f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] OPEN-DECISION | {strategy} | "
+        f"{to_display_pair(symbol)} | {'OPEN' if decision else 'SKIP'} | notify={notify}\n"
+        f"{ind_str}\n"
+        f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
+        f"{'─'*36}\n"
+    )
     # SKIP TIDAK PERNAH kirim Telegram lagi (03/09/2026, permintaan Mas Budi, berlaku ke SEMUA
     # 7 strategi -- bukan cuma TrenKonfirmasi-4h): SKIP artinya tidak ada tindakan, notifnya jauh
     # lebih sering & kurang bernilai dibanding OPEN (yg berarti sesuatu benar2 terjadi), dan
-    # volume-nya kebukti bikin spam. Tetap dicatat di log() di atas utk audit/debug, cuma
-    # dihapus dari Telegram. OPEN tetap gated `notify` spt sebelumnya (TrenKonfirmasi-4h babak 1
-    # masih notify=False di situ, 6 strategi lain tetap default notify=True).
+    # volume-nya kebukti bikin spam. Tetap dicatat (log() + log_ai_decision() di atas) utk
+    # audit/investigasi, cuma dihapus dari Telegram. OPEN tetap gated `notify` spt sebelumnya
+    # (TrenKonfirmasi-4h babak 1 masih notify=False di situ, 6 strategi lain default notify=True).
     if notify and decision:
         if reasoning:
             send_telegram(
@@ -13693,6 +13666,12 @@ def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: i
     result = _ai_call(prompt)
     if not result:
         log(f"[AI] BATCH rank {strategy_label}: AI tidak tersedia, fallback ke urutan ranking asli ({len(fallback)}/{len(candidates)})")
+        log_ai_decision(
+            f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] AI-BATCH-ANALYSIS | {strategy_label}\n"
+            f"Dievaluasi: {len(candidates)} kandidat | AI tidak tersedia -- fallback ke urutan ranking asli\n"
+            f"Diloloskan (fallback): {', '.join(to_display_pair(s) for s in fallback)}\n"
+            f"{'─'*36}\n"
+        )
         return fallback
 
     lines = result.strip().split("\n")
@@ -13700,20 +13679,25 @@ def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: i
     reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
     if not first_line.upper().startswith("PILIH"):
         log(f"[AI] BATCH rank {strategy_label}: format jawaban tidak dikenali, fallback ke urutan ranking asli")
+        log_ai_decision(
+            f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] AI-BATCH-ANALYSIS | {strategy_label}\n"
+            f"Dievaluasi: {len(candidates)} kandidat | Format jawaban AI tidak dikenali -- fallback ke urutan ranking asli\n"
+            f"Diloloskan (fallback): {', '.join(to_display_pair(s) for s in fallback)}\n"
+            f"Jawaban mentah AI: {result.strip()[:300]}\n"
+            f"{'─'*36}\n"
+        )
         return fallback
 
     criteria_line = f"{criteria_note}\n" if criteria_note else ""
     picked_raw = first_line.split(":", 1)[1].strip() if ":" in first_line else ""
     if not picked_raw or "TIDAK ADA" in picked_raw.upper():
         log(f"[AI] BATCH rank {strategy_label}: AI memilih TIDAK ADA dari {len(candidates)} kandidat")
-        send_telegram(
-            f"🤖 AI Batch Analysis | {strategy_label}\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"{ai_provider_note()}\n"
+        log_ai_decision(
+            f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] AI-BATCH-ANALYSIS | {strategy_label}\n"
             f"Dievaluasi: {len(candidates)} kandidat | Diloloskan: 0\n"
             f"{criteria_line}"
-            f"{reasoning}",
-            parse_mode=None
+            f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
+            f"{'─'*36}\n"
         )
         return []
 
@@ -13727,19 +13711,24 @@ def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: i
                 break
     if not picked_syms:
         log(f"[AI] BATCH rank {strategy_label}: gagal parse simbol dari jawaban AI, fallback ke urutan ranking asli")
+        log_ai_decision(
+            f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] AI-BATCH-ANALYSIS | {strategy_label}\n"
+            f"Dievaluasi: {len(candidates)} kandidat | Gagal parse simbol dari jawaban AI -- fallback ke urutan ranking asli\n"
+            f"Diloloskan (fallback): {', '.join(to_display_pair(s) for s in fallback)}\n"
+            f"Jawaban mentah AI: {result.strip()[:300]}\n"
+            f"{'─'*36}\n"
+        )
         return fallback
     picked_syms = picked_syms[:max_approve]
 
     log(f"[AI] BATCH rank {strategy_label}: {len(picked_syms)}/{len(candidates)} diloloskan → {picked_syms}")
-    send_telegram(
-        f"🤖 AI Batch Analysis | {strategy_label}\n"
-        f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-        f"{ai_provider_note()}\n"
+    log_ai_decision(
+        f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] AI-BATCH-ANALYSIS | {strategy_label}\n"
         f"Dievaluasi: {len(candidates)} kandidat | Diloloskan: {len(picked_syms)}\n"
         f"Terpilih: {', '.join(to_display_pair(s) for s in picked_syms)}\n"
         f"{criteria_line}"
-        f"{reasoning}",
-        parse_mode=None
+        f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
+        f"{'─'*36}\n"
     )
     return picked_syms
 
