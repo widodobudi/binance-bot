@@ -13471,6 +13471,18 @@ import urllib.request as _urllib_req
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AI_DECISION_MODEL  = "claude-sonnet-5"   # naik dari Haiku 4.5 (29/08/2026, maksimalkan kredit Anthropic yg jarang kepakai)
+# 04/09/2026: premis 29/08 di atas ("kredit jarang kepakai") sudah nggak berlaku lagi --
+# kredit Anthropic (dipakai lintas bot + Claude Code) terbukti terpakai deras, Sep 3 saja
+# ~$7 dari ~$17 kredit awal. Babak 1 (ai_decision_open, saringan per-kandidat SEBELUM
+# batch-rank) adalah kontributor volume panggilan AI TERBESAR (~18x lebih sering dari
+# babak 2, dari data ai_decisions_log.txt riil: 273 vs 15 panggilan dlm 2.8 jam) sehingga
+# jadi target pertama diturunkan. Haiku 4.5 harganya PERSIS setengah Sonnet 5 baik input
+# maupun output ($1/$5 per MTok vs $2/$10) -- turunkan babak 1 saja memotong porsi
+# terbesar biaya AI bot tanpa mengubah logika 2-babak yg baru dibangun. Babak 2
+# (ai_decision_batch_rank) dan semua ai_decision_* aktif-deal (armed/add_fund/
+# near_timeout/close) TETAP Sonnet 5 -- volume jauh lebih kecil, keputusannya lebih
+# konsekuensial (langsung pengaruhi deal aktif), jadi belum diturunkan.
+AI_DECISION_MODEL_BABAK1 = "claude-haiku-4-5-20251001"
 GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_AI_MODEL    = os.environ.get("GEMINI_AI_MODEL", "gemini-flash-latest")
 AI_DECISION_TIMEOUT = 25  # detik -- dinaikkan dari 10 (30/08/2026), seiringan sama max_tokens 200->1024:
@@ -13484,15 +13496,17 @@ AI_LAST_PROVIDER = "Belum ada keputusan AI"
 
 _ai_quota_notif_sent = False  # flag agar notif quota habis tidak berulang
 
-def _anthropic_ai_call(prompt: str) -> str:
-    """Panggil Anthropic sebagai provider utama."""
+def _anthropic_ai_call(prompt: str, model: str = None) -> str:
+    """Panggil Anthropic sebagai provider utama.
+    model: override model per-panggilan (04/09/2026, dipakai babak 1 -> Haiku 4.5
+    utk hemat biaya) -- default None berarti pakai AI_DECISION_MODEL (Sonnet 5)."""
     global _ai_quota_notif_sent
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY belum di-set")
     try:
         import json as _json
         payload = _json.dumps({
-            "model": AI_DECISION_MODEL,
+            "model": model or AI_DECISION_MODEL,
             "max_tokens": 1024,  # dinaikkan dari 200 (30/08/2026) -- Sonnet 5 kadang isi block "thinking"
             # dulu sebelum jawaban teks; budget 200 abis semua kepakai thinking, jawaban teksnya sendiri
             # nggak pernah kebentuk (response cuma berisi block "thinking", 0 block "text").
@@ -13571,8 +13585,11 @@ def _gemini_ai_call(prompt: str) -> str:
     return body["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
-def _ai_call(prompt: str) -> str:
-    """Panggil provider terpilih lalu fallback provider dan rule-based."""
+def _ai_call(prompt: str, model: str = None) -> str:
+    """Panggil provider terpilih lalu fallback provider dan rule-based.
+    model: diteruskan ke _anthropic_ai_call (override per-panggilan, mis. babak 1
+    pakai Haiku 4.5) -- tidak berlaku ke provider Gemini (model Gemini diatur
+    terpisah lewat env var GEMINI_AI_MODEL, di luar cakupan optimasi ini)."""
     global _ai_quota_notif_sent, AI_LAST_PROVIDER
     mode = load_ai_provider_config().get("mode", "anthropic_gemini")
     if mode == "rule_based":
@@ -13591,7 +13608,7 @@ def _ai_call(prompt: str) -> str:
     provider_errors = {}
     for provider in providers:
         try:
-            result = _anthropic_ai_call(prompt) if provider == "anthropic" else _gemini_ai_call(prompt)
+            result = _anthropic_ai_call(prompt, model=model) if provider == "anthropic" else _gemini_ai_call(prompt)
             if result:
                 AI_LAST_PROVIDER = "Anthropic" if provider == "anthropic" else "Gemini AI Studio"
                 if provider == "gemini": log("[AI] Keputusan memakai Gemini fallback")
@@ -13864,7 +13881,11 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
         f"Trail: saran trailing (normal/ketat/longgar)\n\n"
         f"Baris pertama HARUS hanya kata OPEN atau SKIP."
     )
-    result = _ai_call(prompt)
+    # 04/09/2026: babak 1 pakai Haiku 4.5 (bukan AI_DECISION_MODEL/Sonnet 5 default) --
+    # ini call terbanyak (per-kandidat, tiap siklus scan), jadi target pertama diturunkan
+    # buat hemat biaya. Babak 2 (batch-rank) & semua ai_decision_* aktif-deal lain TETAP
+    # Sonnet 5 lewat default _ai_call(prompt) tanpa param model.
+    result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
     if not result:
         # AI tidak tersedia sama sekali -- fail-open ke OPEN, tapi tetap dicatat (04/09/2026)
         # supaya kelihatan di riwayat kalau ada open yg terjadi TANPA analisis AI riil.
