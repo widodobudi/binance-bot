@@ -2397,8 +2397,18 @@ def get_sell_suggestion(asset: str) -> dict:
         if resistance is not None:
             result["resistance"] = resistance
             if result["breakeven"] >= resistance * 0.995:
-                result["warning"] = (f"harga harus naik 2 tahap: tembus resistance {_fmt_price(resistance)} dulu, "
-                                      f"baru lanjut naik lagi sampai breakeven {_fmt_price(result['breakeven'])}")
+                # 05/09/2026 (permintaan Mas Budi): perjelas kalimat -- resistance ini
+                # bukan swing-high paling baru (indikator "Swing" TradingView nunjukkin
+                # pivot TERBARU apa pun posisinya thd harga, konsepnya beda), ini level
+                # TERDEKAT DI ATAS harga sekarang yang belum pernah ditembus. Sempat bikin
+                # bingung krn kelihatan "diam" terus di 1 angka -- itu memang seharusnya
+                # begitu selama harga belum closing di atasnya.
+                result["warning"] = (
+                    f"harga harus naik 2 tahap: tembus resistance terdekat yang belum pernah "
+                    f"ditembus ({_fmt_price(resistance)}) dulu -- ini BUKAN swing high paling baru, "
+                    f"cuma level terdekat di atas harga sekarang -- baru lanjut naik lagi sampai "
+                    f"breakeven {_fmt_price(result['breakeven'])}"
+                )
     except Exception as e:
         log(f"WARN get_sell_suggestion resistance {asset}: {e}")
 
@@ -9934,7 +9944,7 @@ function refreshAutoSellRowPrice(asset) {
         if (breakevenEl) {
             var beTxt = d.breakeven ? ('breakeven ~' + d.breakeven) : '';
             if (d.htf_trend) beTxt += (beTxt ? ' | ' : '') + 'HTF ' + d.htf_trend;
-            if (d.resistance) beTxt += (beTxt ? ' | ' : '') + 'resistance terdekat ~' + d.resistance;
+            if (d.resistance) beTxt += (beTxt ? ' | ' : '') + 'resistance terdekat (belum tertembus) ~' + d.resistance;
             breakevenEl.innerHTML = beTxt;
             if (d.breakeven_warning) breakevenEl.innerHTML += '<br><span style="color:var(--red)">⚠ ' + d.breakeven_warning + '</span>';
         }
