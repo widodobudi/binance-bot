@@ -2602,7 +2602,14 @@ def find_convert_candidates(source_asset: str, max_results: int = 10, max_near_m
         if convert_cooldown_remaining(asset) > 0:
             continue
         try:
-            df4 = get_ohlcv_4h(sym, limit=100)
+            # limit=120, BUKAN 100 (04/09/2026 fix, ketauan pas nguji fitur near-miss):
+            # atr_pct sendiri butuh ~13-14 candle "pemanasan" (NaN) sebelum mulai keluar
+            # angka -- dengan limit=100, window rolling(100) buat median SELALU nyentuh
+            # candle NaN itu, jadi atr_med SELALU NaN, atr_ok SELALU False, tidak peduli
+            # kondisi pasar riil apa pun. +20 candle ekstra ngasih buffer supaya rolling-100
+            # window akhir bener2 lengkap 100 nilai valid (dibuktikan lewat dry-run: sblm
+            # fix, 0/scan pernah lolos ATR; false negative murni krn data, bukan analisis).
+            df4 = get_ohlcv_4h(sym, limit=120)
             if df4 is None or len(df4) < 60:
                 continue
             df4 = compute_indicators_4h(df4)
