@@ -1925,6 +1925,26 @@ def log_ai_babak1(strategy_label: str, symbols_display: list, max_approve: int,
         )
     log_ai_decision(f"[{ts} WIB] AI-BABAK-1 | {strategy_label}\n{body}{'─'*36}\n")
 
+# ── Riwayat kegagalan open (04/09/2026, permintaan Mas Budi) ────────────────────────
+# "GAGAL OPEN" (order Binance/3Commas ditolak -- saldo/lot size, dsb) BUKAN keputusan
+# AI (murni kegagalan eksekusi), jadi dipisah dari ai_decisions_log.txt -- file
+# tersendiri, pola sama persis (append lokal + mirror Google Drive, tidak pernah
+# overwrite). Sebelumnya cuma 1 titik yg kirim Telegram utk ini (Akumulasi-4h Entry
+# A/B) -- sekarang dialihkan ke sini spy tidak nambah spam tapi tetap ada riwayatnya.
+OPEN_FAIL_LOG = "/data/open_fail_log.txt"
+
+def log_open_fail(strategy_label: str, symbol_display: str, reason: str, extra: str = ""):
+    """Append 1 entri kegagalan open ke open_fail_log.txt + mirror Drive."""
+    ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+    extra_line = f"{extra}\n" if extra else ""
+    text = f"[{ts} WIB] OPEN-FAIL | {strategy_label} | {symbol_display} | {reason}\n{extra_line}{'─'*36}\n"
+    try:
+        with open(OPEN_FAIL_LOG, "a", encoding="utf-8") as f:
+            f.write(text)
+        threading.Thread(target=drive_append, args=("open_fail_log.txt", text), daemon=True).start()
+    except Exception as e:
+        log(f"WARN log_open_fail: {e}")
+
 def normalize_binance_symbol(symbol: str) -> str:
     """Standardize symbol ke raw Binance: ONDOUSDT.
     Menerima ONDOUSDT, ONDO/USDT, USDT_ONDO.
@@ -9898,22 +9918,26 @@ function runConvert(sourceAsset, targetSymbol) {
         }).catch(function(e){ alert('Gagal convert: ' + e); closeConvertModal(); });
 }
 
-// 04/09/2026: dashboard ini reload HALAMAN PENUH tiap 30 detik (window.location.reload()
-// di startRefresh()). Kalau modal Convert kebetulan masih kebuka (atau fetch-nya belum
-// selesai) pas reload itu terjadi, Chrome kadang membekukan state halaman itu lewat
-// bfcache (back-forward cache) alih-alih benar2 muat ulang dari server -- reload
-// BERIKUTNYA malah memulihkan snapshot beku itu (makanya selalu nampilin teks default
-// "Convert Aset"/"Memuat..." tanpa nama koin & tanpa scan beneran jalan, serta ngeblok
-// klik ke menu lain krn modal-nya beneran display:flex di snapshot itu). 'pageshow'
-// dengan persisted=true HANYA nyala kalau halaman ini dipulihkan dari bfcache (bukan di
-// pemuatan awal yg benar2 fresh) -- begitu kedeteksi, paksa modal ketutup lagi supaya
-// snapshot beku itu tidak pernah kelihatan user.
-window.addEventListener('pageshow', function(e) {
-    if (e.persisted) {
-        var m = document.getElementById('convert-modal');
-        if (m) m.style.display = 'none';
-    }
-});
+// 04/09/2026: Mas Budi konsisten lihat modal Convert kebuka sendiri (teks default,
+// belum pernah diklik) di window Chrome/Brave normal, TIAP reload manual maupun
+// otomatis 30 detik -- TAPI tidak kejadian di Incognito, dan tidak berubah walau
+// Shields Brave dimatikan. Dugaan awal saya (bfcache) TERBUKTI SALAH (location.reload()
+// dipastikan lewat dokumentasi resmi TIDAK PERNAH lewat bfcache) -- fungsi pageshow di
+// atas sebelumnya TIDAK PERNAH kejalan sama sekali di skenario ini, makanya nggak ada
+// efeknya. Saya sudah jalankan kode yang BENERAN dikirim server lewat JS engine
+// sungguhan (Node+jsdom) dan modal-nya kebukti selalu display:none di titik itu --
+// artinya penyebab pastinya ada di sisi environment/browser Mas Budi yang belum
+// berhasil saya pastikan (bukan lagi teori bfcache). Daripada terus nebak, ini paksa
+// TUTUP TANPA SYARAT begitu halaman selesai di-parse (DOMContentLoaded) DAN sekali lagi
+// sesaat setelahnya (jaga2 kalau ada sesuatu yg nge-set nya belakangan) -- apa pun nanti
+// penyebab aslinya, modal ini TIDAK AKAN pernah kelihatan lagi tanpa diklik.
+function _forceCloseConvertModalOnLoad() {
+    var m = document.getElementById('convert-modal');
+    if (m) m.style.display = 'none';
+}
+document.addEventListener('DOMContentLoaded', _forceCloseConvertModalOnLoad);
+setTimeout(_forceCloseConvertModalOnLoad, 300);
+window.addEventListener('pageshow', _forceCloseConvertModalOnLoad); // jaga2 (termasuk kasus bfcache asli kalau ada)
 
 if (typeof STRAT_SECONDARY !== 'undefined') {
     STRAT_SECONDARY['Hunting-4h'] = [{key: 'rsi', label: 'RSI<60'}];
@@ -11377,14 +11401,12 @@ def thread_akum_entry_scan():
             if not ok:
                 reject_reason = "Binance order ditolak (cek saldo/lot size)" if USE_BINANCE_DIRECT else "3Commas tolak (cek saldo/slot)"
                 log(f"[T_AKUM_ENTRY] {sym} Entry {entry_type}: {reject_reason}")
-                send_telegram(
-                    f"⚠️ Akumulasi-4h | GAGAL OPEN\n"
-                    f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-                    f"Pair  : {to_display_pair(sym)}\n"
-                    f"Entry : {entry_type} | Score: {score}\n"
-                    f"Harga : {_fmt_price(price_now)}\n"
-                    f"Alasan: {reject_reason}",
-                    parse_mode=None
+                # 04/09/2026 (permintaan Mas Budi): dialihkan dari Telegram ke open_fail_log.txt --
+                # tetap ada riwayatnya utk investigasi, tapi tidak nambah notif tiap kali sizing gagal
+                # (cooldown sizing-fail 30 menit yg sudah ada tetap jaga jangan berulang beruntun).
+                log_open_fail(
+                    "Akumulasi-4h", to_display_pair(sym), reject_reason,
+                    extra=f"Entry: {entry_type} | Score: {score} | Harga: {_fmt_price(price_now)}"
                 )
                 continue
 
@@ -14192,18 +14214,18 @@ def ai_decision_add_fund(symbol: str, strategy: str, d: dict, add_usd: float, cu
     decision = "ADD" in first_line
     reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
     log(f"[AI] ADD-FUND decision {symbol}: {first_line} -> {'ADD' if decision else 'TUNDA'}")
-    if not decision:
-        send_telegram(
-            f"🤖 AI Decision | {to_display_pair(symbol)}\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"{ai_provider_note()}\n"
-            f"Strategi : {strategy}\n"
-            f"Event    : ADD FUND\n"
-            f"Profit   : {profit_now:+.2f}%\n"
-            f"Keputusan: ⏸ TUNDA (dicoba lagi ~15 menit)\n"
-            f"{reasoning}",
-            parse_mode=None
-        )
+    # 04/09/2026 (permintaan Mas Budi): keputusan TUNDA tidak lagi kirim Telegram (bisa
+    # berulang tiap 15 menit selama kondisi belum berubah -- ikut kontribusi ke spam ON/OFF
+    # kemarin) -- tetap dicatat ke ai_decisions_log.txt spy riwayatnya ada utk investigasi,
+    # sama polanya spt OPEN-DECISION. ADD (decision=True) sudah dari dulu silent jg, tetap
+    # begitu -- cuma nambah baris audit di sini utk KEDUANYA (ADD & TUNDA), bukan cuma TUNDA.
+    log_ai_decision(
+        f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] ADD-FUND-DECISION | {strategy} | "
+        f"{to_display_pair(symbol)} | {'ADD' if decision else 'TUNDA'} | profit={profit_now:+.2f}% "
+        f"atr={current_atr:.2f}% add_usd=${add_usd:.0f}\n"
+        f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
+        f"{'─'*36}\n"
+    )
     return decision
 
 
