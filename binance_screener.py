@@ -2725,6 +2725,26 @@ def execute_convert(source_asset: str, target_symbol: str) -> dict:
         if target_final:
             upsert_auto_sell_asset(target_asset, True, target_final, avg_price=buy["price_avg"])
         record_converted(target_asset)
+
+        # 04/09/2026 (permintaan Mas Budi): entry Auto Sell Asset LAMA milik source_asset
+        # dulunya dibiarkan apa adanya setelah convert -- nongol terus "Aktif: menunggu
+        # crossing naik" walau saldonya udah 0, membingungkan. Cek saldo sisa BENERAN
+        # (bukan asumsi qty terjual 100%, market order teorinya bisa partial fill di
+        # kondisi ekstrem) -- kalau nyaris habis (toleransi 2% dust), hapus entry lama-nya.
+        # Kalau ternyata masih tersisa saldo berarti (>2%), JANGAN dihapus -- masih ada
+        # yg perlu dipantau/dijual.
+        try:
+            remaining_qty = binance_get_asset_qty(source_asset)
+        except Exception:
+            remaining_qty = 0.0
+        if remaining_qty <= 0 or remaining_qty < qty * 0.02:
+            remove_auto_sell_asset(source_asset)
+            log(f"[CONVERT] {source_asset}: saldo tersisa {remaining_qty:.8f} (nyaris habis) -- "
+                f"entry Auto Sell Asset lama dihapus")
+        else:
+            log(f"[CONVERT] {source_asset}: masih tersisa saldo {remaining_qty:.8f} (bukan full-sell) -- "
+                f"entry Auto Sell Asset lama TIDAK dihapus")
+
         log(f"[CONVERT] {source_asset}->{target_asset}: sold {sell['qty']:.6f} {source_asset} "
             f"@{sell['price_avg']:.6f} (${proceeds:.2f}) -> bought {buy['qty']:.6f} {target_asset} "
             f"@{buy['price_avg']:.6f} | target_recover={target_recover} resistance={resistance} "
