@@ -9028,7 +9028,7 @@ document.addEventListener('DOMContentLoaded', function() {
      bukan menutup layar penuh spt seharusnya). Diletakkan sejajar/sibling dgn
      .container, bukan nested di dalamnya, supaya position:fixed;inset:0 beneran full-screen. -->
 <div id="convert-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center">
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 20px;max-width:640px;width:92%;max-height:80vh;overflow-y:auto">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;max-width:640px;width:92%;max-height:80vh;overflow-y:auto">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <h3 id="convert-modal-title" style="margin:0;font-size:13px;color:var(--accent)">Convert Aset</h3>
             <button type="button" onclick="closeConvertModal()" style="background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer">✕</button>
