@@ -9898,6 +9898,23 @@ function runConvert(sourceAsset, targetSymbol) {
         }).catch(function(e){ alert('Gagal convert: ' + e); closeConvertModal(); });
 }
 
+// 04/09/2026: dashboard ini reload HALAMAN PENUH tiap 30 detik (window.location.reload()
+// di startRefresh()). Kalau modal Convert kebetulan masih kebuka (atau fetch-nya belum
+// selesai) pas reload itu terjadi, Chrome kadang membekukan state halaman itu lewat
+// bfcache (back-forward cache) alih-alih benar2 muat ulang dari server -- reload
+// BERIKUTNYA malah memulihkan snapshot beku itu (makanya selalu nampilin teks default
+// "Convert Aset"/"Memuat..." tanpa nama koin & tanpa scan beneran jalan, serta ngeblok
+// klik ke menu lain krn modal-nya beneran display:flex di snapshot itu). 'pageshow'
+// dengan persisted=true HANYA nyala kalau halaman ini dipulihkan dari bfcache (bukan di
+// pemuatan awal yg benar2 fresh) -- begitu kedeteksi, paksa modal ketutup lagi supaya
+// snapshot beku itu tidak pernah kelihatan user.
+window.addEventListener('pageshow', function(e) {
+    if (e.persisted) {
+        var m = document.getElementById('convert-modal');
+        if (m) m.style.display = 'none';
+    }
+});
+
 if (typeof STRAT_SECONDARY !== 'undefined') {
     STRAT_SECONDARY['Hunting-4h'] = [{key: 'rsi', label: 'RSI<60'}];
 }
