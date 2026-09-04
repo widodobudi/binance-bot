@@ -9009,17 +9009,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 <tbody id="auto-sell-tbody"><tr><td colspan="10" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
             </table>
             </div>
-            <!-- ═══ Convert Aset (04/09/2026): jual asset stagnan/rugi lalu beli koin lain
-                 yang jarak-ke-resistance-nya >= magnitude kerugian DAN ada momentum riil ═══ -->
-            <div id="convert-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center">
-                <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 20px;max-width:640px;width:92%;max-height:80vh;overflow-y:auto">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                        <h3 id="convert-modal-title" style="margin:0;font-size:13px;color:var(--accent)">Convert Aset</h3>
-                        <button type="button" onclick="closeConvertModal()" style="background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer">✕</button>
-                    </div>
-                    <div id="convert-modal-body" style="font-size:11px;color:var(--muted)">Memuat...</div>
-                </div>
-            </div>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
                 <label>+ Tambah asset <select id="auto-sell-new-asset" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option>Memuat...</option></select></label>
                 <label>Avg beli, USDT per coin (opsional) <input id="auto-sell-new-avg" type="number" min="0" step="0.00000001" placeholder="kalau tahu" style="width:110px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><div id="auto-sell-new-avgsrc" style="color:var(--muted);font-size:9px"></div></label>
@@ -9029,6 +9018,22 @@ document.addEventListener('DOMContentLoaded', function() {
                 <button type="button" onclick="loadAutoSellConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh saldo</button>
             </div>
         </div>
+    </div>
+</div>
+<!-- ═══ Convert Aset (04/09/2026): jual asset stagnan/rugi lalu beli koin lain yang
+     jarak-ke-resistance-nya >= magnitude kerugian DAN ada momentum riil. Modal ini
+     SENGAJA ditaruh DI LUAR .card manapun (04/09/2026 fix) -- .card punya
+     overflow:hidden, yang MEMOTONG rendering position:fixed di dalamnya (dibuktikan
+     lewat screenshot Mas Budi: modal kepotong kecil, numpuk sama isi card lain,
+     bukan menutup layar penuh spt seharusnya). Diletakkan sejajar/sibling dgn
+     .container, bukan nested di dalamnya, supaya position:fixed;inset:0 beneran full-screen. -->
+<div id="convert-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 20px;max-width:640px;width:92%;max-height:80vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <h3 id="convert-modal-title" style="margin:0;font-size:13px;color:var(--accent)">Convert Aset</h3>
+            <button type="button" onclick="closeConvertModal()" style="background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer">✕</button>
+        </div>
+        <div id="convert-modal-body" style="font-size:11px;color:var(--muted)">Memuat...</div>
     </div>
 </div>
   <!-- ═══════════════ MANUAL SCAN ═══════════════ -->
