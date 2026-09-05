@@ -13077,6 +13077,28 @@ def run_web_dashboard():
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)})
 
+        @app.route("/admin/clear_hold_no_sell_price", methods=["POST"])
+        def admin_clear_hold_no_sell_price():
+            """
+            Hapus 1 entry dari hold_no_sell_price.json berdasarkan symbol (mis. "HBARUSDT").
+            05/09/2026: dibuat setelah insiden HBAR -- get_effective_avg_price() memprioritaskan
+            file ini DI ATAS avg manual dashboard, jadi kalau entry di sini kebetulan salah
+            (mis. gara-gara entry_price keliru saat hard-stop tercatat), hasilnya nyasar
+            (avg_gap_pct / est_profit_usd salah) walau avg manual di dashboard sudah benar.
+            Body JSON: {"symbol": "HBARUSDT"}
+            """
+            data = request.get_json(force=True, silent=True) or {}
+            sym = str(data.get("symbol", "")).upper().replace("/", "")
+            if not sym:
+                return jsonify({"ok": False, "error": "symbol required"})
+            with hold_no_sell_price_lock:
+                removed = hold_no_sell_price.pop(sym, None)
+            if removed is None:
+                return jsonify({"ok": False, "error": f"{sym} tidak ada di hold_no_sell_price.json"})
+            save_hold_no_sell_price()
+            log(f"[ADMIN] clear_hold_no_sell_price: hapus {sym} | {removed}")
+            return jsonify({"ok": True, "removed": {sym: removed}})
+
         @app.route("/admin/backfill_rsi_open", methods=["POST"])
         def admin_backfill_rsi_open():
             """
