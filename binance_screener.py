@@ -450,6 +450,14 @@ AKUM_ENTRY_FWDTEST_TARGET = 10           # target forward-test 10 deal
 AKUM_TP_SWING_LOOKBACK    = 30           # swing high dari N candle 4h terakhir (~5 hari)
 AKUM_TP_RSI_OB            = 70           # RSI overbought threshold untuk early exit
 AKUM_TP_STOCH_OB          = 75           # Stoch%K overbought threshold
+AKUM_TP_MOMENTUM_MIN_PROFIT_PCT = 0.5    # 05/09/2026 (permintaan Mas Budi, temuan NVDABUSDT):
+                                          # TP2 "momentum overbought" sebelum ini TIDAK PERNAH cek
+                                          # untung/rugi -- bisa closing rugi kalau momentum kebetulan
+                                          # udah jenuh SEBELUM harga sempat naik dari entry (NVDABUSDT
+                                          # buka-tutup di menit yg sama, -0.20%). Sekarang wajib profit
+                                          # bersih (net fee, dari prof_from_entry) >= nilai ini dulu --
+                                          # kalau belum, exit ini DITAHAN (posisi tetap jalan, tetap
+                                          # dilindungi SL/hard-stop/timeout yg sudah ada).
 # Tidak pakai trailing arm — exit via TP/SL/Timeout saja
 
 # Entry A — Spring/Fakeout
@@ -5938,10 +5946,21 @@ def thread2_monitor():
                             _stoch_ob_cross = (_sk_now > AKUM_TP_STOCH_OB and _sk_now < _sk_prev)  # Stoch OB + mulai turun
                             _macd_turn      = (_macd_hist_now < _macd_hist_prev)                   # MACD hist turun
                             _rsi_ob         = (_rsi_now >= AKUM_TP_RSI_OB)
-                            if _rsi_ob or (_stoch_ob_cross and _macd_turn):
+                            _momentum_ob    = _rsi_ob or (_stoch_ob_cross and _macd_turn)
+                            # 05/09/2026: TP momentum WAJIB posisi sudah untung bersih (net fee)
+                            # >= AKUM_TP_MOMENTUM_MIN_PROFIT_PCT -- sebelum ini murni cek momentum
+                            # tanpa peduli untung/rugi (lihat komentar konstanta di atas). Kalau
+                            # momentum sudah jenuh tapi belum untung segitu, DITAHAN dulu -- tetap
+                            # dilindungi SL/hard-stop/timeout yg sudah ada di bawah, bukan dibiarkan
+                            # tanpa proteksi.
+                            if _momentum_ob and prof_from_entry >= AKUM_TP_MOMENTUM_MIN_PROFIT_PCT:
                                 do_close = True
                                 reason = (f"TP akumulasi momentum: RSI={_rsi_now:.1f} Stoch={_sk_now:.1f}→{_sk_prev:.1f} "
-                                          f"MACD_hist={_macd_hist_now:.4f}→{_macd_hist_prev:.4f}")
+                                          f"MACD_hist={_macd_hist_now:.4f}→{_macd_hist_prev:.4f} "
+                                          f"(profit bersih {prof_from_entry:+.2f}%)")
+                            elif _momentum_ob:
+                                log(f"[T2-AKUM] {sym} momentum sudah jenuh (RSI={_rsi_now:.1f}) tapi profit bersih "
+                                    f"{prof_from_entry:+.2f}% < {AKUM_TP_MOMENTUM_MIN_PROFIT_PCT}% -- TP momentum ditahan")
                         # TP3: upper wick menyentuh pivot high terdekat di atas price (strength N=4)
                         if not do_close:
                             _N4   = 4
@@ -11093,6 +11112,15 @@ def detect_entry_b_breakout(df, resistance: float, support: float, resistance_re
     3. Retest tidak tembus resistance (low >= resistance * (1 - AKUM_B_RETEST_TOL_PCT))
     4. Volume retest < AKUM_B_RETEST_VOL_MAX × volume candle breakout
     5. EMA20 > EMA50 (konfirmasi uptrend)
+    6. RSI < AKUM_TP_RSI_OB (05/09/2026, permintaan Mas Budi, temuan NVDABUSDT) -- momentum
+       BELUM jenuh saat entry. Sebelum ini, entry-nya nggak pernah cek RSI sama sekali,
+       jadi struktur breakout+retest bisa valid TEPAT saat RSI sudah overbought (>=70) --
+       begitu posisi kebuka, syarat exit "TP akumulasi momentum" di thread2_monitor()
+       (murni cek RSI/Stoch/MACD) langsung ketemu kondisi terpenuhi di siklus cek
+       berikutnya, closing rugi tipis walau harga belum sempat bergerak (NVDABUSDT:
+       buka-tutup di menit yang sama, -0.20%). Pakai ambang yang SAMA dengan exit
+       (AKUM_TP_RSI_OB) supaya konsisten -- entry ditolak kalau momentum sudah di level
+       yang bakal langsung memicu exit begitu terbuka.
     Return: dict info atau None.
     """
     if len(df) < 20: return None
@@ -11104,11 +11132,15 @@ def detect_entry_b_breakout(df, resistance: float, support: float, resistance_re
         df['vol_ma'] = df['vol'].rolling(20).mean()
         df['ema20']  = _pta.ema(df['close'], length=20)
         df['ema50']  = _pta.ema(df['close'], length=50)
+        df['rsi']    = _pta.rsi(df['close'], length=14)
 
         # Cek EMA konfirmasi
         last = df.iloc[-1]
         if pd.isna(last.get('ema20')) or pd.isna(last.get('ema50')): return None
         if last['ema20'] <= last['ema50']: return None
+        # Cek momentum belum jenuh (syarat #6 baru)
+        if pd.isna(last.get('rsi')): return None
+        if float(last['rsi']) >= AKUM_TP_RSI_OB: return None
 
         # Cari candle breakout: close > resistance + vol tinggi
         breakout_idx = None
