@@ -301,6 +301,8 @@ STRAT_CROSSEMA_SCAN_INTERVAL= 240      # scan tiap 4 menit
 STRAT_CROSSEMA_MAX_DEALS    = 2
 STRAT_CROSSEMA_MAX_HOLD     = 15
 STRAT_CROSSEMA_FWDTEST      = 7
+STRAT_CROSSEMA_LIVE_BASELINE = 10   # closed deals saat crossema-4h TERCAPAI target -> LIVE (05/09/2026, #10/7)
+STRAT_CROSSEMA_PHASE2_TARGET = 15   # target fase-2 (counter "2nd") setelah LIVE, 05/09/2026, samain hunting/reversal/4h
 STRAT_CROSSEMA_VOLUME_MULT  = 0.10    # dilonggarkan dari 0.25→0.10 (30/08/2026) -- pair yg lagi downtrend (syarat ST=-1) wajar volumenya turun, jadi filter 0.25xMA kegedean
 STRAT_CROSSEMA_VOLUME_MA    = 20
 STRAT_CROSSEMA_MIN_VOL_USD  = 1_000_000
@@ -562,6 +564,9 @@ FWDTEST_CHECK_TRADES   = 12         # (lama, gabungan) cek awal: deteksi masalah
 FWDTEST_TARGET_TRADES  = 25         # (lama, gabungan) evaluasi FINAL
 # Target per-strategi utk forward-test berhasil (tiap close update #X/N):
 FWDTEST_TARGET_BRKX2    = 15        # target close deal brkX2 utk forward-test berhasil
+FWDTEST_BRKX2_LIVE_BASELINE = 17    # closed deals (tahap 3, sejak FWDTEST_BRKX2_PHASE_OFFSET) saat
+                                     # brkX2-12h TERCAPAI target -> LIVE (05/09/2026, #17/15)
+FWDTEST_BRKX2_PHASE2_TARGET = 15    # target fase-2 (counter "2nd") setelah LIVE, 05/09/2026, samain hunting/reversal/4h
 FWDTEST_TARGET_REVERSAL = 8         # target close deal reversal utk forward-test berhasil
 REVERSAL_LIVE_BASELINE  = 8         # closed deals saat Reversal-8h dipromosikan ke LIVE
                                      # (TERCAPAI 28/08/2026 @ #10/8, 8W/2L, +16.4%; baseline=target
@@ -4635,8 +4640,12 @@ def heartbeat_general_tick():
     prog_rev2  = csv_progress('reversal',    offset=REVERSAL_LIVE_BASELINE)
     prog_4h2   = csv_progress('brkX2_4h',    offset=STRAT4H_LIVE_BASELINE)
     prog_hunt2 = csv_progress('hunting_4h',  offset=HUNTING_FWDTEST_PHASE_OFFSET + HUNTING_LIVE_BASELINE)
-    lc_brk    = csv_last_close('brkX2',        offset=FWDTEST_BRKX2_PHASE_OFFSET)
-    lc_cx     = csv_last_close('brkX2_crossema')
+    # 05/09/2026 (permintaan Mas Budi): brkX2-12h & crossema-4h baru saja TERCAPAI target
+    # -> ikutin pola LIVE yg sama spt reversal-8h/brkX2-4h/hunting-4h (format "LIVE: N closed",
+    # TANPA baris Last Close, DENGAN baris "2nd" fase-2). offset fase-2 = offset fase-1 (kalau
+    # ada) + baseline saat TERCAPAI, sama persis pola prog_4h2/prog_hunt2 di atas.
+    prog_brk2 = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET + FWDTEST_BRKX2_LIVE_BASELINE)
+    prog_cx2  = csv_progress('brkX2_crossema', offset=STRAT_CROSSEMA_LIVE_BASELINE)
     lc_akum   = csv_last_close('akumulasi')
     if prog_all is None:
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
@@ -4644,13 +4653,15 @@ def heartbeat_general_tick():
         nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
         prog_qr = quick_reentry_progress()
         prog_line = (f"Progress forward-test (gabungan): {nn} selesai ({wl}, total {prog_all['total_pct']:+.1f}%)\n"
-                     f"  - brkX2-12h  : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2,      lc_brk)}\n"
+                     f"  - brkX2-12h  : {_fmt_hunting_live(prog_brk)}\n"
+                     f"    brkX2-12h: 2nd {_fmt_strat(prog_brk2, FWDTEST_BRKX2_PHASE2_TARGET)}\n"
                      f"  - reversal-8h: {_fmt_hunting_live(prog_rev)}\n"
                      f"    reversal-8h: 2nd {_fmt_strat(prog_rev2, REVERSAL_PHASE2_TARGET)}\n"
                      f"  - brkX2-4h   : {_fmt_hunting_live(prog_4h)}\n"
                      f"    brkX2-4h: 2nd {_fmt_strat(prog_4h2, STRAT4H_PHASE2_TARGET)}\n"
                      f"    brkX2-4h: Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
-                     f"  - crossema-4h: {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST,    lc_cx)}\n"
+                     f"  - crossema-4h: {_fmt_hunting_live(prog_cx)}\n"
+                     f"    crossema-4h: 2nd {_fmt_strat(prog_cx2, STRAT_CROSSEMA_PHASE2_TARGET)}\n"
                      f"  - hunting-4h : {_fmt_hunting_live(prog_hunt)}\n"
                      f"    hunting-4h: 2nd {_fmt_strat(prog_hunt2, HUNTING_PHASE2_TARGET)}\n"
                      f"  - akumulasi-4h: {_fmt_strat(prog_akum, AKUM_ENTRY_FWDTEST_TARGET, lc_akum)}")
