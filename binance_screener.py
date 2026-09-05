@@ -8802,8 +8802,9 @@ def open_hunting_candidate(held: dict) -> bool:
         if symbol not in active_deals:
             send_telegram(
                 f"⚠️ GHOST DEAL WARNING\n"
-                f"{to_display_pair(symbol)} — open_long terkirim ke 3Commas\n"
-                f"tapi tidak masuk active_deals. Cek 3Commas manual!",
+                f"{to_display_pair(symbol)} — open_long terkirim ke " +
+                ("Binance\ntapi tidak masuk active_deals. Cek order Binance manual!" if USE_BINANCE_DIRECT
+                 else "3Commas\ntapi tidak masuk active_deals. Cek 3Commas manual!"),
                 parse_mode=None
             )
             log(f"WARN [T1d-HUNT] {symbol} ghost deal — tidak masuk active_deals!")
@@ -13441,8 +13442,8 @@ def run_web_dashboard():
                 log(f"[MANUAL-OPEN] {sym} BERHASIL — score={sc} target=${target_usd}")
                 return jsonify({"ok": True, "sym": sym, "score": sc, "target_usd": target_usd})
             else:
-                log(f"[MANUAL-OPEN] {sym} GAGAL — 3Commas tidak menerima")
-                return jsonify({"ok": False, "error": "3Commas menolak open long"})
+                log(f"[MANUAL-OPEN] {sym} GAGAL — " + ("Binance order ditolak" if USE_BINANCE_DIRECT else "3Commas tidak menerima"))
+                return jsonify({"ok": False, "error": "Binance order open long gagal (cek log server untuk detail)" if USE_BINANCE_DIRECT else "3Commas menolak open long"})
 
         @app.route("/tradingview_webhook", methods=["POST"])
         def tradingview_webhook():
