@@ -5849,11 +5849,34 @@ def thread2_monitor():
                                     active_deals[sym]['add_fund_ai_hold_until'] = time.time() + 15 * 60
                             save_active_deals()
                             log(f"[T2] {sym} add fund di-TUNDA oleh AI decision (cooldown 15 menit)")
+                    # 05/09/2026 (permintaan Mas Budi): jangan langsung tembak Binance kalau
+                    # saldo USDT bebas jelas kurang -- kejadian nyata ZENUSDT retry $30 tiap
+                    # siklus T2 (~15-20 detik) TERUS MENERUS, gagal -2010 insufficient balance
+                    # tanpa henti, ikut nyumbang beban API yg bikin IP kena rate-limit (-1003/418).
+                    # Sekarang: cek saldo dulu + cooldown 15 menit setelah gagal (baik dari
+                    # precheck maupun ditolak Binance), supaya tidak diulang selamanya.
+                    _addfund_fail_until = float(d.get('add_fund_fail_until', 0) or 0)
+                    if _addfund_ai_ok and time.time() < _addfund_fail_until:
+                        _addfund_ai_ok = False
+                        log(f"[T2] {sym} add fund di-skip: cooldown gagal-saldo ({(_addfund_fail_until - time.time())/60:.1f} menit lagi)")
+                    if _addfund_ai_ok:
+                        _free_usdt_now, _ = get_usdt_balance()
+                        if _free_usdt_now < add_usd:
+                            log(f"[T2] {sym} add fund di-skip: saldo USDT bebas (${_free_usdt_now:.2f}) < ${add_usd} dibutuhkan -- cooldown 15 menit")
+                            with active_deals_lock:
+                                if sym in active_deals:
+                                    active_deals[sym]['add_fund_fail_until'] = time.time() + 15 * 60
+                            save_active_deals()
+                            _addfund_ai_ok = False
                     if _addfund_ai_ok:
                         log(f"[T2] {sym} kirim add fund ${add_usd} (deal confirmed aktif, ATR={current_atr:.2f}%)")
                         add_ok = send_add_funds(sym, add_usd, strat, delay=0)
                         if not add_ok:
-                            log(f"[T2] {sym} add fund gagal; akan dicoba lagi pada siklus berikutnya")
+                            log(f"[T2] {sym} add fund gagal (ditolak Binance) -- cooldown 15 menit sebelum coba lagi")
+                            with active_deals_lock:
+                                if sym in active_deals:
+                                    active_deals[sym]['add_fund_fail_until'] = time.time() + 15 * 60
+                            save_active_deals()
                         else:
                             log_oac('ADD_FUND', sym, strat, {
                                 'add_usd':      f"${add_usd:.0f}",
