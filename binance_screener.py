@@ -12400,17 +12400,23 @@ def run_web_dashboard():
         @app.route("/api/addfund_source_assets")
         def api_addfund_source_assets():
             """Daftar aset nganggur (BUKAN Active Deal) senilai >= $5 -- kandidat sumber
-            dana buat 'Add Fund dari Aset Lain'. 05/09/2026, permintaan Mas Budi."""
+            dana buat 'Add Fund dari Aset Lain'. 05/09/2026, permintaan Mas Budi.
+            05/09/2026 fix: SEBELUMNYA manggil get_price_now() satu-satu per aset (N
+            request weight terpisah) -- kena Binance IP ban (-1003/418, "way too much
+            request weight") pas Mas Budi buka modal ini di tengah beban thread scan
+            background yang sudah tinggi. Sekarang pakai get_ticker_24h() SEKALI (1
+            request borongan utk semua symbol), harga diambil dari situ."""
             MIN_VALUE_USDT = 5.0
             try:
                 with active_deals_lock:
                     deal_assets = {s.replace("USDT", "") for s in active_deals.keys()}
+                price_map = {t.get("symbol"): float(t.get("lastPrice", 0) or 0) for t in (get_ticker_24h() or [])}
                 out = []
                 for item in get_binance_spot_assets():
                     asset = item["asset"]
                     if asset in deal_assets:
                         continue
-                    price = get_price_now(item["symbol"])
+                    price = price_map.get(item["symbol"], 0.0)
                     if price <= 0:
                         continue
                     value_usdt = item["free"] * price
