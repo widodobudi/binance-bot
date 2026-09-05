@@ -13268,19 +13268,24 @@ def run_web_dashboard():
 
         @app.route("/admin/add_closed_trade", methods=["POST"])
         def admin_add_closed_trade():
-            """Inject baris CLOSED manual ke CSV untuk deal yang close tanpa baris OPEN."""
-            data    = request.get_json(force=True, silent=True) or {}
-            sym     = data.get("symbol", "")
-            strat   = data.get("strategy", "hunting_4h")
-            pct     = float(data.get("profit_pct", 0))
-            ep      = data.get("exit_price", "0")
-            open_t  = data.get("open_time", "")
-            close_t = data.get("close_time", now_wib().strftime('%Y-%m-%d %H:%M:%S'))
-            reason  = data.get("exit_reason", "manual_inject")
+            """Inject baris CLOSED manual ke CSV untuk deal yang close tanpa baris OPEN.
+            05/09/2026: tambah base_usd (opsional) -- dibutuhkan buat merekonstruksi baris
+            yang kehapus gak sengaja, supaya kolom MODAL & PROFIT$ (dihitung dari
+            profit_pct x base_usd di frontend) balik akurat, bukan kosong/0."""
+            data     = request.get_json(force=True, silent=True) or {}
+            sym      = data.get("symbol", "")
+            strat    = data.get("strategy", "hunting_4h")
+            pct      = float(data.get("profit_pct", 0))
+            ep       = data.get("exit_price", "0")
+            open_t   = data.get("open_time", "")
+            close_t  = data.get("close_time", now_wib().strftime('%Y-%m-%d %H:%M:%S'))
+            reason   = data.get("exit_reason", "manual_inject")
+            base_usd = data.get("base_usd", None)
+            base_usd = float(base_usd) if base_usd not in (None, "") else None
             if not sym:
                 return jsonify({"ok": False, "error": "symbol required"})
             try:
-                csv_log_close(sym, close_t, float(ep), pct, reason, strategy=strat)
+                csv_log_close(sym, close_t, float(ep), pct, reason, strategy=strat, base_usd=base_usd)
                 if open_t:
                     with trades_csv_lock:
                         with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
