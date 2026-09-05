@@ -9275,12 +9275,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     <th style="padding:5px 6px">Target jual (USDT)</th>
                     <th style="padding:5px 6px" title="Begitu harga >= target, tunggu dulu sekian menit sebelum benar-benar dijual. Kalau harga turun lagi di bawah target sebelum durasi ini terlewati, batal total (harus crossing baru dari nol). 0 = jual instan begitu crossing, seperti sebelumnya.">Tahan konfirmasi (menit)</th>
                     <th style="padding:5px 6px">Jarak ke target</th>
+                    <th style="padding:5px 6px" title="Hitung MUNDUR: ketik profit bersih yang diinginkan (USDT), sistem kasih tahu harga per-coin yang dibutuhkan -- cuma kalkulator, tidak otomatis mengubah Target Jual sampai diklik Pakai.">Target profit diinginkan (USDT)</th>
                     <th style="padding:5px 6px">Status</th>
                     <th style="padding:5px 6px">Aktif</th>
                     <th style="padding:5px 6px" title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB (buat diskon fee trading 25%)">Sisa→BNB</th>
                     <th style="padding:5px 6px"></th>
                 </tr></thead>
-                <tbody id="auto-sell-tbody"><tr><td colspan="11" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
+                <tbody id="auto-sell-tbody"><tr><td colspan="12" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
             </table>
             </div>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
@@ -10010,18 +10011,20 @@ function loadAutoSellConfig() {
             renderAutoSellTable(cfg.assets || {});
         }).catch(function(e){
             var tbody = document.getElementById('auto-sell-tbody');
-            if (tbody) tbody.innerHTML = '<tr><td colspan="11" style="color:var(--red);padding:8px">Gagal memuat: ' + e + '</td></tr>';
+            if (tbody) tbody.innerHTML = '<tr><td colspan="12" style="color:var(--red);padding:8px">Gagal memuat: ' + e + '</td></tr>';
         });
     }
 
 var autoSellCurrentAssets = [];
+var autoSellRowInfo = {};   // asset -> {avg_price, sell_qty}, dipakai kalkulator "target profit diinginkan"
+var AUTO_SELL_FEE = 0.001;  // sama persis dgn fee dipakai est_profit_usd server-side
 function renderAutoSellTable(assets) {
     var tbody = document.getElementById('auto-sell-tbody');
     if (!tbody) return;
     var names = Object.keys(assets);
     autoSellCurrentAssets = names;
     if (!names.length) {
-        tbody.innerHTML = '<tr><td colspan="11" style="color:var(--muted);padding:8px">Belum ada asset auto-sell. Tambah lewat form di bawah.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12" style="color:var(--muted);padding:8px">Belum ada asset auto-sell. Tambah lewat form di bawah.</td></tr>';
         return;
     }
     tbody.innerHTML = '';
@@ -10038,6 +10041,10 @@ function renderAutoSellTable(assets) {
             '<td style="padding:5px 6px"><input type="number" min="0" step="0.00000001" value="' + cfg.threshold_usdt + '" id="auto-sell-thr-' + asset + '" style="width:100px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"><div id="auto-sell-breakeven-' + asset + '" style="color:var(--muted);font-size:9px"></div></td>' +
             '<td style="padding:5px 6px"><input type="number" min="0" step="1" value="' + (cfg.hold_minutes || 0) + '" id="auto-sell-hold-' + asset + '" style="width:70px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"></td>' +
             '<td style="padding:5px 6px" id="auto-sell-gap-' + asset + '">-</td>' +
+            '<td style="padding:5px 6px">' +
+                '<input type="number" min="0" step="0.01" placeholder="mis. 5" id="auto-sell-desired-' + asset + '" oninput="computeDesiredProfit(\\'' + asset + '\\')" style="width:80px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px">' +
+                '<div id="auto-sell-desired-hint-' + asset + '" style="color:var(--muted);font-size:9px"></div>' +
+            '</td>' +
             '<td style="padding:5px 6px;color:var(--muted)" id="auto-sell-status-' + asset + '">' + (cfg.enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif') + '</td>' +
             '<td style="padding:5px 6px"><input type="checkbox" ' + (cfg.enabled ? 'checked' : '') + ' id="auto-sell-chk-' + asset + '"></td>' +
             '<td style="padding:5px 6px" title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB (buat diskon fee trading 25%)"><input type="checkbox" ' + (cfg.convert_leftover_bnb ? 'checked' : '') + ' id="auto-sell-bnb-' + asset + '"></td>' +
@@ -10079,7 +10086,31 @@ function refreshAutoSellRowPrice(asset) {
         }
         // Jangan timpa avg_price kalau user lagi ngetik / sudah keisi lokal, cuma isi kalau field masih kosong & ada suggestion (auto atau perkiraan riwayat Binance)
         if (avgEl && !avgEl.value && d.avg_price && (d.avg_price_source === 'active_deal' || d.avg_price_source === 'auto' || d.avg_price_source === 'binance_history')) avgEl.value = d.avg_price;
+        autoSellRowInfo[asset] = {avg_price: parseFloat(d.avg_price_raw) || 0, sell_qty: parseFloat(d.sell_qty) || 0};
+        computeDesiredProfit(asset);
     }).catch(function(){});
+}
+
+function computeDesiredProfit(asset) {
+    var desiredEl = document.getElementById('auto-sell-desired-' + asset);
+    var hintEl = document.getElementById('auto-sell-desired-hint-' + asset);
+    if (!desiredEl || !hintEl) return;
+    var desired = parseFloat(desiredEl.value);
+    if (isNaN(desired) || desiredEl.value === '') { hintEl.innerHTML = ''; return; }
+    var info = autoSellRowInfo[asset] || {avg_price: 0, sell_qty: 0};
+    if (info.avg_price <= 0) { hintEl.innerHTML = '<span style="color:var(--red)">avg beli belum diketahui, isi dulu</span>'; return; }
+    if (info.sell_qty <= 0) { hintEl.innerHTML = '<span style="color:var(--red)">saldo tidak tersedia</span>'; return; }
+    // Kebalikan dari est_profit_usd = sell_qty*harga*(1-FEE) - sell_qty*avg_price
+    var neededPrice = (desired / info.sell_qty + info.avg_price) / (1 - AUTO_SELL_FEE);
+    hintEl.innerHTML = '-> harga dibutuhkan: <b>' + neededPrice.toFixed(8).replace(/0+$/, '').replace(/\\.$/, '') + '</b> ' +
+        '<button type="button" onclick="applyDesiredProfitPrice(\\'' + asset + '\\', ' + neededPrice + ')" style="background:var(--accent);color:#000;border:none;border-radius:3px;padding:1px 5px;font-size:9px;cursor:pointer;margin-left:3px">Pakai</button>';
+}
+
+function applyDesiredProfitPrice(asset, price) {
+    var thrEl = document.getElementById('auto-sell-thr-' + asset);
+    if (thrEl) thrEl.value = price;
+    // Cuma isi kotak Target Jual -- TIDAK auto-save, Mas Budi tetap harus klik SAVE sendiri
+    // buat konfirmasi (pelajaran dari insiden HBAR: jangan ada perubahan field yg kepropagasi diam-diam).
 }
 
 function saveAutoSellRow(asset) {
@@ -10579,7 +10610,7 @@ function loadClosedTrades() {
     ].join('<span style="color:var(--border);margin:0 4px">|</span>');
         closedTradesRows = d.trades || [];
         renderClosedTradesRows();
-  }).catch(function(e){ document.getElementById('ct-body').innerHTML = '<tr><td colspan="11" style="color:var(--red);padding:8px">Error: ' + e + '</td></tr>'; });
+  }).catch(function(e){ document.getElementById('ct-body').innerHTML = '<tr><td colspan="12" style="color:var(--red);padding:8px">Error: ' + e + '</td></tr>'; });
 }
 function resetCtFilters() {
     var stratSel  = document.getElementById('ct-filter-strat');
@@ -13574,6 +13605,7 @@ def run_web_dashboard():
                 # bakal dijual (95% saldo, sama persis logic eksekusi), dikurangi estimasi
                 # fee jual ~0.1% (Binance spot taker default, blm termasuk diskon BNB).
                 est_profit_usd = None
+                sell_qty = 0.0
                 try:
                     qty = binance_get_asset_qty(asset)
                     sell_qty = qty * 0.95
@@ -13593,7 +13625,8 @@ def run_web_dashboard():
                                 "htf_trend": sugg["htf_trend"] or "",
                                 "est_profit_usd": f"{est_profit_usd:+.2f}" if est_profit_usd is not None else "",
                                 "hold_minutes": hold_minutes, "hold_status": hold_status,
-                                "enabled": bool(asset_cfg.get("enabled", False))})
+                                "enabled": bool(asset_cfg.get("enabled", False)),
+                                "sell_qty": sell_qty, "avg_price_raw": avg_price})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
 
