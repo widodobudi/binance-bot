@@ -6138,23 +6138,30 @@ def thread2_monitor():
                 strat_label = "Momentum brkX2 (12h)"
             # Hold-no-sell: kalau ini hard-stop, ATAU timeout ("batas N candle tercapai") sementara
             # deal lagi RUGI (semua strategi -- 30/08/2026, permintaan user), DAN checkbox "hold,
-            # jangan jual" aktif (default True) untuk deal ini -> tetap catat sebagai loss (statistik
-            # tetap jujur), tapi SKIP jual — koin tetap di wallet. Cooldown 96 jam berlaku ke symbol
-            # ini lintas semua strategi. Timeout yg closing UNTUNG tetap dijual normal seperti biasa.
+            # jangan jual" aktif (default True) untuk deal ini -> SKIP jual, koin tetap di wallet.
+            # Cooldown 96 jam berlaku ke symbol ini lintas semua strategi. Timeout yg closing
+            # UNTUNG tetap dijual normal seperti biasa.
+            # 05/09/2026 (permintaan Mas Budi, sesudah insiden HBAR/TLM/dll -- baris "koin tidak
+            # dijual" ini berulang kali disalahartikan sbg kinerja strategi beneran, bikin
+            # win-rate/PnL forward-test misleading & butuh dibersihkan manual satu-satu):
+            # DIBALIK dari perilaku lama -- kasus hold_no_sell TIDAK LAGI dicatat ke Closed Trades
+            # CSV/History sama sekali (koinnya toh tidak benar-benar dijual, jadi bukan trade yg
+            # benar-benar selesai). Notifikasi Telegram & bookkeeping active_deals/cooldown lain
+            # tetap jalan seperti biasa -- cuma baris di trades_forwardtest.csv yang di-skip.
             _hold_no_sell = (hard_stop_triggered or (timeout_triggered and prof_from_entry < 0)) \
                              and get_deal_override(sym, 'hold_no_sell', True)
             if _hold_no_sell:
                 reason += " [HOLD: koin tidak dijual, cooldown 96j]"
             if _hold_no_sell or send_close_long(sym, strat):
-                # catat ke CSV DULU supaya trade ini ikut terhitung di progress
                 total_usd = estimate_deal_total_usd(d)
-                csv_log_close(
-                    to_display_pair(sym),
-                    now_wib().strftime('%Y-%m-%d %H:%M:%S'),
-                    price, prof_from_entry, reason,
-                    strategy=strat,
-                    base_usd=total_usd
-                )
+                if not _hold_no_sell:
+                    csv_log_close(
+                        to_display_pair(sym),
+                        now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                        price, prof_from_entry, reason,
+                        strategy=strat,
+                        base_usd=total_usd
+                    )
                 # ── DEAL LOG lengkap CLOSE ────────────────────────────────
                 # opened_candle_ts disimpan dalam MILIDETIK -- wajib dibagi 1000 dulu sebelum
                 # dikurangi time.time() (detik), dan pembagi candle wajib sesuai timeframe
