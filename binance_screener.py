@@ -2357,6 +2357,19 @@ def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg
     return config
 
 
+# 05/09/2026 (permintaan Mas Budi, solusi Binance HTTP 429 "too much request weight"):
+# dashboard poll /api/auto_sell_price tiap 30 detik PER ASET, dan tiap poll itu narik ulang
+# ~100 candle 4h penuh cuma buat hitung resistance -- padahal pivot resistance 4h SECARA
+# MATEMATIS tidak mungkin berubah lebih cepat dari sekali per candle 4h CLOSE (kejadiannya
+# tiap 4 jam, bukan tiap 30 detik). Cache ini AMAN 100% (bukan basa-basi "cukup akurat" --
+# betul2 tidak bisa berubah dalam window ini), dan motong beban Binance dari sumber
+# TERBESAR (polling dashboard berulang-ulang minta data yang sama). Harga LIVE (get_price_now,
+# kolom "HARGA SEKARANG") SENGAJA TIDAK ikut di-cache -- itu tetap fresh tiap 30 detik seperti
+# biasa, cuma bagian mahal (resistance) yang dihemat.
+PIVOT_RESISTANCE_CACHE_TTL_SEC = 300   # 5 menit
+_pivot_resistance_cache: dict = {}     # symbol -> (ts, resistance_value_or_None)
+_pivot_resistance_cache_lock = threading.Lock()
+
 def get_pivot_resistance_4h(symbol: str, N4: int = 4, df4=None):
     """Resistance terdekat DI ATAS harga sekarang, TF 4h, via pivot-high N=4 candle
     kiri-kanan. Diekstrak dari get_sell_suggestion() (04/09/2026) supaya bisa dipanggil
@@ -2364,25 +2377,45 @@ def get_pivot_resistance_4h(symbol: str, N4: int = 4, df4=None):
     ulang oleh fitur Convert Aset (cari kandidat convert dari hold_no_sell yang stagnan).
     Return None kalau data kurang / tidak ada pivot di atas harga sekarang.
     `df4` bisa dioper langsung (misal dari scan yang sudah fetch duluan) supaya tidak
-    fetch ulang; kalau None, fetch sendiri via get_ohlcv_4h(symbol, limit=100)."""
+    fetch ulang; kalau None, fetch sendiri via get_ohlcv_4h(symbol, limit=100).
+
+    Cache (05/09/2026): HANYA berlaku kalau df4 TIDAK dioper (caller minta fungsi ini
+    fetch sendiri -- ini jalur yang dipanggil berulang-ulang oleh dashboard). Kalau df4
+    DIOPER (mis. find_convert_candidates() yg scan banyak symbol berbeda, tiap symbol
+    beda datanya), cache dilewati -- caller sudah kontrol kesegaran datanya sendiri.
+    Kegagalan fetch/network TIDAK di-cache (supaya panggilan berikutnya coba lagi,
+    bukan nyangkut None selama 5 menit gara-gara blip sesaat)."""
+    use_cache = df4 is None
+    if use_cache:
+        with _pivot_resistance_cache_lock:
+            cached = _pivot_resistance_cache.get(symbol)
+        if cached and (time.time() - cached[0]) < PIVOT_RESISTANCE_CACHE_TTL_SEC:
+            return cached[1]
+    fetch_failed = False
+    result = None
     try:
         if df4 is None:
             df4 = get_ohlcv_4h(symbol, limit=100)
         if df4 is None or len(df4) <= 20:
-            return None
-        price_now = float(df4["close"].iloc[-1])
-        hi_arr = df4["high"].values
-        pivots = []
-        for pi in range(N4, len(hi_arr) - N4):
-            ph = hi_arr[pi]
-            if (all(ph > hi_arr[pi - j] for j in range(1, N4 + 1)) and
-                    all(ph > hi_arr[pi + j] for j in range(1, N4 + 1))):
-                pivots.append(ph)
-        res_above = sorted(ph for ph in pivots if ph > price_now)
-        return float(res_above[0]) if res_above else None
+            fetch_failed = True
+        else:
+            price_now = float(df4["close"].iloc[-1])
+            hi_arr = df4["high"].values
+            pivots = []
+            for pi in range(N4, len(hi_arr) - N4):
+                ph = hi_arr[pi]
+                if (all(ph > hi_arr[pi - j] for j in range(1, N4 + 1)) and
+                        all(ph > hi_arr[pi + j] for j in range(1, N4 + 1))):
+                    pivots.append(ph)
+            res_above = sorted(ph for ph in pivots if ph > price_now)
+            result = float(res_above[0]) if res_above else None
     except Exception as e:
         log(f"WARN get_pivot_resistance_4h {symbol}: {e}")
-        return None
+        fetch_failed = True
+    if use_cache and not fetch_failed:
+        with _pivot_resistance_cache_lock:
+            _pivot_resistance_cache[symbol] = (time.time(), result)
+    return result
 
 
 def get_sell_suggestion(asset: str) -> dict:
