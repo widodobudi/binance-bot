@@ -9177,28 +9177,32 @@ document.addEventListener('DOMContentLoaded', function() {
         </td>
         <td class="{{ "profit-pos" if d.get("upnl_pct",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_pct",0)) }}%</td>
         <td>
-          <form method="POST" action="/cancel_deal" style="display:inline" onsubmit="return confirm('Cancel deal {{ sym.replace(\"USDT\",\"/USDT\") }}?\n\nBot berhenti kelola pair ini (auto add fund/TP/close berhenti). Koin yang sudah dibeli TETAP di wallet, TIDAK dijual.');">
-            <input type="hidden" name="sym" value="{{ sym }}">
-            <button type="submit" style="background:#ef4444;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Cancel</button>
-          </form>
-          {% set _hns_active = d.get("hold_no_sell_active") %}
-          <form method="POST" action="/toggle" style="display:inline-block;margin-left:4px;{{ '' if _hns_active else 'opacity:0.4' }}" title="{{ 'Deal ini sudah dekat hard-stop/timeout-rugi -- checkbox aktif.' if _hns_active else 'Belum dekat hard-stop atau timeout-rugi -- checkbox terkunci, otomatis aktif begitu mendekat.' }} Tercentang = kalau hard-stop ATAU timeout (batas candle) kesulut sementara deal lagi rugi, koin di-HOLD (tidak dijual), catat sebagai loss, cooldown 96j. Timeout yg closing untung tetap dijual normal. Uncheck = tetap dijual seperti biasa.">
-            <input type="hidden" name="sym" value="{{ sym }}">
-            <input type="hidden" name="key" value="hold_no_sell">
-            <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("hold_no_sell",True) else "" }} {{ "" if _hns_active else "disabled" }} style="width:16px;height:16px;cursor:{{ 'pointer' if _hns_active else 'not-allowed' }}">
-            <div style="font-size:8px;color:var(--muted);white-space:nowrap">Hold, jgn jual</div>
-          </form>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;align-items:start;min-width:130px">
+            <form method="POST" action="/cancel_deal" onsubmit="return confirm('Cancel deal {{ sym.replace(\"USDT\",\"/USDT\") }}?\n\nBot berhenti kelola pair ini (auto add fund/TP/close berhenti). Koin yang sudah dibeli TETAP di wallet, TIDAK dijual.');">
+              <input type="hidden" name="sym" value="{{ sym }}">
+              <button type="submit" style="width:100%;background:#ef4444;color:#fff;border:none;border-radius:4px;padding:4px 6px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Cancel</button>
+            </form>
+            <button type="button" onclick="rowCloseDeal('{{ sym }}')" style="width:100%;background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 6px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Close</button>
+            {% set _hns_active = d.get("hold_no_sell_active") %}
+            <form method="POST" action="/toggle" style="{{ '' if _hns_active else 'opacity:0.4' }}" title="{{ 'Deal ini sudah dekat hard-stop/timeout-rugi -- checkbox aktif.' if _hns_active else 'Belum dekat hard-stop atau timeout-rugi -- checkbox terkunci, otomatis aktif begitu mendekat.' }} Tercentang = kalau hard-stop ATAU timeout (batas candle) kesulut sementara deal lagi rugi, koin di-HOLD (tidak dijual), catat sebagai loss, cooldown 96j. Timeout yg closing untung tetap dijual normal. Uncheck = tetap dijual seperti biasa.">
+              <input type="hidden" name="sym" value="{{ sym }}">
+              <input type="hidden" name="key" value="hold_no_sell">
+              <label style="display:flex;align-items:center;gap:3px;cursor:{{ 'pointer' if _hns_active else 'not-allowed' }}">
+                <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("hold_no_sell",True) else "" }} {{ "" if _hns_active else "disabled" }} style="width:14px;height:14px;cursor:inherit;flex-shrink:0">
+                <span style="font-size:8px;color:var(--muted);white-space:nowrap">Hold, jgn jual</span>
+              </label>
+            </form>
+            <div style="display:flex;flex-direction:column;gap:2px">
+              <input type="text" inputmode="decimal" id="addfund-amt-{{ sym }}" placeholder="{{ 'isi USDT' if not d.get('add_usd',0) else 'auto $'+('%.0f'|format(d.get('add_usd',0))) }}" style="width:100%;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 4px;font-size:9px;font-family:var(--font)" title="Kosongkan buat pakai nominal otomatis sesuai sizing saat open (placeholder 'auto $X' = nominal otomatis; 'isi USDT' = strategi ini butuh nominal manual)">
+              <button type="button" onclick="rowAddFund('{{ sym }}')" style="width:100%;background:#ff9f43;color:#000;border:none;border-radius:4px;padding:3px 6px;font-size:9px;cursor:pointer;font-family:var(--font);white-space:nowrap">+Fund{{ ' ✓' if d.get('add_fund_sent') else '' }}</button>
+            </div>
+          </div>
           {% if d.get("needs_reconcile") %}
-          <form method="POST" action="/reconcile_deal" style="display:inline;margin-left:4px" title="Terdeteksi: saldo wallet asset ini jauh di bawah qty yang seharusnya -- koin kemungkinan sudah terjual di luar jalur normal bot (mis. lewat webhook TradingView). Klik utk catat ke Closed Trades pakai harga sekarang & hapus dari list." onsubmit="return confirm('Reconcile deal {{ sym.replace(\"USDT\",\"/USDT\") }}?\n\nTerdeteksi saldo wallet-nya jauh di bawah qty yang seharusnya -- koin kemungkinan sudah terjual di luar bot. Akan dicatat ke Closed Trades pakai harga SEKARANG sbg estimasi exit, lalu dihapus dari Active Deals.\n\nKalau ternyata koin belum dijual, batalkan ini dan pakai Cancel.');">
+          <form method="POST" action="/reconcile_deal" style="margin-top:4px" title="Terdeteksi: saldo wallet asset ini jauh di bawah qty yang seharusnya -- koin kemungkinan sudah terjual di luar jalur normal bot (mis. lewat webhook TradingView). Klik utk catat ke Closed Trades pakai harga sekarang & hapus dari list." onsubmit="return confirm('Reconcile deal {{ sym.replace(\"USDT\",\"/USDT\") }}?\n\nTerdeteksi saldo wallet-nya jauh di bawah qty yang seharusnya -- koin kemungkinan sudah terjual di luar bot. Akan dicatat ke Closed Trades pakai harga SEKARANG sbg estimasi exit, lalu dihapus dari Active Deals.\n\nKalau ternyata koin belum dijual, batalkan ini dan pakai Cancel.');">
             <input type="hidden" name="sym" value="{{ sym }}">
-            <button type="submit" style="background:#78716c;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Reconcile</button>
+            <button type="submit" style="width:100%;background:#78716c;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Reconcile</button>
           </form>
           {% endif %}
-          <div style="margin-top:4px;display:flex;gap:3px;align-items:center;flex-wrap:wrap">
-            <input type="text" inputmode="decimal" id="addfund-amt-{{ sym }}" placeholder="{{ 'USDT' if not d.get('add_usd',0) else '$'+('%.0f'|format(d.get('add_usd',0))) }}" style="width:52px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 4px;font-size:9px;font-family:var(--font)" title="Kosongkan buat pakai nominal otomatis sesuai sizing saat open">
-            <button type="button" onclick="rowAddFund('{{ sym }}')" style="background:#ff9f43;color:#000;border:none;border-radius:4px;padding:4px 6px;font-size:9px;cursor:pointer;font-family:var(--font);white-space:nowrap">+Fund{{ ' ✓' if d.get('add_fund_sent') else '' }}</button>
-            <button type="button" onclick="rowCloseDeal('{{ sym }}')" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 6px;font-size:9px;cursor:pointer;font-family:var(--font);white-space:nowrap">Close</button>
-          </div>
         </td>
         <td>
           <form method="POST" action="/toggle" style="display:inline">
