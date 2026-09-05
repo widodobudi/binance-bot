@@ -2117,6 +2117,7 @@ def remove_from_active_deals(symbol: str):
     with active_deals_lock:
         active_deals.pop(symbol, None)
     save_active_deals()
+    _tp_hold_armed_since.pop(symbol, None)
 
 # ===================== 3COMMAS =====================
 def send_3commas(payload: dict, label: str) -> bool:
@@ -2241,6 +2242,13 @@ _auto_sell_filter_cache = {}
 # hold_minutes terlewati, entry ini dihapus (batal, harus crossing baru dari nol).
 # In-memory saja -- restart Railway = reset (sama seperti cache lain di modul ini).
 _auto_sell_armed_since: dict = {}
+# 05/09/2026 (permintaan Mas Budi): sama persis konsepnya dgn _auto_sell_armed_since
+# di atas, tapi utk mekanisme Auto TP/TP Target di Active Deals (bukan Auto Sell Asset).
+# symbol -> timestamp saat syarat TP Target PERTAMA KALI terpenuhi. Kalau syaratnya
+# sempat tidak terpenuhi lagi sebelum tp1_hold_minutes terlewati, entry ini dihapus
+# (batal total, harus tercapai lagi dari nol). Direset juga kalau mode/nilai TP Target
+# ATAU tp1_hold_minutes-nya diubah selagi timer jalan (lihat /set_tp_target, /set_tp_hold).
+_tp_hold_armed_since: dict = {}
 
 def _binance_trading_request(method: str, path: str, params: dict) -> dict:
     """Helper HMAC-signed request ke Binance trading API menggunakan BINANCE_TRADING_KEY."""
@@ -5992,23 +6000,50 @@ def thread2_monitor():
         _total_usd_now = estimate_deal_total_usd(d)
         _upnl_usd_now  = prof_from_entry / 100 * _total_usd_now
         _tp_mode = get_deal_override(sym, 'tp1_target_mode', 'usd')
+        _tp_condition_met = False
+        _tp_reason = ""
         if _tp_mode == 'pct':
             _tp_target_pct = float(get_deal_override(sym, 'tp1_target_pct', 1.0) or 1.0)
             if get_deal_override(sym, 'tp1usd', False) and prof_from_entry >= _tp_target_pct:
-                do_close = True
-                reason = f"TP {_tp_target_pct:.2f}%: profit bersih {prof_from_entry:.2f}% (modal ${_total_usd_now:.0f})"
+                _tp_condition_met = True
+                _tp_reason = f"TP {_tp_target_pct:.2f}%: profit bersih {prof_from_entry:.2f}% (modal ${_total_usd_now:.0f})"
         elif _tp_mode == 'price':
             # Target HARGA koin (USDT), bukan target profit -- close begitu harga pasar >= target,
             # berapapun itu representasi profit %/$-nya.
             _tp_target_price = float(get_deal_override(sym, 'tp1_target_price', 0) or 0)
             if get_deal_override(sym, 'tp1usd', False) and _tp_target_price > 0 and price >= _tp_target_price:
-                do_close = True
-                reason = f"TP harga {_fmt_price(_tp_target_price)}: harga sekarang {_fmt_price(price)} (profit bersih ${_upnl_usd_now:.2f})"
+                _tp_condition_met = True
+                _tp_reason = f"TP harga {_fmt_price(_tp_target_price)}: harga sekarang {_fmt_price(price)} (profit bersih ${_upnl_usd_now:.2f})"
         else:
             _tp_target_usd = float(get_deal_override(sym, 'tp1_target_usd', 1.0) or 1.0)
             if get_deal_override(sym, 'tp1usd', False) and _upnl_usd_now >= _tp_target_usd:
+                _tp_condition_met = True
+                _tp_reason = f"TP ${_tp_target_usd:.2f}: profit bersih ${_upnl_usd_now:.2f} (modal ${_total_usd_now:.0f})"
+        # 05/09/2026 (permintaan Mas Budi): jangan langsung close begitu syarat TP
+        # Target terpenuhi -- tunggu dulu tp1_hold_minutes (default 0 = instan spt
+        # sebelumnya) SELAMA syaratnya tetap terpenuhi. Kalau di tengah jalan syaratnya
+        # jadi TIDAK terpenuhi lagi, timer DIBATALKAN TOTAL (harus tercapai lagi dari
+        # nol) -- sama pola persis dgn hold-confirmation Auto Sell Asset. Hard-stop,
+        # trailing, timeout di bawah TIDAK disentuh, tetap instan seperti biasa.
+        _tp_hold_minutes = float(get_deal_override(sym, 'tp1_hold_minutes', 0) or 0)
+        if not _tp_condition_met:
+            if _tp_hold_armed_since.pop(sym, None) is not None:
+                log(f"[T2-TP] {sym} syarat TP tidak lagi terpenuhi sebelum konfirmasi selesai -- timer dibatalkan")
+        else:
+            _tp_armed_since = _tp_hold_armed_since.get(sym)
+            if _tp_armed_since is None:
+                _tp_hold_armed_since[sym] = _tp_armed_since = time.time()
+                if _tp_hold_minutes > 0:
+                    log(f"[T2-TP] {sym} TP ARMED, menunggu konfirmasi {_tp_hold_minutes:.0f} menit ({_tp_reason})")
+                    send_telegram(
+                        f"TP ARMED — {to_display_pair(sym)}\n{_tp_reason}\n"
+                        f"Menunggu konfirmasi {_tp_hold_minutes:.0f} menit (batal otomatis kalau "
+                        f"syarat tidak terpenuhi lagi sebelum itu)."
+                    )
+            if _tp_hold_minutes <= 0 or (time.time() - _tp_armed_since) >= _tp_hold_minutes * 60:
                 do_close = True
-                reason = f"TP ${_tp_target_usd:.2f}: profit bersih ${_upnl_usd_now:.2f} (modal ${_total_usd_now:.0f})"
+                reason = _tp_reason
+                _tp_hold_armed_since.pop(sym, None)
         if not do_close and not _is_akum:
             _hs_label, _hs_base, _hs_pct = hard_stop_pct(atrp)
             if price <= entry * (1 - _hs_pct / 100):
@@ -9285,7 +9320,7 @@ document.addEventListener('DOMContentLoaded', function() {
     {% if active_deals %}
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <table style="min-width:1280px">
-            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>Cancel<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">stop track, koin tetap</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika target tercapai ($/%/harga)</span></th><th>TP Target</th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>isArmed</th><th>Arm Trailing</th><th>Auto Avg Down</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
+            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>Cancel<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">stop track, koin tetap</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika target tercapai ($/%/harga)</span></th><th>TP Target</th><th>Tahan (menit)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">konfirmasi sblm eksekusi TP</span></th><th>isArmed</th><th>Arm Trailing</th><th>Auto Avg Down</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr>
@@ -9296,6 +9331,14 @@ document.addEventListener('DOMContentLoaded', function() {
         <td>
           <div style="font-size:9px;color:var(--muted);margin-bottom:2px">{{ "Average" if d.get("add_fund_sent") else "Entry" }}</div>
           <span id="ep-{{ sym }}" style="cursor:pointer;text-decoration:underline dotted" title="Klik untuk edit" onclick="editEntry('{{ sym }}','{{ fmt_price(d.get(\"entry_price\",0)) }}')">{{ fmt_price(d.get("entry_price",0)) }}</span>
+        </td>
+        <td style="white-space:nowrap">
+          <div>{{ fmt_price(d.get("last_price",0)) if d.get("last_price") else "-" }}</div>
+          {% if d.get("entry_price",0) > 0 and d.get("total_usd_display",0) > 0 %}
+          <div style="font-size:9px;color:var(--muted)">
+            estd {{ "%.2f"|format(d.get("total_usd_display",0) / d.get("entry_price",1)) }} {{ sym.replace("USDT","") }}
+          </div>
+          {% endif %}
         </td>
         <td class="{{ "profit-pos" if d.get("upnl_usd",0) > 0 else "profit-neg" }}" style="white-space:nowrap">
           <div>{{ "%+.2f"|format(d.get("upnl_usd",0)) }}</div>
@@ -9350,12 +9393,14 @@ document.addEventListener('DOMContentLoaded', function() {
             <button type="submit" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Save</button>
           </form>
         </td>
-        <td style="white-space:nowrap">
-          <div>{{ fmt_price(d.get("last_price",0)) if d.get("last_price") else "-" }}</div>
-          {% if d.get("entry_price",0) > 0 and d.get("total_usd_display",0) > 0 %}
-          <div style="font-size:9px;color:var(--muted)">
-            estd {{ "%.2f"|format(d.get("total_usd_display",0) / d.get("entry_price",1)) }} {{ sym.replace("USDT","") }}
-          </div>
+        <td>
+          <form method="POST" action="/set_tp_hold" style="display:inline-flex;gap:4px;align-items:center" title="Begitu syarat TP Target terpenuhi, tunggu dulu sekian menit SELAMA syaratnya tetap terpenuhi sebelum benar-benar close. 0 = close instan begitu tercapai, seperti sebelumnya. Kalau syaratnya sempat tidak terpenuhi lagi di tengah jalan, batal total (harus tercapai lagi dari nol). Cuma berlaku utk Auto TP/TP Target -- hard-stop, trailing, timeout tetap seperti biasa.">
+            <input type="hidden" name="sym" value="{{ sym }}">
+            <input type="number" name="minutes" min="0" step="1" value="{{ overrides.get(sym,{}).get('tp1_hold_minutes', 0) }}" style="width:50px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)">
+            <button type="submit" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Save</button>
+          </form>
+          {% if d.get("tp_hold_status") %}
+          <div style="font-size:9px;color:var(--accent);margin-top:2px">{{ d.get("tp_hold_status") }}</div>
           {% endif %}
         </td>
         <td>{% if d.get("strategy","") in ("akum_entry_a","akum_entry_b") %}<span class="badge" style="background:#444;color:#888">N/A</span>{% elif d.get("trailing_armed") %}<span class="badge badge-armed">Yes</span>{% else %}<span class="badge badge-wait">Wait</span>{% endif %}</td>
@@ -12243,6 +12288,14 @@ def run_web_dashboard():
                         _qty_expected = total_usd / ep
                     _wallet_qty = _wallet_balances.get(_asset)
                     dd["needs_reconcile"] = bool(_wallet_qty is not None and _qty_expected > 0 and _wallet_qty <= _qty_expected * 0.05)
+                # tp_hold_status: 05/09/2026, tampilkan status timer konfirmasi Auto TP
+                # (kalau sedang armed) di kolom "Tahan (menit)".
+                _tp_armed_ts = _tp_hold_armed_since.get(sym)
+                if _tp_armed_ts:
+                    _tp_hold_min_d = float(get_deal_override(sym, 'tp1_hold_minutes', 0) or 0)
+                    _tp_remaining_min = _tp_hold_min_d - (time.time() - _tp_armed_ts) / 60.0
+                    dd["tp_hold_status"] = (f"menunggu konfirmasi, tersisa {max(0, _tp_remaining_min):.1f} menit"
+                                             if _tp_remaining_min > 0 else "konfirmasi terpenuhi, menunggu eksekusi")
                 deals_display[sym] = dd
             closest_to_close = estimate_closest_deal_to_close(deals_display)
             with _dashboard_lock:
@@ -12660,6 +12713,29 @@ def run_web_dashboard():
                 else:
                     overrides[sym]['tp1_target_usd'] = val
                 save_deal_overrides(overrides)
+                # Target berubah -> timer konfirmasi yg lagi jalan (kalau ada) jadi tidak
+                # relevan lagi, reset supaya dihitung ulang dari nol thd target baru.
+                _tp_hold_armed_since.pop(sym, None)
+            return redirect("/")
+
+        @app.route("/set_tp_hold", methods=["POST"])
+        def set_tp_hold():
+            """05/09/2026 (permintaan Mas Budi): atur berapa menit syarat Auto TP/TP
+            Target harus TETAP terpenuhi sebelum benar-benar close (0 = instan, seperti
+            sebelumnya). Cuma berlaku utk mekanisme TP custom ini -- hard-stop, trailing,
+            timeout tetap seperti biasa."""
+            sym = request.form.get("sym", "")
+            try:
+                minutes = max(0.0, float(request.form.get("minutes", "0")))
+            except (TypeError, ValueError):
+                minutes = 0.0
+            if sym:
+                overrides = load_deal_overrides()
+                if sym not in overrides:
+                    overrides[sym] = {}
+                overrides[sym]['tp1_hold_minutes'] = minutes
+                save_deal_overrides(overrides)
+                _tp_hold_armed_since.pop(sym, None)
             return redirect("/")
 
         @app.route("/api/strategy_config", methods=["GET", "POST"])
