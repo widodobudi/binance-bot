@@ -13066,13 +13066,18 @@ def run_web_dashboard():
         @app.route("/admin/delete_trade", methods=["POST"])
         def admin_delete_trade():
             """
-            Hapus 1 baris dari trades_forwardtest.csv berdasarkan symbol + strategy.
-            Jika ada lebih dari 1 baris dengan symbol+strategy yang sama, hapus yang paling baru (close_time_wib terbesar).
-            Body JSON: {"symbol": "WLDUSDT", "strategy": "brkX2_4h"}
+            Hapus 1 baris dari trades_forwardtest.csv berdasarkan symbol + strategy (+ opsional profit_pct
+            buat disambiguasi kalau ada >1 baris symbol+strategy yang sama -- 05/09/2026, ditambah setelah
+            insiden TLM: delete berbasis symbol+strategy doang sempat salah hapus baris trailing asli
+            krn kebetulan strategy-nya sama dgn baris hard-stop yg dituju).
+            Jika ada lebih dari 1 baris cocok, hapus yang paling baru (index terakhir di file).
+            Body JSON: {"symbol": "WLDUSDT", "strategy": "brkX2_4h", "profit_pct": -8.36}
             """
-            data     = request.get_json(force=True, silent=True) or {}
-            sym      = data.get("symbol", "").upper().replace("/", "")
-            strategy = data.get("strategy", "")
+            data       = request.get_json(force=True, silent=True) or {}
+            sym        = data.get("symbol", "").upper().replace("/", "")
+            strategy   = data.get("strategy", "")
+            profit_pct = data.get("profit_pct", None)
+            profit_pct = float(profit_pct) if profit_pct not in (None, "") else None
             if not sym:
                 return jsonify({"ok": False, "error": "symbol required"})
             try:
@@ -13088,9 +13093,10 @@ def run_web_dashboard():
                         (i, r) for i, r in enumerate(rows)
                         if r.get('symbol','').upper().replace("/","") == sym_raw
                         and (not strategy or r.get('strategy','') == strategy)
+                        and (profit_pct is None or abs(float(r.get('profit_pct', 0) or 0) - profit_pct) < 0.005)
                     ]
                     if not matches:
-                        return jsonify({"ok": False, "error": f"Tidak ada baris {sym} {strategy} di CSV"})
+                        return jsonify({"ok": False, "error": f"Tidak ada baris {sym} {strategy} {profit_pct} di CSV"})
                     # Hapus yang paling baru (index terakhir dari matches)
                     del_idx, del_row = matches[-1]
                     rows.pop(del_idx)
