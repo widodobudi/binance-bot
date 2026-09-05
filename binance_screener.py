@@ -3331,6 +3331,103 @@ def send_add_funds(symbol: str, volume, strategy: str = 'brkX2', delay: int = 15
         "delay_seconds":delay,"pair":to_commas_pair(symbol),
         "volume":volume}, "add_funds")
 
+def execute_add_fund(sym: str, add_usd: float) -> dict:
+    """
+    05/09/2026 (dipisah dari route /manual_addfund supaya bisa dipanggil juga dari
+    fitur "Add Fund dari Aset Lain" -- add fund ke deal aktif, tapi dananya berasal
+    dari JUAL aset lain di wallet, bukan USDT nganggur). Melakukan buy tambahan lewat
+    send_add_funds(), lalu recompute avg_price (formula sama persis dgn yang sudah
+    ada di route -- based on BASE_ORDER_VOLUME, BUKAN qty_coin real; sengaja dipertahankan
+    sama supaya kedua entry point konsisten, bukan tempat buat sekalian benerin akurasinya).
+    Return dict {"ok", "sym", "add_usd", "price", "avg_price", "error"}.
+    """
+    sym = str(sym).upper().strip()
+    with active_deals_lock:
+        if sym not in active_deals:
+            return {"ok": False, "error": f"{sym} tidak ada di active_deals"}
+        d = dict(active_deals[sym])
+    if d.get('add_fund_sent'):
+        return {"ok": False, "error": "Add fund sudah pernah dikirim sebelumnya."}
+    strat = d.get('strategy', 'brkX2')
+    try:
+        price_now = get_price_now(sym)
+        if price_now <= 0:
+            return {"ok": False, "error": "Gagal ambil harga live"}
+        ok = send_add_funds(sym, add_usd, strat)
+        if not ok:
+            return {"ok": False, "error": "Binance order add fund gagal (cek log server untuk detail)" if USE_BINANCE_DIRECT else "3Commas menolak add fund"}
+        entry_price = d.get('entry_price', price_now)
+        base_usd    = BASE_ORDER_VOLUME
+        avg_price   = (base_usd * entry_price + add_usd * price_now) / (base_usd + add_usd)
+        ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+        with active_deals_lock:
+            if sym in active_deals:
+                active_deals[sym]['add_fund_sent'] = True
+                active_deals[sym]['entry_price']   = avg_price
+                active_deals[sym]['peak']          = max(active_deals[sym].get('peak', avg_price), avg_price)
+                active_deals[sym]['trailing_armed'] = False
+        with active_deals_lock:
+            d2 = dict(active_deals)
+        try:
+            import json as _j
+            with open(ACTIVE_DEALS_FILE, 'w') as f:
+                _j.dump(d2, f)
+        except Exception as e:
+            log(f"[ADD-FUND] Gagal simpan file: {e}")
+        log(f"[ADD-FUND] {sym} add ${add_usd} @ {price_now:.6g} | avg={avg_price:.6g}")
+        send_telegram(
+            f"Bot | ADD FUND\n"
+            f"{ts} WIB\n"
+            f"Pair     : {to_display_pair(sym)}\n"
+            f"Add fund : ${add_usd}\n"
+            f"Harga    : {_fmt_price(price_now)}\n"
+            f"Avg price: {_fmt_price(avg_price)}\n"
+            f"Strategi : {strat}"
+        )
+        return {"ok": True, "sym": sym, "add_usd": add_usd,
+                "price": price_now, "avg_price": round(avg_price, 8)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def execute_add_fund_from_asset(source_asset: str, target_symbol: str, pct: float) -> dict:
+    """
+    05/09/2026 (permintaan Mas Budi): jual sebagian/seluruh saldo bebas SATU aset
+    nganggur (bukan Active Deal), lalu hasil USDT-nya langsung dipakai add-fund ke
+    SATU deal aktif lain. Dua langkah: sell_to_usdt() (reuse, sama persis logic-nya
+    dgn Convert Aset) -> execute_add_fund() (reuse, sama persis dgn /manual_addfund).
+    pct: 1-100, persentase dari saldo bebas source_asset yang dijual.
+    """
+    source_asset = str(source_asset).upper().strip()
+    target_symbol = str(target_symbol).upper().strip().replace("/", "")
+    if not target_symbol.endswith("USDT"):
+        target_symbol = target_symbol + "USDT"
+    try:
+        pct = float(pct)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "pct tidak valid"}
+    if not (0 < pct <= 100):
+        return {"ok": False, "error": "pct harus 1-100"}
+    with active_deals_lock:
+        deal_assets = {s.replace("USDT", "") for s in active_deals.keys()}
+    if source_asset in deal_assets:
+        return {"ok": False, "error": f"{source_asset} sedang jadi Active Deal -- pakai Cancel/Close, bukan fitur ini"}
+    qty_free = binance_get_asset_qty(source_asset)
+    if qty_free <= 0:
+        return {"ok": False, "error": f"Saldo {source_asset} tidak ada"}
+    sell_qty = qty_free * (pct / 100.0)
+    sell_result = sell_to_usdt(source_asset + "USDT", qty=sell_qty)
+    if not sell_result.get("ok"):
+        return {"ok": False, "error": f"Jual {source_asset} gagal: {sell_result.get('error')}"}
+    proceeds = float(sell_result.get("proceeds_usdt", 0) or 0)
+    if proceeds <= 0:
+        return {"ok": False, "error": f"Jual {source_asset} berhasil tapi hasil USDT 0 -- cek log server"}
+    fund_result = execute_add_fund(target_symbol, proceeds)
+    if not fund_result.get("ok"):
+        return {"ok": False, "error": f"{source_asset} sudah terjual (${proceeds:.2f}) TAPI add fund ke {target_symbol} gagal: {fund_result.get('error')} -- USDT tetap ada di wallet, tidak hilang."}
+    return {"ok": True, "source_asset": source_asset, "sold_qty": sell_result.get("qty_sold"),
+            "proceeds_usdt": proceeds, "target_symbol": target_symbol,
+            "avg_price": fund_result.get("avg_price")}
+
 _daily_loss_notify_lock = threading.Lock()
 _daily_loss_last_notify_ts = 0.0
 _DAILY_LOSS_NOTIFY_COOLDOWN_SEC = 30 * 60  # maks 1x notifikasi klarifikasi tiap 30 menit
@@ -8968,7 +9065,7 @@ def get_deal_override(sym: str, key: str, default: bool = True) -> bool:
     return load_deal_overrides().get(sym, {}).get(key, default)
 
 # ── Inline JS untuk dashboard (ASCII-only, served via /dash.js) ──────────────
-_DASH_JS = 'var _refreshTimer=null;\nvar _curStrat=\'brkX2-12h\';\nfunction startRefresh(){if(_refreshTimer)return;_refreshTimer=setInterval(function(){window.location.reload();},30000);}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){var cb=document.getElementById(\'cb-pause-refresh\');return cb&&cb.checked;}\nfunction pauseRefresh(){stopRefresh();}\nfunction resumeRefresh(){if(!isPauseChecked())startRefresh();}\nfunction onPauseRefreshToggle(checked){if(checked){stopRefresh();}else{startRefresh();}}\nfunction togglePauseRefresh(checked){var a=document.getElementById(\'cb-pause-refresh\');var b=document.getElementById(\'cb-pause-refresh-float\');if(a)a.checked=checked;if(b)b.checked=checked;onPauseRefreshToggle(checked);}\n\n// Definisi secondary per strategi\nvar STRAT_SECONDARY={\n  \'brkX2-12h\':[\n    {key:\'vol\',label:\'Vol 0.6x--5.0xMA\'},{key:\'rsi\',label:\'RSI<60\'},\n    {key:\'stoch\',label:\'Stoch%K<70\'},{key:\'atr\',label:\'ATR%<9%\'},\n    {key:\'htf\',label:\'HTF 3D vol>0.7xMA\'},{key:\'perf\',label:\'Perf>=0.5\'},{key:\'bull3\',label:\'3bar bullish\'}\n  ],\n  \'Reversal-8h T1\':[\n    {key:\'ha_bull\',label:\'c+1 HA bullish\'},{key:\'cross\',label:\'cross-up EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'Reversal-8h T3-REV\':[\n    {key:\'elapsed\',label:\'Elapsed 5%-50%\'},{key:\'cross_live\',label:\'price_now>EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'brkX2-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'rsi\',label:\'RSI<60\'},{key:\'stoch\',label:\'Stoch%K<80\'},\n    {key:\'htf\',label:\'12h candle bullish\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'CrossEMA-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'htf\',label:\'HTF12h vol>1.0xMA\'},\n    {key:\'vol24\',label:\'Vol24h>=$1.0jt\'}\n  ],\n  \'Akumulasi-4h\':[\n    {key:\'vol_asim\',label:\'Vol hijau>merah\'},{key:\'rsi\',label:\'RSI 30-56\'},\n    {key:\'macd_flat\',label:\'MACD flat≈0\'},{key:\'body_ratio\',label:\'Body ratio<0.57\'}\n  ]\n};\n\nfunction onStratSelect(strat){\n  _curStrat=strat;\n  // Update dropdown kandidat\n  var opts=document.querySelectorAll(\'.nm-opt\');\n  var count=0;\n  opts.forEach(function(o){\n    var show=o.getAttribute(\'data-strat\')===strat;\n    o.style.display=show?\'\':\'none\';\n    if(show)count++;\n  });\n  document.getElementById(\'nm-count\').textContent=\'(\'+count+\' kandidat dari scan terakhir)\';\n  // Reset pair select\n  var sel=document.getElementById(\'pair-select\');if(sel)sel.value=\'\';\n  // Reset panel\n  var panel=document.getElementById(\'pair-detail\');if(panel)panel.style.display=\'none\';\n  // Update secondary grid\n  renderSecondaryGrid(strat);\n  // Reset primary status\n  var ps=document.getElementById(\'primary-status\');\n  if(ps)ps.innerHTML=\'<span style="color:var(--muted)">-- pilih pair untuk lihat nilai aktual --</span>\';\n}\n\nfunction renderSecondaryGrid(strat){\n  var grid=document.getElementById(\'secondary-grid\');\n  if(!grid)return;\n  var defs=STRAT_SECONDARY[strat]||[];\n  grid.innerHTML=defs.map(function(d){\n    return \'<div class="sec-item" data-key="\'+d.key+\'"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px"><input type="checkbox" class="sec-cb" data-key="\'+d.key+\'" checked style="cursor:pointer"><span class="sec-label">\'+d.label+\'</span><span class="sec-actual" style="color:var(--muted)">--</span><span class="sec-status">--</span></label></div>\';\n  }).join(\'\');\n  // Re-attach event listeners\n  grid.querySelectorAll(\'.sec-cb\').forEach(function(cb){\n    cb.addEventListener(\'change\',function(){\n      fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});\n    });\n  });\n}\n\ndocument.addEventListener(\'DOMContentLoaded\',function(){\n  startRefresh();\n  onStratSelect(\'brkX2-12h\');\n});\n\nfunction onPairSelect(sym){\n  var panel=document.getElementById(\'pair-detail\');\n  if(!sym){panel.style.display=\'none\';return;}\n  panel.style.display=\'block\';\n  panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';\n  pauseRefresh();\n  fetch(\'/api/strategy_detail?sym=\'+encodeURIComponent(sym)+\'&strat=\'+encodeURIComponent(_curStrat))\n    .then(function(r){return r.json();})\n    .then(function(d){\n      resumeRefresh();\n      if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}\n      // Update primary\n      var ps=document.getElementById(\'primary-status\');\n      ps.innerHTML=d.primary.map(function(p){return badge(p.ok,p.label+\' (\'+p.actual+\')\');}).join(\' \');\n      // Update secondary\n      d.secondary.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n      // Panel ringkasan\n      var allP=d.primary_ok;\n      panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | \'+\n        d.primary.map(function(p){return (p.ok?\'<span style="color:var(--green)">\':\'<span style="color:var(--red)">\') + p.label+\': \'+p.actual+\'</span>\';}).join(\' | \')+\n        \' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');\n    })\n    .catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});\n}\n\nfunction updateSec(key,actual,ok){\n  document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){\n    var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');\n    if(a)a.textContent=\'(skrg \'+actual+\')\';\n    if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';\n  });\n}\n\nfunction doManualScan(){\n  var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');\n  btn.disabled=true;btn.textContent=\'Scanning...\';\n  st.textContent=\'Sedang scan semua pair... (30-60 detik)\';\n  pauseRefresh();\n  fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){\n    btn.disabled=false;btn.textContent=\'Scan Sekarang\';\n    st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';\n    renderResults(data.pairs);resumeRefresh();\n  }).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});\n}\n\nfunction promptOpenLong(){\n  var sel=document.getElementById(\'pair-select\');\n  var sym=sel?sel.value:\'\';\n  if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}\n  var ss=document.getElementById(\'strat-select\');var strat=ss?ss.value:\'brkX2-12h\';\n  if(!confirm(\'Open Long [\'+strat+\']: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;\n  execOpenLong(sym,strat);\n}\n\nfunction execOpenLong(sym,strat){\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'strat\',strat||\"brkX2-12h\");\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Membuka deal \'+sym+\'...\';\n  pauseRefresh();\n  fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){\n    resumeRefresh();\n    var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);\n    if(st)st.textContent=msg;alert(msg);\n  }).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction renderResults(pairs){\n  var el=document.getElementById(\'scan-results\');\n  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];\n  if(sample){\n    document.getElementById(\'primary-status\').innerHTML=\n      sample.secondaries?sample.secondaries.map(function(s){return badge(s.ok,s.key+\':\'+s.actual);}).join(\' \'):\'\';\n    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n  }\n  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);\n  if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos syarat primary.</div>\';return;}\n  var rows=cands.map(function(p){\n    var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');\n    var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';\n    var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';\n    return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';\n  }).join(\'\');\n  el.innerHTML=\'<table><thead><tr><th>Pair</th><th>isArmed</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';\n}\n\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){\n  if(v===undefined||v===null)return \'?\';\n  if(v>=1000)return v.toFixed(0);\n  if(v>=1)return v.toFixed(4);\n  if(v>=0.01)return v.toFixed(6);\n  if(v>=0.0001)return v.toFixed(8);\n  // harga sangat kecil seperti SHIB: pakai fixed decimal\n  var s=v.toFixed(10);\n  // hapus trailing zeros berlebihan tapi sisakan min 2 significant digits\n  return parseFloat(s).toPrecision(4);\n}\nfunction doOpenLong(sym){execOpenLong(sym);}\n\nfunction _setCookie(k,v){document.cookie=k+\'=\'+v+\';path=/;max-age=2592000\';}\n\nfunction _getCookie(k){var m=document.cookie.match(\'(^|;) ?\'+k+\'=([^;]*)(;|$)\');return m?m[2]:null;}\n\nfunction toggleCard(header){var card=header.parentElement;var name=\'c_\'+(card.querySelector(\'h2\').textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));card.classList.toggle(\'collapsed\');var collapsed=card.classList.contains(\'collapsed\');_setCookie(name,collapsed?\'1\':\'0\');}\n\nfunction restoreCards(){document.querySelectorAll(\'.card\').forEach(function(card){var h=card.querySelector(\'h2\');if(!h)return;var name=\'c_\'+(h.textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));if(_getCookie(name)===\'1\')card.classList.add(\'collapsed\');});}\n\nfunction editEntry(sym,curVal){\n  var v=prompt(\'Edit entry price untuk \'+sym.replace(\'USDT\',\'/USDT\')+\':\\n(harga aktual dari 3Commas)\',curVal);\n  if(v===null)return;\n  v=parseFloat(v);\n  if(isNaN(v)||v<=0){alert(\'Nilai tidak valid\');return;}\n  if(!confirm(\'Set entry \'+sym.replace(\'USDT\',\'/USDT\')+\' = \'+v+\'?\'))return;\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'field\',\'entry_price\');fd.append(\'value\',v);\n  pauseRefresh();\n  fetch(\'/edit_deal\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var el=document.getElementById(\'ep-\'+sym);\n        if(el)el.textContent=v;\n        alert(\'Entry \'+sym.replace(\'USDT\',\'/USDT\')+\' diupdate ke \'+v);\n      } else {\n        alert(\'Gagal: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction rowCloseDeal(sym){\n  if(!confirm(\'CLOSE DEAL \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan jual posisi ini sekarang juga di Binance.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_close\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Close \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! Price=\'+data.price+\' Profit=\'+data.profit_pct+\'%\');\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Close GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction rowAddFund(sym){\n  var amtEl=document.getElementById(\'addfund-amt-\'+sym);\n  var amount=amtEl?amtEl.value.trim():\'\';\n  if(!confirm(\'ADD FUND untuk \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nNominal: \'+(amount||\'otomatis sesuai sizing saat open\')+\'\\nAverage price akan diupdate otomatis.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);if(amount)fd.append(\'amount\',amount);\n  fetch(\'/manual_addfund\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! +$\'+data.add_usd+\' @ \'+data.price+\' | Avg=\'+data.avg_price);\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Add Fund GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n'
+_DASH_JS = 'var _refreshTimer=null;\nvar _curStrat=\'brkX2-12h\';\nfunction startRefresh(){if(_refreshTimer)return;_refreshTimer=setInterval(function(){window.location.reload();},30000);}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){var cb=document.getElementById(\'cb-pause-refresh\');return cb&&cb.checked;}\nfunction pauseRefresh(){stopRefresh();}\nfunction resumeRefresh(){if(!isPauseChecked())startRefresh();}\nfunction onPauseRefreshToggle(checked){if(checked){stopRefresh();}else{startRefresh();}}\nfunction togglePauseRefresh(checked){var a=document.getElementById(\'cb-pause-refresh\');var b=document.getElementById(\'cb-pause-refresh-float\');if(a)a.checked=checked;if(b)b.checked=checked;onPauseRefreshToggle(checked);}\n\n// Definisi secondary per strategi\nvar STRAT_SECONDARY={\n  \'brkX2-12h\':[\n    {key:\'vol\',label:\'Vol 0.6x--5.0xMA\'},{key:\'rsi\',label:\'RSI<60\'},\n    {key:\'stoch\',label:\'Stoch%K<70\'},{key:\'atr\',label:\'ATR%<9%\'},\n    {key:\'htf\',label:\'HTF 3D vol>0.7xMA\'},{key:\'perf\',label:\'Perf>=0.5\'},{key:\'bull3\',label:\'3bar bullish\'}\n  ],\n  \'Reversal-8h T1\':[\n    {key:\'ha_bull\',label:\'c+1 HA bullish\'},{key:\'cross\',label:\'cross-up EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'Reversal-8h T3-REV\':[\n    {key:\'elapsed\',label:\'Elapsed 5%-50%\'},{key:\'cross_live\',label:\'price_now>EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'brkX2-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'rsi\',label:\'RSI<60\'},{key:\'stoch\',label:\'Stoch%K<80\'},\n    {key:\'htf\',label:\'12h candle bullish\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'CrossEMA-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'htf\',label:\'HTF12h vol>1.0xMA\'},\n    {key:\'vol24\',label:\'Vol24h>=$1.0jt\'}\n  ],\n  \'Akumulasi-4h\':[\n    {key:\'vol_asim\',label:\'Vol hijau>merah\'},{key:\'rsi\',label:\'RSI 30-56\'},\n    {key:\'macd_flat\',label:\'MACD flat≈0\'},{key:\'body_ratio\',label:\'Body ratio<0.57\'}\n  ]\n};\n\nfunction onStratSelect(strat){\n  _curStrat=strat;\n  // Update dropdown kandidat\n  var opts=document.querySelectorAll(\'.nm-opt\');\n  var count=0;\n  opts.forEach(function(o){\n    var show=o.getAttribute(\'data-strat\')===strat;\n    o.style.display=show?\'\':\'none\';\n    if(show)count++;\n  });\n  document.getElementById(\'nm-count\').textContent=\'(\'+count+\' kandidat dari scan terakhir)\';\n  // Reset pair select\n  var sel=document.getElementById(\'pair-select\');if(sel)sel.value=\'\';\n  // Reset panel\n  var panel=document.getElementById(\'pair-detail\');if(panel)panel.style.display=\'none\';\n  // Update secondary grid\n  renderSecondaryGrid(strat);\n  // Reset primary status\n  var ps=document.getElementById(\'primary-status\');\n  if(ps)ps.innerHTML=\'<span style="color:var(--muted)">-- pilih pair untuk lihat nilai aktual --</span>\';\n}\n\nfunction renderSecondaryGrid(strat){\n  var grid=document.getElementById(\'secondary-grid\');\n  if(!grid)return;\n  var defs=STRAT_SECONDARY[strat]||[];\n  grid.innerHTML=defs.map(function(d){\n    return \'<div class="sec-item" data-key="\'+d.key+\'"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px"><input type="checkbox" class="sec-cb" data-key="\'+d.key+\'" checked style="cursor:pointer"><span class="sec-label">\'+d.label+\'</span><span class="sec-actual" style="color:var(--muted)">--</span><span class="sec-status">--</span></label></div>\';\n  }).join(\'\');\n  // Re-attach event listeners\n  grid.querySelectorAll(\'.sec-cb\').forEach(function(cb){\n    cb.addEventListener(\'change\',function(){\n      fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});\n    });\n  });\n}\n\ndocument.addEventListener(\'DOMContentLoaded\',function(){\n  startRefresh();\n  onStratSelect(\'brkX2-12h\');\n});\n\nfunction onPairSelect(sym){\n  var panel=document.getElementById(\'pair-detail\');\n  if(!sym){panel.style.display=\'none\';return;}\n  panel.style.display=\'block\';\n  panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';\n  pauseRefresh();\n  fetch(\'/api/strategy_detail?sym=\'+encodeURIComponent(sym)+\'&strat=\'+encodeURIComponent(_curStrat))\n    .then(function(r){return r.json();})\n    .then(function(d){\n      resumeRefresh();\n      if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}\n      // Update primary\n      var ps=document.getElementById(\'primary-status\');\n      ps.innerHTML=d.primary.map(function(p){return badge(p.ok,p.label+\' (\'+p.actual+\')\');}).join(\' \');\n      // Update secondary\n      d.secondary.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n      // Panel ringkasan\n      var allP=d.primary_ok;\n      panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | \'+\n        d.primary.map(function(p){return (p.ok?\'<span style="color:var(--green)">\':\'<span style="color:var(--red)">\') + p.label+\': \'+p.actual+\'</span>\';}).join(\' | \')+\n        \' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');\n    })\n    .catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});\n}\n\nfunction updateSec(key,actual,ok){\n  document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){\n    var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');\n    if(a)a.textContent=\'(skrg \'+actual+\')\';\n    if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';\n  });\n}\n\nfunction doManualScan(){\n  var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');\n  btn.disabled=true;btn.textContent=\'Scanning...\';\n  st.textContent=\'Sedang scan semua pair... (30-60 detik)\';\n  pauseRefresh();\n  fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){\n    btn.disabled=false;btn.textContent=\'Scan Sekarang\';\n    st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';\n    renderResults(data.pairs);resumeRefresh();\n  }).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});\n}\n\nfunction promptOpenLong(){\n  var sel=document.getElementById(\'pair-select\');\n  var sym=sel?sel.value:\'\';\n  if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}\n  var ss=document.getElementById(\'strat-select\');var strat=ss?ss.value:\'brkX2-12h\';\n  if(!confirm(\'Open Long [\'+strat+\']: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;\n  execOpenLong(sym,strat);\n}\n\nfunction execOpenLong(sym,strat){\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'strat\',strat||\"brkX2-12h\");\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Membuka deal \'+sym+\'...\';\n  pauseRefresh();\n  fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){\n    resumeRefresh();\n    var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);\n    if(st)st.textContent=msg;alert(msg);\n  }).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction renderResults(pairs){\n  var el=document.getElementById(\'scan-results\');\n  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];\n  if(sample){\n    document.getElementById(\'primary-status\').innerHTML=\n      sample.secondaries?sample.secondaries.map(function(s){return badge(s.ok,s.key+\':\'+s.actual);}).join(\' \'):\'\';\n    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n  }\n  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);\n  if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos syarat primary.</div>\';return;}\n  var rows=cands.map(function(p){\n    var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');\n    var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';\n    var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';\n    return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';\n  }).join(\'\');\n  el.innerHTML=\'<table><thead><tr><th>Pair</th><th>isArmed</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';\n}\n\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){\n  if(v===undefined||v===null)return \'?\';\n  if(v>=1000)return v.toFixed(0);\n  if(v>=1)return v.toFixed(4);\n  if(v>=0.01)return v.toFixed(6);\n  if(v>=0.0001)return v.toFixed(8);\n  // harga sangat kecil seperti SHIB: pakai fixed decimal\n  var s=v.toFixed(10);\n  // hapus trailing zeros berlebihan tapi sisakan min 2 significant digits\n  return parseFloat(s).toPrecision(4);\n}\nfunction doOpenLong(sym){execOpenLong(sym);}\n\nfunction _setCookie(k,v){document.cookie=k+\'=\'+v+\';path=/;max-age=2592000\';}\n\nfunction _getCookie(k){var m=document.cookie.match(\'(^|;) ?\'+k+\'=([^;]*)(;|$)\');return m?m[2]:null;}\n\nfunction toggleCard(header){var card=header.parentElement;var name=\'c_\'+(card.querySelector(\'h2\').textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));card.classList.toggle(\'collapsed\');var collapsed=card.classList.contains(\'collapsed\');_setCookie(name,collapsed?\'1\':\'0\');}\n\nfunction restoreCards(){document.querySelectorAll(\'.card\').forEach(function(card){var h=card.querySelector(\'h2\');if(!h)return;var name=\'c_\'+(h.textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));if(_getCookie(name)===\'1\')card.classList.add(\'collapsed\');});}\n\nfunction editEntry(sym,curVal){\n  var v=prompt(\'Edit entry price untuk \'+sym.replace(\'USDT\',\'/USDT\')+\':\\n(harga aktual dari 3Commas)\',curVal);\n  if(v===null)return;\n  v=parseFloat(v);\n  if(isNaN(v)||v<=0){alert(\'Nilai tidak valid\');return;}\n  if(!confirm(\'Set entry \'+sym.replace(\'USDT\',\'/USDT\')+\' = \'+v+\'?\'))return;\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'field\',\'entry_price\');fd.append(\'value\',v);\n  pauseRefresh();\n  fetch(\'/edit_deal\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var el=document.getElementById(\'ep-\'+sym);\n        if(el)el.textContent=v;\n        alert(\'Entry \'+sym.replace(\'USDT\',\'/USDT\')+\' diupdate ke \'+v);\n      } else {\n        alert(\'Gagal: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction rowCloseDeal(sym){\n  if(!confirm(\'CLOSE DEAL \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan jual posisi ini sekarang juga di Binance.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_close\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Close \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! Price=\'+data.price+\' Profit=\'+data.profit_pct+\'%\');\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Close GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction rowAddFund(sym){\n  var amtEl=document.getElementById(\'addfund-amt-\'+sym);\n  var amount=amtEl?amtEl.value.trim():\'\';\n  if(!confirm(\'ADD FUND untuk \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nNominal: \'+(amount||\'otomatis sesuai sizing saat open\')+\'\\nAverage price akan diupdate otomatis.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);if(amount)fd.append(\'amount\',amount);\n  fetch(\'/manual_addfund\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! +$\'+data.add_usd+\' @ \'+data.price+\' | Avg=\'+data.avg_price);\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Add Fund GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\n\nfunction openAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  if(!modal||!body)return;\n  modal.style.display=\'flex\';\n  body.innerHTML=\'Memuat...\';\n  pauseRefresh();\n  var targets=[];\n  document.querySelectorAll(\'#active-deals-body tr\').forEach(function(tr){\n    var symTd=tr.querySelector(\'td.sym\');\n    if(!symTd)return;\n    var sym=symTd.textContent.replace(\'/USDT\',\'USDT\').trim();\n    var tds=tr.querySelectorAll(\'td\');\n    var strat=tds[1]?tds[1].textContent.trim():\'\';\n    targets.push({sym:sym, label:symTd.textContent.trim()+\' (\'+strat+\')\'});\n  });\n  fetch(\'/api/addfund_source_assets\').then(function(r){return r.json();}).then(function(d){\n    if(!d.ok){body.innerHTML=\'<div style="color:var(--red)">Error: \'+(d.error||\'gagal memuat aset\')+\'</div>\';return;}\n    if(targets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada Active Deal untuk ditambah fund.</div>\';return;}\n    if(d.assets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada aset nganggur senilai >= $5 yang bisa dijual (semua aset di wallet sudah jadi Active Deal, atau nilainya di bawah $5).</div>\';return;}\n    var targetOpts=targets.map(function(t){return \'<option value="\'+t.sym+\'">\'+t.label+\'</option>\';}).join(\'\');\n    var sourceOpts=d.assets.map(function(a){return \'<option value="\'+a.asset+\'" data-free="\'+a.free+\'" data-value="\'+a.value_usdt+\'">\'+a.asset+\' (\'+a.free+\', \\u2248$\'+a.value_usdt.toFixed(2)+\')</option>\';}).join(\'\');\n    body.innerHTML=\n      \'<label style="display:block;margin-bottom:8px">Add fund ke deal:<br>\'+\n      \'<select id="afa-target" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+targetOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:8px">Sumber aset (dijual buat dapat USDT):<br>\'+\n      \'<select id="afa-source" onchange="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+sourceOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:10px">Jual berapa % dari saldo (default 100%):<br>\'+\n      \'<input type="number" id="afa-pct" min="1" max="100" value="100" oninput="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)"></label>\'+\n      \'<div id="afa-estimate" style="margin-bottom:12px;color:var(--accent)"></div>\'+\n      \'<button type="button" onclick="submitAddFundFromAsset()" style="background:#7c5cff;color:#fff;border:none;border-radius:4px;padding:6px 14px;font-size:11px;cursor:pointer;font-weight:600;font-family:var(--font)">Eksekusi</button>\';\n    updateAddFundAssetEstimate();\n  }).catch(function(e){resumeRefresh();body.innerHTML=\'<div style="color:var(--red)">Error: \'+e+\'</div>\';});\n}\n\nfunction updateAddFundAssetEstimate(){\n  var sel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  var est=document.getElementById(\'afa-estimate\');\n  if(!sel||!pctEl||!est||!sel.options.length)return;\n  var opt=sel.options[sel.selectedIndex];\n  var value=parseFloat(opt.dataset.value)||0;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  var estimate=value*(pct/100);\n  est.textContent=\'\\u2248 jual \'+pct+\'% \'+opt.value+\' \\u2248 $\'+estimate.toFixed(2)+\' akan ditambahkan ke deal target\';\n}\n\nfunction submitAddFundFromAsset(){\n  var targetSel=document.getElementById(\'afa-target\');\n  var sourceSel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  if(!targetSel||!sourceSel||!pctEl)return;\n  var target=targetSel.value;\n  var source=sourceSel.value;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  if(!confirm(\'Jual \'+pct+\'% saldo \'+source+\' lalu tambahkan hasilnya (USDT) ke deal \'+target.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan eksekusi order JUAL market sungguhan di Binance, lalu BELI tambahan ke \'+target.replace(\'USDT\',\'/USDT\')+\'.\'))return;\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  body.innerHTML=\'Memproses...\';\n  pauseRefresh();\n  fetch(\'/api/addfund_from_asset\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({source_asset:source,target_symbol:target,pct:pct})})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'BERHASIL! Jual \'+data.sold_qty+\' \'+source+\' -> $\'+data.proceeds_usdt.toFixed(2)+\' ditambahkan ke \'+data.target_symbol.replace(\'USDT\',\'/USDT\')+\' (avg baru \'+data.avg_price+\')\');\n        closeAddFundAssetModal();\n        setTimeout(function(){window.location.reload();},1000);\n      } else {\n        alert(\'GAGAL: \'+data.error);\n        body.innerHTML=\'<div style="color:var(--red)">Gagal: \'+data.error+\'</div><button type="button" onclick="openAddFundAssetModal()" style="margin-top:10px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 10px;font-size:11px;cursor:pointer;font-family:var(--font)">Coba lagi</button>\';\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction closeAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  if(modal)modal.style.display=\'none\';\n  resumeRefresh();\n}\n'
 
 def _fmt_price(v):
     """Format harga agar tidak pakai notasi scientific (e-06 dll)."""
@@ -9154,6 +9251,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <span class="scan-time" title="Estimasi heuristik (timeout/trailing/hard-stop), BUKAN prediksi harga pasti">Estimasi closing tercepat: <b>{{ closest_to_close.sym.replace("USDT","/USDT") }}</b> <span style="color:var(--muted)">({{ closest_to_close.note }})</span></span>
             {% endif %}
             <span class="scan-time">Sisa USDT (blm terpakai): <b style="color:var(--accent)">${{ "%.2f"|format(free_usdt) }}</b></span>
+            <button type="button" onclick="event.stopPropagation();openAddFundAssetModal()" style="background:#7c5cff;color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font)">+ Fund dari Aset Lain</button>
     </div>
     <div class="card-body">
     {% if active_deals %}
@@ -9344,6 +9442,20 @@ document.addEventListener('DOMContentLoaded', function() {
             <button type="button" onclick="closeConvertModal()" style="background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer">✕</button>
         </div>
         <div id="convert-modal-body" style="font-size:11px;color:var(--muted)">Memuat...</div>
+    </div>
+</div>
+<!-- ═══ Add Fund dari Aset Lain (05/09/2026): jual sebagian/seluruh 1 aset nganggur,
+     hasil USDT-nya langsung add-fund ke 1 Active Deal lain. Sengaja pola persis sama
+     dgn convert-modal di atas (dash-section-start data-tab="__none__") -- itu fix
+     spesifik supaya modal ini TIDAK ikut kesapu sibling-walk selectDashTab(), lihat
+     komentar panjang di convert-modal. -->
+<div id="addfundasset-modal" class="dash-section-start" data-tab="__none__" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;max-width:480px;width:92%;max-height:80vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <h3 style="margin:0;font-size:13px;color:var(--accent)">Add Fund dari Aset Lain</h3>
+            <button type="button" onclick="closeAddFundAssetModal()" style="background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer">✕</button>
+        </div>
+        <div id="addfundasset-modal-body" style="font-size:11px;color:var(--muted)">Memuat...</div>
     </div>
 </div>
   <!-- ═══════════════ MANUAL SCAN ═══════════════ -->
@@ -12202,51 +12314,46 @@ def run_web_dashboard():
                     add_usd = float(manual_amount) if manual_amount else float(BASE_ORDER_VOLUME)
                 except (ValueError, TypeError):
                     add_usd = float(BASE_ORDER_VOLUME)
-            if d.get('add_fund_sent'):
-                return jsonify({"ok": False, "error": "Add fund sudah pernah dikirim sebelumnya."})
-            strat = d.get('strategy', 'brkX2')
+            return jsonify(execute_add_fund(sym, add_usd))
+
+        @app.route("/api/addfund_source_assets")
+        def api_addfund_source_assets():
+            """Daftar aset nganggur (BUKAN Active Deal) senilai >= $5 -- kandidat sumber
+            dana buat 'Add Fund dari Aset Lain'. 05/09/2026, permintaan Mas Budi."""
+            MIN_VALUE_USDT = 5.0
             try:
-                price_now = get_price_now(sym)
-                if price_now <= 0:
-                    return jsonify({"ok": False, "error": "Gagal ambil harga live"})
-                ok = send_add_funds(sym, add_usd, strat)
-                if ok:
-                    # Hitung average price baru
-                    entry_price = d.get('entry_price', price_now)
-                    base_usd    = BASE_ORDER_VOLUME
-                    avg_price   = (base_usd * entry_price + add_usd * price_now) / (base_usd + add_usd)
-                    ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
-                    with active_deals_lock:
-                        if sym in active_deals:
-                            active_deals[sym]['add_fund_sent'] = True
-                            active_deals[sym]['entry_price']   = avg_price
-                            active_deals[sym]['peak']          = max(active_deals[sym].get('peak', avg_price), avg_price)
-                            active_deals[sym]['trailing_armed'] = False
-                    # Simpan ke file
-                    with active_deals_lock:
-                        d2 = dict(active_deals)
-                    try:
-                        import json as _j
-                        with open(ACTIVE_DEALS_FILE, 'w') as f:
-                            _j.dump(d2, f)
-                    except Exception as e:
-                        log(f"[MANUAL-ADDFUND] Gagal simpan file: {e}")
-                    log(f"[MANUAL-ADDFUND] {sym} add ${add_usd} @ {price_now:.6g} | avg={avg_price:.6g}")
-                    send_telegram(
-                        f"Bot | ADD FUND MANUAL\n"
-                        f"{ts} WIB\n"
-                        f"Pair     : {to_display_pair(sym)}\n"
-                        f"Add fund : ${add_usd}\n"
-                        f"Harga    : {_fmt_price(price_now)}\n"
-                        f"Avg price: {_fmt_price(avg_price)}\n"
-                        f"Strategi : {strat}"
-                    )
-                    return jsonify({"ok": True, "sym": sym, "add_usd": add_usd,
-                                    "price": price_now, "avg_price": round(avg_price, 8)})
-                else:
-                    return jsonify({"ok": False, "error": "Binance order add fund gagal (cek log server untuk detail)" if USE_BINANCE_DIRECT else "3Commas menolak add fund"})
+                with active_deals_lock:
+                    deal_assets = {s.replace("USDT", "") for s in active_deals.keys()}
+                out = []
+                for item in get_binance_spot_assets():
+                    asset = item["asset"]
+                    if asset in deal_assets:
+                        continue
+                    price = get_price_now(item["symbol"])
+                    if price <= 0:
+                        continue
+                    value_usdt = item["free"] * price
+                    if value_usdt < MIN_VALUE_USDT:
+                        continue
+                    out.append({"asset": asset, "free": item["free"], "value_usdt": round(value_usdt, 2)})
+                out.sort(key=lambda a: -a["value_usdt"])
+                return jsonify({"ok": True, "assets": out})
             except Exception as e:
-                return jsonify({"ok": False, "error": str(e)})
+                return jsonify({"ok": False, "error": str(e)}), 500
+
+        @app.route("/api/addfund_from_asset", methods=["POST"])
+        def api_addfund_from_asset():
+            """Jual sebagian/seluruh 1 aset nganggur -> hasil USDT-nya add-fund ke 1 deal
+            aktif lain. 05/09/2026, permintaan Mas Budi (dana Add Fund dari aset lain,
+            bukan cuma USDT nganggur)."""
+            data = request.get_json(force=True, silent=True) or {}
+            source_asset = data.get("source_asset", "")
+            target_symbol = data.get("target_symbol", "")
+            pct = data.get("pct", 100)
+            if not source_asset or not target_symbol:
+                return jsonify({"ok": False, "error": "source_asset & target_symbol wajib diisi"}), 400
+            result = execute_add_fund_from_asset(source_asset, target_symbol, pct)
+            return jsonify(result), (200 if result.get("ok") else 400)
 
         @app.route("/manual_close", methods=["POST"])
         def manual_close():
