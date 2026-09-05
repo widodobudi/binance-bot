@@ -450,13 +450,19 @@ AKUM_ENTRY_FWDTEST_TARGET = 10           # target forward-test 10 deal
 AKUM_TP_SWING_LOOKBACK    = 30           # swing high dari N candle 4h terakhir (~5 hari)
 AKUM_TP_RSI_OB            = 70           # RSI overbought threshold untuk early exit
 AKUM_TP_STOCH_OB          = 75           # Stoch%K overbought threshold
-AKUM_TP_MOMENTUM_MIN_PROFIT_PCT = 0.5    # 05/09/2026 (permintaan Mas Budi, temuan NVDABUSDT):
-                                          # TP2 "momentum overbought" sebelum ini TIDAK PERNAH cek
-                                          # untung/rugi -- bisa closing rugi kalau momentum kebetulan
-                                          # udah jenuh SEBELUM harga sempat naik dari entry (NVDABUSDT
-                                          # buka-tutup di menit yg sama, -0.20%). Sekarang wajib profit
-                                          # bersih (net fee, dari prof_from_entry) >= nilai ini dulu --
-                                          # kalau belum, exit ini DITAHAN (posisi tetap jalan, tetap
+AKUM_TP_MIN_PROFIT_PCT   = 0.5           # 05/09/2026 (permintaan Mas Budi, temuan NVDABUSDT +
+                                          # audit menyeluruh sesudahnya, temuan TRXUSDT): ketiga
+                                          # kondisi TP akumulasi (TP1 swing-high, TP2 momentum
+                                          # overbought, TP3 upper-wick tembus resistance) sebelum
+                                          # ini TIDAK PERNAH cek untung/rugi -- bisa closing rugi
+                                          # kalau level/kondisinya kebetulan tersentuh SEBELUM harga
+                                          # sempat bergerak cukup jauh dari entry utk nutup fee
+                                          # round-trip (NVDABUSDT: buka-tutup di menit yg sama via
+                                          # TP2, -0.20%; TRXUSDT: wick nyentuh resistance via TP3
+                                          # stlh cuma +0.30% gerak harga mentah, net jadi -0.09%
+                                          # abis fee). Sekarang ketiganya wajib profit bersih (net
+                                          # fee, dari prof_from_entry) >= nilai ini dulu -- kalau
+                                          # belum, exit DITAHAN (posisi tetap jalan, tetap
                                           # dilindungi SL/hard-stop/timeout yg sudah ada).
 # Tidak pakai trailing arm — exit via TP/SL/Timeout saja
 
@@ -5928,10 +5934,15 @@ def thread2_monitor():
                     if _df4 is not None and len(_df4) >= 10:
                         import pandas_ta as _pta
                         _swing_hi = get_akum_swing_high(_df4, AKUM_TP_SWING_LOOKBACK)
-                        # TP1: harga menyentuh swing high lokal
+                        # TP1: harga menyentuh swing high lokal (wajib profit bersih >= ambang, lihat AKUM_TP_MIN_PROFIT_PCT)
                         if _swing_hi > 0 and price >= _swing_hi:
-                            do_close = True
-                            reason = f"TP akumulasi: price {_fmt_price(price)} >= swing_high_30c {_fmt_price(_swing_hi)}"
+                            if prof_from_entry >= AKUM_TP_MIN_PROFIT_PCT:
+                                do_close = True
+                                reason = (f"TP akumulasi: price {_fmt_price(price)} >= swing_high_30c {_fmt_price(_swing_hi)} "
+                                          f"(profit bersih {prof_from_entry:+.2f}%)")
+                            else:
+                                log(f"[T2-AKUM] {sym} swing-high tersentuh (price {_fmt_price(price)} >= {_fmt_price(_swing_hi)}) "
+                                    f"tapi profit bersih {prof_from_entry:+.2f}% < {AKUM_TP_MIN_PROFIT_PCT}% -- TP swing-high ditahan")
                         # TP2: momentum overbought (Stoch%K>75 AND MACD hist mulai turun) OR RSI>70
                         if not do_close:
                             _df4c = _df4.copy()
@@ -5947,21 +5958,24 @@ def thread2_monitor():
                             _macd_turn      = (_macd_hist_now < _macd_hist_prev)                   # MACD hist turun
                             _rsi_ob         = (_rsi_now >= AKUM_TP_RSI_OB)
                             _momentum_ob    = _rsi_ob or (_stoch_ob_cross and _macd_turn)
-                            # 05/09/2026: TP momentum WAJIB posisi sudah untung bersih (net fee)
-                            # >= AKUM_TP_MOMENTUM_MIN_PROFIT_PCT -- sebelum ini murni cek momentum
-                            # tanpa peduli untung/rugi (lihat komentar konstanta di atas). Kalau
+                            # TP momentum WAJIB posisi sudah untung bersih (net fee) >=
+                            # AKUM_TP_MIN_PROFIT_PCT -- sebelum ini murni cek momentum tanpa
+                            # peduli untung/rugi (lihat komentar konstanta di atas). Kalau
                             # momentum sudah jenuh tapi belum untung segitu, DITAHAN dulu -- tetap
                             # dilindungi SL/hard-stop/timeout yg sudah ada di bawah, bukan dibiarkan
                             # tanpa proteksi.
-                            if _momentum_ob and prof_from_entry >= AKUM_TP_MOMENTUM_MIN_PROFIT_PCT:
+                            if _momentum_ob and prof_from_entry >= AKUM_TP_MIN_PROFIT_PCT:
                                 do_close = True
                                 reason = (f"TP akumulasi momentum: RSI={_rsi_now:.1f} Stoch={_sk_now:.1f}→{_sk_prev:.1f} "
                                           f"MACD_hist={_macd_hist_now:.4f}→{_macd_hist_prev:.4f} "
                                           f"(profit bersih {prof_from_entry:+.2f}%)")
                             elif _momentum_ob:
                                 log(f"[T2-AKUM] {sym} momentum sudah jenuh (RSI={_rsi_now:.1f}) tapi profit bersih "
-                                    f"{prof_from_entry:+.2f}% < {AKUM_TP_MOMENTUM_MIN_PROFIT_PCT}% -- TP momentum ditahan")
-                        # TP3: upper wick menyentuh pivot high terdekat di atas price (strength N=4)
+                                    f"{prof_from_entry:+.2f}% < {AKUM_TP_MIN_PROFIT_PCT}% -- TP momentum ditahan")
+                        # TP3: upper wick menyentuh pivot high terdekat di atas price (strength N=4),
+                        # wajib profit bersih >= ambang juga (lihat AKUM_TP_MIN_PROFIT_PCT) -- temuan
+                        # TRXUSDT 05/09/2026: wick nyentuh resistance stlh cuma +0.30% gerak harga
+                        # mentah, net jadi -0.09% abis fee round-trip.
                         if not do_close:
                             _N4   = 4
                             _hiArr = _df4['high'].values
@@ -5977,9 +5991,15 @@ def thread2_monitor():
                             if _res_above:
                                 _nearest_res = _res_above[0]
                                 if _cur_high >= _nearest_res:
-                                    do_close = True
-                                    reason = (f"TP3 akumulasi: upper_wick {_fmt_price(_cur_high)} "
-                                              f">= pivot_resistance {_fmt_price(_nearest_res)}")
+                                    if prof_from_entry >= AKUM_TP_MIN_PROFIT_PCT:
+                                        do_close = True
+                                        reason = (f"TP3 akumulasi: upper_wick {_fmt_price(_cur_high)} "
+                                                  f">= pivot_resistance {_fmt_price(_nearest_res)} "
+                                                  f"(profit bersih {prof_from_entry:+.2f}%)")
+                                    else:
+                                        log(f"[T2-AKUM] {sym} upper-wick tembus resistance ({_fmt_price(_cur_high)} >= "
+                                            f"{_fmt_price(_nearest_res)}) tapi profit bersih {prof_from_entry:+.2f}% "
+                                            f"< {AKUM_TP_MIN_PROFIT_PCT}% -- TP3 ditahan")
                 except Exception as _e:
                     log(f"[T2] {sym} akum TP check error: {_e}")
         else:
