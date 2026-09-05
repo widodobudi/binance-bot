@@ -5328,6 +5328,26 @@ def thread1_scan():
                 'add_usd': add_usd, 'add_fund_sent': False,
                 **_open_fields,
             })
+            # 05/09/2026 (permintaan Mas Budi, temuan DASH/ARB): csv_log_open() SENGAJA
+            # dipindah ke SINI, sesegera mungkin setelah add_to_active_deals() -- sebelumnya
+            # ada di bawah SETELAH kirim Telegram+email (~50 baris), jadi kalau proses
+            # ke-restart (mis. Railway redeploy) TEPAT di jendela itu, deal-nya tetap valid
+            # & tetap kelacak (sudah tersimpan di active_deals.json), tapi baris OPEN di CSV
+            # nggak pernah tertulis -- pas deal itu close, csv_log_close() nggak nemu baris
+            # OPEN yg cocok, jadi bikin baris darurat kosong (ENTRY=EXIT, waktu open kosong).
+            csv_log_open({
+                'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                'symbol': to_display_pair(sym),
+                'signal_price': f"{_fmt_price(signal_price)}",
+                'entry_price': f"{_fmt_price(entry_price)}",
+                'slip_pct': f"{slip_pct:+.2f}",
+                'atr_pct': f"{atrp:.2f}",
+                'trail_dist_pct': f"{trailing_dist(atrp)}",
+                'base_usd': target_usd,
+                'score': score,
+                'rsi_open': f"{_open_fields['rsi_open']:.1f}" if _open_fields.get('rsi_open') is not None else '',
+                'strategy': 'brkX2',
+            })
             # Simpan indikator saat open untuk perbandingan re-entry berikutnya
             try:
                 if df_saved is not None:
@@ -5370,20 +5390,6 @@ def thread1_scan():
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}\n"
                 f"{_ind_block}"
             ), daemon=True).start()
-            
-            csv_log_open({
-                'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
-                'symbol': to_display_pair(sym),
-                'signal_price': f"{_fmt_price(signal_price)}",
-                'entry_price': f"{_fmt_price(entry_price)}",
-                'slip_pct': f"{slip_pct:+.2f}",
-                'atr_pct': f"{atrp:.2f}",
-                'trail_dist_pct': f"{trailing_dist(atrp)}",
-                'base_usd': target_usd,
-                'score': score,
-                'rsi_open': f"{_open_fields['rsi_open']:.1f}" if _open_fields.get('rsi_open') is not None else '',
-                'strategy': 'brkX2',
-            })
             _r12 = r   # r == df_saved.iloc[-1] (dihitung di atas), bukan df.iloc[-1] (sisa loop scan simbol lain)
             log_oac('OPEN', sym, 'brkX2-12h', {
                 'entry_price':  _fmt_price(entry_price),
@@ -5637,6 +5643,22 @@ def thread1b_scan_reversal():
                 'strategy': 'reversal',
                 **_open_fields_rev,
             })
+            # 05/09/2026: csv_log_open() dipindah ke sini (lihat komentar panjang di
+            # thread1_scan) -- kurangi jendela risiko kalau proses ke-restart tepat
+            # sebelum notifikasi Telegram/email selesai.
+            csv_log_open({
+                'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                'symbol': to_display_pair(sym),
+                'signal_price': f"{_fmt_price(signal_price)}",
+                'entry_price': f"{_fmt_price(entry_price)}",
+                'slip_pct': f"{slip_pct:+.2f}",
+                'atr_pct': f"{atrp:.2f}",
+                'trail_dist_pct': f"{trailing_dist(atrp)}",
+                'base_usd': target_usd,
+                'score': 0,
+                'strategy': 'reversal',
+                'rsi_open': f"{_open_fields_rev['rsi_open']:.1f}" if _open_fields_rev.get('rsi_open') is not None else '',
+            })
             send_telegram(
                 f"Reversal-8h | OPEN LONG\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
@@ -5661,20 +5683,6 @@ def thread1b_scan_reversal():
                 f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{total_max_deals_all_strategies()}\n"
                 f"{_fmt_indicators_open_block(_open_fields_rev)}"
             ), daemon=True).start()
-            
-            csv_log_open({
-                'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
-                'symbol': to_display_pair(sym),
-                'signal_price': f"{_fmt_price(signal_price)}",
-                'entry_price': f"{_fmt_price(entry_price)}",
-                'slip_pct': f"{slip_pct:+.2f}",
-                'atr_pct': f"{atrp:.2f}",
-                'trail_dist_pct': f"{trailing_dist(atrp)}",
-                'base_usd': target_usd,
-                'score': 0,
-                'strategy': 'reversal',
-                'rsi_open': f"{_open_fields_rev['rsi_open']:.1f}" if _open_fields_rev.get('rsi_open') is not None else '',
-            })
             log_oac('OPEN', sym, 'Reversal-8h', {
                 'entry_price': _fmt_price(entry_price),
                 'slip_pct':    f"{slip_pct:+.2f}%",
@@ -6707,6 +6715,22 @@ def thread1c_scan_intrabar():
                 'strategy': 'brkX2', 'score': score, 'target_usd': target_usd,
                 'add_usd': add_usd, 'add_fund_sent': False,
             })
+            # 05/09/2026: csv_log_open() dipindah ke sini (lihat komentar panjang di
+            # thread1_scan) -- kurangi jendela risiko kalau proses ke-restart tepat
+            # sebelum notifikasi Telegram/email selesai.
+            csv_log_open({
+                'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                'symbol':         to_display_pair(sym),
+                'signal_price':   f"{_fmt_price(signal_price)}",
+                'entry_price':    f"{_fmt_price(entry_price)}",
+                'slip_pct':       f"{slip_pct:+.2f}",
+                'atr_pct':        f"{atrp:.2f}",
+                'trail_dist_pct': f"{trailing_dist(atrp)}",
+                'base_usd':       target_usd,
+                'score':          score,
+                'strategy':       'brkX2',
+                'rsi_open':       f"{float(r12['rsi']):.1f}" if 'rsi' in r12.index and not pd.isna(r12.get('rsi')) else '',
+            })
             addfund_txt = f" (+add ${add_usd} delay 15s)" if add_usd > 0 else ""
             send_telegram(
                 f"brkX2-12h | OPEN LONG INTRABAR\n"
@@ -6732,19 +6756,6 @@ def thread1c_scan_intrabar():
                 f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}"
             ), daemon=True).start()
-            csv_log_open({
-                'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
-                'symbol':         to_display_pair(sym),
-                'signal_price':   f"{_fmt_price(signal_price)}",
-                'entry_price':    f"{_fmt_price(entry_price)}",
-                'slip_pct':       f"{slip_pct:+.2f}",
-                'atr_pct':        f"{atrp:.2f}",
-                'trail_dist_pct': f"{trailing_dist(atrp)}",
-                'base_usd':       target_usd,
-                'score':          score,
-                'strategy':       'brkX2',
-                'rsi_open':       f"{float(r12['rsi']):.1f}" if 'rsi' in r12.index and not pd.isna(r12.get('rsi')) else '',
-            })
             # ── DEAL LOG lengkap T1c ──────────────────────────────────────
             _ind = _row_indicators(r12, vol_ma=float(r12.get('vol_ma', 0)) if not pd.isna(r12.get('vol_ma', 0)) else None)
             _htf = _get_htf_values(sym)
@@ -6947,6 +6958,23 @@ def thread1c_scan_intrabar_early():
                 'trailing_armed': False,
                 'strategy': 'brkX2', 'score': score, 'target_usd': target_usd,
                 'add_usd': add_usd, 'add_fund_sent': False,
+            })
+            # 05/09/2026 (permintaan Mas Budi, temuan DASH/ARB): jalur INTRABAR EARLY ini
+            # SEBELUMNYA TIDAK PERNAH memanggil csv_log_open() sama sekali (bukan cuma
+            # soal timing kayak 2 jalur brkX2-12h lain -- di sini memang belum pernah ada
+            # sejak awal). Ditambahkan sekarang, sesegera mungkin setelah add_to_active_deals().
+            csv_log_open({
+                'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                'symbol':         to_display_pair(sym),
+                'signal_price':   f"{_fmt_price(signal_price)}",
+                'entry_price':    f"{_fmt_price(entry_price)}",
+                'slip_pct':       f"{slip_pct:+.2f}",
+                'atr_pct':        f"{atrp:.2f}",
+                'trail_dist_pct': f"{trailing_dist(atrp)}",
+                'base_usd':       target_usd,
+                'score':          score,
+                'strategy':       'brkX2',
+                'rsi_open':       f"{float(r12['rsi']):.1f}" if 'rsi' in r12.index and not pd.isna(r12.get('rsi')) else '',
             })
             addfund_txt = f" (+add ${add_usd} delay 15s)" if add_usd > 0 else ""
             send_telegram(
