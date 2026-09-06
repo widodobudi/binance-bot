@@ -9426,7 +9426,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <div style="font-size:9px;color:var(--accent);margin-top:2px">{{ d.get("tp_hold_status") }}</div>
           {% endif %}
         </td>
-        <td>{% if d.get("strategy","") in ("akum_entry_a","akum_entry_b") %}<span class="badge" style="background:#444;color:#888">N/A</span>{% elif d.get("trailing_armed") %}<span class="badge badge-armed">Yes</span>{% else %}<span class="badge badge-wait">Wait</span>{% endif %}</td>
+        <td>{% if d.get("strategy","") in ("akum_entry_a","akum_entry_b") %}<span class="badge" style="background:#444;color:#888">N/A</span>{% elif d.get("trailing_armed") %}<span class="badge badge-armed">Yes</span>{% else %}<span class="badge badge-wait">Wait</span>{% endif %}{% if d.get("arm_status_detail") %}<div style="font-size:9px;color:var(--muted);margin-top:2px;white-space:nowrap">{{ d.get("arm_status_detail") }}</div>{% endif %}</td>
         <td>
           {% if d.get("strategy","") in ("akum_entry_a","akum_entry_b") %}
           <span class="badge" style="background:#444;color:#888">N/A</span>
@@ -12319,6 +12319,23 @@ def run_web_dashboard():
                     _tp_remaining_min = _tp_hold_min_d - (time.time() - _tp_armed_ts) / 60.0
                     dd["tp_hold_status"] = (f"menunggu konfirmasi, tersisa {max(0, _tp_remaining_min):.1f} menit"
                                              if _tp_remaining_min > 0 else "konfirmasi terpenuhi, menunggu eksekusi")
+                # arm_status_detail (06/09/2026, permintaan Mas Budi): kolom ISARMED cuma
+                # bilang Wait/Yes tanpa angka -- tidak kelihatan seberapa DEKAT deal itu ke
+                # kondisi arm (kalau Wait) atau ke titik close sebenarnya (kalau sudah armed,
+                # deviasi trailing saja cuma aturan tetap, bukan jarak live ke stop).
+                if dd.get("strategy", "") not in ("akum_entry_a", "akum_entry_b"):
+                    _live_atrp_d = get_live_atr_pct(sym, dd.get("strategy", "brkX2"), dd.get("atr_pct", 3.0) or 3.0)
+                    if dd.get("trailing_armed"):
+                        _peak_d = dd.get("peak", ep) or ep
+                        if _peak_d > 0 and ep > 0:
+                            _prof_peak_d = (_peak_d / ep - 1) * 100 - FEE_ROUND_TRIP_PCT
+                            _tdist_d = trailing_dist_progressive(_live_atrp_d, _prof_peak_d)
+                            _stop_price_d = _peak_d * (1 - _tdist_d / 100)
+                            if _stop_price_d > 0:
+                                _gap_pct_d = (lp / _stop_price_d - 1) * 100
+                                dd["arm_status_detail"] = f"trail {_tdist_d:.1f}%, jarak ke stop {_gap_pct_d:.2f}%"
+                    else:
+                        dd["arm_status_detail"] = f"arm @ +{get_arm_pct(_live_atrp_d):.1f}%"
                 deals_display[sym] = dd
             closest_to_close = estimate_closest_deal_to_close(deals_display)
             with _dashboard_lock:
