@@ -3419,6 +3419,11 @@ def execute_add_fund_from_asset(source_asset: str, target_symbol: str, pct: floa
     SATU deal aktif lain. Dua langkah: sell_to_usdt() (reuse, sama persis logic-nya
     dgn Convert Aset) -> execute_add_fund() (reuse, sama persis dgn /manual_addfund).
     pct: 1-100, persentase dari saldo bebas source_asset yang dijual.
+    06/09/2026 fix: SEBELUMNYA aset yang simbolnya ada di active_deals ditolak TOTAL --
+    sekarang (sejalan dgn /api/addfund_source_assets) dihitung SELISIH saldo wallet
+    dikurangi qty yang masih ditrack deal aktif utk aset itu -- kalau masih ada
+    kelebihan (mis. sisa dari cancel-sebagian), pct dihitung dari KELEBIHAN itu, bukan
+    dari total saldo wallet, supaya porsi yang masih jadi deal aktif tidak ikut kejual.
     """
     source_asset = str(source_asset).upper().strip()
     target_symbol = str(target_symbol).upper().strip().replace("/", "")
@@ -3431,12 +3436,14 @@ def execute_add_fund_from_asset(source_asset: str, target_symbol: str, pct: floa
     if not (0 < pct <= 100):
         return {"ok": False, "error": "pct harus 1-100"}
     with active_deals_lock:
-        deal_assets = {s.replace("USDT", "") for s in active_deals.keys()}
-    if source_asset in deal_assets:
-        return {"ok": False, "error": f"{source_asset} sedang jadi Active Deal -- pakai Cancel/Close, bukan fitur ini"}
-    qty_free = binance_get_asset_qty(source_asset)
+        tracked_qty = sum(
+            float(dd.get("qty_coin", 0) or 0)
+            for s, dd in active_deals.items() if s.replace("USDT", "") == source_asset
+        )
+    qty_wallet = binance_get_asset_qty(source_asset)
+    qty_free = qty_wallet - tracked_qty
     if qty_free <= 0:
-        return {"ok": False, "error": f"Saldo {source_asset} tidak ada"}
+        return {"ok": False, "error": f"{source_asset} sedang jadi Active Deal (tidak ada kelebihan saldo di luar itu) -- pakai Cancel/Close, bukan fitur ini"}
     sell_qty = qty_free * (pct / 100.0)
     sell_result = sell_to_usdt(source_asset + "USDT", qty=sell_qty)
     if not sell_result.get("ok"):
@@ -12478,24 +12485,37 @@ def run_web_dashboard():
             request weight terpisah) -- kena Binance IP ban (-1003/418, "way too much
             request weight") pas Mas Budi buka modal ini di tengah beban thread scan
             background yang sudah tinggi. Sekarang pakai get_ticker_24h() SEKALI (1
-            request borongan utk semua symbol), harga diambil dari situ."""
+            request borongan utk semua symbol), harga diambil dari situ.
+            06/09/2026 fix: SEBELUMNYA aset yang punya deal aktif (simbolnya ada di
+            active_deals) di-skip TOTAL dari daftar -- masuk akal sebelum ada fitur
+            cancel-sebagian, tapi begitu deal di-cancel sebagian (mis. cancel 80%),
+            sisa 20%-nya TETAP jadi deal aktif (masih ada di active_deals), padahal
+            80% saldo wallet-nya sudah lepas dari tracking & seharusnya boleh dijual.
+            Sekarang hitung SELISIH: saldo bebas wallet dikurangi qty yang masih
+            ditrack aktif utk aset itu -- selisih positif (>=$5) itu yang ditawarkan
+            sbg sumber dana, BUKAN seluruh saldo (supaya porsi yang masih jadi deal
+            aktif tidak ikut ketawarkan buat dijual)."""
             MIN_VALUE_USDT = 5.0
             try:
                 with active_deals_lock:
-                    deal_assets = {s.replace("USDT", "") for s in active_deals.keys()}
+                    tracked_qty = {}
+                    for s, dd in active_deals.items():
+                        a = s.replace("USDT", "")
+                        tracked_qty[a] = tracked_qty.get(a, 0.0) + float(dd.get("qty_coin", 0) or 0)
                 price_map = {t.get("symbol"): float(t.get("lastPrice", 0) or 0) for t in (get_ticker_24h() or [])}
                 out = []
                 for item in get_binance_spot_assets():
                     asset = item["asset"]
-                    if asset in deal_assets:
+                    excess_qty = item["free"] - tracked_qty.get(asset, 0.0)
+                    if excess_qty <= 0:
                         continue
                     price = price_map.get(item["symbol"], 0.0)
                     if price <= 0:
                         continue
-                    value_usdt = item["free"] * price
+                    value_usdt = excess_qty * price
                     if value_usdt < MIN_VALUE_USDT:
                         continue
-                    out.append({"asset": asset, "free": item["free"], "value_usdt": round(value_usdt, 2)})
+                    out.append({"asset": asset, "free": excess_qty, "value_usdt": round(value_usdt, 2)})
                 out.sort(key=lambda a: -a["value_usdt"])
                 return jsonify({"ok": True, "assets": out})
             except Exception as e:
