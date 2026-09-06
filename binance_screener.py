@@ -9692,9 +9692,11 @@ document.addEventListener('DOMContentLoaded', function() {
           </div>
         </div>
       </div>
-      <!-- Scan button + status -->
+      <!-- Scan button (06/09/2026: tombol "Scan Sekarang" dihapus atas permintaan Mas Budi --
+           dropdown "Pilih item hasil scan" + detail kriteria sudah otomatis terisi dari hasil
+           scan background tiap strategi (sama seperti yang tampil di tab STRATEGIES), jadi
+           tombol scan manual terpisah tidak diperlukan lagi. Tombol Open Sekarang tetap.) -->
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
-        <button id="btn-scan" onclick="doManualScan()" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:7px 18px;font-size:12px;cursor:pointer;font-family:var(--font)">🔍 Scan Sekarang</button>
         <button id="btn-open-prompt" onclick="promptOpenLong()" style="background:var(--green);color:#000;border:none;border-radius:4px;padding:7px 18px;font-size:12px;cursor:pointer;font-family:var(--font)">Open Sekarang</button>
         <span id="scan-status" style="font-size:11px;color:var(--muted)"></span>
 
