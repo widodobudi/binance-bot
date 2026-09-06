@@ -14200,6 +14200,7 @@ def run_web_dashboard():
 #   - CLOSE: close deal sekarang atau hold (T2)
 # ============================================================
 import urllib.request as _urllib_req
+import urllib.error as _urllib_err
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AI_DECISION_MODEL  = "claude-sonnet-5"   # naik dari Haiku 4.5 (29/08/2026, maksimalkan kredit Anthropic yg jarang kepakai)
@@ -14304,6 +14305,22 @@ def _anthropic_ai_call(prompt: str, model: str = None) -> str:
                     daemon=True
                 ).start()
             return text
+    except _urllib_err.HTTPError as e:
+        # 06/09/2026 (permintaan Mas Budi): SEBELUMNYA str(HTTPError) cuma kasih status
+        # HTTP mentah ("HTTP Error 400: Bad Request"), tanpa pesan asli dari Anthropic --
+        # notif Telegram jadi tidak informatif, tidak bisa bedakan credit habis vs request
+        # salah format vs sebab lain. Sekarang baca body respons error-nya juga (Anthropic
+        # kirim {"error":{"type":..., "message":...}}) supaya alasan sebenarnya tampil.
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            err_body = ""
+        err_msg = ""
+        try:
+            err_msg = _json.loads(err_body).get("error", {}).get("message", "")
+        except Exception:
+            pass
+        raise RuntimeError(f"HTTP {e.code}: {err_msg or err_body or e.reason}")
     except Exception:
         raise
 
