@@ -5959,15 +5959,30 @@ def thread2_monitor():
         # — SKIP untuk akumulasi: exit via TP/SL/Timeout, bukan trailing
         _is_akum = strat in ('akum_entry_a', 'akum_entry_b')
         if (not armed) and (not _is_akum) and get_deal_override(sym, 'arm_trailing_enabled', True) and prof_peak >= get_arm_pct(live_atrp):
-            # AI decision jika ai_call=True untuk deal ini
+            # AI decision jika ai_call=True -- cooldown 10 menit (06/09/2026, pola sama persis dgn
+            # fix ai_decision_close 03/09/2026): SEBELUMNYA ai_decision_armed() ditanya ULANG tiap
+            # siklus T2 (~15-20 detik) selama profit masih di atas ambang arm & AI masih bilang
+            # HOLD -- kalau 1 deal nyangkut di zona itu berlama-lama, boros panggilan Sonnet 5 utk
+            # keputusan yg pada dasarnya sama berulang-ulang (celah ini luput saat close/add_fund
+            # dikasih cooldown serupa sebelumnya).
+            _arm_denied = False
             if get_deal_override(sym, 'ai_call', True):
-                if not ai_decision_armed(sym, d.get('strategy', 'brkX2'), d, price, peak):
-                    log(f"[T2] {sym} ARM ditahan oleh AI decision")
-                    # skip arm kali ini, cek lagi di siklus berikutnya
+                _arm_ai_hold_until = float(d.get('arm_ai_hold_until', 0) or 0)
+                if time.time() < _arm_ai_hold_until:
+                    _arm_denied = True
+                elif not ai_decision_armed(sym, d.get('strategy', 'brkX2'), d, price, peak):
+                    _arm_denied = True
+                    log(f"[T2] {sym} ARM ditahan oleh AI decision (cooldown 10 menit)")
                     with active_deals_lock:
-                        if sym in active_deals: active_deals[sym]['last_price'] = price
+                        if sym in active_deals:
+                            active_deals[sym]['arm_ai_hold_until'] = time.time() + 10 * 60
                     save_active_deals()
-                    continue
+            if _arm_denied:
+                # skip arm kali ini, cek lagi setelah cooldown lewat
+                with active_deals_lock:
+                    if sym in active_deals: active_deals[sym]['last_price'] = price
+                save_active_deals()
+                continue
             armed = True
             log(f"[T2] {sym} trailing ARMED (peak profit {prof_peak:.2f}%, ATR% live {live_atrp:.2f}%)")
             # Simpan waktu arm, ATR% live saat arm (acuan un-arm), dan stoch saat arm
