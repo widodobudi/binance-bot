@@ -3343,10 +3343,19 @@ def execute_add_fund(sym: str, add_usd: float) -> dict:
     """
     05/09/2026 (dipisah dari route /manual_addfund supaya bisa dipanggil juga dari
     fitur "Add Fund dari Aset Lain" -- add fund ke deal aktif, tapi dananya berasal
-    dari JUAL aset lain di wallet, bukan USDT nganggur). Melakukan buy tambahan lewat
-    send_add_funds(), lalu recompute avg_price (formula sama persis dgn yang sudah
-    ada di route -- based on BASE_ORDER_VOLUME, BUKAN qty_coin real; sengaja dipertahankan
-    sama supaya kedua entry point konsisten, bukan tempat buat sekalian benerin akurasinya).
+    dari JUAL aset lain di wallet, bukan USDT nganggur).
+    06/09/2026 (permintaan Mas Budi): add fund MANUAL (tombol +Fund / Add Fund dari
+    Aset Lain) sekarang boleh dilakukan berkali-kali per deal -- gembok add_fund_sent
+    lama diangkat dari jalur ini. Flag add_fund_sent TETAP dipasang setelah sukses,
+    tapi sekarang cuma dikonsultasikan oleh logika auto-tier-sizing add-fund di T2
+    (thread2_monitor) supaya auto-add-fund tidak ikut nembak ulang di atas add
+    manual -- bukan lagi buat mengunci jalur manual ini sendiri.
+    avg_price SEKARANG dibaca dari entry_price yang sudah dihitung benar oleh
+    send_add_funds() (rata-rata tertimbang dari qty_coin real di Binance -- otomatis
+    tetap benar walau add fund berkali-kali), BUKAN dihitung ulang pakai konstanta
+    BASE_ORDER_VOLUME seperti sebelumnya (rumus lama cuma kebetulan benar utk add
+    PERTAMA; kalau dipakai lagi utk add KEDUA dst hasilnya salah karena tidak tahu
+    modal sebelumnya sudah bertambah dari add sebelumnya).
     Return dict {"ok", "sym", "add_usd", "price", "avg_price", "error"}.
     """
     sym = str(sym).upper().strip()
@@ -3354,8 +3363,6 @@ def execute_add_fund(sym: str, add_usd: float) -> dict:
         if sym not in active_deals:
             return {"ok": False, "error": f"{sym} tidak ada di active_deals"}
         d = dict(active_deals[sym])
-    if d.get('add_fund_sent'):
-        return {"ok": False, "error": "Add fund sudah pernah dikirim sebelumnya."}
     strat = d.get('strategy', 'brkX2')
     try:
         price_now = get_price_now(sym)
@@ -3364,16 +3371,24 @@ def execute_add_fund(sym: str, add_usd: float) -> dict:
         ok = send_add_funds(sym, add_usd, strat)
         if not ok:
             return {"ok": False, "error": "Binance order add fund gagal (cek log server untuk detail)" if USE_BINANCE_DIRECT else "3Commas menolak add fund"}
-        entry_price = d.get('entry_price', price_now)
-        base_usd    = BASE_ORDER_VOLUME
-        avg_price   = (base_usd * entry_price + add_usd * price_now) / (base_usd + add_usd)
         ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
         with active_deals_lock:
             if sym in active_deals:
+                if USE_BINANCE_DIRECT:
+                    # send_add_funds() sudah update qty_coin + entry_price (avg tertimbang
+                    # dari qty & harga fill REAL) -- tinggal dibaca lagi di sini.
+                    avg_price = float(active_deals[sym].get('entry_price', price_now))
+                else:
+                    # Jalur 3Commas (legacy, tidak update qty_coin/entry_price sendiri) --
+                    # pertahankan rumus perkiraan lama, cuma valid utk add fund PERTAMA.
+                    entry_price_before = d.get('entry_price', price_now)
+                    avg_price = (BASE_ORDER_VOLUME * entry_price_before + add_usd * price_now) / (BASE_ORDER_VOLUME + add_usd)
+                    active_deals[sym]['entry_price'] = avg_price
                 active_deals[sym]['add_fund_sent'] = True
-                active_deals[sym]['entry_price']   = avg_price
                 active_deals[sym]['peak']          = max(active_deals[sym].get('peak', avg_price), avg_price)
                 active_deals[sym]['trailing_armed'] = False
+            else:
+                avg_price = price_now
         with active_deals_lock:
             d2 = dict(active_deals)
         try:
