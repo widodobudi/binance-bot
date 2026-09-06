@@ -13593,6 +13593,14 @@ def run_web_dashboard():
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)})
 
+        # 06/09/2026: decorator route ini HILANG dari kode sejak awal (dicek via git log -S,
+        # string "/manual_scan" tidak pernah ada di riwayat git manapun) -- akibatnya POST
+        # /manual_scan selalu 404, Flask balikin halaman error HTML, dan tombol "Scan Sekarang"
+        # gagal parse JSON ("Unexpected token '<'"). Ditambahkan kembali di sini. CATATAN:
+        # run_manual_scan() ini KHUSUS brkX2-12h (belum ikut dropdown "Strategi" yang dipilih
+        # di panel Manual Scan) -- itu perbaikan/fitur terpisah yang masih perlu didesain lebih
+        # lanjut (permintaan Mas Budi 06/09/2026: scan harus ikut strategi yang dipilih).
+        @app.route("/manual_scan", methods=["POST"])
         def manual_scan_endpoint():
             result = run_manual_scan()
             return jsonify(result)
