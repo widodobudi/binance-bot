@@ -10565,13 +10565,13 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
   <div style="overflow-x:auto">
     <table id="ct-table" style="width:100%;border-collapse:collapse;font-size:11px">
       <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
-        <th data-sort-key="open_time" onclick="sortClosedTrades('open_time')" style="text-align:left;padding:5px 8px;cursor:pointer">Opened</th>
-        <th data-sort-key="close_time" onclick="sortClosedTrades('close_time')" style="text-align:left;padding:5px 8px;cursor:pointer">Close</th>
         <th data-sort-key="symbol" onclick="sortClosedTrades('symbol')" style="text-align:left;padding:5px 8px;cursor:pointer">Pair</th>
         <th data-sort-key="strategy" onclick="sortClosedTrades('strategy')" style="text-align:left;padding:5px 8px;cursor:pointer">Strategi</th>
+        <th data-sort-key="open_time" onclick="sortClosedTrades('open_time')" style="text-align:left;padding:5px 8px;cursor:pointer">Opened</th>
         <th style="text-align:right;padding:5px 8px">Entry</th>
-        <th data-sort-key="rsi_open" onclick="sortClosedTrades('rsi_open')" style="text-align:right;padding:5px 8px;cursor:pointer" title="RSI(14) saat open long">RSI@Open</th>
+        <th data-sort-key="close_time" onclick="sortClosedTrades('close_time')" style="text-align:left;padding:5px 8px;cursor:pointer">Closed</th>
         <th style="text-align:right;padding:5px 8px">Exit</th>
+        <th data-sort-key="rsi_open" onclick="sortClosedTrades('rsi_open')" style="text-align:right;padding:5px 8px;cursor:pointer" title="RSI(14) saat open long">RSI@Open</th>
         <th data-sort-key="profit_pct" onclick="sortClosedTrades('profit_pct')" style="text-align:right;padding:5px 8px;cursor:pointer">Profit%</th>
         <th data-sort-key="profit_usd" onclick="sortClosedTrades('profit_usd')" style="text-align:right;padding:5px 8px;cursor:pointer">Profit$</th>
         <th style="text-align:right;padding:5px 8px">Modal</th>
@@ -10624,7 +10624,7 @@ function renderClosedTradesRows() {
     }
     document.querySelectorAll('#ct-table th[data-sort-key]').forEach(function(th) {
         var label = th.getAttribute('data-sort-key');
-        var text = {open_time:'Opened',close_time:'Close',symbol:'Pair',strategy:'Strategi',rsi_open:'RSI@Open',profit_pct:'Profit%',profit_usd:'Profit$',duration:'Durasi'}[label];
+        var text = {open_time:'Opened',close_time:'Closed',symbol:'Pair',strategy:'Strategi',rsi_open:'RSI@Open',profit_pct:'Profit%',profit_usd:'Profit$',duration:'Durasi'}[label];
         th.textContent = text + (closedTradesSortKey === label ? (closedTradesSortDirection === 1 ? ' ▲' : ' ▼') : '');
     });
     window._ctFilteredRows = rows;
@@ -10637,13 +10637,13 @@ function renderClosedTradesRows() {
             var usd = parseFloat(r.profit_usd||0);
             var clr = pct>=0?'var(--green)':'var(--red)';
             return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">' +
-                '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.open_time ? r.open_time.substring(0,16) : '-') + '</td>' +
-                '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.close_time||'').substring(0,16) + '</td>' +
                 '<td style="padding:5px 8px;font-weight:600">' + (r.symbol ? ('<a href="javascript:void(0)" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="color:#2962ff;text-decoration:none;cursor:pointer" title="Buka chart TradingView">' + r.symbol + '</a>') : '-') + '</td>' +
                 '<td style="padding:5px 8px;color:var(--muted)">' + (strat_map[r.strategy]||r.strategy||'-') + '</td>' +
+                '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.open_time ? r.open_time.substring(0,16) : '-') + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.entry_price||'-') + '</td>' +
-                '<td style="padding:5px 8px;text-align:right;font-size:10px;color:var(--muted)">' + (r.rsi_open||'-') + '</td>' +
+                '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.close_time||'').substring(0,16) + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.exit_price||'-') + '</td>' +
+                '<td style="padding:5px 8px;text-align:right;font-size:10px;color:var(--muted)">' + (r.rsi_open||'-') + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;color:' + clr + '">' + (pct>=0?'+':'') + pct.toFixed(2) + '%</td>' +
                 '<td style="padding:5px 8px;text-align:right;color:' + clr + '">' + (usd>=0?'+':'') + usd.toFixed(2) + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;color:var(--muted)">$' + (r.base_usd||'-') + '</td>' +
@@ -10707,7 +10707,7 @@ function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
     var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h'};
-    var headers = ['Opened','Close','Pair','Strategi','Entry','RSI@Open','Exit','Profit%','Profit$','Modal','Durasi','Alasan'];
+    var headers = ['Pair','Strategi','Opened','Entry','Closed','Exit','RSI@Open','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
         if (v.indexOf(',') !== -1 || v.indexOf('"') !== -1 || v.indexOf('\\n') !== -1) { v = '"' + v.replace(/"/g, '""') + '"'; }
@@ -10715,8 +10715,8 @@ function exportCtCsv() {
     };
     var lines = [headers.join(',')];
     rows.forEach(function(r) {
-        lines.push([r.open_time||'', r.close_time||'', r.symbol||'', strat_map[r.strategy]||r.strategy||'',
-            r.entry_price||'', r.rsi_open||'', r.exit_price||'', r.profit_pct||'', r.profit_usd||'', r.base_usd||'',
+        lines.push([r.symbol||'', strat_map[r.strategy]||r.strategy||'', r.open_time||'', r.entry_price||'',
+            r.close_time||'', r.exit_price||'', r.rsi_open||'', r.profit_pct||'', r.profit_usd||'', r.base_usd||'',
             r.duration||'', r.exit_reason||''].map(csvEsc).join(','));
     });
     var blob = new Blob([lines.join('\\n')], {type: 'text/csv;charset=utf-8;'});
