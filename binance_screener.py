@@ -14229,6 +14229,17 @@ AI_LAST_PROVIDER = "Belum ada keputusan AI"
 
 _ai_quota_notif_sent = False  # flag agar notif quota habis tidak berulang
 
+# 06/09/2026 (permintaan Mas Budi): cooldown SKIP per (symbol, strategi) utk ai_decision_open()
+# -- SEBELUMNYA kandidat yang terus lolos filter rule-based tapi di-SKIP AI bakal ditanya ULANG
+# tiap siklus scan (3-4 menit) SELAMA kandidat itu masih lolos filter, walau kondisi pasarnya
+# belum berubah berarti dari pertanyaan sebelumnya -- ini kontributor volume panggilan AI
+# TERBESAR (273 panggilan/2,8 jam versi babak-1, tercatat di ai_decisions_log.txt). Cooldown
+# ini MURNI memangkas pertanyaan yg praktis identik/redundan, TIDAK mengurangi kualitas
+# keputusan -- begitu cooldown habis, kandidat yg masih lolos filter tetap ditanya AI seperti
+# biasa (bukan di-skip permanen). OPEN tidak butuh cooldown (begitu dibuka, bukan kandidat lagi).
+AI_OPEN_SKIP_COOLDOWN_SEC = 15 * 60
+_ai_open_skip_cooldown = {}   # {(symbol, strategy): until_timestamp}
+
 # 04/09/2026: model yg mendukung "adaptive thinking" (makanya "output_config":{"effort":...}
 # valid dikirim ke situ) -- dokumentasi resmi Anthropic: Claude Sonnet 4.5, Opus 4.5, Haiku 4.5
 # dan model Claude 4 ke bawah TIDAK dukung adaptive thinking sama sekali ("extended-thinking-only"),
@@ -14620,7 +14631,13 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     Telegram di sini -- dipakai saat keputusan ini BELUM final (masih akan direview
     ulang di babak 2/batch), supaya user tidak dapat notif "OPEN" yang lalu ternyata
     dibuang di babak berikutnya. Caller yang tanggung jawab kirim notif final sendiri.
+    06/09/2026: cooldown SKIP per (symbol, strategi) -- lihat AI_OPEN_SKIP_COOLDOWN_SEC.
     """
+    _cd_key = (symbol, strategy)
+    _cd_until = _ai_open_skip_cooldown.get(_cd_key, 0)
+    if time.time() < _cd_until:
+        log(f"[AI] OPEN decision {symbol} ({strategy}): SKIP (cooldown, {(_cd_until - time.time())/60:.1f} menit lagi) -- tidak tanya AI ulang")
+        return False
     ind_str  = "\n".join(f"- {k}: {v}" for k, v in indicators.items())
     htf_str  = fetch_htf_context_for_ai(symbol)
     ltf_str  = fetch_ltf_context_for_ai(symbol)
@@ -14663,6 +14680,8 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     first_line = lines[0].strip().upper()
     decision = "OPEN" in first_line
     reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+    if not decision:
+        _ai_open_skip_cooldown[_cd_key] = time.time() + AI_OPEN_SKIP_COOLDOWN_SEC
     log(f"[AI] OPEN decision {symbol}: {first_line} → {'BUKA' if decision else 'SKIP'}")
     # Riwayat lengkap semua keputusan (OPEN maupun SKIP) ke ai_decisions_log.txt (04/09/2026,
     # permintaan Mas Budi -- utk investigasi/penyelidikan nanti, terlepas dari notify Telegram).
