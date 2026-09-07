@@ -9514,6 +9514,17 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="card-header" onclick="toggleCard(this)"><h2>AUTO SELL ASSET <span class="card-toggle">&#9660;</span></h2></div>
         <div class="card-body" style="font-size:11px">
             <div style="color:var(--muted);margin-bottom:8px">Tiap asset dipantau &amp; dieksekusi independen — begitu 1 asset crossing naik lewat target, cuma asset itu yang dijual (95% saldo bebas) &amp; nonaktif; asset lain di daftar tetap jalan.</div>
+            <!-- 07/09/2026 (permintaan Mas Budi): widget Convert Aset berdiri sendiri, TIDAK
+                 tergantung tabel Auto Sell Asset (sebelumnya tombol CONVERT cuma muncul per-baris
+                 SETELAH aset ditambahkan lewat form "+ Tambah asset" -- tidak jelas/tidak ke-notice
+                 kalau tabelnya masih kosong atau baru pertama kali pakai). Pakai ulang
+                 openConvertModal(asset) yang sudah ada, cuma beda titik masuknya -- tidak perlu
+                 endpoint/backend baru. -->
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding:8px 10px;background:rgba(124,92,255,0.08);border:1px solid rgba(124,92,255,0.3);border-radius:6px">
+                <span style="color:var(--muted)">Convert Aset cepat (tanpa perlu tambah ke Auto Sell dulu):</span>
+                <select id="convert-asset-picker" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px"><option value="">Memuat...</option></select>
+                <button type="button" onclick="openConvertModalFromPicker()" style="background:#7c5cff;color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">CONVERT</button>
+            </div>
             <div style="overflow-x:auto">
             <table style="width:100%;border-collapse:collapse">
                 <thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--border)">
@@ -10271,6 +10282,20 @@ function loadAutoSellConfig() {
                 sel.onchange = suggestNewAssetAvg;
                 suggestNewAssetAvg();
             }
+            var convSel = document.getElementById('convert-asset-picker');
+            if (convSel) {
+                convSel.innerHTML = '';
+                if (!freeAssets.length) {
+                    convSel.innerHTML = '<option value="">Tidak ada aset bebas</option>';
+                } else {
+                    freeAssets.forEach(function(item) {
+                        var opt2 = document.createElement('option');
+                        opt2.value = item.asset;
+                        opt2.textContent = item.asset + ' (' + item.free + ')';
+                        convSel.appendChild(opt2);
+                    });
+                }
+            }
             renderAutoSellTable(cfg.assets || {});
         }).catch(function(e){
             var tbody = document.getElementById('auto-sell-tbody');
@@ -10446,6 +10471,12 @@ function addAutoSellAsset() {
             if (srcEl) srcEl.textContent = '';
             renderAutoSellTable(d.assets || {});
         });
+}
+function openConvertModalFromPicker() {
+    var sel = document.getElementById('convert-asset-picker');
+    var asset = sel ? sel.value : '';
+    if (!asset) { alert('Pilih aset dulu.'); return; }
+    openConvertModal(asset);
 }
 function openConvertModal(asset) {
     var modal = document.getElementById('convert-modal');
