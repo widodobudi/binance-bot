@@ -1848,6 +1848,29 @@ def send_telegram(message: str, parse_mode: str = None):
     except Exception as e:
         log(f"WARN gagal kirim Telegram: {e}")
 
+# 07/09/2026: counter sampel EMA200(1D) per strategi -- lihat memory
+# project_trendconfirm_htf_watch.md. Target 13/strategi = titik CEK PERTAMA,
+# bukan titik keputusan otomatis -- kalau di 13 sampel polanya masih campur/
+# tidak jelas, tunggu sampel berikutnya, jangan langsung dijadikan gate.
+EMA200_WATCH_TARGET = 13
+
+def _bump_ema200_watch_count(strategy: str) -> int:
+    """Naikkan counter sampel EMA200(1D) utk `strategy`, simpan ke /data, return count baru.
+    Gagal baca/tulis -> return 0 (counter cuma buat visibilitas, bukan data kritikal)."""
+    path = os.path.join("/data", "ema200_watch_state.json")
+    try:
+        state = {}
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                state = json.load(f)
+        state[strategy] = state.get(strategy, 0) + 1
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        return state[strategy]
+    except Exception as e:
+        log(f"WARN ema200_watch_state {strategy}: {e}")
+        return 0
+
 def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
     """Append event Open/Armed/Close + semua nilai indikator ke open-arm-close.txt
     dan kirim notifikasi Telegram yang sama.
@@ -1897,13 +1920,15 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
                 if ema200_1d is not None and not pd.isna(ema200_1d) and ema200_1d > 0:
                     merged.setdefault("ema200_1d", round(float(ema200_1d), 8))
                     merged.setdefault("pct_vs_ema200_1d", f"{(close_1d / ema200_1d - 1) * 100:+.2f}%")
+                    _ema200_n = _bump_ema200_watch_count(strategy)
+                    merged.setdefault("ema200_sample", f"{_ema200_n}/{EMA200_WATCH_TARGET}")
         except Exception as error:
             log(f"WARN log_oac ema200_1d enrichment {symbol}: {error}")
     standard_fields = (
         "entry_price", "peak_price", "peak_profit", "arm_pct", "atr_pct", "trail_dist",
         "rsi", "stoch_k", "stoch_d", "macd_hist", "bb_pct", "williams_r", "cci", "obv",
-        "ema20", "st_dir", "ema200_1d", "pct_vs_ema200_1d", "add_usd", "total_usd",
-        "profit_pct", "exit_reason",
+        "ema20", "st_dir", "ema200_1d", "pct_vs_ema200_1d", "ema200_sample", "add_usd",
+        "total_usd", "profit_pct", "exit_reason",
     )
     for field in standard_fields:
         merged.setdefault(field, "—")
