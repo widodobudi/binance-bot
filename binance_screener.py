@@ -1882,10 +1882,28 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
                         merged[key] = value
         except Exception as error:
             log(f"WARN log_oac indicator enrichment {symbol}: {error}")
+        # 07/09/2026: logging EMA200 1D (BUKAN gate) -- kejadian T/USDT, lihat
+        # memory project_trendconfirm_htf_watch.md. CCI backtest sudah membuktikan
+        # CCI tidak diskriminatif utk TrenKonfirmasi-4h; EMA200(1D) masih hipotesis
+        # HTF yang belum ada sampel sama sekali -- baru bisa dibacktest setelah
+        # OPEN event2 berikutnya numpuk data ini. JANGAN dipakai sbg syarat entry
+        # sebelum dibacktest dan dikonfirmasi ke Mas Budi.
+        try:
+            import pandas_ta as _pta
+            df1d = get_ohlcv_htf(symbol, interval="1d", limit=250)
+            if df1d is not None and len(df1d) >= 200:
+                ema200_1d = _pta.ema(df1d["close"], length=200).iloc[-1]
+                close_1d = df1d["close"].iloc[-1]
+                if ema200_1d is not None and not pd.isna(ema200_1d) and ema200_1d > 0:
+                    merged.setdefault("ema200_1d", round(float(ema200_1d), 8))
+                    merged.setdefault("pct_vs_ema200_1d", f"{(close_1d / ema200_1d - 1) * 100:+.2f}%")
+        except Exception as error:
+            log(f"WARN log_oac ema200_1d enrichment {symbol}: {error}")
     standard_fields = (
         "entry_price", "peak_price", "peak_profit", "arm_pct", "atr_pct", "trail_dist",
         "rsi", "stoch_k", "stoch_d", "macd_hist", "bb_pct", "williams_r", "cci", "obv",
-        "ema20", "st_dir", "add_usd", "total_usd", "profit_pct", "exit_reason",
+        "ema20", "st_dir", "ema200_1d", "pct_vs_ema200_1d", "add_usd", "total_usd",
+        "profit_pct", "exit_reason",
     )
     for field in standard_fields:
         merged.setdefault(field, "—")
