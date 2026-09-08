@@ -358,23 +358,27 @@ TRENDCONFIRM_RSI_MAX          = 75.0     # syarat wajib BARU (03/09/2026, koreks
 TRENDCONFIRM_BB_PCT_SECONDARY= 0.65      # syarat SEKUNDER (skor/ranking, bukan gerbang wajib)
 TRENDCONFIRM_CLOSE_HARD_CEILING_EXTRA_PCT = 5.0  # batas absolut close = hard_stop_pct(atr) + ini,
                                           # TIDAK BISA di-override AI (Fase 2, permintaan Mas Budi 03/09/2026)
-TRENDCONFIRM_BATCH_POOL_SIZE = 15        # (03/09/2026, permintaan Mas Budi, direvisi setelah
+TRENDCONFIRM_BATCH_POOL_SIZE = 10        # (03/09/2026, permintaan Mas Budi, direvisi setelah
                                           # koreksi beliau) batas JUMLAH kandidat yg dievaluasi AI
                                           # individual sebelum babak 2 -- BUKAN batas waktu. Versi
                                           # awal (batas 45 detik) ternyata cuma sempat memproses
                                           # ~5-6 kandidat krn latensi AI individual (~7-9 detik/
                                           # kandidat), jadi babak 2 nyaris tidak menyaring apa-apa.
                                           # Dengan batas JUMLAH, kumpulan kandidat yg masuk ke
-                                          # babak 2 benar-benar besar (s/d 15) tidak peduli berapa
-                                          # lama prosesnya.
+                                          # babak 2 benar-benar besar tidak peduli berapa lama
+                                          # prosesnya. 08/09/2026 (audit biaya API, permintaan Mas
+                                          # Budi): diturunkan dari 15 -- log nunjukkin pool sering
+                                          # nyaris penuh (14/15), jadi ini pemotong volume call AI
+                                          # individual/babak-1 yang nyata. Tinjau lagi 15/09/2026.
 TRENDCONFIRM_BATCH_MAX_APPROVE = 5       # batas atas yg diloloskan babak KEDUA (AI batch re-analysis)
                                           # -- Max Deals (3) tetap jadi batas akhir yg benar2 dibuka,
                                           # angka 5 ini kasih sedikit ruang kalau Max Deals dinaikkan
 
 # Konstanta generik pola 2-babak AI (03/09/2026) -- dipakai strategi LAIN selain TrenKonfirmasi-4h
 # yg konstanta batch-nya sendiri sudah di atas (TRENDCONFIRM_BATCH_*). Nilai sama, dipisah supaya
-# tuning salah satu strategi nggak ikut mengubah yg lain.
-AI_BATCH_POOL_SIZE   = 15
+# tuning salah satu strategi nggak ikut mengubah yg lain. 08/09/2026 (audit biaya API): diturunkan
+# 15->10, sama alasan spt TRENDCONFIRM_BATCH_POOL_SIZE di atas. Tinjau lagi 15/09/2026.
+AI_BATCH_POOL_SIZE   = 10
 AI_BATCH_MAX_APPROVE = 5
 
 # ── STRATEGI #5: Akumulasi Detector (4h, scan periodik) ───────────────────────
@@ -2409,9 +2413,14 @@ def save_auto_sell_config(config: dict) -> None:
 
 
 def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg_price: float = None,
-                            convert_leftover_bnb: bool = None, hold_minutes: float = None) -> dict:
+                            convert_leftover_bnb: bool = None, hold_minutes: float = None,
+                            sell_pct: float = None) -> dict:
     """Tambah/update 1 entry asset di auto-sell config, tanpa ganggu asset lain.
-    avg_price/convert_leftover_bnb/hold_minutes=None -> pertahankan nilai yang sudah ada (kalau ada)."""
+    avg_price/convert_leftover_bnb/hold_minutes/sell_pct=None -> pertahankan nilai yang
+    sudah ada (kalau ada). sell_pct (08/09/2026, permintaan Mas Budi): persentase saldo
+    yang dijual begitu crossing kena, default 95 (sama persis perilaku lama). Cuma kalau
+    >=95 sisa-nya bisa auto-convert ke BNB (lihat _check_auto_sell_one) -- di bawah itu
+    sisanya kebesaran buat di-dump ke BNB begitu saja, jadi dibiarkan."""
     config = load_auto_sell_config()
     asset = str(asset).upper()
     existing = config["assets"].get(asset, {})
@@ -2421,6 +2430,8 @@ def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg
         convert_leftover_bnb = existing.get("convert_leftover_bnb", False)
     if hold_minutes is None:
         hold_minutes = existing.get("hold_minutes", 0)
+    if sell_pct is None:
+        sell_pct = existing.get("sell_pct", 95)
     # Threshold berubah (mis. user naikkan target) -> timer konfirmasi yg lagi jalan
     # (kalau ada) jadi tidak relevan lagi, reset supaya dihitung ulang dari nol thd
     # threshold baru, bukan diam-diam lanjut pakai target lama.
@@ -2430,6 +2441,7 @@ def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg
         "enabled": bool(enabled), "threshold_usdt": float(threshold_usdt),
         "avg_price": float(avg_price or 0), "convert_leftover_bnb": bool(convert_leftover_bnb),
         "hold_minutes": max(0.0, float(hold_minutes or 0)),
+        "sell_pct": min(100.0, max(1.0, float(sell_pct or 95))),
     }
     save_auto_sell_config(config)
     return config
@@ -3074,17 +3086,20 @@ def _convert_leftover_to_bnb(asset: str, symbol: str, filter_info: dict):
 
 
 def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: bool = False,
-                          hold_minutes: float = 0) -> None:
+                          hold_minutes: float = 0, sell_pct: float = 95.0) -> None:
     """Cek 1 asset: begitu harga >= threshold, mulai hitung masa tunggu konfirmasi
     (hold_minutes, default 0 = eksekusi instan seperti sebelumnya). Kalau harga
-    BERTAHAN >= threshold sepanjang durasi itu, baru jual 95% saldo bebasnya lalu
-    nonaktifkan HANYA entry asset ini (asset lain di daftar tetap jalan). Kalau
-    harga sempat turun lagi di bawah threshold sebelum durasi terlewati, timer
+    BERTAHAN >= threshold sepanjang durasi itu, baru jual sell_pct% saldo bebasnya.
+    Kalau harga sempat turun lagi di bawah threshold sebelum durasi terlewati, timer
     DIBATALKAN TOTAL -- harus nunggu crossing baru dari nol, bukan pause-lalu-lanjut.
     05/09/2026 (permintaan Mas Budi): sebelum ini, crossing sesaat (wick) langsung
     dieksekusi walau momentum naiknya sebenarnya masih lanjut.
-    convert_leftover_bnb: kalau True, sisa ~5% yg nggak ikut dijual otomatis dikonversi
-    ke BNB (jual ke USDT lalu beli BNB) -- buat numpuk stok BNB diskon fee 25%."""
+    convert_leftover_bnb: kalau True DAN sell_pct>=95, sisa saldo yg nggak ikut dijual
+    otomatis dikonversi ke BNB (jual ke USDT lalu beli BNB) -- buat numpuk stok BNB
+    diskon fee 25%. Di bawah 95% sisanya sengaja TIDAK di-convert (kebesaran).
+    08/09/2026 (permintaan Mas Budi): sell_pct kini bisa <100 (partial sell) --
+    entry TIDAK lagi otomatis dihapus setelah eksekusi, tetap aktif menunggu crossing
+    berikutnya untuk sisa saldo (hapus manual lewat tombol Hapus kalau tidak mau lanjut)."""
     symbol = asset + "USDT"
     if threshold <= 0:
         return
@@ -3110,7 +3125,8 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
     quantity = binance_get_asset_qty(asset)
     if quantity <= 0:
         return
-    sell_quantity = quantity * 0.95
+    sell_pct = min(100.0, max(1.0, float(sell_pct or 95)))
+    sell_quantity = quantity * (sell_pct / 100.0)
     try:
         info = _auto_sell_filter_cache.get(symbol)
         if info is None:
@@ -3136,34 +3152,40 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
         if step_size > 0:
             sell_quantity = (sell_quantity // step_size) * step_size
         if sell_quantity < info["min_qty"] or sell_quantity * price < info["min_notional"]:
-            log(f"[AUTO-SELL] {symbol} 95% saldo di bawah filter Binance — order dibatalkan")
+            log(f"[AUTO-SELL] {symbol} {sell_pct:.0f}% saldo di bawah filter Binance — order dibatalkan")
             return
     except Exception as error:
         log(f"[AUTO-SELL] {symbol} preflight gagal — order dibatalkan: {error}")
         return
     result = binance_sell_market(symbol, sell_quantity)
     bnb_result = None
-    if convert_leftover_bnb:
+    if convert_leftover_bnb and sell_pct >= 95:
         try:
             bnb_result = _convert_leftover_to_bnb(asset, symbol, info)
         except Exception as error:
             log(f"WARN [AUTO-SELL] convert leftover ke BNB {asset}: {error}")
-    remove_auto_sell_asset(asset)
+    # 08/09/2026: entry TIDAK dihapus lagi -- reset armed-timer saja supaya sisa saldo
+    # (kalau ada) nunggu crossing baru dari nol, bukan langsung ke-trigger ulang pakai
+    # timer lama. Mas Budi hapus manual lewat tombol Hapus kalau tidak mau lanjut.
+    _auto_sell_armed_since.pop(symbol, None)
     msg = (
         f"AUTO SELL {asset}/USDT\n"
         f"Harga crossing: {_fmt_price(price)} USDT\n"
         f"Threshold: {_fmt_price(threshold)} USDT\n"
         f"Saldo bebas: {quantity}\n"
-        f"Qty dijual (95%): {sell_quantity}\n"
+        f"Qty dijual ({sell_pct:.0f}%): {sell_quantity}\n"
         f"Hasil: {result.get('proceeds_usdt', 0):.2f} USDT\n"
-        "Asset ini otomatis dihapus dari daftar Auto Sell setelah satu eksekusi (asset lain di daftar tetap jalan)."
+        + ("Entry ini tetap aktif menunggu crossing berikutnya untuk sisa saldo "
+           "(hapus manual lewat tombol Hapus kalau tidak mau lanjut)."
+           if sell_pct < 100 else
+           "Entry ini tetap aktif di daftar (hapus manual lewat tombol Hapus kalau tidak mau lanjut).")
     )
     if bnb_result:
         msg += (f"\n\nSisa saldo {bnb_result['leftover_qty']} {asset} dikonversi ke BNB:\n"
                 f"{bnb_result['usdt_from_leftover']:.2f} USDT -> {bnb_result['bnb_bought']:.6f} BNB "
                 f"@ {bnb_result['bnb_avg']:.2f}")
     send_telegram(msg)
-    log(f"[AUTO-SELL] {symbol} crossing {threshold} -> sold {quantity}")
+    log(f"[AUTO-SELL] {symbol} crossing {threshold} -> sold {sell_quantity} ({sell_pct:.0f}%)")
 
 
 def check_auto_sell_crossing() -> None:
@@ -3174,7 +3196,8 @@ def check_auto_sell_crossing() -> None:
         try:
             _check_auto_sell_one(str(asset).upper(), float(cfg.get("threshold_usdt", 0) or 0),
                                   bool(cfg.get("convert_leftover_bnb", False)),
-                                  float(cfg.get("hold_minutes", 0) or 0))
+                                  float(cfg.get("hold_minutes", 0) or 0),
+                                  float(cfg.get("sell_pct", 95) or 95))
         except Exception as error:
             log(f"WARN [AUTO-SELL] {asset}: {error}")
 
@@ -9576,15 +9599,16 @@ document.addEventListener('DOMContentLoaded', function() {
                     <th style="padding:5px 6px">Harga sekarang</th>
                     <th style="padding:5px 6px">vs Avg</th>
                     <th style="padding:5px 6px">Target jual (USDT)</th>
+                    <th style="padding:5px 6px" title="Persentase saldo bebas yang dijual begitu crossing kena. Default 95%. Di bawah 100%, sisanya TIDAK dihapus dari daftar -- entry tetap aktif nunggu crossing berikutnya buat jual sisanya.">Persentase jual (%)</th>
                     <th style="padding:5px 6px" title="Begitu harga >= target, tunggu dulu sekian menit sebelum benar-benar dijual. Kalau harga turun lagi di bawah target sebelum durasi ini terlewati, batal total (harus crossing baru dari nol). 0 = jual instan begitu crossing, seperti sebelumnya.">Tahan konfirmasi (menit)</th>
                     <th style="padding:5px 6px">Jarak ke target</th>
                     <th style="padding:5px 6px" title="Hitung MUNDUR: ketik profit bersih yang diinginkan (USDT), sistem kasih tahu harga per-coin yang dibutuhkan -- cuma kalkulator, tidak otomatis mengubah Target Jual sampai diklik Pakai.">Target profit diinginkan (USDT)</th>
                     <th style="padding:5px 6px">Status</th>
                     <th style="padding:5px 6px">Aktif</th>
-                    <th style="padding:5px 6px" title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB (buat diskon fee trading 25%)">Sisa→BNB</th>
+                    <th style="padding:5px 6px" title="Cuma aktif kalau Persentase Jual >= 95% -- sisa yg nggak ikut terjual otomatis dikonversi jadi BNB (buat diskon fee trading 25%). Di bawah 95%, sisanya dibiarkan (kebesaran buat di-convert)">Sisa→BNB</th>
                     <th style="padding:5px 6px"></th>
                 </tr></thead>
-                <tbody id="auto-sell-tbody"><tr><td colspan="12" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
+                <tbody id="auto-sell-tbody"><tr><td colspan="13" style="padding:8px;color:var(--muted)">Memuat...</td></tr></tbody>
             </table>
             </div>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
@@ -10342,7 +10366,7 @@ function loadAutoSellConfig() {
             renderAutoSellTable(cfg.assets || {});
         }).catch(function(e){
             var tbody = document.getElementById('auto-sell-tbody');
-            if (tbody) tbody.innerHTML = '<tr><td colspan="12" style="color:var(--red);padding:8px">Gagal memuat: ' + e + '</td></tr>';
+            if (tbody) tbody.innerHTML = '<tr><td colspan="13" style="color:var(--red);padding:8px">Gagal memuat: ' + e + '</td></tr>';
         });
     }
 
@@ -10355,7 +10379,7 @@ function renderAutoSellTable(assets) {
     var names = Object.keys(assets);
     autoSellCurrentAssets = names;
     if (!names.length) {
-        tbody.innerHTML = '<tr><td colspan="12" style="color:var(--muted);padding:8px">Belum ada asset auto-sell. Tambah lewat form di bawah.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="13" style="color:var(--muted);padding:8px">Belum ada asset auto-sell. Tambah lewat form di bawah.</td></tr>';
         return;
     }
     tbody.innerHTML = '';
@@ -10370,6 +10394,7 @@ function renderAutoSellTable(assets) {
             '<td style="padding:5px 6px" id="auto-sell-price-' + asset + '">memuat...</td>' +
             '<td style="padding:5px 6px" id="auto-sell-avggap-' + asset + '">-</td>' +
             '<td style="padding:5px 6px"><input type="number" min="0" step="0.00000001" value="' + cfg.threshold_usdt + '" id="auto-sell-thr-' + asset + '" style="width:100px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"><div id="auto-sell-breakeven-' + asset + '" style="color:var(--muted);font-size:9px"></div></td>' +
+            '<td style="padding:5px 6px"><input type="number" min="1" max="100" step="1" value="' + (cfg.sell_pct || 95) + '" id="auto-sell-sellpct-' + asset + '" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"></td>' +
             '<td style="padding:5px 6px"><input type="number" min="0" step="1" value="' + (cfg.hold_minutes || 0) + '" id="auto-sell-hold-' + asset + '" style="width:70px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"></td>' +
             '<td style="padding:5px 6px" id="auto-sell-gap-' + asset + '">-</td>' +
             '<td style="padding:5px 6px">' +
@@ -10455,12 +10480,14 @@ function saveAutoSellRow(asset) {
     var avgEl = document.getElementById('auto-sell-avg-' + asset);
     var bnbEl = document.getElementById('auto-sell-bnb-' + asset);
     var holdEl = document.getElementById('auto-sell-hold-' + asset);
+    var sellPctEl = document.getElementById('auto-sell-sellpct-' + asset);
     var enabled = chkEl ? chkEl.checked : false;
     var threshold = parseFloat(thrEl ? thrEl.value : 0) || 0;
     var holdMinutes = Math.max(0, parseFloat(holdEl ? holdEl.value : 0) || 0);
+    var sellPct = Math.min(100, Math.max(1, parseFloat(sellPctEl ? sellPctEl.value : 95) || 95));
     var avgPrice = avgEl && avgEl.value !== '' ? parseFloat(avgEl.value) : null;
     if (enabled && threshold <= 0) { alert('Isi threshold harga yang valid.'); return; }
-    var body = {asset:asset, enabled:enabled, threshold_usdt:threshold, convert_leftover_bnb: bnbEl ? bnbEl.checked : false, hold_minutes: holdMinutes};
+    var body = {asset:asset, enabled:enabled, threshold_usdt:threshold, convert_leftover_bnb: bnbEl ? bnbEl.checked : false, hold_minutes: holdMinutes, sell_pct: sellPct};
     if (avgPrice !== null) body.avg_price = avgPrice;
     fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
         .then(function(r){ return r.json(); }).then(function(d){
@@ -14056,13 +14083,14 @@ def run_web_dashboard():
                 avg_gap_pct = ((price / avg_price) - 1) * 100 if avg_price > 0 else None
                 sugg = get_sell_suggestion(asset)
                 # Estimasi profit USDT kalau target tercapai: (target - avg_beli) x qty yg
-                # bakal dijual (95% saldo, sama persis logic eksekusi), dikurangi estimasi
-                # fee jual ~0.1% (Binance spot taker default, blm termasuk diskon BNB).
+                # bakal dijual (sell_pct% saldo, sama persis logic eksekusi), dikurangi
+                # estimasi fee jual ~0.1% (Binance spot taker default, blm termasuk diskon BNB).
+                sell_pct_cfg = min(100.0, max(1.0, float(asset_cfg.get("sell_pct", 95) or 95)))
                 est_profit_usd = None
                 sell_qty = 0.0
                 try:
                     qty = binance_get_asset_qty(asset)
-                    sell_qty = qty * 0.95
+                    sell_qty = qty * (sell_pct_cfg / 100.0)
                     if threshold > 0 and avg_price > 0 and sell_qty > 0:
                         est_profit_usd = sell_qty * threshold * (1 - 0.001) - sell_qty * avg_price
                 except Exception:
@@ -14107,7 +14135,9 @@ def run_web_dashboard():
                         convert_bnb = bool(convert_bnb) if convert_bnb is not None else None
                         hold_minutes = payload.get("hold_minutes", None)
                         hold_minutes = float(hold_minutes) if hold_minutes not in (None, "") else None
-                        upsert_auto_sell_asset(asset, enabled, threshold, avg_price, convert_bnb, hold_minutes)
+                        sell_pct = payload.get("sell_pct", None)
+                        sell_pct = float(sell_pct) if sell_pct not in (None, "") else None
+                        upsert_auto_sell_asset(asset, enabled, threshold, avg_price, convert_bnb, hold_minutes, sell_pct)
                 return jsonify({"ok": True, **load_auto_sell_config()})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
@@ -14392,8 +14422,14 @@ _ai_quota_notif_sent = False  # flag agar notif quota habis tidak berulang
 # TERBESAR (273 panggilan/2,8 jam versi babak-1, tercatat di ai_decisions_log.txt). Cooldown
 # ini MURNI memangkas pertanyaan yg praktis identik/redundan, TIDAK mengurangi kualitas
 # keputusan -- begitu cooldown habis, kandidat yg masih lolos filter tetap ditanya AI seperti
-# biasa (bukan di-skip permanen). OPEN tidak butuh cooldown (begitu dibuka, bukan kandidat lagi).
+# biasa (bukan di-skip permanen).
 AI_OPEN_SKIP_COOLDOWN_SEC = 15 * 60
+# 08/09/2026 (permintaan Mas Budi, audit biaya API): cooldown APPROVE terpisah, lebih pendek
+# dari SKIP. Alasan awal "OPEN tidak butuh cooldown (begitu dibuka, bukan kandidat lagi)" cuma
+# benar KALAU deal beneran kebuka -- kandidat yg lolos babak-1 tapi ditolak babak-2 (batch-rank),
+# atau kena MAX_DEALS penuh, tetap jadi kandidat lagi siklus berikutnya TANPA cooldown sama
+# sekali sebelum fix ini -- ditanya ulang persis pertanyaan yg sama tiap 3-4 menit.
+AI_OPEN_APPROVE_COOLDOWN_SEC = 10 * 60
 _ai_open_skip_cooldown = {}   # {(symbol, strategy): until_timestamp}
 
 # 04/09/2026: model yg mendukung "adaptive thinking" (makanya "output_config":{"effort":...}
@@ -14838,6 +14874,10 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
     if not decision:
         _ai_open_skip_cooldown[_cd_key] = time.time() + AI_OPEN_SKIP_COOLDOWN_SEC
+    else:
+        # 08/09/2026: APPROVE juga kena cooldown (lebih pendek dari SKIP) -- lihat
+        # AI_OPEN_APPROVE_COOLDOWN_SEC. Pakai key/dict yg sama, cuma durasi beda.
+        _ai_open_skip_cooldown[_cd_key] = time.time() + AI_OPEN_APPROVE_COOLDOWN_SEC
     log(f"[AI] OPEN decision {symbol}: {first_line} → {'BUKA' if decision else 'SKIP'}")
     # Riwayat lengkap semua keputusan (OPEN maupun SKIP) ke ai_decisions_log.txt (04/09/2026,
     # permintaan Mas Budi -- utk investigasi/penyelidikan nanti, terlepas dari notify Telegram).
