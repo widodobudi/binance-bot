@@ -2407,6 +2407,10 @@ def save_auto_sell_config(config: dict) -> None:
             "avg_price": float(cfg.get("avg_price", 0) or 0),
             "convert_leftover_bnb": bool(cfg.get("convert_leftover_bnb", False)),
             "hold_minutes": max(0.0, float(cfg.get("hold_minutes", 0) or 0)),
+            # 08/09/2026: sell_pct sempat kelupaan di whitelist ini -- akibatnya SELALU
+            # kebuang tiap save walau upsert_auto_sell_asset() sudah benar menyertakannya,
+            # jadi persentase jual yang diubah user selalu balik ke 95 (bug, lapor Mas Budi).
+            "sell_pct": min(100.0, max(1.0, float(cfg.get("sell_pct", 95) or 95))),
         }
     with open(AUTO_SELL_CONFIG_FILE, "w", encoding="utf-8") as file:
         json.dump({"assets": clean}, file, indent=2)
