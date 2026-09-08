@@ -14430,6 +14430,16 @@ AI_OPEN_SKIP_COOLDOWN_SEC = 15 * 60
 # atau kena MAX_DEALS penuh, tetap jadi kandidat lagi siklus berikutnya TANPA cooldown sama
 # sekali sebelum fix ini -- ditanya ulang persis pertanyaan yg sama tiap 3-4 menit.
 AI_OPEN_APPROVE_COOLDOWN_SEC = 10 * 60
+# 08/09/2026 (permintaan Mas Budi, temuan sampingan pas audit biaya API): cooldown PENDEK
+# khusus saat AI benar2 gagal total dipanggil (result kosong -- credit habis/rate limit/network
+# error), BUKAN saat AI berhasil dipanggil lalu jawab SKIP. Sebelum ini, jalur fail-open TIDAK
+# pernah pasang cooldown sama sekali -- terbukti dari log 08/09/2026 (saldo $0): tiap titik
+# keputusan retry lagi di siklus scan BERIKUTNYA, spam ~1 percobaan/1-2 detik ke Anthropic
+# (gagal) + Gemini (gagal, 429) terus menerus lintas ~7 thread scan paralel. Tidak mengubah
+# hasil keputusan (tetap fail-open ke OPEN persis spt sebelumnya) -- cuma kurangi percobaan
+# panggilan yang sia-sia selama outage/saldo habis. Sengaja lebih PENDEK dari SKIP/APPROVE
+# supaya begitu AI pulih (mis. saldo di-top-up), keputusan riil kembali jalan cepat.
+AI_UNAVAILABLE_COOLDOWN_SEC = 5 * 60
 _ai_open_skip_cooldown = {}   # {(symbol, strategy): until_timestamp}
 
 # 04/09/2026: model yg mendukung "adaptive thinking" (makanya "output_config":{"effort":...}
@@ -14862,6 +14872,8 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     if not result:
         # AI tidak tersedia sama sekali -- fail-open ke OPEN, tapi tetap dicatat (04/09/2026)
         # supaya kelihatan di riwayat kalau ada open yg terjadi TANPA analisis AI riil.
+        # 08/09/2026: pasang cooldown pendek juga di sini -- lihat AI_UNAVAILABLE_COOLDOWN_SEC.
+        _ai_open_skip_cooldown[_cd_key] = time.time() + AI_UNAVAILABLE_COOLDOWN_SEC
         log_ai_decision(
             f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] OPEN-DECISION | {strategy} | "
             f"{to_display_pair(symbol)} | OPEN (fail-open, AI tidak tersedia) | notify={notify}\n"
