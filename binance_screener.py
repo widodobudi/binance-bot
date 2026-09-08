@@ -10398,7 +10398,7 @@ function renderAutoSellTable(assets) {
             '<td style="padding:5px 6px" id="auto-sell-price-' + asset + '">memuat...</td>' +
             '<td style="padding:5px 6px" id="auto-sell-avggap-' + asset + '">-</td>' +
             '<td style="padding:5px 6px"><input type="number" min="0" step="0.00000001" value="' + cfg.threshold_usdt + '" id="auto-sell-thr-' + asset + '" style="width:100px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"><div id="auto-sell-breakeven-' + asset + '" style="color:var(--muted);font-size:9px"></div></td>' +
-            '<td style="padding:5px 6px"><input type="number" min="1" max="100" step="1" value="' + (cfg.sell_pct || 95) + '" id="auto-sell-sellpct-' + asset + '" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"></td>' +
+            '<td style="padding:5px 6px"><input type="number" min="1" max="100" step="1" value="' + (cfg.sell_pct || 95) + '" id="auto-sell-sellpct-' + asset + '" oninput="updateBnbCheckboxState(\\'' + asset + '\\')" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"></td>' +
             '<td style="padding:5px 6px"><input type="number" min="0" step="1" value="' + (cfg.hold_minutes || 0) + '" id="auto-sell-hold-' + asset + '" style="width:70px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"></td>' +
             '<td style="padding:5px 6px" id="auto-sell-gap-' + asset + '">-</td>' +
             '<td style="padding:5px 6px">' +
@@ -10407,7 +10407,7 @@ function renderAutoSellTable(assets) {
             '</td>' +
             '<td style="padding:5px 6px;color:var(--muted)" id="auto-sell-status-' + asset + '">' + (cfg.enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif') + '</td>' +
             '<td style="padding:5px 6px"><input type="checkbox" ' + (cfg.enabled ? 'checked' : '') + ' id="auto-sell-chk-' + asset + '"></td>' +
-            '<td style="padding:5px 6px" title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB (buat diskon fee trading 25%)"><input type="checkbox" ' + (cfg.convert_leftover_bnb ? 'checked' : '') + ' id="auto-sell-bnb-' + asset + '"></td>' +
+            '<td style="padding:5px 6px" title="Sisa ~5% yg nggak ikut terjual otomatis dikonversi jadi BNB (buat diskon fee trading 25%). Cuma aktif kalau Persentase Jual >= 95%."><input type="checkbox" ' + (cfg.convert_leftover_bnb ? 'checked' : '') + ' ' + ((cfg.sell_pct || 95) < 95 ? 'disabled' : '') + ' id="auto-sell-bnb-' + asset + '"></td>' +
             '<td style="padding:5px 6px;white-space:nowrap">' +
                 '<button type="button" onclick="saveAutoSellRow(\\'' + asset + '\\')" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;margin-right:4px;font-weight:600">SAVE</button>' +
                 '<button type="button" onclick="openConvertModal(\\'' + asset + '\\')" title="Cari koin lain buat convert (jual asset ini, beli koin lain yang lebih bertenaga)" style="background:#7c5cff;color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;margin-right:4px;font-weight:600">CONVERT</button>' +
@@ -10416,6 +10416,18 @@ function renderAutoSellTable(assets) {
         tbody.appendChild(tr);
         refreshAutoSellRowPrice(asset);
     });
+}
+
+// 08/09/2026 (permintaan Mas Budi): checkbox "Sisa->BNB" cuma efektif kalau Persentase Jual
+// >=95% (lihat _check_auto_sell_one di server) -- kalau tidak, tetap kelihatan aktif/bisa
+// diklik padahal no-op. Redupkan (disable) begitu <95%, TANPA hapus centangannya -- begitu
+// dinaikkan lagi ke >=95%, pilihan lama otomatis balik aktif tanpa perlu diatur ulang.
+function updateBnbCheckboxState(asset) {
+    var pctEl = document.getElementById('auto-sell-sellpct-' + asset);
+    var bnbEl = document.getElementById('auto-sell-bnb-' + asset);
+    if (!pctEl || !bnbEl) return;
+    var pct = parseFloat(pctEl.value);
+    bnbEl.disabled = !isNaN(pct) && pct < 95;
 }
 
 function refreshAutoSellRowPrice(asset) {
