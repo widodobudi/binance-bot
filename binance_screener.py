@@ -10374,7 +10374,7 @@ function renderAutoSellTable(assets) {
             '<td style="padding:5px 6px" id="auto-sell-gap-' + asset + '">-</td>' +
             '<td style="padding:5px 6px">' +
                 '<input type="number" min="0" step="0.01" placeholder="mis. 5" id="auto-sell-desired-' + asset + '" oninput="computeDesiredProfit(\\'' + asset + '\\')" style="width:80px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px">' +
-                '<div id="auto-sell-desired-hint-' + asset + '" style="color:var(--muted);font-size:9px"></div>' +
+                '<div id="auto-sell-desired-hint-' + asset + '" style="color:var(--muted);font-size:9px;font-style:italic;opacity:0.7">-> ketik profit (USDT) di atas utk lihat harga yg dibutuhkan</div>' +
             '</td>' +
             '<td style="padding:5px 6px;color:var(--muted)" id="auto-sell-status-' + asset + '">' + (cfg.enabled ? 'Aktif: menunggu crossing naik' : 'Nonaktif') + '</td>' +
             '<td style="padding:5px 6px"><input type="checkbox" ' + (cfg.enabled ? 'checked' : '') + ' id="auto-sell-chk-' + asset + '"></td>' +
@@ -10426,9 +10426,14 @@ function computeDesiredProfit(asset) {
     var desiredEl = document.getElementById('auto-sell-desired-' + asset);
     var hintEl = document.getElementById('auto-sell-desired-hint-' + asset);
     if (!desiredEl || !hintEl) return;
+    var placeholderHint = '-> ketik profit (USDT) di atas utk lihat harga yg dibutuhkan';
     var desired = parseFloat(desiredEl.value);
-    if (isNaN(desired) || desiredEl.value === '') { hintEl.innerHTML = ''; return; }
+    if (isNaN(desired) || desiredEl.value === '') {
+        hintEl.style.fontStyle = 'italic'; hintEl.style.opacity = '0.7';
+        hintEl.innerHTML = placeholderHint; return;
+    }
     var info = autoSellRowInfo[asset] || {avg_price: 0, sell_qty: 0};
+    hintEl.style.fontStyle = 'normal'; hintEl.style.opacity = '1';
     if (info.avg_price <= 0) { hintEl.innerHTML = '<span style="color:var(--red)">avg beli belum diketahui, isi dulu</span>'; return; }
     if (info.sell_qty <= 0) { hintEl.innerHTML = '<span style="color:var(--red)">saldo tidak tersedia</span>'; return; }
     // Kebalikan dari est_profit_usd = sell_qty*harga*(1-FEE) - sell_qty*avg_price
