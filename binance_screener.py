@@ -1941,7 +1941,7 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
         except Exception as error:
             log(f"WARN log_oac ema200_1d enrichment {symbol}: {error}")
     standard_fields = (
-        "entry_price", "peak_price", "peak_profit", "arm_pct", "atr_pct", "trail_dist",
+        "entry_price", "peak_price", "peak_profit", "arm_pct", "atr_pct", "rvol", "trail_dist",
         "rsi", "stoch_k", "stoch_d", "macd_hist", "bb_pct", "williams_r", "cci", "obv",
         "ema20", "st_dir", "ema200_1d", "pct_vs_ema200_1d", "ema200_sample", "add_usd",
         "total_usd", "profit_pct", "exit_reason",
@@ -12094,11 +12094,21 @@ def thread_akum_entry_scan():
                 if pd.isna(_rsi_akum): _rsi_akum = None
             except Exception:
                 _rsi_akum = None
+            # 10/09/2026 (permintaan Mas Budi, kasus TSLAB): RVOL 4h sebelumnya TIDAK PERNAH
+            # dikirim ke AI utk Akumulasi Entry A/B (_ai_ind gak punya field ini sama sekali,
+            # dan detail['rvol'] di bawah cuma placeholder 0.0) -- AI menilai OPEN/SKIP tanpa
+            # tahu momentum/volume riil-nya, sama pola formula rvol yg dipakai TrenKonfirmasi-4h.
+            try:
+                _vol_ma20_akum = df['vol'].rolling(20).mean().iloc[-1]
+                _rvol_akum = float(df['vol'].iloc[-1]) / float(_vol_ma20_akum) if pd.notna(_vol_ma20_akum) and _vol_ma20_akum > 0 else None
+            except Exception:
+                _rvol_akum = None
 
             if is_ai_call_open_enabled('akum_entry_a'):
                 _ai_ind = {'entry_type': entry_type, 'price_now': _fmt_price(price_now),
                            'atr_pct': f"{item.get('atr_pct', 3.0):.2f}%"}
                 if _rsi_akum is not None: _ai_ind['rsi'] = f"{_rsi_akum:.1f}"
+                if _rvol_akum is not None: _ai_ind['rvol'] = f"{_rvol_akum:.2f}x"
                 if not ai_decision_open(sym, f'Akumulasi-4h Entry {entry_type}', _ai_ind, active_deal_count(), notify=False):
                     log(f"[T_AKUM_ENTRY] {sym} babak-1 di-skip oleh AI individual")
                     continue
@@ -12111,7 +12121,7 @@ def thread_akum_entry_scan():
                 'support_reentry_ref': support_reentry_ref, 'resistance_break_ref': resistance_break_ref,
                 'has_struct': has_struct, 'atrp_item': item.get('atr_pct', 3.0),
                 'price_now': price_now, 'rsi_akum': _rsi_akum, 'df_ct_last': int(df['ct'].iloc[-1]),
-                'detail': {'atr_pct': item.get('atr_pct', 3.0), 'rvol': 0.0, 'bb_pct': 0.0,
+                'detail': {'atr_pct': item.get('atr_pct', 3.0), 'rvol': _rvol_akum or 0.0, 'bb_pct': 0.0,
                            'gap_ema20_pct': 0.0, 'rsi': _rsi_akum or 0.0},
             }
         except Exception as e:
@@ -12127,7 +12137,10 @@ def thread_akum_entry_scan():
                              for s, v in held_akum.items()]
         approved_akum = ai_decision_batch_rank(
             batch_input_akum, strategy_label='Akumulasi-4h', max_approve=AI_BATCH_MAX_APPROVE,
-            criteria_note="Kriteria: skor, ATR%, RSI (Akumulasi-4h tidak hitung RVOL/BB%b/EMA20 -- basis Wyckoff S/R, bukan EMA)",
+            # 10/09/2026: RVOL 4h sekarang IKUT dihitung (kasus TSLAB -- sebelumnya AI menilai
+            # tanpa tahu volume riil-nya sama sekali). BB%b/EMA20 tetap tidak dihitung -- basis
+            # entry Akumulasi murni Wyckoff S/R (spring/breakout+retest), bukan EMA band.
+            criteria_note="Kriteria: skor, ATR%, RSI, RVOL (Akumulasi-4h tidak hitung BB%b/EMA20 -- basis Wyckoff S/R, bukan EMA)",
         )
 
     for sym in approved_akum:
@@ -12224,6 +12237,9 @@ def thread_akum_entry_scan():
                 'ref_basis':    'struct_zone' if has_struct else 'extreme_fallback',
                 'score':        score,
                 'target_usd':   f"${target_usd}",
+                # 10/09/2026: RVOL 4h (kasus TSLAB) -- lihat detail di held_akum, dihitung
+                # sekali di babak 1 (rolling 20 candle 4h, formula sama spt TrenKonfirmasi-4h).
+                'rvol':         f"{v['detail'].get('rvol', 0):.2f}x",
             })
 
         except Exception as e:
