@@ -1206,16 +1206,28 @@ def get_daily_loss_status() -> dict:
             "limit_pct": limit_pct, "breached": breached}
 
 def is_daily_loss_limit_breached() -> bool:
+    """09/09/2026 (permintaan Mas Budi, keluhan notif "Batas Rugi Harian Tersulut" bertubi-tubi):
+    fungsi ini sekarang JUGA jadi titik reset _daily_loss_notified_flag -- begitu kondisi TIDAK
+    breach lagi (P&L membaik, atau lewat tengah malam), flag direset supaya notif klarifikasi di
+    open_deal_with_sizing() bisa kirim 1x lagi kalau kena breach lagi nanti. Sebelumnya notif itu
+    diulang tiap 30 menit SELAMA blokir masih aktif -- bisa 1 blokir jadi puluhan notif identik
+    semalaman."""
+    global _daily_loss_notified_flag
     try:
         with daily_loss_limit_lock:
             limit_pct = daily_loss_limit_pct
         if limit_pct <= 0:
+            _daily_loss_notified_flag = False
             return False
         cap = get_total_capital_usd()
         if cap <= 0:
+            _daily_loss_notified_flag = False
             return False
         pnl_pct = get_today_pnl_usd() / cap * 100
-        return pnl_pct <= -abs(limit_pct)
+        breached = pnl_pct <= -abs(limit_pct)
+        if not breached:
+            _daily_loss_notified_flag = False
+        return breached
     except Exception as e:
         log(f"WARN is_daily_loss_limit_breached: {e}")
         return False
@@ -3529,8 +3541,11 @@ def execute_add_fund_from_asset(source_asset: str, target_symbol: str, pct: floa
             "avg_price": fund_result.get("avg_price")}
 
 _daily_loss_notify_lock = threading.Lock()
-_daily_loss_last_notify_ts = 0.0
-_DAILY_LOSS_NOTIFY_COOLDOWN_SEC = 30 * 60  # maks 1x notifikasi klarifikasi tiap 30 menit
+# 09/09/2026 (permintaan Mas Budi, keluhan notif "Batas Rugi Harian Tersulut" bertubi-tubi):
+# diganti dari "maks 1x/30menit SELAMA blokir masih aktif" (bisa jadi puluhan notif identik
+# semalaman) jadi "1x per EPISODE blokir" -- lihat is_daily_loss_limit_breached() utk logika
+# reset flag-nya begitu P&L membaik lagi atau lewat tengah malam.
+_daily_loss_notified_flag = False  # sudah kirim notif utk episode breach yg SEKARANG aktif?
 
 # ===================== SIZING BERBASIS SKOR SINYAL (brkX2) =====================
 # Ambang TETAP tiap dimensi (dari backtest signal_strength, tersil-tinggi).
@@ -3569,13 +3584,13 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
         # Notifikasi klarifikasi (03/09/2026, permintaan Mas Budi) -- supaya notif "AI Decision:
         # OPEN" yg terkirim SEBELUM guard ini (dari ai_decision_open, gerbang terpisah) tidak
         # membingungkan: kelihatan "disetujui AI" tapi nyatanya tidak pernah benar2 kebuka.
-        # Di-throttle max 1x/30menit (global, lintas symbol/strategi) -- breach ini kondisi
-        # bot-wide yg bisa nge-block puluhan kandidat sekaligus, jangan sampai jadi spam baru.
-        global _daily_loss_last_notify_ts
+        # 09/09/2026: cuma kirim 1x per EPISODE blokir (bukan tiap 30 menit selama blokir
+        # masih aktif) -- flag direset di is_daily_loss_limit_breached() begitu P&L membaik
+        # atau lewat tengah malam, jadi tetap dapat notif lagi kalau kena breach lagi nanti.
+        global _daily_loss_notified_flag
         with _daily_loss_notify_lock:
-            _now_ts = time.time()
-            if _now_ts - _daily_loss_last_notify_ts > _DAILY_LOSS_NOTIFY_COOLDOWN_SEC:
-                _daily_loss_last_notify_ts = _now_ts
+            if not _daily_loss_notified_flag:
+                _daily_loss_notified_flag = True
                 _dls = get_daily_loss_status()
                 send_telegram(
                     f"⛔ Batas Rugi Harian Tersulut\n"
