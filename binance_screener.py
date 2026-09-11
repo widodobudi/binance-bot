@@ -5188,6 +5188,13 @@ def format_near_miss(near_miss, total, max_show=5):
 
 def thread1_scan():
     global last_processed_candle_ts, heartbeat_window_start, heartbeat_last_sent
+    # 11/09/2026 (permintaan Mas Budi): is_strategy_enabled() ("IZINKAN OPEN LONG" di Strategy
+    # Control) sebelumnya CUMA dicek di ujung (open_deal_with_sizing/send_open_long) -- scan +
+    # AI call tetap jalan penuh walau strategi di-disable, ketahuan pas biaya Anthropic tetap
+    # jalan selama lockdown migrasi Sub Account biarpun semua strategi off. Cek di awal = 0 scan
+    # & 0 AI call kalau disabled, bukan baru gagal di langkah terakhir.
+    if not is_strategy_enabled('brkX2'):
+        return None
     log("[T1] Scan candle (TF tutup)...")
     # ambil ticker utk filter volume + daftar pair
     pairs = get_usdt_spot_pairs()
@@ -5562,6 +5569,8 @@ def thread1b_scan_reversal():
     Berbagi pool deal & bot 3Commas dgn brkX2, tapi slot terpisah (MAX_DEALS_REVERSAL)."""
     global last_rev_candle_ts
     if not REVERSAL_ENABLED:
+        return None
+    if not is_strategy_enabled('reversal'):  # 11/09/2026, lihat catatan di thread1_scan()
         return None
     log("[T1b] Scan REVERSAL candle 8h (TF tutup)...")
     pairs = get_usdt_spot_pairs()
@@ -6748,6 +6757,8 @@ def thread1c_scan_intrabar():
     global last_intrabar_candle_ts
     if not INTRABAR_ENABLED:
         return None
+    if not is_strategy_enabled('brkX2'):  # 11/09/2026, lihat catatan di thread1_scan()
+        return None
     now_ms         = int(time.time() * 1000)
     sec12_ms       = SECONDS_PER_CANDLE * 1000
     candle_open_ms = (now_ms // sec12_ms) * sec12_ms
@@ -6982,6 +6993,8 @@ def thread1c_scan_intrabar_early():
     """
     global last_intrabar_early_candle_ts
     if not INTRABAR_EARLY_ENABLED:
+        return None
+    if not is_strategy_enabled('brkX2'):  # 11/09/2026, lihat catatan di thread1_scan()
         return None
     now_ms         = int(time.time() * 1000)
     sec12_ms       = SECONDS_PER_CANDLE * 1000
@@ -7248,6 +7261,8 @@ def thread_rev_intrabar_scan():
         return
     if not REVERSAL_ENABLED:
         return
+    if not is_strategy_enabled('reversal'):  # 11/09/2026, lihat catatan di thread1_scan()
+        return
     if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL:
         return
 
@@ -7506,6 +7521,8 @@ def thread1d_scan_4h():
     """
     global last_4h_candle_ts
     if not STRAT4H_ENABLED:
+        return
+    if not is_strategy_enabled('brkX2_4h'):  # 11/09/2026, lihat catatan di thread1_scan()
         return
 
     now_ms   = int(time.time() * 1000)
@@ -7865,6 +7882,8 @@ def thread1d_scan_4h():
 def scan_hunting_signals_only():
     """Scan Hunting-4h independen — tidak diblokir gating window intrabar brkX2-4h.
     Dipanggil tiap loop run_thread1d_4h() agar dashboard selalu update."""
+    if not is_strategy_enabled('hunting_4h'):  # 11/09/2026, lihat catatan di thread1_scan()
+        return
     try:
         ticker = get_ticker_24h()
         if not ticker:
@@ -7959,6 +7978,7 @@ def thread_crossema_scan():
     """Scan CrossEMA intrabar: ST=-1, close<EMA20, lalu price_now>EMA20 (cross-up)."""
     global _crossema_last_candle_ts, _crossema_near_miss
     if not STRAT_CROSSEMA_ENABLED: return
+    if not is_strategy_enabled('brkX2_crossema'): return  # 11/09/2026, lihat catatan di thread1_scan()
 
     # Cek slot
     n_crossema = sum(1 for d in active_deals.values()
@@ -8241,6 +8261,7 @@ def thread_trendconfirm_scan():
     """Scan sinyal TrenKonfirmasi-4h. Dipanggil periodik tiap TRENDCONFIRM_SCAN_INTERVAL detik."""
     global _trendconfirm_last_candle_ts
     if not TRENDCONFIRM_ENABLED: return
+    if not is_strategy_enabled('trend_confirm_4h'): return  # 11/09/2026, lihat catatan di thread1_scan()
 
     # Cek circuit breaker rugi harian DI SINI, SEBELUM evaluasi kandidat apa pun (fix
     # 03/09/2026, permintaan Mas Budi): sebelumnya breaker cuma dicek di dalam
@@ -11950,6 +11971,11 @@ def thread_akum_entry_scan():
     sudah terdeteksi dalam fase akumulasi oleh T_AKUM.
     Jalan tiap AKUM_ENTRY_SCAN_INTERVAL detik.
     """
+    # 11/09/2026, lihat catatan di thread1_scan(). Dashboard "Akumulasi-4h" cuma 1 baris
+    # toggle (Entry A & B berbagi 1 key 'akum_entry_a' -- lihat is_ai_call_open_enabled
+    # di bawah yg juga cuma pakai key ini).
+    if not is_strategy_enabled('akum_entry_a'):
+        return
     with _akum_lock:
         kandidat = list(_akum_near_miss)
     if not kandidat:
