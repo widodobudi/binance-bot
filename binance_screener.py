@@ -12405,6 +12405,36 @@ _stoch_bt_lock = threading.Lock()
 _stoch_bt_status = {"running": False, "started_at": None, "progress": "", "done": False,
                      "results": None, "error": None}
 
+STOCH_BT_CACHE_DIR = os.path.join(DATA_DIR, "stoch_bt_cache")
+
+def _stoch_bt_cache_path(symbol: str) -> str:
+    return os.path.join(STOCH_BT_CACHE_DIR, f"{symbol}.csv")
+
+def _stoch_bt_load_or_fetch(symbol: str, start_ms: int, end_ms: int):
+    """12/09/2026 (permintaan Mas Budi): cache candle 4h ke /data supaya run backtest
+    BERIKUTNYA (mis. nambah indikator baru) tidak perlu fetch ulang ke Binance dari nol --
+    cukup baca file lokal, hitung ulang sinyal/simulasi lebih cepat (detik-menit, bukan
+    jam). Cache dianggap valid kalau candle TERAKHIR di file itu masih dalam
+    STOCH_BT_MAX_HOLD_CANDLES*4h dari end_ms (cukup baru) -- kalau basi/tidak ada,
+    fetch penuh dari Binance seperti biasa lalu simpan.
+    """
+    path = _stoch_bt_cache_path(symbol)
+    try:
+        if os.path.exists(path):
+            cached = pd.read_csv(path)
+            if len(cached) > 100 and int(cached['ot'].iloc[-1]) >= end_ms - 8 * 3600 * 1000:
+                return cached
+    except Exception as e:
+        log(f"WARN [STOCH-BT] cache baca {symbol}: {e}")
+    df = _stoch_bt_fetch_history(symbol, start_ms, end_ms)
+    if df is not None and len(df) > 0:
+        try:
+            os.makedirs(STOCH_BT_CACHE_DIR, exist_ok=True)
+            df.to_csv(path, index=False)
+        except Exception as e:
+            log(f"WARN [STOCH-BT] cache simpan {symbol}: {e}")
+    return df
+
 def _stoch_bt_fetch_history(symbol: str, start_ms: int, end_ms: int):
     """Paginate /api/v3/klines (1000 candle/call) dari start_ms s/d end_ms, TF 4h."""
     out = []
@@ -12443,10 +12473,14 @@ def _stoch_bt_fetch_history(symbol: str, start_ms: int, end_ms: int):
     df = df.drop_duplicates(subset='ot').sort_values('ot').reset_index(drop=True)
     return df
 
-def _stoch_bt_signals(df, oversold_thresh: float):
+def _stoch_bt_signals(df, oversold_thresh: float, extra_filters: bool = False):
     """Sinyal entry: %K cross up %D di candle i, DAN %K & %D < oversold_thresh di candle i-1
     (bukan pas di candle cross-nya sendiri -- lihat diskusi ADAUSDT 11/09/2026: %D bisa sudah
-    keburu lewat ambang pas cross-nya sendiri, jadi oversold dicek SEBELUM cross, bukan SAAT)."""
+    keburu lewat ambang pas cross-nya sendiri, jadi oversold dicek SEBELUM cross, bukan SAAT).
+    extra_filters=True (12/09/2026, permintaan Mas Budi): tambahan syarat WAJIB di candle i --
+    RSI < RSI-MA(14), MACD hist < 0 (MACD line < Signal line), BB%b < 0.3. Dites TERPISAH dari
+    extra_filters=False (baseline) di run_stoch_oversold_backtest supaya kelihatan efeknya
+    dibanding tanpa filter tambahan ini, bukan cuma diganti begitu saja."""
     st = ta.stoch(df['high'], df['low'], df['close'], k=14, d=3, smooth_k=1)
     if st is None or st.empty:
         return []
@@ -12456,14 +12490,34 @@ def _stoch_bt_signals(df, oversold_thresh: float):
         return []
     K = st[kcol[0]]; D = st[dcol[0]]
     atr = ta.atr(df['high'], df['low'], df['close'], length=14)
+
+    rsi = rsi_ma = macd_hist = bb_pct = None
+    if extra_filters:
+        rsi = ta.rsi(df['close'], length=14)
+        rsi_ma = rsi.rolling(14).mean()  # RSI-MA -- SMA(RSI,14), sama pola dgn overlay default TradingView
+        macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
+        hcol = [c for c in macd.columns if 'MACDh' in c] if macd is not None else []
+        macd_hist = macd[hcol[0]] if hcol else None
+        bb = ta.bbands(df['close'], length=20, std=2)
+        bcol = [c for c in bb.columns if 'BBP' in c] if bb is not None else []
+        bb_pct = bb[bcol[0]] if bcol else None
+
     sigs = []
     for i in range(1, len(df) - 1):
         if pd.isna(K.iloc[i-1]) or pd.isna(D.iloc[i-1]) or pd.isna(K.iloc[i]) or pd.isna(D.iloc[i]) or pd.isna(atr.iloc[i]):
             continue
         crossed_up = K.iloc[i-1] <= D.iloc[i-1] and K.iloc[i] > D.iloc[i]
         was_oversold = K.iloc[i-1] < oversold_thresh and D.iloc[i-1] < oversold_thresh
-        if crossed_up and was_oversold:
-            sigs.append({'i': i, 'atr': float(atr.iloc[i]), 'K': K, 'D': D})
+        if not (crossed_up and was_oversold):
+            continue
+        if extra_filters:
+            if rsi is None or rsi_ma is None or macd_hist is None or bb_pct is None:
+                continue
+            if pd.isna(rsi.iloc[i]) or pd.isna(rsi_ma.iloc[i]) or pd.isna(macd_hist.iloc[i]) or pd.isna(bb_pct.iloc[i]):
+                continue
+            if not (rsi.iloc[i] < rsi_ma.iloc[i] and macd_hist.iloc[i] < 0 and bb_pct.iloc[i] < 0.3):
+                continue
+        sigs.append({'i': i, 'atr': float(atr.iloc[i]), 'K': K, 'D': D})
     return sigs
 
 # 4 opsi exit x beberapa varian parameter (dari framework backtest Mas Budi sendiri)
@@ -12537,33 +12591,41 @@ def run_stoch_oversold_backtest():
         thresholds = [20.0, 21.0, 25.0, 30.0]
         combo_stats: dict = {}
         n_pairs = len(pairs)
-        log(f"[STOCH-BT] Mulai backtest {n_pairs} pair, 2022-sekarang, TF 4h")
+        # 12/09/2026 (permintaan Mas Budi): sweep DUA mode -- baseline (Stoch cross-up-dari-
+        # oversold saja) vs extra_filters (+ RSI<RSI-MA + MACD hist<0 + BB%b<0.3) -- supaya
+        # kelihatan APAKAH filter tambahan ini benar2 membantu, dibanding baseline, bukan
+        # cuma diganti tanpa pembanding.
+        filter_modes = [False, True]
+        log(f"[STOCH-BT] Mulai backtest {n_pairs} pair, 2022-sekarang, TF 4h, "
+            f"baseline + extra_filters (RSI<RSI-MA, MACD<0, BB%b<0.3)")
         for idx, sym in enumerate(pairs):
             with _stoch_bt_lock:
                 _stoch_bt_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
             try:
-                df = _stoch_bt_fetch_history(sym, start_ms, end_ms)
+                df = _stoch_bt_load_or_fetch(sym, start_ms, end_ms)
                 if df is None or len(df) < 100:
                     continue
                 for thresh in thresholds:
-                    sigs = _stoch_bt_signals(df, thresh)
-                    for sig in sigs:
-                        i = sig['i']; atr_val = sig['atr']; K = sig['K']; D = sig['D']
-                        for exit_label, exit_cfg in STOCH_BT_EXIT_VARIANTS:
-                            res = _stoch_bt_simulate(df, i, exit_cfg, atr_val, K, D)
-                            if res is None:
-                                continue
-                            pct, _hold = res
-                            # 12/09/2026 (fix bug, permintaan Mas Budi): grouping PER SIMBOL,
-                            # bukan 1 list rata semua pair -- lihat penjelasan maxDD di bawah.
-                            combo_stats.setdefault((thresh, exit_label), {}).setdefault(sym, []).append(pct)
+                    for use_extra in filter_modes:
+                        sigs = _stoch_bt_signals(df, thresh, extra_filters=use_extra)
+                        for sig in sigs:
+                            i = sig['i']; atr_val = sig['atr']; K = sig['K']; D = sig['D']
+                            for exit_label, exit_cfg in STOCH_BT_EXIT_VARIANTS:
+                                res = _stoch_bt_simulate(df, i, exit_cfg, atr_val, K, D)
+                                if res is None:
+                                    continue
+                                pct, _hold = res
+                                # 12/09/2026 (fix bug, permintaan Mas Budi): grouping PER
+                                # SIMBOL, bukan 1 list rata semua pair -- lihat maxDD di bawah.
+                                key = (thresh, use_extra, exit_label)
+                                combo_stats.setdefault(key, {}).setdefault(sym, []).append(pct)
             except Exception as e:
                 log(f"WARN [STOCH-BT] {sym}: {e}")
             if idx % 20 == 0:
                 log(f"[STOCH-BT] progress {idx+1}/{n_pairs}")
 
         rows = []
-        for (thresh, exit_label), per_symbol in combo_stats.items():
+        for (thresh, use_extra, exit_label), per_symbol in combo_stats.items():
             all_pcts = [p for lst in per_symbol.values() for p in lst]
             n = len(all_pcts)
             if n < 30:  # minimal 30 trade biar signifikan (checklist Mas Budi sendiri)
@@ -12590,7 +12652,8 @@ def run_stoch_oversold_backtest():
                 symbol_maxdds.append(dd)
             avg_maxdd = sum(symbol_maxdds) / len(symbol_maxdds)
             worst_maxdd = min(symbol_maxdds)
-            rows.append({'thresh': thresh, 'exit': exit_label, 'n': n, 'n_symbols': len(per_symbol),
+            rows.append({'thresh': thresh, 'extra_filters': use_extra, 'exit': exit_label,
+                         'n': n, 'n_symbols': len(per_symbol),
                          'wr': wr, 'profit_factor': pf, 'avg_pct': avg,
                          'avg_maxdd': avg_maxdd, 'worst_maxdd': worst_maxdd})
         rows.sort(key=lambda r: (r['profit_factor'] if r['profit_factor'] != float('inf') else 1e9), reverse=True)
@@ -12598,10 +12661,12 @@ def run_stoch_oversold_backtest():
         # Kirim SEMUA kombinasi yg lolos min-30-trade (permintaan Mas Budi, bukan cuma top 5).
         msg_lines = ["📊 Backtest Stoch Oversold-Cross -- SEMUA kombinasi (urut Profit Factor)",
                      f"Universe: {n_pairs} USDT pairs | 2022-sekarang | TF 4h | min 30 trade",
+                     "extra=+RSI<RSI-MA+MACD<0+BB%b<0.3 (vs baseline=cuma Stoch cross)",
                      "maxDD: rata-rata & terburuk PER SIMBOL (bukan digabung lintas pair)", ""]
         for r in rows:
             msg_lines.append(
-                f"Thresh<{r['thresh']:.0f} + {r['exit']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
+                f"Thresh<{r['thresh']:.0f} {'+extra' if r['extra_filters'] else '(baseline)'} + {r['exit']}: "
+                f"n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
                 f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}% "
                 f"maxDD(avg/worst)={r['avg_maxdd']:.1f}%/{r['worst_maxdd']:.1f}%"
             )
