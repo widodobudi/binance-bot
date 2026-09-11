@@ -12554,40 +12554,56 @@ def run_stoch_oversold_backtest():
                             if res is None:
                                 continue
                             pct, _hold = res
-                            combo_stats.setdefault((thresh, exit_label), []).append(pct)
+                            # 12/09/2026 (fix bug, permintaan Mas Budi): grouping PER SIMBOL,
+                            # bukan 1 list rata semua pair -- lihat penjelasan maxDD di bawah.
+                            combo_stats.setdefault((thresh, exit_label), {}).setdefault(sym, []).append(pct)
             except Exception as e:
                 log(f"WARN [STOCH-BT] {sym}: {e}")
             if idx % 20 == 0:
                 log(f"[STOCH-BT] progress {idx+1}/{n_pairs}")
 
         rows = []
-        for (thresh, exit_label), pcts in combo_stats.items():
-            n = len(pcts)
+        for (thresh, exit_label), per_symbol in combo_stats.items():
+            all_pcts = [p for lst in per_symbol.values() for p in lst]
+            n = len(all_pcts)
             if n < 30:  # minimal 30 trade biar signifikan (checklist Mas Budi sendiri)
                 continue
-            wins = [p for p in pcts if p > 0]
-            losses = [p for p in pcts if p <= 0]
+            wins = [p for p in all_pcts if p > 0]
+            losses = [p for p in all_pcts if p <= 0]
             wr = len(wins) / n * 100
             gross_win = sum(wins) if wins else 0.0
             gross_loss = -sum(losses) if losses else 0.0
             pf = (gross_win / gross_loss) if gross_loss > 0 else float('inf')
-            avg = sum(pcts) / n
-            eq = 0.0; peak = 0.0; maxdd = 0.0
-            for p in pcts:
-                eq += p; peak = max(peak, eq); maxdd = min(maxdd, eq - peak)
-            rows.append({'thresh': thresh, 'exit': exit_label, 'n': n, 'wr': wr,
-                         'profit_factor': pf, 'avg_pct': avg, 'max_dd': maxdd})
+            avg = sum(all_pcts) / n
+            # 12/09/2026 (fix bug): drawdown SEBELUMNYA dihitung dgn numpuk return %
+            # dari 474 pair BERBEDA jadi 1 kurva ekuitas seolah 1 akun berurutan --
+            # ratusan ribu trade PARALEL lintas pair jadi kelihatan seperti drawdown
+            # -14.000% (tidak bermakna). Sekarang: hitung equity curve SEQUENTIAL per
+            # simbol sendiri-sendiri (urutan waktu asli di simbol itu), ambil maxDD tiap
+            # simbol, baru diagregasi (rata-rata = risiko tipikal, terburuk = worst-case
+            # yg pernah kejadian di 1 simbol).
+            symbol_maxdds = []
+            for _sym_pcts in per_symbol.values():
+                eq = 0.0; peak = 0.0; dd = 0.0
+                for p in _sym_pcts:
+                    eq += p; peak = max(peak, eq); dd = min(dd, eq - peak)
+                symbol_maxdds.append(dd)
+            avg_maxdd = sum(symbol_maxdds) / len(symbol_maxdds)
+            worst_maxdd = min(symbol_maxdds)
+            rows.append({'thresh': thresh, 'exit': exit_label, 'n': n, 'n_symbols': len(per_symbol),
+                         'wr': wr, 'profit_factor': pf, 'avg_pct': avg,
+                         'avg_maxdd': avg_maxdd, 'worst_maxdd': worst_maxdd})
         rows.sort(key=lambda r: (r['profit_factor'] if r['profit_factor'] != float('inf') else 1e9), reverse=True)
 
-        # 11/09/2026 (permintaan Mas Budi): kirim SEMUA kombinasi yg lolos min-30-trade,
-        # bukan cuma top 5 -- sebelumnya cuma dipangkas 5 di notif Telegram (data lengkapnya
-        # tetap selalu ada di _stoch_bt_status['results'], ini cuma soal apa yg ditampilkan).
+        # Kirim SEMUA kombinasi yg lolos min-30-trade (permintaan Mas Budi, bukan cuma top 5).
         msg_lines = ["📊 Backtest Stoch Oversold-Cross -- SEMUA kombinasi (urut Profit Factor)",
-                     f"Universe: {n_pairs} USDT pairs | 2022-sekarang | TF 4h | min 30 trade", ""]
+                     f"Universe: {n_pairs} USDT pairs | 2022-sekarang | TF 4h | min 30 trade",
+                     "maxDD: rata-rata & terburuk PER SIMBOL (bukan digabung lintas pair)", ""]
         for r in rows:
             msg_lines.append(
-                f"Thresh<{r['thresh']:.0f} + {r['exit']}: n={r['n']} WR={r['wr']:.1f}% "
-                f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}% maxDD={r['max_dd']:.1f}%"
+                f"Thresh<{r['thresh']:.0f} + {r['exit']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
+                f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}% "
+                f"maxDD(avg/worst)={r['avg_maxdd']:.1f}%/{r['worst_maxdd']:.1f}%"
             )
         full_report = "\n".join(msg_lines)
         log(f"[STOCH-BT] SELESAI.\n{full_report}")
