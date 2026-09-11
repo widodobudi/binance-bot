@@ -14451,7 +14451,7 @@ def run_web_dashboard():
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
 
-        @app.route("/api/run_stoch_backtest", methods=["POST"])
+        @app.route("/api/run_stoch_backtest", methods=["GET", "POST"])
         def api_run_stoch_backtest():
             """One-off (11/09/2026): trigger backtest Stoch oversold-cross di background
             thread. Cuma baca data historis Binance + simulasi lokal -- TIDAK menyentuh
