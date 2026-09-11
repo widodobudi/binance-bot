@@ -12395,6 +12395,214 @@ def run_manual_scan() -> dict:
     return {"ts": ts, "pairs": results}
 
 
+# ===================== ONE-OFF: BACKTEST STOCH OVERSOLD-CROSS ENTRY (11/09/2026) =====================
+# Permintaan Mas Budi: cek beneran (bukan tebak) apakah entry "%K cross up %D dari area
+# oversold" + 4 opsi exit (Fixed RR / Stoch Exit / ATR-based / Fixed%) itu layak, di SEMUA
+# USDT pair, 2022-sekarang, TF 4h. Jalan di background thread lewat Railway (server ini yang
+# punya akses internet ke Binance, bukan sandbox lokal) -- dipicu manual via endpoint di bawah,
+# HANYA baca data historis + simulasi, TIDAK menyentuh active_deals/order sama sekali.
+_stoch_bt_lock = threading.Lock()
+_stoch_bt_status = {"running": False, "started_at": None, "progress": "", "done": False,
+                     "results": None, "error": None}
+
+def _stoch_bt_fetch_history(symbol: str, start_ms: int, end_ms: int):
+    """Paginate /api/v3/klines (1000 candle/call) dari start_ms s/d end_ms, TF 4h."""
+    out = []
+    cursor = start_ms
+    while cursor < end_ms:
+        try:
+            r = _binance_get("/api/v3/klines", params={
+                'symbol': symbol, 'interval': '4h', 'startTime': cursor,
+                'endTime': end_ms, 'limit': 1000,
+            }, timeout=20)
+        except Exception:
+            break
+        if r is None:
+            break
+        try:
+            batch = r.json()
+        except Exception:
+            break
+        if not isinstance(batch, list) or not batch:
+            break
+        out.extend(batch)
+        last_open = int(batch[-1][0])
+        if last_open <= cursor:
+            break
+        cursor = last_open + 1
+        if len(batch) < 1000:
+            break
+        time.sleep(0.12)  # gentle -- IP ini dipakai bareng bot trading live
+    if not out:
+        return None
+    df = pd.DataFrame(out, columns=['ot', 'open', 'high', 'low', 'close', 'vol',
+                                     'ct', 'qav', 'nt', 'tbbav', 'tbqav', 'ig'])
+    for c in ['open', 'high', 'low', 'close', 'vol']:
+        df[c] = pd.to_numeric(df[c], errors='coerce')
+    df['ot'] = df['ot'].astype('int64')
+    df = df.drop_duplicates(subset='ot').sort_values('ot').reset_index(drop=True)
+    return df
+
+def _stoch_bt_signals(df, oversold_thresh: float):
+    """Sinyal entry: %K cross up %D di candle i, DAN %K & %D < oversold_thresh di candle i-1
+    (bukan pas di candle cross-nya sendiri -- lihat diskusi ADAUSDT 11/09/2026: %D bisa sudah
+    keburu lewat ambang pas cross-nya sendiri, jadi oversold dicek SEBELUM cross, bukan SAAT)."""
+    st = ta.stoch(df['high'], df['low'], df['close'], k=14, d=3, smooth_k=1)
+    if st is None or st.empty:
+        return []
+    kcol = [c for c in st.columns if 'STOCHk' in c]
+    dcol = [c for c in st.columns if 'STOCHd' in c]
+    if not kcol or not dcol:
+        return []
+    K = st[kcol[0]]; D = st[dcol[0]]
+    atr = ta.atr(df['high'], df['low'], df['close'], length=14)
+    sigs = []
+    for i in range(1, len(df) - 1):
+        if pd.isna(K.iloc[i-1]) or pd.isna(D.iloc[i-1]) or pd.isna(K.iloc[i]) or pd.isna(D.iloc[i]) or pd.isna(atr.iloc[i]):
+            continue
+        crossed_up = K.iloc[i-1] <= D.iloc[i-1] and K.iloc[i] > D.iloc[i]
+        was_oversold = K.iloc[i-1] < oversold_thresh and D.iloc[i-1] < oversold_thresh
+        if crossed_up and was_oversold:
+            sigs.append({'i': i, 'atr': float(atr.iloc[i]), 'K': K, 'D': D})
+    return sigs
+
+# 4 opsi exit x beberapa varian parameter (dari framework backtest Mas Budi sendiri)
+STOCH_BT_EXIT_VARIANTS = [
+    ('fixedRR_2x',     {'type': 'fixed_rr',   'rr': 2.0}),
+    ('fixedRR_3x',     {'type': 'fixed_rr',   'rr': 3.0}),
+    ('stochExit',      {'type': 'stoch_exit'}),
+    ('atr_1.5x_3x',    {'type': 'atr',        'sl_k': 1.5, 'tp_k': 3.0}),
+    ('atr_2x_4x',      {'type': 'atr',        'sl_k': 2.0, 'tp_k': 4.0}),
+    ('fixedpct_5_2.5', {'type': 'fixed_pct',  'tp': 5.0,   'sl': 2.5}),
+    ('fixedpct_8_4',   {'type': 'fixed_pct',  'tp': 8.0,   'sl': 4.0}),
+]
+STOCH_BT_MAX_HOLD_CANDLES = 60  # 10 hari @4h, batas anti infinite-hold
+
+def _stoch_bt_simulate(df, i: int, exit_cfg: dict, atr_at_signal: float, K, D):
+    """Entry di OPEN candle i+1 (bukan close candle sinyal -- no-lookahead, sesuai framework
+    Mas Budi sendiri). Return (profit_pct, candle_ditahan) atau None kalau data kurang."""
+    entry_idx = i + 1
+    if entry_idx >= len(df):
+        return None
+    entry = float(df['open'].iloc[entry_idx])
+    signal_low = float(df['low'].iloc[i])
+    etype = exit_cfg['type']
+    tp = None
+    if etype == 'fixed_rr':
+        risk = entry - signal_low
+        if risk <= 0: return None
+        sl = signal_low
+        tp = entry + exit_cfg['rr'] * risk
+    elif etype == 'atr':
+        if atr_at_signal <= 0: return None
+        sl = entry - exit_cfg['sl_k'] * atr_at_signal
+        tp = entry + exit_cfg['tp_k'] * atr_at_signal
+    elif etype == 'fixed_pct':
+        sl = entry * (1 - exit_cfg['sl'] / 100.0)
+        tp = entry * (1 + exit_cfg['tp'] / 100.0)
+    elif etype == 'stoch_exit':
+        sl = entry * 0.85  # hard stop -15% -- cuma jaga2 anti infinite-hold pas crash, bukan syarat utama
+    else:
+        return None
+    last_j = min(entry_idx + STOCH_BT_MAX_HOLD_CANDLES, len(df)) - 1
+    for j in range(entry_idx, last_j + 1):
+        lo = float(df['low'].iloc[j]); hi = float(df['high'].iloc[j])
+        if lo <= sl:
+            return (sl / entry - 1) * 100, j - entry_idx
+        if etype == 'stoch_exit':
+            if j > entry_idx and not pd.isna(K.iloc[j-1]) and not pd.isna(D.iloc[j-1]) and \
+               not pd.isna(K.iloc[j]) and not pd.isna(D.iloc[j]) and \
+               K.iloc[j-1] >= D.iloc[j-1] and K.iloc[j] < D.iloc[j]:
+                exit_price = float(df['close'].iloc[j])
+                return (exit_price / entry - 1) * 100, j - entry_idx
+        elif tp is not None and hi >= tp:
+            return (tp / entry - 1) * 100, j - entry_idx
+    exit_price = float(df['close'].iloc[last_j])
+    return (exit_price / entry - 1) * 100, last_j - entry_idx
+
+def run_stoch_oversold_backtest():
+    """Loop utama: semua USDT pair x 4 threshold oversold x 7 varian exit, 2022-sekarang TF 4h.
+    Jalan di thread terpisah (dipicu /api/run_stoch_backtest), tidak menyentuh trading live
+    sama sekali -- murni fetch histori + simulasi lokal."""
+    global _stoch_bt_status
+    with _stoch_bt_lock:
+        if _stoch_bt_status['running']:
+            return
+        _stoch_bt_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                             "progress": "starting", "done": False, "results": None, "error": None}
+    try:
+        pairs = get_usdt_spot_pairs()
+        start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        end_ms = int(time.time() * 1000)
+        thresholds = [20.0, 21.0, 25.0, 30.0]
+        combo_stats: dict = {}
+        n_pairs = len(pairs)
+        log(f"[STOCH-BT] Mulai backtest {n_pairs} pair, 2022-sekarang, TF 4h")
+        for idx, sym in enumerate(pairs):
+            with _stoch_bt_lock:
+                _stoch_bt_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
+            try:
+                df = _stoch_bt_fetch_history(sym, start_ms, end_ms)
+                if df is None or len(df) < 100:
+                    continue
+                for thresh in thresholds:
+                    sigs = _stoch_bt_signals(df, thresh)
+                    for sig in sigs:
+                        i = sig['i']; atr_val = sig['atr']; K = sig['K']; D = sig['D']
+                        for exit_label, exit_cfg in STOCH_BT_EXIT_VARIANTS:
+                            res = _stoch_bt_simulate(df, i, exit_cfg, atr_val, K, D)
+                            if res is None:
+                                continue
+                            pct, _hold = res
+                            combo_stats.setdefault((thresh, exit_label), []).append(pct)
+            except Exception as e:
+                log(f"WARN [STOCH-BT] {sym}: {e}")
+            if idx % 20 == 0:
+                log(f"[STOCH-BT] progress {idx+1}/{n_pairs}")
+
+        rows = []
+        for (thresh, exit_label), pcts in combo_stats.items():
+            n = len(pcts)
+            if n < 30:  # minimal 30 trade biar signifikan (checklist Mas Budi sendiri)
+                continue
+            wins = [p for p in pcts if p > 0]
+            losses = [p for p in pcts if p <= 0]
+            wr = len(wins) / n * 100
+            gross_win = sum(wins) if wins else 0.0
+            gross_loss = -sum(losses) if losses else 0.0
+            pf = (gross_win / gross_loss) if gross_loss > 0 else float('inf')
+            avg = sum(pcts) / n
+            eq = 0.0; peak = 0.0; maxdd = 0.0
+            for p in pcts:
+                eq += p; peak = max(peak, eq); maxdd = min(maxdd, eq - peak)
+            rows.append({'thresh': thresh, 'exit': exit_label, 'n': n, 'wr': wr,
+                         'profit_factor': pf, 'avg_pct': avg, 'max_dd': maxdd})
+        rows.sort(key=lambda r: (r['profit_factor'] if r['profit_factor'] != float('inf') else 1e9), reverse=True)
+        top5 = rows[:5]
+
+        msg_lines = ["📊 Backtest Stoch Oversold-Cross -- Top 5 kombinasi",
+                     f"Universe: {n_pairs} USDT pairs | 2022-sekarang | TF 4h | min 30 trade", ""]
+        for r in top5:
+            msg_lines.append(
+                f"Thresh<{r['thresh']:.0f} + {r['exit']}: n={r['n']} WR={r['wr']:.1f}% "
+                f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}% maxDD={r['max_dd']:.1f}%"
+            )
+        full_report = "\n".join(msg_lines)
+        log(f"[STOCH-BT] SELESAI.\n{full_report}")
+        send_telegram(full_report, parse_mode=None)
+
+        with _stoch_bt_lock:
+            _stoch_bt_status['running'] = False
+            _stoch_bt_status['done'] = True
+            _stoch_bt_status['results'] = rows
+            _stoch_bt_status['progress'] = 'done'
+    except Exception as e:
+        log(f"ERROR [STOCH-BT] fatal: {e}")
+        with _stoch_bt_lock:
+            _stoch_bt_status['running'] = False
+            _stoch_bt_status['error'] = str(e)
+
+
 def run_web_dashboard():
     """Thread web dashboard Flask."""
     try:
@@ -14242,6 +14450,25 @@ def run_web_dashboard():
                 return jsonify(data), (200 if data.get("ok") else 400)
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
+
+        @app.route("/api/run_stoch_backtest", methods=["POST"])
+        def api_run_stoch_backtest():
+            """One-off (11/09/2026): trigger backtest Stoch oversold-cross di background
+            thread. Cuma baca data historis Binance + simulasi lokal -- TIDAK menyentuh
+            active_deals/order sama sekali. Bisa makan waktu lama (semua USDT pair,
+            2022-sekarang) -- cek progress via /api/stoch_backtest_status."""
+            if request.args.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
+            with _stoch_bt_lock:
+                if _stoch_bt_status.get("running"):
+                    return jsonify({"ok": False, "error": "sudah jalan", "status": _stoch_bt_status})
+            threading.Thread(target=run_stoch_oversold_backtest, daemon=True).start()
+            return jsonify({"ok": True, "message": "Backtest dimulai di background."})
+
+        @app.route("/api/stoch_backtest_status")
+        def api_stoch_backtest_status():
+            with _stoch_bt_lock:
+                return jsonify(dict(_stoch_bt_status))
 
         @app.route("/api/hunting_config", methods=["POST"])
         def api_hunting_config():
