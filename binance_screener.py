@@ -14288,7 +14288,7 @@ def run_web_dashboard():
                 "akumulasi-4h-a": "akum_entry_a", "akumulasi-4h-b": "akum_entry_b",
                 "trenkonfirmasi-4h": "trend_confirm_4h",
             }.get(strategy, strategy)
-            if action not in {"open_long", "add_fund", "start_trailing", "close_deal", "sell_usdt"} or not symbol.endswith("USDT"):
+            if action not in {"open_long", "add_fund", "start_trailing", "close_deal", "sell_usdt", "convert"} or not symbol.endswith("USDT"):
                 return jsonify({"ok": False, "error": "action atau symbol tidak valid"}), 400
             if action == "sell_usdt":
                 # 04/09/2026 (permintaan Mas Budi): jual asset (biasanya hold_no_sell, mis.
@@ -14298,6 +14298,18 @@ def run_web_dashboard():
                 # -- kalau dipaksa lewat blok situ pasti 404.
                 qty_payload = payload.get("qty")
                 result = sell_to_usdt(symbol, qty=qty_payload)
+                return jsonify(result), (200 if result.get("ok") else 400)
+            if action == "convert":
+                # 12/09/2026 (permintaan Mas Budi): jual `symbol` (source) LALU langsung beli
+                # target_symbol -- sama persis tombol CONVERT di dashboard (execute_convert()),
+                # cuma dipicu via webhook TradingView. Sengaja SEBELUM blok active_deals di
+                # bawah, sama alasan spt sell_usdt (source biasanya hold_no_sell asset, bukan
+                # active deal, kalau lewat blok situ pasti 404).
+                target_symbol = normalize_binance_symbol(payload.get("target_symbol", ""))
+                if not target_symbol.endswith("USDT"):
+                    return jsonify({"ok": False, "error": "target_symbol wajib diisi & harus pair USDT"}), 400
+                source_asset = symbol.replace("USDT", "")
+                result = execute_convert(source_asset, target_symbol)
                 return jsonify(result), (200 if result.get("ok") else 400)
             if action == "open_long":
                 with active_deals_lock:
