@@ -12578,11 +12578,13 @@ def run_stoch_oversold_backtest():
             rows.append({'thresh': thresh, 'exit': exit_label, 'n': n, 'wr': wr,
                          'profit_factor': pf, 'avg_pct': avg, 'max_dd': maxdd})
         rows.sort(key=lambda r: (r['profit_factor'] if r['profit_factor'] != float('inf') else 1e9), reverse=True)
-        top5 = rows[:5]
 
-        msg_lines = ["📊 Backtest Stoch Oversold-Cross -- Top 5 kombinasi",
+        # 11/09/2026 (permintaan Mas Budi): kirim SEMUA kombinasi yg lolos min-30-trade,
+        # bukan cuma top 5 -- sebelumnya cuma dipangkas 5 di notif Telegram (data lengkapnya
+        # tetap selalu ada di _stoch_bt_status['results'], ini cuma soal apa yg ditampilkan).
+        msg_lines = ["📊 Backtest Stoch Oversold-Cross -- SEMUA kombinasi (urut Profit Factor)",
                      f"Universe: {n_pairs} USDT pairs | 2022-sekarang | TF 4h | min 30 trade", ""]
-        for r in top5:
+        for r in rows:
             msg_lines.append(
                 f"Thresh<{r['thresh']:.0f} + {r['exit']}: n={r['n']} WR={r['wr']:.1f}% "
                 f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}% maxDD={r['max_dd']:.1f}%"
