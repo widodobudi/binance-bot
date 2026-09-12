@@ -533,6 +533,15 @@ REVERSAL_EMA_FAST     = 20
 REVERSAL_EMA_SLOW     = 50
 REVERSAL_DOJI_MAX     = 0.20     # badan doji < 20% range
 REVERSAL_DROP_MIN_PCT = 3.0      # total drop minimum, dilonggarkan dari 5%
+# Syarat Stoch%K<50 di candle entry (12/09/2026, backtest Mas Budi -- cari deal yg BARU MULAI
+# bullish, bukan yg udah lanjut). Backtest full-lifecycle 474 pair 2022-sekarang, TF 8h, exit
+# pakai fungsi produksi asli (hard_stop_pct/get_arm_pct/trailing_dist_progressive):
+#   baseline (tanpa syarat): n=2022 (386 pair) WR=75.7% PF=1.64 avg=+1.48%
+#   Stoch<50 (DIPILIH)     : n=1137 (354 pair) WR=76.3% PF=1.75 avg=+1.70% -- WR ikut naik,
+#                            bukan cuma "tetap", PF +6.7%, avg +15% relatif. n turun ~44%
+#                            (trade-off yg diterima). Stoch<40/<30 TERNYATA lebih jelek dari
+#                            baseline (non-linear, ada sweet spot di ~50) -- jangan diperketat lagi.
+REVERSAL_STOCH_MAX    = 50
 REVERSAL_SECONDS_PER_CANDLE = _TF_SECONDS.get(REVERSAL_TIMEFRAME, 28800)
 REVERSAL_MAX_HOLD_CANDLES   = 30 # batas aman hold (8h*30=10 hari) supaya tdk gantung
 # add fund reversal OFF dulu (forward-test slippage; sesuai keputusan)
@@ -4102,6 +4111,9 @@ def reversal_blockers(df, sym: str | None = None) -> list:
         failures.append("HA bullish")
     if not (_cross_up(df, i1, 'ema_fast') or _cross_up(df, i2, 'ema_fast')):
         failures.append("Cross up EMA20")
+    sk_entry = df.iloc[i2].get('stoch_k')
+    if pd.isna(sk_entry) or float(sk_entry) >= REVERSAL_STOCH_MAX:
+        failures.append(f"Stoch%K<{REVERSAL_STOCH_MAX} di candle entry")
     if sym:
         last = df.iloc[-1]
         entry_price = float(last['close'])
