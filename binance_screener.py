@@ -12866,7 +12866,11 @@ _ce2_lock = threading.Lock()
 _ce2_status = {"running": False, "started_at": None, "progress": "", "done": False,
                "results": None, "error": None}
 
-CE2_STOCH_MAX_SWEEP = [70, 60, 50, 40, 30]
+# 12/09/2026: hasil sweep pertama (70/60/50/40/30) monoton naik terus sampai titik paling ketat
+# yg dites (Stoch<30: WR=82.5% PF=3.37 avg=+2.51%, vs baseline WR=78.9% PF=2.45 avg=+1.83%) --
+# belum ketemu titik balik. Diperluas ke 20/15 (permintaan Mas Budi) utk cari titik sebenarnya
+# sebelum dikunci ke live.
+CE2_STOCH_MAX_SWEEP = [70, 60, 50, 40, 30, 20, 15]
 
 
 def _ce2_signals_for_symbol(df: pd.DataFrame):
@@ -13230,6 +13234,173 @@ def run_reversal_stoch_backtest():
         with _rev_bt_lock:
             _rev_bt_status['running'] = False
             _rev_bt_status['error'] = str(e)
+
+
+# ===================== ONE-OFF: Hunting-4h + syarat Stoch "belum telat" (12/09/2026) =====================
+# Lanjutan rencana Mas Budi (Reversal-8h done, CrossEMA-4h done -- keduanya pakai exit produksi
+# asli). Entry PAKAI check_hunting_strategy() ASLI (bukan tiruan) dgn config default (semua
+# syarat opsional ON, sama spt dashboard default). Indikator (st_dir/rsi/atr_pct/stoch_k) di-
+# precompute SEKALI per symbol via compute_indicators_4h() (vectorized) sebelum loop growing-
+# window, supaya check_hunting_strategy() pakai lookup murah (.iloc[-1]) bukan rolling ulang
+# tiap window -- tanpa ini O(n^2) per symbol terlalu lambat. Exit: fungsi produksi asli
+# (hard_stop_pct/get_arm_pct/trailing_dist_progressive), TIMEOUT=HUNTING_MAX_HOLD_CANDLES.
+_hunt_bt_lock = threading.Lock()
+_hunt_bt_status = {"running": False, "started_at": None, "progress": "", "done": False,
+                    "results": None, "error": None}
+
+HUNT_STOCH_MAX_SWEEP = [70, 60, 50, 40, 30, 20]
+
+
+def _hunt_signals_for_symbol(df4: pd.DataFrame):
+    """Scan semua titik entry Hunting-4h yg LOLOS check_hunting_strategy() (config default,
+    semua syarat opsional ON) di histori 1 symbol. Return list of dict {i, atr_pct, stoch_k}."""
+    if len(df4) < 60:
+        return []
+    df4 = df4.copy()
+    if 'qvol' not in df4.columns:
+        # cache dari _stoch_bt_fetch_history pakai kolom 'qav' (quote asset volume Binance
+        # klines), bukan 'qvol' -- compute_indicators_4h() butuh 'qvol' utk vol24h_usd
+        # (tidak dipakai check_hunting_strategy, tapi tetap wajib ada supaya tidak KeyError)
+        df4['qvol'] = df4['qav'] if 'qav' in df4.columns else df4['vol'] * df4['close']
+    df4 = compute_indicators_4h(df4)
+    sym_row = {"symbol": "BACKTESTUSDT"}  # dummy -- lolos filter "endswith USDT", bukan fiat
+    out = []
+    n = len(df4)
+    for i in range(55, n):
+        window = df4.iloc[:i + 1]
+        res = check_hunting_strategy(window, sym_row, {}, blocker_counts={})
+        if res is None:
+            continue
+        stoch_k = window['stoch_k'].iloc[-1]
+        out.append({'i': i, 'atr_pct': float(res['atr_pct']),
+                     'stoch_k': float(stoch_k) if not pd.isna(stoch_k) else None})
+    return out
+
+
+def _hunt_simulate_trade(df: pd.DataFrame, i: int, atr_pct_entry: float):
+    """Exit PAKAI fungsi produksi asli. Entry = close candle i (candle closed, sama pola
+    dgn strategi closed-candle lain di codebase ini)."""
+    close_v = df['close'].values.astype(float)
+    high_v = df['high'].values.astype(float)
+    low_v = df['low'].values.astype(float)
+    n = len(df)
+    entry = float(close_v[i])
+    if pd.isna(atr_pct_entry) or atr_pct_entry <= 0 or entry <= 0:
+        return None
+    _, _, hard_stop_final = hard_stop_pct(atr_pct_entry)
+    hard_stop_price = entry * (1 - hard_stop_final / 100)
+    arm_pct = get_arm_pct(atr_pct_entry)
+    peak = entry
+    armed = False
+    last_j = min(i + HUNTING_MAX_HOLD_CANDLES, n - 1)
+    if last_j <= i:
+        return None
+    for j in range(i + 1, last_j + 1):
+        low_j = float(low_v[j]); high_j = float(high_v[j])
+        if low_j <= hard_stop_price:
+            return (hard_stop_price / entry - 1) * 100 - 0.2
+        peak = max(peak, high_j)
+        peak_profit_pct = (peak / entry - 1) * 100
+        if not armed and peak_profit_pct >= arm_pct:
+            armed = True
+        if armed:
+            trail_dist = trailing_dist_progressive(atr_pct_entry, peak_profit_pct)
+            stop_price = peak * (1 - trail_dist / 100)
+            if low_j <= stop_price:
+                return (stop_price / entry - 1) * 100 - 0.2
+    exit_price = float(close_v[last_j])
+    return (exit_price / entry - 1) * 100 - 0.2
+
+
+def run_hunting_stoch_backtest():
+    """Jalan di thread terpisah (dipicu /api/run_hunting_stoch_backtest). Tidak menyentuh
+    trading live -- cuma baca cache 4h yg sudah ada + simulasi lokal."""
+    global _hunt_bt_status
+    with _hunt_bt_lock:
+        if _hunt_bt_status['running']:
+            return
+        _hunt_bt_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                            "progress": "0/0", "done": False, "results": None, "error": None}
+    try:
+        pairs = get_usdt_spot_pairs()
+        n_pairs = len(pairs)
+        end_ms = int(time.time() * 1000)
+        start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        log(f"[HUNT-BT] Mulai backtest Hunting-4h + syarat Stoch (exit produksi asli), "
+            f"{n_pairs} pair, 2022-sekarang, TF 4h")
+
+        combo_labels = ["baseline"] + [f"Stoch<{t}" for t in HUNT_STOCH_MAX_SWEEP]
+        combo_stats = {label: {} for label in combo_labels}
+
+        for idx, sym in enumerate(pairs):
+            with _hunt_bt_lock:
+                _hunt_bt_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
+            try:
+                df = _stoch_bt_load_or_fetch(sym, start_ms, end_ms)
+                if df is None or len(df) < 120:
+                    continue
+                signals = _hunt_signals_for_symbol(df)
+                if not signals:
+                    continue
+                per_combo_trades = {label: [] for label in combo_labels}
+                for sig in signals:
+                    pct = _hunt_simulate_trade(df, sig['i'], sig['atr_pct'])
+                    if pct is None:
+                        continue
+                    per_combo_trades["baseline"].append(pct)
+                    sk = sig['stoch_k']
+                    if sk is not None:
+                        for t in HUNT_STOCH_MAX_SWEEP:
+                            if sk < t:
+                                per_combo_trades[f"Stoch<{t}"].append(pct)
+                for label, trades in per_combo_trades.items():
+                    if trades:
+                        combo_stats[label][sym] = trades
+            except Exception as e:
+                log(f"WARN [HUNT-BT] {sym}: {e}")
+            if (idx + 1) % 50 == 0:
+                log(f"[HUNT-BT] progress {idx+1}/{n_pairs}")
+
+        rows = []
+        for label, per_symbol in combo_stats.items():
+            all_pcts = [p for lst in per_symbol.values() for p in lst]
+            n = len(all_pcts)
+            if n < 20:
+                continue
+            wins = [p for p in all_pcts if p > 0]
+            losses = [p for p in all_pcts if p <= 0]
+            wr = len(wins) / n * 100
+            gross_win = sum(wins) if wins else 0.0
+            gross_loss = -sum(losses) if losses else 0.0
+            pf = (gross_win / gross_loss) if gross_loss > 0 else float('inf')
+            avg = sum(all_pcts) / n
+            rows.append({'label': label, 'n': n, 'n_symbols': len(per_symbol), 'wr': wr,
+                         'profit_factor': pf, 'avg_pct': avg})
+        rows.sort(key=lambda r: r['profit_factor'], reverse=True)
+
+        msg_lines = ["📊 Hunting-4h + syarat Stoch (exit PRODUKSI ASLI)",
+                     f"Universe: {n_pairs} pair | 2022-sekarang | TF 4h",
+                     "Exit: hard_stop_pct/get_arm_pct/trailing_dist_progressive, TIMEOUT=HUNTING_MAX_HOLD_CANDLES",
+                     "Entry: check_hunting_strategy() asli, config default (semua opsional ON)", ""]
+        for r in rows:
+            msg_lines.append(
+                f"{r['label']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
+                f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}%"
+            )
+        full_report = "\n".join(msg_lines)
+        log(f"[HUNT-BT] SELESAI.\n{full_report}")
+        send_telegram(full_report, parse_mode=None)
+
+        with _hunt_bt_lock:
+            _hunt_bt_status['running'] = False
+            _hunt_bt_status['done'] = True
+            _hunt_bt_status['results'] = rows
+            _hunt_bt_status['progress'] = 'done'
+    except Exception as e:
+        log(f"ERROR [HUNT-BT] fatal: {e}")
+        with _hunt_bt_lock:
+            _hunt_bt_status['running'] = False
+            _hunt_bt_status['error'] = str(e)
 
 
 def run_web_dashboard():
@@ -15164,6 +15335,23 @@ def run_web_dashboard():
         def api_crossema_stoch_backtest_status():
             with _ce2_lock:
                 return jsonify(dict(_ce2_status))
+
+        @app.route("/api/run_hunting_stoch_backtest", methods=["GET", "POST"])
+        def api_run_hunting_stoch_backtest():
+            """One-off (12/09/2026): uji syarat Stoch tambahan di Hunting-4h, exit PRODUKSI
+            ASLI. Cek progress via /api/hunting_stoch_backtest_status."""
+            if request.args.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
+            with _hunt_bt_lock:
+                if _hunt_bt_status.get("running"):
+                    return jsonify({"ok": False, "error": "sudah jalan", "status": _hunt_bt_status})
+            threading.Thread(target=run_hunting_stoch_backtest, daemon=True).start()
+            return jsonify({"ok": True, "message": "Backtest dimulai di background."})
+
+        @app.route("/api/hunting_stoch_backtest_status")
+        def api_hunting_stoch_backtest_status():
+            with _hunt_bt_lock:
+                return jsonify(dict(_hunt_bt_status))
 
         @app.route("/api/hunting_config", methods=["POST"])
         def api_hunting_config():
