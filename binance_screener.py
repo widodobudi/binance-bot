@@ -14107,27 +14107,26 @@ QSCALP_FIXED_EXIT = (0.8, 0.3, 2.0, 15)   # arm%, trail%, stop%, timeout candle
 QSCALP_EMA_FAST = 9
 
 # baseline ronde 1 = (vol_mult=4.0, momentum_pct=1.75, breakout_lookback=15, anti_fomo_pct=2.0).
-# Sweep single-dimensi (ubah 1 parameter, sisanya di baseline) -- longgarkan ke 2 arah (lebih
-# ketat & lebih longgar) tiap dimensi, supaya kelihatan apakah masalahnya "kurang selektif"
-# atau "kebanyakan filter, kehilangan pump yg bagus".
+# Ronde 2 (single-dimensi, 1 parameter diubah tiap kombo) hasilnya: breakout_lookback nyaris
+# tidak berpengaruh (PF 0.77-0.80 semua varian); vol_mult dilonggarkan sedikit membantu (PF naik
+# tipis, belum tembus 1); momentum% DIKETATKAN ke 2.5% = PF terbaik dari semua (1.77) tapi n
+# kecil (79/45 pair, rawan kebetulan); anti-FOMO band DILONGGARKAN ke 3-5% tembus PF>1 dgn n
+# BESAR (1788-2067/113-114 pair) -- kombinasi paling kredibel secara statistik.
+# Ronde 3 (12/09/2026, permintaan Mas Budi "lanjut Ronde 3"): GABUNGKAN kedua arah yg terbukti
+# membantu (momentum lebih ketat + anti-FOMO lebih longgar), plus 1 titik pengisi celah kurva
+# momentum (2.0%, belum pernah dites sendirian) dan varian vol_mult dilonggarkan bareng.
+# Target: cari kombo dgn PF>1.3 DAN n>300 sekaligus (belum ada yg begitu di ronde 1/2).
 QSCALP_ENTRY_SWEEP = [
-    ("baseline",     4.0, 1.75, 15, 2.0),
-    ("volmult2.5",   2.5, 1.75, 15, 2.0),
-    ("volmult3.0",   3.0, 1.75, 15, 2.0),
-    ("volmult5.0",   5.0, 1.75, 15, 2.0),
-    ("volmult6.0",   6.0, 1.75, 15, 2.0),
-    ("mom1.0",       4.0, 1.0,  15, 2.0),
-    ("mom1.5",       4.0, 1.5,  15, 2.0),
-    ("mom2.5",       4.0, 2.5,  15, 2.0),
-    ("mom3.5",       4.0, 3.5,  15, 2.0),
-    ("hh5",          4.0, 1.75, 5,  2.0),
-    ("hh10",         4.0, 1.75, 10, 2.0),
-    ("hh20",         4.0, 1.75, 20, 2.0),
-    ("hh30",         4.0, 1.75, 30, 2.0),
-    ("fomo1.0",      4.0, 1.75, 15, 1.0),
-    ("fomo1.5",      4.0, 1.75, 15, 1.5),
-    ("fomo3.0",      4.0, 1.75, 15, 3.0),
-    ("fomo5.0",      4.0, 1.75, 15, 5.0),
+    ("baseline",       4.0, 1.75, 15, 2.0),   # pembanding, sama spt ronde 1/2
+    ("mom2.0_alone",   4.0, 2.0,  15, 2.0),   # isi celah kurva momentum (1.75->2.5 belum dites)
+    ("combo_A",        4.0, 2.0,  15, 3.0),   # mom lebih ketat + fomo dilonggarkan sedang
+    ("combo_B",        4.0, 2.0,  15, 5.0),   # mom lebih ketat + fomo dilonggarkan penuh
+    ("combo_C",        3.0, 2.0,  15, 3.0),   # + vol_mult ikut dilonggarkan
+    ("combo_D",        3.0, 2.0,  15, 5.0),
+    ("combo_E",        4.0, 2.5,  15, 3.0),   # mom persis titik terbaik ronde 2 + fomo sedang
+    ("combo_F",        4.0, 2.5,  15, 5.0),   # mom titik terbaik ronde 2 + fomo penuh longgar
+    ("combo_G",        3.0, 2.5,  15, 5.0),   # ketiga arah digabung penuh
+    ("combo_H",        2.5, 2.5,  15, 5.0),   # vol_mult paling longgar dites + mom ketat + fomo longgar
 ]
 
 
@@ -14325,12 +14324,12 @@ def run_qscalp_backtest():
                          'profit_factor': pf, 'avg_pct': avg})
         rows.sort(key=lambda r: r['profit_factor'], reverse=True)
 
-        msg_lines = ["📊 QScalp-3m Ronde 2 -- sweep ENTRY (exit dikunci ke varian C ronde 1)",
+        msg_lines = ["📊 QScalp-3m Ronde 3 -- gabungan momentum lebih ketat + anti-FOMO lebih longgar",
                      f"Universe: {n_pairs} pair TERLIKUID | {QSCALP_LOOKBACK_DAYS} hari terakhir | TF 3m",
                      f"Exit tetap: arm{arm}%/trail{trail}%/stop{stop}%/timeout{timeout}c "
                      f"(terbaik ronde 1: PF=0.78)",
-                     "Baseline ronde 1: vol>=4xMA20 + momentum>=1.75%/2candle + breakout HH15c + "
-                     "close<=EMA9+2.0%", ""]
+                     "Ronde 2: momentum2.5 sendiri PF=1.77 (n kecil), fomo5.0 sendiri PF=1.06 (n besar)",
+                     "Ronde 3: kombinasi kedua arah itu, target PF>1.3 DAN n>300 sekaligus", ""]
         for r in rows:
             msg_lines.append(
                 f"{r['label']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
