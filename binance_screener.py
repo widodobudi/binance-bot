@@ -16066,6 +16066,46 @@ def run_web_dashboard():
             with _rev_ath_lock:
                 return jsonify(dict(_rev_ath_status))
 
+        @app.route("/api/download_stoch_cache_zip")
+        def api_download_stoch_cache_zip():
+            """One-off (12/09/2026): zip seluruh /data/stoch_bt_cache (semua backtest hari ini
+            sudah selesai) supaya Mas Budi bisa download lewat browser & upload manual ke Drive
+            pribadinya -- service account bot ini TIDAK punya kuota storage utk bikin file baru
+            di Drive, jadi upload langsung dari server tidak bisa. Setelah dikonfirmasi
+            tersimpan, hapus via /api/delete_stoch_cache?confirm=1."""
+            import zipfile, io as _io_zip
+            from flask import send_file
+            cache_dir = STOCH_BT_CACHE_DIR
+            if not os.path.isdir(cache_dir):
+                return jsonify({"ok": False, "error": "Cache directory tidak ditemukan (sudah kosong?)"}), 404
+            buf = _io_zip.BytesIO()
+            n_files = 0
+            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for fname in os.listdir(cache_dir):
+                    fpath = os.path.join(cache_dir, fname)
+                    if os.path.isfile(fpath):
+                        zf.write(fpath, arcname=fname)
+                        n_files += 1
+            buf.seek(0)
+            size_mb = buf.getbuffer().nbytes / 1e6
+            log(f"[CACHE-ZIP] {n_files} file di-zip jadi {size_mb:.1f}MB, dikirim ke Mas Budi utk download.")
+            return send_file(buf, mimetype='application/zip', as_attachment=True,
+                              download_name='stoch_bt_cache.zip')
+
+        @app.route("/api/delete_stoch_cache", methods=["GET", "POST"])
+        def api_delete_stoch_cache():
+            """Hapus /data/stoch_bt_cache PERMANEN. HANYA jalankan setelah Mas Budi konfirmasi
+            ZIP-nya sudah tersimpan aman (lihat /api/download_stoch_cache_zip)."""
+            if request.args.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
+            import shutil
+            cache_dir = STOCH_BT_CACHE_DIR
+            if os.path.isdir(cache_dir):
+                shutil.rmtree(cache_dir)
+                log(f"[CACHE-ZIP] {cache_dir} dihapus permanen atas konfirmasi Mas Budi.")
+                return jsonify({"ok": True, "message": "Cache dihapus."})
+            return jsonify({"ok": True, "message": "Cache tidak ada (sudah bersih)."})
+
         @app.route("/api/hunting_config", methods=["POST"])
         def api_hunting_config():
             with _hunting_lock:
