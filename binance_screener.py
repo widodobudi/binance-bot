@@ -5027,7 +5027,7 @@ def heartbeat_general_tick():
                      f"    crossema-4h: 3rd {_fmt_strat(prog_cx3, STRAT_CROSSEMA_PHASE3_TARGET)}\n"
                      f"  - hunting-4h : {_fmt_hunting_live(prog_hunt)}\n"
                      f"    hunting-4h: 2nd {_fmt_strat(prog_hunt2, HUNTING_PHASE2_TARGET)}\n"
-                     f"  - akumulasi-4h: 1st STOP@Stoch<25(EntryB) "
+                     f"  - akumulasi-4h: 1st STOP@Stoch<25 "
                      f"{prog_akum_stop['n']}/{AKUM_ENTRY_FWDTEST_TARGET} "
                      f"({prog_akum_stop['win']}W/{prog_akum_stop['loss']}L,{prog_akum_stop['total_pct']:+.1f}%)\n"
                      f"    akumulasi-4h: 2nd {_fmt_strat(prog_akum2, AKUM_ENTRY_PHASE2_TARGET)}")
