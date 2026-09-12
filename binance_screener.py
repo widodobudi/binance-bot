@@ -13445,6 +13445,381 @@ def run_hunting_stoch_backtest():
             _hunt_bt_status['error'] = str(e)
 
 
+# ===================== ONE-OFF: Akumulasi-4h Entry B + syarat Stoch (12/09/2026) =====================
+# Terakhir dari 4 rencana Mas Budi (Reversal-8h done+LIVE, CrossEMA-4h done, Hunting-4h done
+# [tidak diterapkan]). Entry B jauh lebih kompleks dari 3 lainnya: butuh REPLIKASI PENUH
+# score_akumulasi() (detector fase akumulasi, 7 syarat primary + 4 secondary + zona support/
+# resistance structural) SEBELUM detect_entry_b_breakout() bisa dievaluasi -- 2 fungsi produksi
+# asli, bukan cuma 1. Disetujui Mas Budi: syarat DETEKSI 100% asli (primary_score>=3, sesuai
+# threshold live persis), TAPI TANPA batasan "top 5 kandidat per siklus scan" (itu murni
+# rate-limit operasional/tampilan dashboard live, bukan bagian definisi sinyal) -- supaya
+# feasible dievaluasi per-symbol independen spt 3 backtest lain (replikasi cross-sectional
+# top-5 tiap satu dari ~4380 titik waktu x 474 pair akan >100x lebih lambat).
+# OPTIMISASI PENTING: score_akumulasi() asli memanggil compute_indicators_akum() (EMA/ATR/RSI/
+# MACD/OBV) pada df yg diberikan -- kalau dipanggil dgn slice yg terus membesar tiap candle,
+# ini O(n^2) per symbol (tidak feasible, recompute indicator penuh tiap step). Di sini semua
+# indikator dihitung SEKALI per symbol (vectorized), lalu logika per-window (P1/P3/P7/S1/S4 dkk,
+# yg memang cuma butuh AKUM_SIDEWAYS_CANDLES candle terakhir) pakai slicing array -- hasil
+# akhirnya SAMA, cuma jauh lebih cepat.
+# Exit: REPLIKASI PENUH mesin exit produksi asli Akumulasi (BEDA dari 3 strategi lain -- bukan
+# hard_stop_pct/get_arm_pct/trailing_dist_progressive): SL struktural (retest_low - buffer),
+# TP1 swing-high 30 candle, TP2 momentum overbought (RSI>=70 ATAU Stoch>75+turun+MACD turun),
+# TP3 upper-wick tembus pivot resistance (N=4 tiap sisi) -- SEMUA TP wajib profit bersih (net
+# fee) >= AKUM_TP_MIN_PROFIT_PCT, timeout AKUM_ENTRY_TIMEOUT candle.
+_akumb_lock = threading.Lock()
+_akumb_status = {"running": False, "started_at": None, "progress": "", "done": False,
+                  "results": None, "error": None}
+
+AKUMB_STOCH_MAX_SWEEP = [70, 60, 50, 40, 30]
+
+
+def _akumb_precompute(df: pd.DataFrame) -> dict:
+    """Hitung SEKALI semua indikator yg dibutuhkan score_akumulasi()/detect_entry_b_breakout()/
+    exit engine, vectorized penuh -- supaya loop per-candle di bawah cuma index lookup (O(1)),
+    bukan recompute indikator tiap step (yg akan O(n^2))."""
+    close = df['close'].astype(float); high = df['high'].astype(float)
+    low = df['low'].astype(float); openp = df['open'].astype(float); vol = df['vol'].astype(float)
+    ema20 = ta.ema(close, length=20); ema50 = ta.ema(close, length=50); ema200 = ta.ema(close, length=200)
+    atr = ta.atr(high, low, close, length=14)
+    rsi = ta.rsi(close, length=14)
+    macd = ta.macd(close, fast=12, slow=26, signal=9)
+    macd_hist = macd[[c for c in macd.columns if 'MACDh' in c][0]] if macd is not None else pd.Series(np.nan, index=df.index)
+    stoch = ta.stoch(high, low, close, k=14, d=3)
+    stoch_k = stoch[[c for c in stoch.columns if 'STOCHk' in c][0]] if stoch is not None else pd.Series(np.nan, index=df.index)
+    obv = [0.0]
+    cv = close.values
+    for i in range(1, len(cv)):
+        if cv[i] > cv[i-1]: obv.append(obv[-1] + vol.values[i])
+        elif cv[i] < cv[i-1]: obv.append(obv[-1] - vol.values[i])
+        else: obv.append(obv[-1])
+    obv = np.array(obv)
+    rng = (high - low).replace(0, float('nan'))
+    body_ratio = (close - openp).abs() / rng
+    atr_cummax = atr.cummax()  # utk P4: atr_peak dari SEMUA histori sebelum window (O(1) lookup)
+    swing_hi = high.rolling(AKUM_TP_SWING_LOOKBACK).max().shift(1)  # excl candle ybs, spt get_akum_swing_high
+
+    n = len(df)
+    is_pivot = np.zeros(n, dtype=bool)
+    hi_arr = high.values
+    for p in range(4, n - 4):
+        ph = hi_arr[p]
+        if all(ph > hi_arr[p - j] for j in range(1, 5)) and all(ph > hi_arr[p + j] for j in range(1, 5)):
+            is_pivot[p] = True
+
+    return {
+        'close': close.values, 'high': high.values, 'low': low.values, 'open': openp.values,
+        'vol': vol.values, 'ema20': ema20.values, 'ema50': ema50.values, 'ema200': ema200.values,
+        'atr': atr.values, 'rsi': rsi.values, 'macd_hist': macd_hist.values, 'stoch_k': stoch_k.values,
+        'obv': obv, 'body_ratio': body_ratio.values, 'atr_cummax': atr_cummax.values,
+        'swing_hi': swing_hi.values, 'is_pivot': is_pivot, 'n': n,
+    }
+
+
+def _akumb_window_score(a: dict, i: int):
+    """Replikasi PERSIS logika window score_akumulasi() (P1-P7, S1-S4, gating, zona structural)
+    di index i -- window = candle [i-AKUM_SIDEWAYS_CANDLES+1 : i] INKLUSIF i, match
+    win=df.iloc[-N:] & row=df.iloc[-1] asli (row = candle TERAKHIR window, bukan candle
+    SESUDAHNYA -- awalnya salah off-by-one di sini, sudah diverifikasi lewat cross-check
+    langsung ke score_akumulasi() sebelum dipakai). i setara "df berakhir tepat di i".
+    Return dict ringkas atau None kalau data/window tidak valid."""
+    W = AKUM_SIDEWAYS_CANDLES
+    if i < W + 60:
+        return None
+    close_now = a['close'][i]
+    if close_now <= 0 or pd.isna(close_now):
+        return None
+    w_hi = a['high'][i - W + 1:i + 1]; w_lo = a['low'][i - W + 1:i + 1]; w_close = a['close'][i - W + 1:i + 1]
+    w_open = a['open'][i - W + 1:i + 1]; w_vol = a['vol'][i - W + 1:i + 1]; w_obv = a['obv'][i - W + 1:i + 1]
+    w_ema20 = a['ema20'][i - W + 1:i + 1]; w_body = a['body_ratio'][i - W + 1:i + 1]
+    if np.isnan(w_ema20).any():
+        return None
+
+    hi_max = float(np.nanmax(w_hi)); lo_min = float(np.nanmin(w_lo))
+    range_pct = (hi_max - lo_min) / close_now if close_now > 0 else 99
+    p1_ok = range_pct <= AKUM_RANGE_PCT
+
+    zone_half_band = max((hi_max - lo_min) * 0.06, close_now * 0.004)
+    lows = w_lo[~np.isnan(w_lo)]; highs = w_hi[~np.isnan(w_hi)]
+    sup_seed = float(np.nanpercentile(lows, 18)); res_seed = float(np.nanpercentile(highs, 82))
+    sup_cluster = lows[(lows >= sup_seed - zone_half_band) & (lows <= sup_seed + zone_half_band)]
+    res_cluster = highs[(highs >= res_seed - zone_half_band) & (highs <= res_seed + zone_half_band)]
+    sup_center = float(np.median(sup_cluster)) if len(sup_cluster) >= 3 else sup_seed
+    res_center = float(np.median(res_cluster)) if len(res_cluster) >= 3 else res_seed
+    support_zone_low = max(lo_min, sup_center - zone_half_band)
+    support_zone_high = min(hi_max, sup_center + zone_half_band)
+    resistance_zone_low = max(lo_min, res_center - zone_half_band)
+    resistance_zone_high = min(hi_max, res_center + zone_half_band)
+    if support_zone_high >= resistance_zone_low:
+        mid = (sup_center + res_center) / 2.0
+        support_zone_high = min(support_zone_high, mid)
+        resistance_zone_low = max(resistance_zone_low, mid)
+    if support_zone_low > support_zone_high:
+        support_zone_low = support_zone_high = sup_center
+    if resistance_zone_low > resistance_zone_high:
+        resistance_zone_low = resistance_zone_high = res_center
+
+    ema20_now = a['ema20'][i]; ema200_now = a['ema200'][i]
+    if pd.isna(ema20_now) or pd.isna(ema200_now) or ema200_now == 0:
+        return None
+    ema_gap = abs(ema20_now - ema200_now) / ema200_now
+    p2_ok = ema_gap <= AKUM_EMA_GAP_PCT
+
+    n_obv = len(w_obv)
+    if n_obv < 10:
+        return None
+    obv_slope = float(np.polyfit(np.arange(n_obv), w_obv, 1)[0])
+    p3_ok = obv_slope > 0
+
+    atr_now = a['atr'][i]
+    pre_idx = i - W  # pre-window ends here inclusive (window now starts at i-W+1)
+    atr_peak = float(a['atr_cummax'][pre_idx]) if pre_idx >= 5 and not pd.isna(a['atr_cummax'][pre_idx]) else None
+    if pd.isna(atr_now) or atr_peak is None:
+        p4_ok = False
+    else:
+        atr_drop = 1 - (atr_now / atr_peak) if atr_peak > 0 else 0
+        p4_ok = atr_drop >= AKUM_ATR_DROP_PCT
+
+    ema20_start = w_ema20[0]; ema20_end = w_ema20[-1]
+    if ema20_start > 0 and not pd.isna(ema20_start) and not pd.isna(ema20_end):
+        ema_slope_drop = (ema20_start - ema20_end) / ema20_start
+        p5_ok = ema_slope_drop <= AKUM_EMA_SLOPE_MAX
+    else:
+        p5_ok = True
+
+    close_start = w_close[0]; close_end = w_close[-1]
+    if close_start > 0:
+        close_drift = abs(close_end - close_start) / close_start
+        p6_ok = close_drift <= AKUM_CLOSE_DRIFT_MAX
+    else:
+        p6_ok = True
+
+    seg = len(w_hi) // 3
+    if seg >= 10:
+        def _seg_range(hi_s, lo_s, cl_s):
+            lo_ = float(np.nanmin(lo_s)); hi_ = float(np.nanmax(hi_s)); mid_ = float(np.nanmean(cl_s))
+            return (hi_ - lo_) / mid_ if mid_ > 0 else 0
+        r1 = _seg_range(w_hi[:seg], w_lo[:seg], w_close[:seg])
+        r2 = _seg_range(w_hi[seg:seg*2], w_lo[seg:seg*2], w_close[seg:seg*2])
+        r3 = _seg_range(w_hi[seg*2:], w_lo[seg*2:], w_close[seg*2:])
+        ranges = [r for r in (r1, r2, r3) if r > 0]
+        p7_ok = (max(ranges) / min(ranges)) <= AKUM_RANGE_DIST_MAX if len(ranges) >= 2 else True
+    else:
+        p7_ok = True
+
+    green_vol = float(w_vol[w_close >= w_open].sum()); red_vol = float(w_vol[w_close < w_open].sum())
+    s1_ok = green_vol > red_vol
+    rsi_now = a['rsi'][i]
+    s2_ok = not pd.isna(rsi_now) and 30 <= rsi_now <= 56
+    macd_now = a['macd_hist'][i]
+    s3_ok = not pd.isna(macd_now) and abs(macd_now) < AKUM_MACD_FLAT_PCT * close_now
+    avg_body = float(np.nanmean(w_body))
+    s4_ok = avg_body < AKUM_BODY_RATIO_MAX
+
+    primary_score = sum([p1_ok, p2_ok, p3_ok, p4_ok])
+    primary_ok = p1_ok and p2_ok and p3_ok and p4_ok and p5_ok and p6_ok and p7_ok
+    if primary_score < 3:
+        return None
+    return {
+        'primary_ok': primary_ok, 'primary_score': primary_score,
+        'support': lo_min, 'resistance': hi_max,
+        'support_zone_low': support_zone_low, 'support_zone_high': support_zone_high,
+        'resistance_zone_low': resistance_zone_low, 'resistance_zone_high': resistance_zone_high,
+    }
+
+
+def _akumb_detect_entry(a: dict, i: int, resistance: float, support: float, resistance_retest_low: float):
+    """Replikasi PERSIS detect_entry_b_breakout() di index i (window df.iloc[:i+1], 'saat ini'=i)."""
+    if i < 20:
+        return None
+    ema20_now = a['ema20'][i]; ema50_now = a['ema50'][i]; rsi_now = a['rsi'][i]
+    if pd.isna(ema20_now) or pd.isna(ema50_now): return None
+    if ema20_now <= ema50_now: return None
+    if pd.isna(rsi_now) or rsi_now >= AKUM_TP_RSI_OB: return None
+
+    vol_ma = pd.Series(a['vol'][max(0, i - 25):i + 1]).rolling(20).mean().values
+    close_arr = a['close']; vol_arr = a['vol']; low_arr = a['low']
+
+    breakout_idx = None; breakout_vol = 0.0
+    lo_search = max(0, i - 9)
+    for ii in range(lo_search, i):
+        if ii < 5: continue
+        vm_idx = ii - max(0, i - 25)
+        vm = vol_ma[vm_idx] if 0 <= vm_idx < len(vol_ma) else np.nan
+        if pd.isna(vm) or vm <= 0: continue
+        if close_arr[ii] > resistance and vol_arr[ii] >= AKUM_B_VOL_BREAKOUT_MULT * vm:
+            breakout_idx = ii; breakout_vol = float(vol_arr[ii]); break
+    if breakout_idx is None:
+        return None
+
+    retest_low = resistance_retest_low * (1 - AKUM_B_RETEST_TOL_PCT)
+    retest_high = resistance * (1 + AKUM_B_RETEST_TOL_PCT)
+    for j in range(breakout_idx + 1, i + 1):
+        lo_j = low_arr[j]; vol_j = vol_arr[j]
+        if lo_j <= retest_high and lo_j >= retest_low:
+            if lo_j < retest_low: continue
+            if breakout_vol > 0 and vol_j >= AKUM_B_RETEST_VOL_MAX * breakout_vol: continue
+            if close_arr[i] < resistance: continue
+            sl_price = round(resistance_retest_low * (1 - AKUM_ENTRY_SL_BUFFER), 8)
+            return {'sl_price': sl_price}
+    return None
+
+
+def _akumb_simulate_trade(a: dict, i: int, sl_price: float):
+    """Replikasi PERSIS exit engine produksi Akumulasi (SL struktural, TP1 swing-high,
+    TP2 momentum overbought, TP3 upper-wick pivot, semua wajib profit bersih >=
+    AKUM_TP_MIN_PROFIT_PCT, timeout AKUM_ENTRY_TIMEOUT candle). Entry = close candle i."""
+    n = a['n']
+    entry = float(a['close'][i])
+    if entry <= 0:
+        return None
+    last_j = min(i + AKUM_ENTRY_TIMEOUT, n - 1)
+    if last_j <= i:
+        return None
+    pivots_high = a['is_pivot']; hi_arr = a['high']; low_arr = a['low']; close_arr = a['close']
+    swing_hi_arr = a['swing_hi']; rsi_arr = a['rsi']; stoch_arr = a['stoch_k']; macd_arr = a['macd_hist']
+
+    for j in range(i + 1, last_j + 1):
+        price_hi = float(hi_arr[j]); price_lo = float(low_arr[j]); price_close = float(close_arr[j])
+        prof_from_entry = (price_close / entry - 1) * 100 - FEE_ROUND_TRIP_PCT
+        # SL struktural (pakai low candle sbg proxy harga intraday tersentuh)
+        if sl_price > 0 and price_lo <= sl_price:
+            return (sl_price / entry - 1) * 100 - FEE_ROUND_TRIP_PCT
+        # TP1: swing-high (pakai high candle sbg proxy harga intraday tersentuh)
+        swing_hi = swing_hi_arr[j]
+        if not pd.isna(swing_hi) and swing_hi > 0 and price_hi >= swing_hi:
+            prof_touch = (swing_hi / entry - 1) * 100 - FEE_ROUND_TRIP_PCT
+            if prof_touch >= AKUM_TP_MIN_PROFIT_PCT:
+                return prof_touch
+        # TP2: momentum overbought (RSI close-based, Stoch+MACD close-based)
+        rsi_j = rsi_arr[j]; sk_j = stoch_arr[j]; sk_prev = stoch_arr[j - 1] if j > 0 else np.nan
+        macd_j = macd_arr[j]; macd_prev = macd_arr[j - 1] if j > 0 else np.nan
+        rsi_ob = (not pd.isna(rsi_j)) and rsi_j >= AKUM_TP_RSI_OB
+        stoch_ob_cross = (not pd.isna(sk_j) and not pd.isna(sk_prev) and sk_j > AKUM_TP_STOCH_OB and sk_j < sk_prev)
+        macd_turn = (not pd.isna(macd_j) and not pd.isna(macd_prev) and macd_j < macd_prev)
+        if rsi_ob or (stoch_ob_cross and macd_turn):
+            if prof_from_entry >= AKUM_TP_MIN_PROFIT_PCT:
+                return prof_from_entry
+        # TP3: upper-wick tembus pivot resistance terdekat di atas price (confirmed pivot: p<=j-4)
+        known_idx = j - 4
+        if known_idx >= 4:
+            cand_pivots = hi_arr[4:known_idx + 1][pivots_high[4:known_idx + 1]]
+            above = cand_pivots[cand_pivots > price_close]
+            if len(above) > 0:
+                nearest_res = float(np.min(above))
+                if price_hi >= nearest_res and prof_from_entry >= AKUM_TP_MIN_PROFIT_PCT:
+                    return prof_from_entry
+    exit_price = float(close_arr[last_j])
+    return (exit_price / entry - 1) * 100 - FEE_ROUND_TRIP_PCT
+
+
+def run_akumb_stoch_backtest():
+    """Jalan di thread terpisah (dipicu /api/run_akumb_stoch_backtest). Tidak menyentuh
+    trading live -- cuma baca cache 4h yg sudah ada + simulasi lokal."""
+    global _akumb_status
+    with _akumb_lock:
+        if _akumb_status['running']:
+            return
+        _akumb_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                          "progress": "0/0", "done": False, "results": None, "error": None}
+    try:
+        pairs = get_usdt_spot_pairs()
+        n_pairs = len(pairs)
+        end_ms = int(time.time() * 1000)
+        start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        log(f"[AKUMB-BT] Mulai backtest Akumulasi-4h Entry B + syarat Stoch (replikasi penuh "
+            f"detector+entry+exit produksi asli, TANPA batasan top-5/siklus), {n_pairs} pair, "
+            f"2022-sekarang, TF 4h")
+
+        combo_labels = ["baseline"] + [f"Stoch<{t}" for t in AKUMB_STOCH_MAX_SWEEP]
+        combo_stats = {label: {} for label in combo_labels}
+
+        for idx, sym in enumerate(pairs):
+            with _akumb_lock:
+                _akumb_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
+            try:
+                df = _stoch_bt_load_or_fetch(sym, start_ms, end_ms)
+                if df is None or len(df) < AKUM_SIDEWAYS_CANDLES + 100:
+                    continue
+                a = _akumb_precompute(df)
+                per_combo_trades = {label: [] for label in combo_labels}
+                last_entry_i = -10**9
+                i = AKUM_SIDEWAYS_CANDLES + 60
+                n = a['n']
+                while i < n - AKUM_ENTRY_TIMEOUT - 1:
+                    if i - last_entry_i < 5:  # dedup ringan -- hindari sinyal beruntun di candle nyaris sama
+                        i += 1; continue
+                    score = _akumb_window_score(a, i)
+                    if score is None:
+                        i += 1; continue
+                    has_struct = (score['support_zone_low'] <= score['support_zone_high'] <=
+                                  score['resistance_zone_low'] <= score['resistance_zone_high'])
+                    support_ref = score['support_zone_low'] if has_struct else score['support']
+                    resistance_ref = score['resistance_zone_high'] if has_struct else score['resistance']
+                    resistance_retest_low_ref = score['resistance_zone_low'] if has_struct else score['resistance']
+                    sig = _akumb_detect_entry(a, i, resistance_ref, support_ref, resistance_retest_low_ref)
+                    if sig is None:
+                        i += 1; continue
+                    pct = _akumb_simulate_trade(a, i, sig['sl_price'])
+                    if pct is None:
+                        i += 1; continue
+                    per_combo_trades["baseline"].append(pct)
+                    sk = a['stoch_k'][i]
+                    if not pd.isna(sk):
+                        for t in AKUMB_STOCH_MAX_SWEEP:
+                            if sk < t:
+                                per_combo_trades[f"Stoch<{t}"].append(pct)
+                    last_entry_i = i
+                    i += AKUM_ENTRY_TIMEOUT  # skip ke depan setelah entry, spt strategi lain (1 posisi dulu)
+                for label, trades in per_combo_trades.items():
+                    if trades:
+                        combo_stats[label][sym] = trades
+            except Exception as e:
+                log(f"WARN [AKUMB-BT] {sym}: {e}")
+            if (idx + 1) % 50 == 0:
+                log(f"[AKUMB-BT] progress {idx+1}/{n_pairs}")
+
+        rows = []
+        for label, per_symbol in combo_stats.items():
+            all_pcts = [p for lst in per_symbol.values() for p in lst]
+            n = len(all_pcts)
+            if n < 20:
+                continue
+            wins = [p for p in all_pcts if p > 0]
+            losses = [p for p in all_pcts if p <= 0]
+            wr = len(wins) / n * 100
+            gross_win = sum(wins) if wins else 0.0
+            gross_loss = -sum(losses) if losses else 0.0
+            pf = (gross_win / gross_loss) if gross_loss > 0 else float('inf')
+            avg = sum(all_pcts) / n
+            rows.append({'label': label, 'n': n, 'n_symbols': len(per_symbol), 'wr': wr,
+                         'profit_factor': pf, 'avg_pct': avg})
+        rows.sort(key=lambda r: r['profit_factor'], reverse=True)
+
+        msg_lines = ["📊 Akumulasi-4h Entry B + syarat Stoch (replikasi penuh, TANPA batas top-5/siklus)",
+                     f"Universe: {n_pairs} pair | 2022-sekarang | TF 4h",
+                     "Exit: SL struktural / TP1 swing-high / TP2 momentum OB / TP3 pivot wick, semua produksi asli",
+                     "Deteksi: score_akumulasi() asli (primary_score>=3) + detect_entry_b_breakout() asli", ""]
+        for r in rows:
+            msg_lines.append(
+                f"{r['label']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
+                f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}%"
+            )
+        full_report = "\n".join(msg_lines)
+        log(f"[AKUMB-BT] SELESAI.\n{full_report}")
+        send_telegram(full_report, parse_mode=None)
+
+        with _akumb_lock:
+            _akumb_status['running'] = False
+            _akumb_status['done'] = True
+            _akumb_status['results'] = rows
+            _akumb_status['progress'] = 'done'
+    except Exception as e:
+        log(f"ERROR [AKUMB-BT] fatal: {e}")
+        with _akumb_lock:
+            _akumb_status['running'] = False
+            _akumb_status['error'] = str(e)
+
+
 def run_web_dashboard():
     """Thread web dashboard Flask."""
     try:
@@ -15394,6 +15769,23 @@ def run_web_dashboard():
         def api_hunting_stoch_backtest_status():
             with _hunt_bt_lock:
                 return jsonify(dict(_hunt_bt_status))
+
+        @app.route("/api/run_akumb_stoch_backtest", methods=["GET", "POST"])
+        def api_run_akumb_stoch_backtest():
+            """One-off (12/09/2026): replikasi penuh detector+Entry B+exit Akumulasi-4h,
+            uji syarat Stoch tambahan. Cek progress via /api/akumb_stoch_backtest_status."""
+            if request.args.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
+            with _akumb_lock:
+                if _akumb_status.get("running"):
+                    return jsonify({"ok": False, "error": "sudah jalan", "status": _akumb_status})
+            threading.Thread(target=run_akumb_stoch_backtest, daemon=True).start()
+            return jsonify({"ok": True, "message": "Backtest dimulai di background."})
+
+        @app.route("/api/akumb_stoch_backtest_status")
+        def api_akumb_stoch_backtest_status():
+            with _akumb_lock:
+                return jsonify(dict(_akumb_status))
 
         @app.route("/api/hunting_config", methods=["POST"])
         def api_hunting_config():
