@@ -16389,6 +16389,22 @@ def run_web_dashboard():
             with _qscalp_bt_lock:
                 return jsonify(dict(_qscalp_bt_status))
 
+        @app.route("/api/delete_qscalp_cache", methods=["GET", "POST"])
+        def api_delete_qscalp_cache():
+            """URGENT (12/09/2026): cache 3m QScalp bikin volume penuh lagi (~99%) di tengah
+            backtest pertama (banyak symbol GAGAL ke-cache krn disk penuh -- datanya sendiri
+            tetap kepakai di hasil backtest yg sudah selesai, cuma cache lokalnya yg rusak/
+            parsial). Hapus supaya bot trading live tidak berisiko gagal tulis file."""
+            if request.args.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
+            import shutil
+            cache_dir = QSCALP_CACHE_DIR
+            if os.path.isdir(cache_dir):
+                shutil.rmtree(cache_dir)
+                log(f"[QSCALP-BT] {cache_dir} dihapus permanen (volume penuh, urgent).")
+                return jsonify({"ok": True, "message": "Cache QScalp dihapus."})
+            return jsonify({"ok": True, "message": "Cache tidak ada (sudah bersih)."})
+
         @app.route("/api/hunting_config", methods=["POST"])
         def api_hunting_config():
             with _hunting_lock:
