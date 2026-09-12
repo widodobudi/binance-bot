@@ -207,6 +207,8 @@ def _candle_seconds_for_strategy(strat: str) -> float:
         return REVERSAL_SECONDS_PER_CANDLE
     if strat in ('brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
         return STRAT4H_SECONDS
+    if strat == 'qscalp_3m':
+        return 180  # 3 menit
     return SECONDS_PER_CANDLE  # brkX2 (12h), default
 
 BASE_ORDER_VOLUME       = 8    # diubah ke $8 (17/08/2026, saldo $85, agar semua strategi bisa open)
@@ -236,6 +238,9 @@ STRAT4H_ENTRY_MAX_PCT   = 60/240  # menit ke-60 dari 240 menit = 25% elapsed (di
 STRAT4H_FWDTEST_TARGET  = 30      # target forward-test fase 2 (fase 1 selesai: #15/7, 13W/1L +12.6%)
 STRAT4H_LIVE_BASELINE   = 30      # closed deals saat brkX2-4h TERCAPAI target fase 2 -> LIVE
 STRAT4H_PHASE2_TARGET   = 15      # target fase-2 (counter "2nd") setelah LIVE, 29/08/2026, samain hunting/reversal
+# ── QScalp-3m (live 12/09/2026, lihat konstanta lengkap dekat thread scan-nya) ─
+QSCALP_MAX_DEALS         = 2       # slot standalone, permintaan eksplisit Mas Budi -- TIDAK
+                                    # mengurangi slot strategi lain, jangan diubah tanpa diminta.
 # ── Hunting-4h ───────────────────────────────────────────────────────────────
 HUNTING_MAX_DEALS        = 3       # max deal hunting aktif bersamaan
 HUNTING_MAX_HOLD_CANDLES = 15      # timeout 15 candle 4h = 2.5 hari (sama brkX2-4h)
@@ -848,7 +853,14 @@ STRATEGY_CONFIG_DEFAULTS = {
     "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
     "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
     "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
+    "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "max_deals": 2},
 }
+# qscalp_3m: ai_call_open=False PERMANEN secara desain (bukan cuma default) -- strategi ini
+# full rule-based TANPA AI sama sekali (disepakati Mas Budi 12/09/2026, alasan: pump 3m
+# selesai dalam hitungan menit, latency AI bisa bikin kelewat entry/exit). Toggle
+# "sc-aicall-qscalp_3m" di dashboard TIDAK memanggil apa pun untuk strategi ini walau
+# di-centang -- lihat open_qscalp_if_signal() & thread2_monitor(), tidak ada satu pun
+# panggilan ai_decision_* di jalur qscalp_3m.
 # Nilai "max_deals" di atas SAMA PERSIS dengan default lama MAX_DEALS_BRKX2/MAX_DEALS_REVERSAL/
 # STRAT4H_MAX_DEALS/STRAT_CROSSEMA_MAX_DEALS/AKUM_ENTRY_MAX_DEALS/HUNTING_MAX_DEALS (31/08/2026,
 # permintaan user: bisa diatur lewat dashboard Strategy Control) -- lihat sync_max_deals_globals()
@@ -906,7 +918,7 @@ def sync_max_deals_globals():
     ubah puluhan call-site sekaligus)."""
     global MAX_DEALS_BRKX2, MAX_DEALS_REVERSAL, STRAT4H_MAX_DEALS
     global STRAT_CROSSEMA_MAX_DEALS, HUNTING_MAX_DEALS, AKUM_ENTRY_MAX_DEALS
-    global TRENDCONFIRM_MAX_DEALS
+    global TRENDCONFIRM_MAX_DEALS, QSCALP_MAX_DEALS
     try:
         cfg = load_strategy_config()
         MAX_DEALS_BRKX2          = int(cfg.get('brkX2', {}).get('max_deals', MAX_DEALS_BRKX2) or MAX_DEALS_BRKX2)
@@ -916,9 +928,11 @@ def sync_max_deals_globals():
         HUNTING_MAX_DEALS        = int(cfg.get('hunting_4h', {}).get('max_deals', HUNTING_MAX_DEALS) or HUNTING_MAX_DEALS)
         AKUM_ENTRY_MAX_DEALS     = int(cfg.get('akum_entry_a', {}).get('max_deals', AKUM_ENTRY_MAX_DEALS) or AKUM_ENTRY_MAX_DEALS)
         TRENDCONFIRM_MAX_DEALS   = int(cfg.get('trend_confirm_4h', {}).get('max_deals', TRENDCONFIRM_MAX_DEALS) or TRENDCONFIRM_MAX_DEALS)
+        QSCALP_MAX_DEALS         = int(cfg.get('qscalp_3m', {}).get('max_deals', QSCALP_MAX_DEALS) or QSCALP_MAX_DEALS)
         log(f"   Max deals per strategi: brkX2={MAX_DEALS_BRKX2} reversal={MAX_DEALS_REVERSAL} "
             f"4h={STRAT4H_MAX_DEALS} crossema={STRAT_CROSSEMA_MAX_DEALS} "
-            f"hunting={HUNTING_MAX_DEALS} akum={AKUM_ENTRY_MAX_DEALS} trendconfirm={TRENDCONFIRM_MAX_DEALS}")
+            f"hunting={HUNTING_MAX_DEALS} akum={AKUM_ENTRY_MAX_DEALS} trendconfirm={TRENDCONFIRM_MAX_DEALS} "
+            f"qscalp={QSCALP_MAX_DEALS}")
     except Exception as e:
         log(f"WARN sync_max_deals_globals: {e}")
 
@@ -926,7 +940,8 @@ def total_max_deals_all_strategies() -> int:
     """Jumlah semua slot maks lintas 6 strategi -- dipakai murni buat DISPLAY (ganti
     COMMAS_MAX_ACTIVE_DEALS yang lama & basi, lihat penjelasan di dekat definisinya)."""
     return (MAX_DEALS_BRKX2 + MAX_DEALS_REVERSAL + STRAT4H_MAX_DEALS
-            + STRAT_CROSSEMA_MAX_DEALS + HUNTING_MAX_DEALS + AKUM_ENTRY_MAX_DEALS)
+            + STRAT_CROSSEMA_MAX_DEALS + HUNTING_MAX_DEALS + AKUM_ENTRY_MAX_DEALS
+            + QSCALP_MAX_DEALS)
 
 def is_strategy_enabled(strategy: str) -> bool:
     cfg = load_strategy_config()
@@ -3671,6 +3686,11 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
     if strategy == 'hunting_4h':
         target  = float(_cfg_base if _cfg_base else HUNTING_ORDER_VOLUME)
         add_usd = 0
+    # QScalp-3m: base_usd dari Strategy Control (fallback $10), tanpa add fund -- scalp cepat,
+    # tidak ada averaging-down (konsisten dgn exit flat % yg dites di backtest).
+    elif strategy == 'qscalp_3m':
+        target  = float(_cfg_base if _cfg_base else 10)
+        add_usd = 0
     # Akumulasi pakai base_usd dari Strategy Control (fallback BASE_ORDER_VOLUME), tanpa add fund
     elif strategy in ('akum_entry_a', 'akum_entry_b'):
         target  = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
@@ -4260,6 +4280,21 @@ def trailing_dist_progressive(atr_pct: float, current_profit_pct: float) -> floa
     return round(max(PROG_TRAIL_MIN, reduced), 4)
 
 
+# ── QScalp-3m exit wrapper (12/09/2026) ───────────────────────────────────────
+# Exit backtest-nya (3 ronde) pakai FLAT % (arm/trail/stop), BUKAN ATR-tiered spt 6 strategi
+# lain -- ATR-tiered TIDAK PERNAH dites utk TF 3m. Wrapper tipis ini dipakai di thread2_monitor
+# HANYA utk strat=='qscalp_3m', supaya hard_stop_pct()/get_arm_pct()/trailing_dist_progressive()
+# ASLI (dipakai 6 strategi lain) tetap 100% tidak tersentuh/tidak berubah perilakunya.
+def qscalp_hard_stop_pct():
+    return "QScalp-flat", QSCALP_LIVE_STOP_PCT, QSCALP_LIVE_STOP_PCT
+
+def qscalp_arm_pct() -> float:
+    return QSCALP_LIVE_ARM_PCT
+
+def qscalp_trail_pct() -> float:
+    return QSCALP_LIVE_TRAIL_PCT
+
+
 def estimate_closest_deal_to_close(deals_display: dict):
     """Heuristik (BUKAN prediksi harga pasti): tebak deal Active Deals mana yang paling
     berpotensi closing lebih dulu, berdasar 3 tingkat urgensi (tier 1 paling mendesak):
@@ -4442,6 +4477,10 @@ def get_live_atr_pct(symbol: str, strategy: str, fallback: float) -> float:
     LIVE_ATR_CACHE_SECONDS supaya tidak fetch OHLCV tiap siklus monitor 15 detik
     (ATR sendiri cuma berubah berarti tiap candle closed, bukan tiap detik).
     Gagal fetch -> pakai fallback (biasanya snapshot ATR% saat OPEN)."""
+    if strategy == 'qscalp_3m':
+        # qscalp_3m pakai exit FLAT % (qscalp_arm_pct/qscalp_trail_pct/qscalp_hard_stop_pct),
+        # tidak butuh ATR% live sama sekali -- skip fetch (hemat API call tiap siklus T2).
+        return fallback
     now = time.time()
     with _live_atr_cache_lock:
         cached = _live_atr_cache.get(symbol)
@@ -6124,6 +6163,8 @@ def thread2_monitor():
             # Trailing dist dengan factor variatif, ATR% live
             base_td = trailing_dist(live_atrp)
             tdist   = round(base_td * _factor, 4)
+        elif strat == 'qscalp_3m':
+            tdist = qscalp_trail_pct()  # flat %, bukan ATR-tiered -- lihat backtest 3 ronde
         else:
             tdist = trailing_dist_progressive(live_atrp, prof_peak)
         armed = d.get('trailing_armed', False)
@@ -6132,7 +6173,9 @@ def thread2_monitor():
         # snapshot ATR% saat entry — supaya reaktif ke perubahan volatilitas terkini)
         # — SKIP untuk akumulasi: exit via TP/SL/Timeout, bukan trailing
         _is_akum = strat in ('akum_entry_a', 'akum_entry_b')
-        if (not armed) and (not _is_akum) and get_deal_override(sym, 'arm_trailing_enabled', True) and prof_peak >= get_arm_pct(live_atrp):
+        _qscalp_arm = strat == 'qscalp_3m'
+        _cur_arm_pct = qscalp_arm_pct() if _qscalp_arm else get_arm_pct(live_atrp)
+        if (not armed) and (not _is_akum) and get_deal_override(sym, 'arm_trailing_enabled', True) and prof_peak >= _cur_arm_pct:
             # AI decision jika ai_call=True -- cooldown 10 menit (06/09/2026, pola sama persis dgn
             # fix ai_decision_close 03/09/2026): SEBELUMNYA ai_decision_armed() ditanya ULANG tiap
             # siklus T2 (~15-20 detik) selama profit masih di atas ambang arm & AI masih bilang
@@ -6170,7 +6213,7 @@ def thread2_monitor():
             save_active_deals()
             log_oac('ARMED', sym, d.get('strategy', 'brkX2'), {
                 'peak_profit':  f"{prof_peak:.2f}%",
-                'arm_pct':      f"{get_arm_pct(live_atrp):.1f}%",
+                'arm_pct':      f"{_cur_arm_pct:.1f}%",
                 'atr_pct':      f"{live_atrp:.2f}%",
                 'trail_dist':   f"{tdist:.2f}%",
                 'entry_price':  _fmt_price(d.get('entry_price', 0)),
@@ -6192,16 +6235,19 @@ def thread2_monitor():
         # sudah dicapai tidak lagi cukup utk tier arm_pct yang berlaku sekarang — trailing ketat
         # yang di-set saat market tenang jadi nggak relevan lagi di kondisi volatil sekarang,
         # fallback ke hard stop saja sampai nanti profit cukup utk re-arm di tier baru.
-        if armed and not _is_akum:
+        if armed and not _is_akum and strat != 'qscalp_3m':
+            # qscalp_3m dikecualikan -- backtest-nya tidak pernah model un-arm (state machine
+            # sederhana: arm -> trail-stop atau timeout, sekali armed tetap armed), dan mekanisme
+            # ini didesain utk ATR-tiered strategi 4h/8h, belum divalidasi utk TF 3m/flat-%.
             _armed_ref_atr = d.get('armed_live_atr', atrp)
             _armed_since   = d.get('armed_since_ts', 0)
             _armed_min     = (time.time() - _armed_since) / 60.0 if _armed_since > 0 else 999.0
-            if (prof_peak < get_arm_pct(live_atrp)
+            if (prof_peak < _cur_arm_pct
                     and live_atrp >= _armed_ref_atr + UNARM_ATR_MARGIN_PP
                     and _armed_min >= UNARM_MIN_ARMED_MINUTES):
                 armed = False
                 log(f"[T2] {sym} trailing UN-ARMED (ATR% live naik {_armed_ref_atr:.2f}%→{live_atrp:.2f}% "
-                    f"sejak arm, peak profit {prof_peak:.2f}% < arm_pct tier sekarang {get_arm_pct(live_atrp):.1f}%)")
+                    f"sejak arm, peak profit {prof_peak:.2f}% < arm_pct tier sekarang {_cur_arm_pct:.1f}%)")
                 with active_deals_lock:
                     if sym in active_deals:
                         active_deals[sym]['trailing_armed'] = False
@@ -6272,10 +6318,12 @@ def thread2_monitor():
                 reason = _tp_reason
                 _tp_hold_armed_since.pop(sym, None)
         if not do_close and not _is_akum:
-            _hs_label, _hs_base, _hs_pct = hard_stop_pct(atrp)
+            _hs_label, _hs_base, _hs_pct = qscalp_hard_stop_pct() if strat == 'qscalp_3m' else hard_stop_pct(atrp)
             if price <= entry * (1 - _hs_pct / 100):
                 do_close = True
-                reason = (f"hard stop volatilitas [{_hs_label}, ATR {atrp:.2f}%]: price {_fmt_price(price)} "
+                reason = (f"hard stop {_hs_pct:.2f}% flat (varian C ronde 1): price {_fmt_price(price)} turun "
+                          f">= {_hs_pct:.2f}% dari entry" if strat == 'qscalp_3m' else
+                          f"hard stop volatilitas [{_hs_label}, ATR {atrp:.2f}%]: price {_fmt_price(price)} "
                           f"turun >= {_hs_pct:.2f}% dari entry (base {_hs_base:.1f}% x K{HARD_STOP_MULT:.2f})")
                 hard_stop_triggered = True
         if not do_close and armed and not _is_akum:
@@ -6322,6 +6370,9 @@ def thread2_monitor():
         elif d.get('strategy','brkX2') == 'trend_confirm_4h':
             hold_limit_sec = TRENDCONFIRM_MAX_HOLD_CANDLES * STRAT4H_SECONDS
             hold_label = f"batas {TRENDCONFIRM_MAX_HOLD_CANDLES} candle 4h (trendconfirm)"
+        elif d.get('strategy','brkX2') == 'qscalp_3m':
+            hold_limit_sec = QSCALP_LIVE_TIMEOUT_CANDLES * 180
+            hold_label = f"batas {QSCALP_LIVE_TIMEOUT_CANDLES} candle 3m (qscalp)"
         elif d.get('strategy','') in ('akum_entry_a', 'akum_entry_b'):
             timeout_c = d.get('timeout_candles', AKUM_ENTRY_TIMEOUT)
             hold_limit_sec = timeout_c * STRAT4H_SECONDS
@@ -6501,6 +6552,8 @@ def thread2_monitor():
                 strat_label = "Akumulasi-4h Entry B"
             elif strat == 'trend_confirm_4h':
                 strat_label = "TrenKonfirmasi-4h"
+            elif strat == 'qscalp_3m':
+                strat_label = "QScalp-3m"
             else:
                 strat_label = "Momentum brkX2 (12h)"
             # Hold-no-sell: kalau ini hard-stop, ATAU timeout ("batas N candle tercapai") sementara
@@ -6579,7 +6632,7 @@ def thread2_monitor():
                     'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
                 })
                 remove_from_active_deals(sym)
-                if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'): record_closed(sym)
+                if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
                 if strat == 'brkX2_4h' and trail_stop_triggered: record_trail_close(sym, price)
                 if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof_from_entry)
                 if _hold_no_sell:
@@ -6593,6 +6646,8 @@ def thread2_monitor():
                     tgt = FWDTEST_TARGET_4H
                 elif strat == 'hunting_4h':
                     tgt = HUNTING_FWDTEST_TARGET
+                elif strat == 'qscalp_3m':
+                    tgt = QSCALP_FWDTEST_TARGET
                 else:
                     tgt = FWDTEST_TARGET_BRKX2
                 pstrat = csv_progress(strat, offset=FWDTEST_BRKX2_PHASE_OFFSET if strat=='brkX2' else (HUNTING_FWDTEST_PHASE_OFFSET if strat=='hunting_4h' else 0))
@@ -10266,10 +10321,12 @@ var SC_LABELS = {
     brkX2_crossema: 'CrossEMA-4h',
     akum_entry_a: 'Akumulasi-4h',
     hunting_4h: 'Hunting-4h',
-    trend_confirm_4h: 'TrenKonfirmasi-4h'
+    trend_confirm_4h: 'TrenKonfirmasi-4h',
+    qscalp_3m: 'QScalp-3m'
 };
 var SC_HAS_ADDFUND = {brkX2: true, brkX2_4h: true, trend_confirm_4h: true};
 var SC_ADDFUND_LABEL = {brkX2: 'auto (score-based)'};
+var SC_NO_AI = {qscalp_3m: true};  // strategi full rule-based, checkbox AI-call tidak berlaku
 var _scData = {};
 
 function buildStrategySelect() {
@@ -10339,7 +10396,9 @@ function loadStrategyConfig() {
                     + '<td style="padding:5px 8px;font-weight:600">' + SC_LABELS[k] + '</td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-maxdeals-' + k + '" value="' + (cfg.max_deals || 2) + '" min="1" step="1" style="width:50px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-run-' + k + '" ' + (strategyEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
-                    + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-aicall-' + k + '" ' + (aiCallOpenEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer" title="Kandidat OPEN yang lolos semua filter rule-based masih dikonsultasikan ke AI dulu sebelum dibuka. Default OFF -- ini nggak bisa di-backtest kayak parameter lain."></td>'
+                    + (SC_NO_AI[k]
+                        ? '<td style="text-align:center;padding:5px 8px"><span style="color:var(--muted);font-size:10px;font-style:italic" title="Strategi full rule-based, tidak pernah memanggil AI sama sekali (desain permanen)">N/A</span></td>'
+                        : '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-aicall-' + k + '" ' + (aiCallOpenEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer" title="Kandidat OPEN yang lolos semua filter rule-based masih dikonsultasikan ke AI dulu sebelum dibuka. Default OFF -- ini nggak bisa di-backtest kayak parameter lain."></td>')
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-size-' + k + '" ' + (sizingEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>'
                     + addFundCell
@@ -10815,6 +10874,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="brkX2_crossema">CrossEMA-4h</option>
         <option value="akumulasi">Akumulasi-4h</option>
         <option value="trend_confirm_4h">TrenKonfirmasi-4h</option>
+        <option value="qscalp_3m">QScalp-3m</option>
         <option value="__exclude_hardstop__">Semua strategi, exclude hardstop volatilitas</option>
       </select>
     <select id="ct-filter-pair" onclick="event.stopPropagation()" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
@@ -11279,7 +11339,8 @@ var SCAN_BLOCKERS_SCHEDULE = {
     'CrossEMA-4h': 'Hanya scan di menit ke-~12 s/d 36 tiap candle 4h',
     'Reversal-8h': 'Hanya scan sekali saat candle 8h baru tertutup',
     'Hunting-4h':  'Scan tiap loop (~1-3 menit), tidak dibatasi jendela waktu',
-    'Akumulasi-4h':'Scan periodik (~tiap beberapa menit)'
+    'Akumulasi-4h':'Scan periodik (~tiap beberapa menit)',
+    'QScalp-3m':   'Scan tiap ~60 detik (TF 3m), tidak dibatasi jendela waktu'
 };
 function loadScanBlockers() {
     fetch('/api/scan_blockers').then(function(r){ return r.json(); }).then(function(d) {
@@ -14351,6 +14412,235 @@ def run_qscalp_backtest():
             _qscalp_bt_status['error'] = str(e)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# STRATEGI #8 QScalp-3m — LIVE (12/09/2026, setelah 3 ronde backtest)
+# Full rule-based, TANPA AI (desain awal, permintaan Mas Budi -- pump 3m selesai dalam
+# hitungan menit, latency AI bisa bikin kelewat entry/exit). Slot 2 standalone (tidak
+# mengurangi slot strategi lain, permintaan eksplisit). Forward-test awal target 12 deal
+# (permintaan Mas Budi 12/09/2026).
+#
+# Parameter entry = Combo G (backtest ronde 3, 90 hari/120 pair terlikuid, TF 3m):
+#   n=1196 (98 pair) WR=64.9% PF=1.41 avg=+0.29%/trade.
+# Combo G dipilih dari 4 kombo yang SAMA-SAMA lolos target (PF>1.3 DAN n>300 sekaligus)
+# -- Combo E/F/H dicatat di bawah sbg CADANGAN: kalau Combo G ternyata bermasalah di live
+# (mis. slippage/eksekusi nyata beda jauh dari backtest), tiga ini kandidat pengganti
+# tanpa perlu backtest ulang dari nol, urutan menurut PF ronde 3:
+#   Combo E: vol_mult=4.0 mom=2.5% hh=15 fomo=3.0%  (PF=1.47 n=588,  91 pair -- PF tertinggi)
+#   Combo F: vol_mult=4.0 mom=2.5% hh=15 fomo=5.0%  (PF=1.37 n=910,  97 pair)
+#   Combo H: vol_mult=2.5 mom=2.5% hh=15 fomo=5.0%  (PF=1.37 n=1371, 98 pair -- n terbesar)
+# Exit = varian C ronde 1 (arm/trail/stop FLAT %, bukan ATR-tiered spt strategi lain --
+# exit ATR-tiered TIDAK pernah dites utk TF 3m, jangan dicampur tanpa backtest baru).
+QSCALP_LIVE_VOL_MULT          = 3.0   # Combo G
+QSCALP_LIVE_MOMENTUM_PCT      = 2.5   # Combo G (sama di E/F/H -- ini parameter kunci)
+QSCALP_LIVE_BREAKOUT_LOOKBACK = 15    # Combo G (sama di semua kombo pemenang)
+QSCALP_LIVE_ANTI_FOMO_PCT     = 5.0   # Combo G (sama di F/H, cadangan E pakai 3.0)
+QSCALP_LIVE_ARM_PCT           = 0.8   # varian C ronde 1 (arm%)
+QSCALP_LIVE_TRAIL_PCT         = 0.3   # varian C ronde 1 (trail%)
+QSCALP_LIVE_STOP_PCT          = 2.0   # varian C ronde 1 (hard stop%, FLAT dari entry)
+QSCALP_LIVE_TIMEOUT_CANDLES   = 15    # varian C ronde 1 (15 candle x 3m = 45 menit)
+QSCALP_SCAN_INTERVAL          = 60    # detik -- lebih rapat dari strategi 4h/8h krn TF 3m
+QSCALP_FWDTEST_TARGET         = 12    # target forward-test awal (permintaan Mas Budi 12/09/2026)
+
+_qscalp_lock = threading.Lock()
+_qscalp_signals: list = []       # untuk dashboard (kandidat lolos scan terakhir)
+_qscalp_scan_ts = "-"
+_qscalp_last_candle_ts: dict = {}   # sym -> candle open ts (ms) sudah dientry, cegah dobel entry di candle yg sama
+
+
+def active_deal_count_qscalp() -> int:
+    with active_deals_lock:
+        return sum(1 for d in active_deals.values() if d.get("strategy") == "qscalp_3m")
+
+
+def check_qscalp_signal(df: pd.DataFrame, symbol: str):
+    """Cek sinyal QScalp-3m LIVE di candle TERAKHIR df (sama pola dgn check_hunting_strategy --
+    df['-1'] dipakai sbg 'saat ini', konsisten dgn strategi 4h lain di codebase ini).
+    Return dict ringkas kalau lolos, None kalau tidak. Replikasi PERSIS
+    _qscalp_signals_for_symbol() (backtest) tapi cuma cek 1 titik (candle terakhir),
+    bukan scan seluruh histori."""
+    n = len(df)
+    if n < 40:
+        return None
+    close = df['close'].values.astype(float)
+    high  = df['high'].values.astype(float)
+    open_ = df['open'].values.astype(float)
+    vol   = df['vol'].values.astype(float)
+    i = n - 1
+
+    vol_ma20 = pd.Series(vol).rolling(20).mean().values
+    vm = vol_ma20[i]
+    if pd.isna(vm) or vm <= 0 or vol[i] < QSCALP_LIVE_VOL_MULT * vm:
+        return None
+    if close[i] <= open_[i]:
+        return None
+    if i < 2 or close[i-2] <= 0:
+        return None
+    momentum_pct = (close[i] / close[i-2] - 1) * 100
+    if momentum_pct < QSCALP_LIVE_MOMENTUM_PCT:
+        return None
+    hh_prior = pd.Series(high).rolling(QSCALP_LIVE_BREAKOUT_LOOKBACK).max().shift(1).values
+    hh = hh_prior[i]
+    if pd.isna(hh) or close[i] <= hh:
+        return None
+    ema9 = pd.Series(close).ewm(span=QSCALP_EMA_FAST, adjust=False).mean().values
+    e9 = ema9[i]
+    if pd.isna(e9) or e9 <= 0 or close[i] > e9 * (1 + QSCALP_LIVE_ANTI_FOMO_PCT / 100):
+        return None
+
+    try:
+        atr_pct = float(ta.atr(pd.Series(df['high']), pd.Series(df['low']),
+                                pd.Series(df['close']), length=14).iloc[-1] / close[i] * 100)
+        if atr_pct != atr_pct or atr_pct <= 0:
+            atr_pct = 1.0
+    except Exception:
+        atr_pct = 1.0
+
+    return {'symbol': symbol, 'close': float(close[i]), 'momentum_pct': float(momentum_pct),
+            'vol_ratio': float(vol[i] / vm), 'atr_pct': atr_pct,
+            'candle_ot': int(df['ot'].iloc[i])}
+
+
+def open_qscalp_if_signal(sig: dict) -> bool:
+    """Eksekusi open long QScalp-3m. Dipanggil segera setelah check_qscalp_signal() lolos
+    (tidak ada babak-2/AI-batch spt hunting -- desain full rule-based, langsung eksekusi)."""
+    symbol = sig['symbol']
+    with active_deals_lock:
+        if symbol in active_deals:
+            return False
+    if active_deal_count_qscalp() >= QSCALP_MAX_DEALS:
+        return False
+    if is_cooldown_enabled('qscalp_3m') and cooldown_remaining(symbol) > 0:
+        return False
+    candle_ot = sig['candle_ot']
+    if _qscalp_last_candle_ts.get(symbol) == candle_ot:
+        return False  # sudah dientry di candle ini, hindari dobel-entry antar siklus scan
+
+    close = sig['close']; atrp = sig['atr_pct']
+    ok, target_usd, add_usd = open_deal_with_sizing(symbol, 1, strategy="qscalp_3m")
+    if not ok:
+        log(f"[QSCALP] {symbol} open ditolak Binance")
+        return False
+    _qscalp_last_candle_ts[symbol] = candle_ot
+
+    try:
+        ticker_now = _binance_get("/api/v3/ticker/price", {"symbol": symbol})
+        entry_price = float(ticker_now["price"]) if ticker_now else close
+    except Exception:
+        entry_price = close
+    slip_pct = (entry_price / close - 1) * 100 if close > 0 else 0.0
+    candle_open_ms = candle_ot
+
+    add_to_active_deals(symbol, {
+        "strategy":         "qscalp_3m",
+        "entry_price":      entry_price,
+        "signal_price":     close,
+        "peak":             entry_price,
+        "atr_pct":          atrp,
+        "score":            1,
+        "target_usd":       target_usd,
+        "add_usd":          0,
+        "opened_ts":        time.time(),
+        "opened_candle_ts": int(candle_open_ms),
+        "opened_at_wib":    now_wib().strftime('%d/%m/%Y %H:%M:%S'),
+        "trailing_armed":   False,
+        "tf":               "3m",
+        "momentum_pct_open": sig['momentum_pct'],
+        "vol_ratio_open":    sig['vol_ratio'],
+    })
+    # ai_call=False permanen (bukan cuma default dashboard) -- gate langsung di thread2_monitor
+    # via `strat == 'qscalp_3m'`, tapi override ini dipasang juga sbg lapis kedua eksplisit.
+    try:
+        _ov = load_deal_overrides()
+        _ov.setdefault(symbol, {})['ai_call'] = False
+        save_deal_overrides(_ov)
+    except Exception:
+        pass
+
+    msg = (
+        f"⚡ QScalp-3m | OPEN LONG\n"
+        f"{now_wib().strftime('%d/%m/%Y %H:%M:%S')} WIB\n"
+        f"Pair       : {to_display_pair(symbol)}\n"
+        f"Entry pasar: {_fmt_price(entry_price)}  |  Sinyal: {_fmt_price(close)}\n"
+        f"Slippage   : {slip_pct:+.2f}%\n"
+        f"Momentum 2c: {sig['momentum_pct']:.2f}%  |  Vol: {sig['vol_ratio']:.1f}xMA20\n"
+        f"Arm {QSCALP_LIVE_ARM_PCT}% / Trail {QSCALP_LIVE_TRAIL_PCT}% / Stop {QSCALP_LIVE_STOP_PCT}% / "
+        f"Timeout {QSCALP_LIVE_TIMEOUT_CANDLES}c(3m)\n"
+        f"Modal: ${target_usd:.0f}\n"
+        f"Slot qscalp: {active_deal_count_qscalp()}/{QSCALP_MAX_DEALS}"
+    )
+    send_telegram(msg, parse_mode=None)
+    csv_log_open({
+        'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+        'symbol':         to_display_pair(symbol),
+        'signal_price':   _fmt_price(close),
+        'entry_price':    _fmt_price(entry_price),
+        'slip_pct':       f"{slip_pct:+.2f}",
+        'atr_pct':        f"{atrp:.2f}",
+        'trail_dist_pct': QSCALP_LIVE_TRAIL_PCT,
+        'base_usd':       target_usd,
+        'score':          1,
+        'strategy':       'qscalp_3m',
+    })
+    return True
+
+
+def thread_qscalp_scan():
+    """Scan QScalp-3m: universe = top QSCALP_UNIVERSE_SIZE pair TERLIKUID (sama spt backtest),
+    cek candle 3m TERAKHIR tiap pair. Full rule-based, TANPA AI -- langsung eksekusi begitu
+    lolos (tidak ada babak-2 AI-batch)."""
+    global _qscalp_scan_ts
+    if not is_strategy_enabled('qscalp_3m'):
+        return
+    try:
+        ticker = get_ticker_24h()
+        if not ticker:
+            return
+        volmap = {}
+        for t in ticker:
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        pairs_all = [s for s in volmap if s.endswith('USDT')]
+        pairs = sorted(pairs_all, key=lambda s: volmap[s], reverse=True)[:QSCALP_UNIVERSE_SIZE]
+
+        display = []
+        blockers = {}
+        scanned = 0
+        for sym in pairs:
+            scanned += 1
+            try:
+                df = get_ohlcv(sym, interval="3m", limit=60)
+                if df is None or len(df) < 40:
+                    count_blocker(blockers, "Data candle kurang", True)
+                    continue
+                sig = check_qscalp_signal(df, sym)
+                if sig is None:
+                    count_blocker(blockers, "Syarat entry belum lolos", True)
+                    continue
+                display.append(sig)
+                open_qscalp_if_signal(sig)
+            except Exception as _qe:
+                pass
+        ts = now_wib().strftime("%d/%m/%Y %H:%M:%S")
+        with _qscalp_lock:
+            _qscalp_signals.clear()
+            _qscalp_signals.extend(display[:50])
+            _qscalp_scan_ts = ts
+        record_scan_blockers("QScalp-3m", scanned, len(display), blockers)
+    except Exception as e:
+        log(f"WARN [QSCALP] scan error: {e}")
+
+
+def run_thread_qscalp():
+    """Thread T_QSCALP: scan QScalp-3m tiap QSCALP_SCAN_INTERVAL detik."""
+    time.sleep(20)
+    while True:
+        try:
+            thread_qscalp_scan()
+        except Exception as e:
+            log(f"WARN T_QSCALP: {e}")
+        time.sleep(QSCALP_SCAN_INTERVAL)
+
+
 def run_web_dashboard():
     """Thread web dashboard Flask."""
     try:
@@ -14712,7 +15002,7 @@ def run_web_dashboard():
                         'total_usd':     d.get('target_usd', ''),
                     })
                     remove_from_active_deals(sym)
-                    if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'): record_closed(sym)
+                    if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
                     if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof)
                     log(f"[MANUAL-CLOSE] {sym} @ {price_now:.6g} profit={prof:.2f}%")
                     send_telegram(
@@ -17660,6 +17950,13 @@ if __name__ == '__main__':
         log(f"  Entry: EMA20<EMA50 gap<=1.5% | price>EMA20 0-0.75% | chg 0-2.0% | Hammer OR StrongBull (semua opsional kecuali price>EMA20)")
         log(f"  Slot: {HUNTING_MAX_DEALS} | Base order: ${HUNTING_ORDER_VOLUME} | Target forward-test: {HUNTING_FWDTEST_TARGET} deal")
         log(f"  Bot : #{COMMAS_BOT_ID_HUNTING}")
+    log("  " + "-"*51)
+    log("  STRATEGI #8 QScalp-3m: ON | TF 3m | TANPA AI (full rule-based)")
+    log(f"  Entry Combo G: vol>={QSCALP_LIVE_VOL_MULT}xMA20 + momentum>={QSCALP_LIVE_MOMENTUM_PCT}%/2candle + "
+        f"breakout HH{QSCALP_LIVE_BREAKOUT_LOOKBACK}c + close<=EMA9+{QSCALP_LIVE_ANTI_FOMO_PCT}%")
+    log(f"  Exit: arm{QSCALP_LIVE_ARM_PCT}%/trail{QSCALP_LIVE_TRAIL_PCT}%/stop{QSCALP_LIVE_STOP_PCT}% flat, "
+        f"timeout {QSCALP_LIVE_TIMEOUT_CANDLES}c(3m) | scan tiap {QSCALP_SCAN_INTERVAL}s")
+    log(f"  Slot: {QSCALP_MAX_DEALS} (standalone) | Target forward-test: {QSCALP_FWDTEST_TARGET} deal | Universe: {QSCALP_UNIVERSE_SIZE} pair terlikuid")
     log("="*55)
     # Flush banner sebelum thread-thread mulai print
     time.sleep(2.0)
@@ -17715,7 +18012,10 @@ if __name__ == '__main__':
     t_s6 = threading.Thread(target=run_thread_strat6, daemon=True, name="T-Strat6")
     threads.append(t_s6)
     n_threads += 1
-    
+    t_qscalp = threading.Thread(target=run_thread_qscalp, daemon=True, name="T-QScalp")
+    threads.append(t_qscalp)
+    n_threads += 1
+
     for t in threads: t.start()
     # Delay kecil agar banner startup selesai sebelum thread mulai print
     time.sleep(0.5)
