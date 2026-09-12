@@ -12842,6 +12842,185 @@ def run_crossema_verify_backtest():
             _cxv_status['error'] = str(e)
 
 
+# ===================== ONE-OFF: Reversal-8h + syarat Stoch "belum telat" (12/09/2026) =====================
+# Permintaan Mas Budi: strategi mana yg cocok ditambah syarat Stochastic supaya nangkap deal yg
+# BARU MULAI bullish (bukan yg udah di tengah/akhir rally) -- WR boleh sama/turun sedikit asal
+# kualitas (avg%/PF) naik. Reversal-8h prioritas #1 (filosofinya emang "tangkap balikan awal").
+# PENTING (pelajaran dari salah metodologi verifikasi CrossEMA-4h sebelumnya): backtest ini pakai
+# FUNGSI PRODUKSI ASLI (reversal_blockers/compute_indicators_reversal/hard_stop_pct/get_arm_pct/
+# trailing_dist_progressive) -- BUKAN exit engine tiruan -- supaya hasil benar2 apple-to-apple
+# dgn cara kerja bot beneran.
+# Keterbatasan yg disadari: ATH-distance filter (REVERSAL_ATH_DIST_MIN_PCT) DILEWATI (butuh cache
+# 1D ATH terpisah per symbol sejak listing, di luar scope quick-test ini) -- reversal_blockers()
+# dipanggil dgn sym=None. Data 8h didapat dgn RESAMPLE cache 4h yg sudah ada (bukan fetch ulang).
+_rev_bt_lock = threading.Lock()
+_rev_bt_status = {"running": False, "started_at": None, "progress": "", "done": False,
+                   "results": None, "error": None}
+
+REV_STOCH_MAX_SWEEP = [70, 60, 50, 40, 30]   # syarat tambahan: Stoch%K di candle entry < ambang ini
+
+
+def _resample_4h_to_8h(df4h: pd.DataFrame) -> pd.DataFrame:
+    d = df4h.copy()
+    d['ot8'] = (d['ot'] // (8 * 3600 * 1000)) * (8 * 3600 * 1000)
+    agg = d.groupby('ot8').agg(open=('open', 'first'), high=('high', 'max'),
+                                low=('low', 'min'), close=('close', 'last'),
+                                vol=('vol', 'sum'), n=('open', 'size')).reset_index()
+    agg = agg[agg['n'] == 2].drop(columns='n')  # buang candle 8h yg tidak lengkap 2x4h (ujung data)
+    agg = agg.rename(columns={'ot8': 'ot'}).sort_values('ot').reset_index(drop=True)
+    return agg
+
+
+def _rev_simulate_trade(df: pd.DataFrame, i2: int, atr_pct_entry: float):
+    """Simulasi exit PAKAI fungsi produksi asli. Entry = close candle i2 (sesuai
+    docstring check_entry_reversal: 'Entry di candle c+2 yg baru tutup')."""
+    entry = float(df['close'].iloc[i2])
+    if pd.isna(atr_pct_entry) or atr_pct_entry <= 0 or entry <= 0:
+        return None
+    _, _, hard_stop_final = hard_stop_pct(atr_pct_entry)
+    hard_stop_price = entry * (1 - hard_stop_final / 100)
+    arm_pct = get_arm_pct(atr_pct_entry)
+    peak = entry
+    armed = False
+    n = len(df)
+    last_j = min(i2 + REVERSAL_MAX_HOLD_CANDLES, n - 1)
+    if last_j <= i2:
+        return None
+    for j in range(i2 + 1, last_j + 1):
+        low_j = float(df['low'].iloc[j]); high_j = float(df['high'].iloc[j])
+        if low_j <= hard_stop_price:
+            return (hard_stop_price / entry - 1) * 100 - 0.2, j - i2
+        peak = max(peak, high_j)
+        peak_profit_pct = (peak / entry - 1) * 100
+        if not armed and peak_profit_pct >= arm_pct:
+            armed = True
+        if armed:
+            trail_dist = trailing_dist_progressive(atr_pct_entry, peak_profit_pct)
+            stop_price = peak * (1 - trail_dist / 100)
+            if low_j <= stop_price:
+                return (stop_price / entry - 1) * 100 - 0.2, j - i2
+    exit_price = float(df['close'].iloc[last_j])
+    return (exit_price / entry - 1) * 100 - 0.2, last_j - i2
+
+
+def _rev_signals_for_symbol(df8: pd.DataFrame):
+    """Scan semua titik entry Reversal-8h yg LOLOS reversal_blockers() (ATH-distance dilewati,
+    sym=None) di histori 1 symbol. Return list of dict {i2, atr_pct, stoch_k}."""
+    if len(df8) < 60:
+        return []
+    df8 = compute_indicators_reversal(df8.copy())
+    out = []
+    n = len(df8)
+    for i2 in range(8, n):
+        window = df8.iloc[:i2 + 1]
+        fails = reversal_blockers(window, sym=None)
+        if fails:
+            continue
+        row = df8.iloc[i2]
+        atr_pct = row.get('atr_pct')
+        stoch_k = row.get('stoch_k')
+        if pd.isna(atr_pct):
+            continue
+        out.append({'i2': i2, 'atr_pct': float(atr_pct),
+                     'stoch_k': float(stoch_k) if not pd.isna(stoch_k) else None})
+    return out
+
+
+def run_reversal_stoch_backtest():
+    """Jalan di thread terpisah (dipicu /api/run_reversal_stoch_backtest), tidak menyentuh
+    trading live -- cuma baca data historis (dari cache 4h yg sudah ada) + simulasi lokal."""
+    global _rev_bt_status
+    with _rev_bt_lock:
+        if _rev_bt_status['running']:
+            return
+        _rev_bt_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                           "progress": "0/0", "done": False, "results": None, "error": None}
+    try:
+        pairs = get_usdt_spot_pairs()
+        n_pairs = len(pairs)
+        end_ms = int(time.time() * 1000)
+        start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        log(f"[REV-BT] Mulai backtest Reversal-8h + syarat Stoch, {n_pairs} pair, "
+            f"2022-sekarang, TF 8h (resample dari cache 4h)")
+
+        combo_labels = ["baseline"] + [f"Stoch<{t}" for t in REV_STOCH_MAX_SWEEP]
+        combo_stats = {label: {} for label in combo_labels}
+
+        for idx, sym in enumerate(pairs):
+            with _rev_bt_lock:
+                _rev_bt_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
+            try:
+                df4 = _stoch_bt_load_or_fetch(sym, start_ms, end_ms)
+                if df4 is None or len(df4) < 120:
+                    continue
+                df8 = _resample_4h_to_8h(df4)
+                if len(df8) < 60:
+                    continue
+                signals = _rev_signals_for_symbol(df8)
+                if not signals:
+                    continue
+                per_combo_trades = {label: [] for label in combo_labels}
+                for sig in signals:
+                    res = _rev_simulate_trade(df8, sig['i2'], sig['atr_pct'])
+                    if res is None:
+                        continue
+                    pct, hold = res
+                    per_combo_trades["baseline"].append(pct)
+                    sk = sig['stoch_k']
+                    if sk is not None:
+                        for t in REV_STOCH_MAX_SWEEP:
+                            if sk < t:
+                                per_combo_trades[f"Stoch<{t}"].append(pct)
+                for label, trades in per_combo_trades.items():
+                    if trades:
+                        combo_stats[label][sym] = trades
+            except Exception as e:
+                log(f"WARN [REV-BT] {sym}: {e}")
+            if (idx + 1) % 50 == 0:
+                log(f"[REV-BT] progress {idx+1}/{n_pairs}")
+
+        rows = []
+        for label, per_symbol in combo_stats.items():
+            all_pcts = [p for lst in per_symbol.values() for p in lst]
+            n = len(all_pcts)
+            if n < 20:
+                continue
+            wins = [p for p in all_pcts if p > 0]
+            losses = [p for p in all_pcts if p <= 0]
+            wr = len(wins) / n * 100
+            gross_win = sum(wins) if wins else 0.0
+            gross_loss = -sum(losses) if losses else 0.0
+            pf = (gross_win / gross_loss) if gross_loss > 0 else float('inf')
+            avg = sum(all_pcts) / n
+            rows.append({'label': label, 'n': n, 'n_symbols': len(per_symbol), 'wr': wr,
+                         'profit_factor': pf, 'avg_pct': avg})
+        rows.sort(key=lambda r: r['profit_factor'], reverse=True)
+
+        msg_lines = ["📊 Reversal-8h + syarat Stoch (cari 'baru mulai bullish', bukan yg sudah lanjut)",
+                     f"Universe: {n_pairs} pair | 2022-sekarang | TF 8h (resample dari cache 4h)",
+                     "Exit: fungsi PRODUKSI ASLI (hard_stop_pct/get_arm_pct/trailing_dist_progressive)",
+                     "ATH-distance filter DILEWATI (butuh cache 1D terpisah, di luar scope ini)", ""]
+        for r in rows:
+            msg_lines.append(
+                f"{r['label']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
+                f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}%"
+            )
+        full_report = "\n".join(msg_lines)
+        log(f"[REV-BT] SELESAI.\n{full_report}")
+        send_telegram(full_report, parse_mode=None)
+
+        with _rev_bt_lock:
+            _rev_bt_status['running'] = False
+            _rev_bt_status['done'] = True
+            _rev_bt_status['results'] = rows
+            _rev_bt_status['progress'] = 'done'
+    except Exception as e:
+        log(f"ERROR [REV-BT] fatal: {e}")
+        with _rev_bt_lock:
+            _rev_bt_status['running'] = False
+            _rev_bt_status['error'] = str(e)
+
+
 def run_web_dashboard():
     """Thread web dashboard Flask."""
     try:
@@ -14738,6 +14917,24 @@ def run_web_dashboard():
         def api_crossema_verify_status():
             with _cxv_lock:
                 return jsonify(dict(_cxv_status))
+
+        @app.route("/api/run_reversal_stoch_backtest", methods=["GET", "POST"])
+        def api_run_reversal_stoch_backtest():
+            """One-off (12/09/2026): uji syarat Stoch tambahan di Reversal-8h ('belum
+            telat' filter). Pakai cache 4h yg sudah ada (resample ke 8h), exit engine
+            produksi asli. Cek progress via /api/reversal_stoch_backtest_status."""
+            if request.args.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
+            with _rev_bt_lock:
+                if _rev_bt_status.get("running"):
+                    return jsonify({"ok": False, "error": "sudah jalan", "status": _rev_bt_status})
+            threading.Thread(target=run_reversal_stoch_backtest, daemon=True).start()
+            return jsonify({"ok": True, "message": "Backtest dimulai di background."})
+
+        @app.route("/api/reversal_stoch_backtest_status")
+        def api_reversal_stoch_backtest_status():
+            with _rev_bt_lock:
+                return jsonify(dict(_rev_bt_status))
 
         @app.route("/api/hunting_config", methods=["POST"])
         def api_hunting_config():
