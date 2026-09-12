@@ -14663,6 +14663,16 @@ def thread_qscalp_scan():
                 if df is None or len(df) < 40:
                     count_blocker(blockers, "Data candle kurang", True)
                     continue
+                # Buang candle TERAKHIR kalau masih berjalan (belum closed) -- vol/momentum
+                # candle yg belum tutup jauh lebih kecil dari candle penuh (baru sebagian
+                # umur candle-nya berlalu di antara siklus scan 60 detik vs candle 180 detik),
+                # jadi syarat vol>=3xMA nyaris mustahil lolos kalau dievaluasi di tengah jalan.
+                # Backtest-nya SELALU pakai candle yg sudah closed penuh -- harus disamakan.
+                if len(df) > 1 and df['ct'].iloc[-1] >= int(time.time() * 1000):
+                    df = df.iloc[:-1]
+                if len(df) < 40:
+                    count_blocker(blockers, "Data candle kurang", True)
+                    continue
                 sig = check_qscalp_signal(df, sym)
                 if sig is None:
                     count_blocker(blockers, "Syarat entry belum lolos", True)
@@ -15486,6 +15496,7 @@ def run_web_dashboard():
                 elif strat == "QScalp-3m":
                     df = get_ohlcv(sym, interval="3m", limit=60)
                     if df is None: return jsonify(_s({"error": "Gagal ambil OHLCV 3m"}))
+                    if len(df) > 1 and df['ct'].iloc[-1] >= int(time.time() * 1000): df = df.iloc[:-1]
                     if len(df) < 40: return jsonify(_s({"error": "Data kurang"}))
                     close_v = df['close'].values.astype(float); high_v = df['high'].values.astype(float)
                     open_v = df['open'].values.astype(float); vol_v = df['vol'].values.astype(float)
@@ -16227,6 +16238,8 @@ def run_web_dashboard():
                     df3 = get_ohlcv(sym, interval="3m", limit=60)
                     if df3 is None:
                         return jsonify({"ok": False, "error": "Gagal ambil OHLCV 3m"})
+                    if len(df3) > 1 and df3['ct'].iloc[-1] >= int(time.time() * 1000):
+                        df3 = df3.iloc[:-1]
                     sig = check_qscalp_signal(df3, sym)
                     if sig is None:
                         return jsonify({"ok": False, "error": "Syarat entry QScalp-3m tidak terpenuhi saat ini"})
