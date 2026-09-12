@@ -461,6 +461,14 @@ AKUM_ENTRY_MAX_DEALS      = 3            # max 3 deal aktif strategi #5
 AKUM_ENTRY_TIMEOUT        = 60           # timeout 60 candle 4h = 10 hari
 AKUM_ENTRY_SL_BUFFER      = 0.005        # SL 0.5% di bawah Spring low / Resistance
 AKUM_ENTRY_FWDTEST_TARGET = 10           # target forward-test 10 deal
+# 12/09/2026: syarat entry Entry B berubah (tambah Stoch<25, lihat AKUM_B_STOCH_MAX). Counter
+# gabungan (Entry A+B) DIBEKUKAN di angka saat patch di-deploy (5, dikonfirmasi dari heartbeat
+# terakhir Mas Budi, #5/10 1W/4L -1.0%, last close 05/09/2026 -- tidak ada close baru sejak
+# itu) supaya trade Entry B dgn syarat baru tidak tercampur ke counter lama. Catatan: Entry A
+# TIDAK berubah, tapi tetap ikut kehitung ke counter "2nd" krn counter ini gabungan A+B
+# (konsisten dgn cara counter fase-1 lama juga menggabungkan keduanya).
+AKUM_ENTRY_STOCH_PATCH_BASELINE = 5
+AKUM_ENTRY_PHASE2_TARGET = 10
 
 # TP khusus Akumulasi — exit berbasis swing high lokal + momentum overbought
 AKUM_TP_SWING_LOOKBACK    = 30           # swing high dari N candle 4h terakhir (~5 hari)
@@ -501,6 +509,11 @@ AKUM_B_RETEST_TOL_PCT     = 0.02        # retest dalam ±2% dari resistance -- b
 # ini BUKAN penghambat (loosening ke 3-4% sama sekali nggak nambah sinyal), dibiarkan
 AKUM_B_RETEST_VOL_MAX     = 0.8         # volume retest < 80% volume breakout -- sama kayak retest_tol,
 # backtest nunjukkin bukan penghambat (loosening ke 90-100% nggak nambah sinyal), dibiarkan
+# 12/09/2026: syarat Stoch%K<25 di candle entry (backtest Mas Budi, 474 pair 2022-sekarang,
+# exit produksi asli) -- Stoch<25 adalah TITIK TERBAIK (bukan monoton, Stoch<20 justru
+# jatuh drastis PF=0.43): baseline WR=72.5% PF=0.99 avg=-0.02% -> Stoch<25 WR=68.3% PF=1.56
+# avg=+0.99% (n=60/53 pair). WR turun cukup besar tapi PF+avg naik jauh lebih signifikan.
+AKUM_B_STOCH_MAX = 25
 
 PERF_FILTER_ENABLED = False   # Perf Grade: info saja, tidak memblokir open deal (07/08/2026)
 PERF_SCORE_MIN      = 0.5    # EQUAL_thr0.5: cukup 3 dari 6 TF positif
@@ -4970,7 +4983,10 @@ def heartbeat_general_tick():
     prog_4h   = csv_progress('brkX2_4h')
     prog_cx   = csv_progress('brkX2_crossema')
     prog_hunt = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
-    prog_akum = csv_progress('akumulasi')
+    # 12/09/2026: fase-1 Akumulasi-4h (gabungan Entry A+B) DIBEKUKAN di AKUM_ENTRY_STOCH_PATCH_BASELINE
+    # (syarat Entry B berubah, tambah Stoch<25) -- lihat komentar konstantanya.
+    prog_akum_stop = csv_progress('akumulasi', until=AKUM_ENTRY_STOCH_PATCH_BASELINE)
+    prog_akum2     = csv_progress('akumulasi', offset=AKUM_ENTRY_STOCH_PATCH_BASELINE)
     # 12/09/2026: fase-2 Reversal-8h DIBEKUKAN di REVERSAL_STOCH_PATCH_BASELINE (syarat entry
     # berubah, tambah Stoch<50) -- lihat komentar REVERSAL_STOCH_PATCH_BASELINE. Fase-3 (prog_rev3)
     # mulai dari situ, hitung khusus trade dgn syarat BARU.
@@ -4988,7 +5004,6 @@ def heartbeat_general_tick():
     # di-deploy jadi frozen counter-nya 0, tapi tetap dipisah dari fase-3 (trade dgn syarat baru).
     prog_cx2  = csv_progress('brkX2_crossema', offset=STRAT_CROSSEMA_LIVE_BASELINE, until=STRAT_CROSSEMA_STOCH_PATCH_BASELINE)
     prog_cx3  = csv_progress('brkX2_crossema', offset=STRAT_CROSSEMA_STOCH_PATCH_BASELINE)
-    lc_akum   = csv_last_close('akumulasi')
     if prog_all is None:
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
     else:
@@ -5012,7 +5027,10 @@ def heartbeat_general_tick():
                      f"    crossema-4h: 3rd {_fmt_strat(prog_cx3, STRAT_CROSSEMA_PHASE3_TARGET)}\n"
                      f"  - hunting-4h : {_fmt_hunting_live(prog_hunt)}\n"
                      f"    hunting-4h: 2nd {_fmt_strat(prog_hunt2, HUNTING_PHASE2_TARGET)}\n"
-                     f"  - akumulasi-4h: {_fmt_strat(prog_akum, AKUM_ENTRY_FWDTEST_TARGET, lc_akum)}")
+                     f"  - akumulasi-4h: 1st STOP@Stoch<25(EntryB) "
+                     f"{prog_akum_stop['n']}/{AKUM_ENTRY_FWDTEST_TARGET} "
+                     f"({prog_akum_stop['win']}W/{prog_akum_stop['loss']}L,{prog_akum_stop['total_pct']:+.1f}%)\n"
+                     f"    akumulasi-4h: 2nd {_fmt_strat(prog_akum2, AKUM_ENTRY_PHASE2_TARGET)}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
     slot_line = (f"Slot brkX2-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2} | "
@@ -12176,6 +12194,17 @@ def thread_akum_entry_scan():
             if sig is None:
                 sig = detect_entry_b_breakout(df, resistance_break_ref, support_break_ref, resistance_retest_low_ref)
                 entry_type = 'B'
+                if sig is not None:
+                    # 12/09/2026: syarat Stoch%K<25 (backtest, lihat AKUM_B_STOCH_MAX) --
+                    # Entry B jangan dibuka kalau momentum sudah terlalu jauh dari oversold.
+                    try:
+                        _stoch_b = ta.stoch(df['high'], df['low'], df['close'], k=14, d=3)
+                        _sk_col = [c for c in _stoch_b.columns if 'STOCHk' in c]
+                        _sk_b = float(_stoch_b[_sk_col[0]].iloc[-1]) if _sk_col and not pd.isna(_stoch_b[_sk_col[0]].iloc[-1]) else None
+                    except Exception:
+                        _sk_b = None
+                    if _sk_b is None or _sk_b >= AKUM_B_STOCH_MAX:
+                        sig = None
             if sig is None: continue
 
             # Open deal
@@ -13844,6 +13873,204 @@ def run_akumb_stoch_backtest():
         with _akumb_lock:
             _akumb_status['running'] = False
             _akumb_status['error'] = str(e)
+
+
+# ===================== ONE-OFF: Reversal-8h ATH-distance filter, layer di atas Stoch<50 LIVE (12/09/2026) =====================
+# Reversal-8h Stoch<50 backtest sebelumnya SENGAJA melewati filter ATH-distance produksi
+# (REVERSAL_ATH_DIST_MIN_PCT=-85%, reversal_blockers(sym=...)) krn fungsi cache-nya asli
+# (_get_ath_data_1d/ath_distance_ok) cuma simpan candle 1D 1000 HARI TERAKHIR DARI SEKARANG
+# (tanpa startTime) -- tidak cukup jauh ke belakang utk cover sinyal dari 2022 (fail-open utk
+# ~2 tahun pertama data kita). Di sini dibuat versi historis LENGKAP (dari 2020, pagination
+# spt cache 4h), TAPI cuma di-fetch utk symbol yg BENAR-BENAR dapat sinyal Stoch<50 (bukan
+# semua 474 pair) -- permintaan eksplisit Mas Budi, supaya hemat disk & API call.
+_rev_ath_lock = threading.Lock()
+_rev_ath_status = {"running": False, "started_at": None, "progress": "", "done": False,
+                    "results": None, "error": None}
+
+REV_ATH_CACHE_DIR = os.path.join(DATA_DIR, "rev_ath_cache")
+
+
+def _rev_ath_cache_path(symbol: str) -> str:
+    return os.path.join(REV_ATH_CACHE_DIR, f"{symbol}.csv")
+
+
+def _rev_ath_fetch_history(symbol: str, end_ms: int):
+    """Paginate /api/v3/klines 1D dari 2020-01-01 s/d end_ms -- BEDA dari _get_ath_data_1d()
+    produksi (cuma 1000 hari terakhir dari now), supaya cummax ATH valid utk query dari 2022."""
+    start_ms = int(datetime(2020, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+    out = []
+    cursor = start_ms
+    while cursor < end_ms:
+        try:
+            r = _binance_get("/api/v3/klines", params={
+                'symbol': symbol, 'interval': '1d', 'startTime': cursor, 'endTime': end_ms, 'limit': 1000,
+            }, timeout=20)
+        except Exception:
+            break
+        if r is None:
+            break
+        try:
+            batch = r.json()
+        except Exception:
+            break
+        if not isinstance(batch, list) or not batch:
+            break
+        out.extend(batch)
+        last_open = int(batch[-1][0])
+        if last_open <= cursor:
+            break
+        cursor = last_open + 1
+        if len(batch) < 1000:
+            break
+        time.sleep(0.12)  # gentle -- IP ini dipakai bareng bot trading live
+    if not out:
+        return None
+    df = pd.DataFrame(out, columns=['ts', 'open', 'high', 'low', 'close', 'vol',
+                                     'ct', 'qv', 'nt', 'tb', 'tq', 'ig'])
+    df['ts'] = df['ts'].astype('int64')
+    df['high'] = pd.to_numeric(df['high'], errors='coerce')
+    df = df[['ts', 'high']].dropna().drop_duplicates(subset='ts').sort_values('ts').reset_index(drop=True)
+    return df
+
+
+def _rev_ath_load_or_fetch(symbol: str, end_ms: int):
+    """Cache lokal dulu (di /data/rev_ath_cache, TERPISAH dari cache produksi _cache_ath_1D),
+    fallback fetch penuh dari 2020. Hanya dipanggil utk symbol yg dapat sinyal (lazy)."""
+    path = _rev_ath_cache_path(symbol)
+    try:
+        if os.path.exists(path):
+            df = pd.read_csv(path)
+            if len(df) > 30 and (end_ms - int(df['ts'].iloc[-1])) < 3 * 24 * 3600 * 1000:
+                return df
+    except Exception as e:
+        log(f"WARN [REV-ATH] cache baca {symbol}: {e}")
+    df = _rev_ath_fetch_history(symbol, end_ms)
+    if df is not None:
+        try:
+            os.makedirs(REV_ATH_CACHE_DIR, exist_ok=True)
+            df.to_csv(path, index=False)
+        except Exception as e:
+            log(f"WARN [REV-ATH] cache simpan {symbol}: {e}")
+    return df
+
+
+def _rev_ath_ok(ath_df, cummax_arr, current_price: float, query_ts_ms: int, min_pct: float) -> bool:
+    """Replikasi ath_distance_ok() produksi, pakai data historis LENGKAP (bukan cache produksi
+    yg cuma 1000 hari terakhir). Fail-open (True) kalau data tidak cukup -- konsisten dgn
+    perilaku produksi."""
+    if ath_df is None or len(ath_df) == 0 or current_price <= 0:
+        return True
+    ts_arr = ath_df['ts'].values
+    idx = int(np.searchsorted(ts_arr, query_ts_ms, side='right')) - 1
+    if idx < 0:
+        return True
+    ath = float(cummax_arr[idx])
+    if ath <= 0:
+        return True
+    dist = (current_price / ath - 1) * 100
+    return dist > min_pct
+
+
+def run_reversal_ath_backtest():
+    """Jalan di thread terpisah (dipicu /api/run_reversal_ath_backtest). Tidak menyentuh
+    trading live. Layer filter ATH-distance (-85%) DI ATAS syarat Stoch<50 yg sudah LIVE,
+    utk lihat apakah kombinasi keduanya lebih baik dari Stoch<50 sendirian."""
+    global _rev_ath_status
+    with _rev_ath_lock:
+        if _rev_ath_status['running']:
+            return
+        _rev_ath_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                            "progress": "0/0", "done": False, "results": None, "error": None}
+    try:
+        pairs = get_usdt_spot_pairs()
+        n_pairs = len(pairs)
+        end_ms = int(time.time() * 1000)
+        start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        log(f"[REV-ATH] Mulai backtest Reversal-8h Stoch<50 + ATH-distance layer, "
+            f"{n_pairs} pair, 2022-sekarang, TF 8h (resample dari cache 4h)")
+
+        combo_labels = ["Stoch<50 saja (sudah LIVE)", "Stoch<50 + ATH>-85%"]
+        combo_stats = {label: {} for label in combo_labels}
+        n_ath_fetched = 0
+
+        for idx, sym in enumerate(pairs):
+            with _rev_ath_lock:
+                _rev_ath_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
+            try:
+                df4 = _stoch_bt_load_or_fetch(sym, start_ms, end_ms)
+                if df4 is None or len(df4) < 120:
+                    continue
+                df8 = _resample_4h_to_8h(df4)
+                if len(df8) < 60:
+                    continue
+                signals = _rev_signals_for_symbol(df8)
+                if not signals:
+                    continue
+                # Saring dulu dgn Stoch<50 (syarat yg SUDAH live) -- baru symbol yg lolos
+                # ini dapat fetch data ATH (lazy, sesuai permintaan Mas Budi).
+                sig_stoch50 = [s for s in signals if s['stoch_k'] is not None and s['stoch_k'] < 50]
+                if not sig_stoch50:
+                    continue
+                ath_df = None; cummax_arr = None
+                for sig in sig_stoch50:
+                    res = _rev_simulate_trade(df8, sig['i2'], sig['atr_pct'])
+                    if res is None:
+                        continue
+                    pct, hold = res
+                    combo_stats["Stoch<50 saja (sudah LIVE)"].setdefault(sym, []).append(pct)
+                    if ath_df is None:
+                        ath_df = _rev_ath_load_or_fetch(sym, end_ms)
+                        n_ath_fetched += 1
+                        if ath_df is not None and len(ath_df) > 0:
+                            cummax_arr = np.maximum.accumulate(ath_df['high'].values.astype(float))
+                    entry_price = float(df8['close'].iloc[sig['i2']])
+                    entry_ts_ms = int(df8['ot'].iloc[sig['i2']])
+                    if _rev_ath_ok(ath_df, cummax_arr, entry_price, entry_ts_ms, REVERSAL_ATH_DIST_MIN_PCT):
+                        combo_stats["Stoch<50 + ATH>-85%"].setdefault(sym, []).append(pct)
+            except Exception as e:
+                log(f"WARN [REV-ATH] {sym}: {e}")
+            if (idx + 1) % 50 == 0:
+                log(f"[REV-ATH] progress {idx+1}/{n_pairs} (ATH fetched utk {n_ath_fetched} symbol)")
+
+        rows = []
+        for label, per_symbol in combo_stats.items():
+            all_pcts = [p for lst in per_symbol.values() for p in lst]
+            n = len(all_pcts)
+            if n < 20:
+                continue
+            wins = [p for p in all_pcts if p > 0]
+            losses = [p for p in all_pcts if p <= 0]
+            wr = len(wins) / n * 100
+            gross_win = sum(wins) if wins else 0.0
+            gross_loss = -sum(losses) if losses else 0.0
+            pf = (gross_win / gross_loss) if gross_loss > 0 else float('inf')
+            avg = sum(all_pcts) / n
+            rows.append({'label': label, 'n': n, 'n_symbols': len(per_symbol), 'wr': wr,
+                         'profit_factor': pf, 'avg_pct': avg})
+        rows.sort(key=lambda r: r['profit_factor'], reverse=True)
+
+        msg_lines = ["📊 Reversal-8h: ATH-distance filter (-85%) DI ATAS Stoch<50 yg sudah LIVE",
+                     f"Universe: {n_pairs} pair | 2022-sekarang | TF 8h | ATH historis fetch lazy utk {n_ath_fetched} symbol",
+                     "Exit: fungsi PRODUKSI ASLI (hard_stop_pct/get_arm_pct/trailing_dist_progressive)", ""]
+        for r in rows:
+            msg_lines.append(
+                f"{r['label']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
+                f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}%"
+            )
+        full_report = "\n".join(msg_lines)
+        log(f"[REV-ATH] SELESAI.\n{full_report}")
+        send_telegram(full_report, parse_mode=None)
+
+        with _rev_ath_lock:
+            _rev_ath_status['running'] = False
+            _rev_ath_status['done'] = True
+            _rev_ath_status['results'] = rows
+            _rev_ath_status['progress'] = 'done'
+    except Exception as e:
+        log(f"ERROR [REV-ATH] fatal: {e}")
+        with _rev_ath_lock:
+            _rev_ath_status['running'] = False
+            _rev_ath_status['error'] = str(e)
 
 
 def run_web_dashboard():
@@ -15812,6 +16039,24 @@ def run_web_dashboard():
         def api_akumb_stoch_backtest_status():
             with _akumb_lock:
                 return jsonify(dict(_akumb_status))
+
+        @app.route("/api/run_reversal_ath_backtest", methods=["GET", "POST"])
+        def api_run_reversal_ath_backtest():
+            """One-off (12/09/2026): uji filter ATH-distance (-85%) DI ATAS Stoch<50 Reversal-8h
+            yg sudah live. Fetch histori 1D lazy, cuma utk symbol yg dapat sinyal. Cek progress
+            via /api/reversal_ath_backtest_status."""
+            if request.args.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
+            with _rev_ath_lock:
+                if _rev_ath_status.get("running"):
+                    return jsonify({"ok": False, "error": "sudah jalan", "status": _rev_ath_status})
+            threading.Thread(target=run_reversal_ath_backtest, daemon=True).start()
+            return jsonify({"ok": True, "message": "Backtest dimulai di background."})
+
+        @app.route("/api/reversal_ath_backtest_status")
+        def api_reversal_ath_backtest_status():
+            with _rev_ath_lock:
+                return jsonify(dict(_rev_ath_status))
 
         @app.route("/api/hunting_config", methods=["POST"])
         def api_hunting_config():
