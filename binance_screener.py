@@ -9878,6 +9878,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <option value="CrossEMA-4h">CrossEMA-4h</option>
           <option value="Akumulasi-4h">Akumulasi-4h ⭐</option>
           <option value="Hunting-4h">Hunting-4h 🎯</option>
+          <option value="QScalp-3m">QScalp-3m ⚡</option>
         </select>
       </div>
       <!-- Dropdown kandidat dinamis per strategi -->
@@ -9888,7 +9889,8 @@ document.addEventListener('DOMContentLoaded', function() {
         "brkX2-4h": near_miss.get("brkX2-4h", []),
         "CrossEMA-4h": near_miss.get("CrossEMA-4h", []),
         "Akumulasi-4h": near_miss.get("Akumulasi-4h", []),
-        "Hunting-4h": near_miss.get("Hunting-4h", [])
+        "Hunting-4h": near_miss.get("Hunting-4h", []),
+        "QScalp-3m": near_miss.get("QScalp-3m", [])
       } %}
       <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <label style="font-size:11px;color:var(--muted)">Pilih item hasil scan:</label>
@@ -10903,6 +10905,7 @@ window.addEventListener('pageshow', _forceCloseConvertModalOnLoad); // jaga2 (te
 
 if (typeof STRAT_SECONDARY !== 'undefined') {
     STRAT_SECONDARY['Hunting-4h'] = [{key: 'rsi', label: 'RSI<60'}];
+    STRAT_SECONDARY['QScalp-3m'] = [];  // semua syarat sudah di primary, tidak ada secondary
 }
 setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); }, 30000);
 </script>
@@ -15480,6 +15483,39 @@ def run_web_dashboard():
                     }))
 
 
+                elif strat == "QScalp-3m":
+                    df = get_ohlcv(sym, interval="3m", limit=60)
+                    if df is None: return jsonify(_s({"error": "Gagal ambil OHLCV 3m"}))
+                    if len(df) < 40: return jsonify(_s({"error": "Data kurang"}))
+                    close_v = df['close'].values.astype(float); high_v = df['high'].values.astype(float)
+                    open_v = df['open'].values.astype(float); vol_v = df['vol'].values.astype(float)
+                    i = len(df) - 1
+                    vol_ma20 = pd.Series(vol_v).rolling(20).mean().values
+                    vm = vol_ma20[i] if not pd.isna(vol_ma20[i]) and vol_ma20[i] > 0 else None
+                    vol_ratio = float(vol_v[i] / vm) if vm else None
+                    momentum_pct = float((close_v[i] / close_v[i-2] - 1) * 100) if i >= 2 and close_v[i-2] > 0 else None
+                    hh_prior = pd.Series(high_v).rolling(QSCALP_LIVE_BREAKOUT_LOOKBACK).max().shift(1).values
+                    hh = hh_prior[i] if not pd.isna(hh_prior[i]) else None
+                    ema9 = pd.Series(close_v).ewm(span=QSCALP_EMA_FAST, adjust=False).mean().values
+                    e9 = ema9[i] if not pd.isna(ema9[i]) else None
+                    close_now = float(close_v[i])
+                    p = [vol_ratio is not None and vol_ratio >= QSCALP_LIVE_VOL_MULT,
+                         close_now > open_v[i],
+                         momentum_pct is not None and momentum_pct >= QSCALP_LIVE_MOMENTUM_PCT,
+                         hh is not None and close_now > hh,
+                         e9 is not None and e9 > 0 and close_now <= e9 * (1 + QSCALP_LIVE_ANTI_FOMO_PCT / 100)]
+                    return jsonify(_s({"strat": strat, "sym": sym,
+                        "primary": [
+                            {"label": f"Vol>={QSCALP_LIVE_VOL_MULT}xMA20", "ok": p[0], "actual": f"{vol_ratio:.2f}x" if vol_ratio is not None else "n/a"},
+                            {"label": "Candle hijau (close>open)", "ok": p[1], "actual": f"{close_now:.6g} vs open {open_v[i]:.6g}"},
+                            {"label": f"Momentum>={QSCALP_LIVE_MOMENTUM_PCT}%/2candle", "ok": p[2], "actual": f"{momentum_pct:.2f}%" if momentum_pct is not None else "n/a"},
+                            {"label": f"Breakout HH{QSCALP_LIVE_BREAKOUT_LOOKBACK}c", "ok": p[3], "actual": f"{close_now:.6g} vs HH {hh:.6g}" if hh is not None else "n/a"},
+                            {"label": f"Anti-FOMO close<=EMA9+{QSCALP_LIVE_ANTI_FOMO_PCT}%", "ok": p[4], "actual": f"{close_now:.6g} vs EMA9 {e9:.6g}" if e9 is not None else "n/a"},
+                        ],
+                        "secondary": [],
+                        "primary_ok": all(p),
+                    }))
+
                 elif strat in ("Reversal-8h T1","Reversal-8h T3-REV"):
                     df = get_ohlcv(sym, interval=REVERSAL_TIMEFRAME, limit=60)
                     if df is None: return jsonify(_s({"error": "Gagal ambil OHLCV 8h"}))
@@ -16186,6 +16222,21 @@ def run_web_dashboard():
                         return jsonify({"ok": False, "error": "Hunting open gagal atau syarat tidak terpenuhi"})
                 except Exception as e:
                     return jsonify({"ok": False, "error": f"Hunting open error: {e}"})
+            elif strat == "QScalp-3m":
+                try:
+                    df3 = get_ohlcv(sym, interval="3m", limit=60)
+                    if df3 is None:
+                        return jsonify({"ok": False, "error": "Gagal ambil OHLCV 3m"})
+                    sig = check_qscalp_signal(df3, sym)
+                    if sig is None:
+                        return jsonify({"ok": False, "error": "Syarat entry QScalp-3m tidak terpenuhi saat ini"})
+                    ok3 = open_qscalp_if_signal(sig)
+                    if ok3:
+                        return jsonify({"ok": True, "sym": sym, "score": 1, "target_usd": get_strategy_base_usd('qscalp_3m')})
+                    else:
+                        return jsonify({"ok": False, "error": "QScalp open gagal (slot penuh/cooldown/ditolak Binance)"})
+                except Exception as e:
+                    return jsonify({"ok": False, "error": f"QScalp open error: {e}"})
             elif strat == "Reversal-8h T1":
                 strat_key = "reversal"
                 tf_label  = "8h"
