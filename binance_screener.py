@@ -13496,7 +13496,7 @@ _akumb_status = {"running": False, "started_at": None, "progress": "", "done": F
 # 12/09/2026: hasil sweep pertama (70/60/50/40/30) -- baseline nyaris breakeven (PF=0.99),
 # Stoch<60/70 memperburuk, Stoch<50/40/30 progresif membaik (PF 1.07/1.14/1.31). Ditambah 25
 # (permintaan Mas Budi) utk lihat lanjutan tren di titik terketat sebelum kunci ambang.
-AKUMB_STOCH_MAX_SWEEP = [70, 60, 50, 40, 30, 25]
+AKUMB_STOCH_MAX_SWEEP = [70, 60, 50, 40, 30, 25, 20]
 
 
 def _akumb_precompute(df: pd.DataFrame) -> dict:
