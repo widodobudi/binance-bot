@@ -5009,7 +5009,7 @@ def heartbeat_general_tick():
     else:
         nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
         prog_qr = quick_reentry_progress()
-        prog_line = (f"Progress forward-test (gabungan): {nn} selesai ({wl}, total {prog_all['total_pct']:+.1f}%)\n"
+        prog_line = (f"Progress (gabungan): {nn} ({wl}, {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2-12h  : {_fmt_hunting_live(prog_brk)}\n"
                      f"    brkX2-12h: 2nd {_fmt_strat(prog_brk2, FWDTEST_BRKX2_PHASE2_TARGET)}\n"
                      f"  - reversal-8h: {_fmt_hunting_live(prog_rev)}\n"
@@ -6724,7 +6724,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
     else:
         nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
         prog_qr = quick_reentry_progress()
-        prog_line = (f"Progress forward-test (gabungan): {nn} selesai ({wl}, total {prog_all['total_pct']:+.1f}%)\n"
+        prog_line = (f"Progress (gabungan): {nn} ({wl}, {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2    : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2)}\n"
                      f"  - reversal : {_fmt_hunting_live(prog_rev)}\n"
                      f"    reversal : 2nd STOP@Stoch<50 "
