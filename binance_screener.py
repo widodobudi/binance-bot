@@ -12854,6 +12854,205 @@ def run_crossema_verify_backtest():
             _cxv_status['error'] = str(e)
 
 
+# ===================== ONE-OFF: CrossEMA-4h + syarat Stoch "belum telat" (12/09/2026) =====================
+# Lanjutan rencana Mas Budi setelah Reversal-8h (hasilnya bagus: Stoch<50 menang di semua sisi).
+# PENTING: verifikasi CXV di atas PAKAI EXIT TIRUAN (ARM/TRAIL tetap, tanpa hard-stop) supaya
+# apple-to-apple dgn angka founding lama -- itu TERBUKTI menyesatkan (avg jadi -0.17% krn beberapa
+# trade jatuh -90% tanpa hard-stop). Backtest INI pakai EXIT PRODUKSI ASLI (hard_stop_pct/
+# get_arm_pct/trailing_dist_progressive, TIMEOUT=STRAT_CROSSEMA_MAX_HOLD) -- pelajaran yg sama
+# spt dipakai di backtest Reversal-8h Stoch. Entry gate SAMA dgn _cxv_simulate (st_dir_cx==-1 dll),
+# ditambah rekam ATR%+Stoch%K di titik entry utk exit engine & sweep Stoch.
+_ce2_lock = threading.Lock()
+_ce2_status = {"running": False, "started_at": None, "progress": "", "done": False,
+               "results": None, "error": None}
+
+CE2_STOCH_MAX_SWEEP = [70, 60, 50, 40, 30]
+
+
+def _ce2_signals_for_symbol(df: pd.DataFrame):
+    """Scan titik entry CrossEMA-4h LIVE (sama gate dgn _cxv_simulate), return list of
+    dict {i, atr_pct, stoch_k} -- i = index candle ENTRY (ni+1 semantics _cxv_simulate,
+    di sini disederhanakan: i = index candle konfirmasi cross, entry disimulasikan mulai i+1)."""
+    n = len(df)
+    if n < 60:
+        return []
+    close_v = df['close'].values.astype(float)
+    high_v = df['high'].values.astype(float)
+    low_v = df['low'].values.astype(float)
+    open_v = df['open'].values.astype(float)
+    vol_v = df['vol'].values.astype(float)
+
+    close_s = pd.Series(close_v)
+    ema20 = close_s.ewm(span=20, adjust=False).mean().values
+    vol_ma20 = pd.Series(vol_v).rolling(20).mean().values
+    vol_ma12 = pd.Series(vol_v).rolling(12).mean().values
+    atr_pct = (ta.atr(pd.Series(high_v), pd.Series(low_v), close_s, length=14) / close_s * 100).values
+
+    st = ta.supertrend(pd.Series(high_v), pd.Series(low_v), close_s,
+                        length=STRAT4H_ST_LENGTH, multiplier=STRAT_CROSSEMA_ST_MULT)
+    dcol = [c for c in st.columns if "SUPERTd" in c]
+    st_dir = st[dcol[0]].values if dcol else np.full(n, np.nan)
+
+    stoch = ta.stoch(pd.Series(high_v), pd.Series(low_v), close_s, k=14, d=3, smooth_k=3)
+    kcol = [c for c in stoch.columns if 'STOCHk' in c]
+    stoch_k_arr = stoch[kcol[0]].values if kcol else np.full(n, np.nan)
+
+    out = []
+    i = 1
+    while i < n - STRAT_CROSSEMA_MAX_HOLD - 2:
+        e20 = ema20[i]; vm = vol_ma20[i]; vol = vol_v[i]; v12 = vol_ma12[i]; c = close_v[i]
+        sd = st_dir[i] if i < len(st_dir) else np.nan
+        if pd.isna(e20) or pd.isna(vm) or pd.isna(v12) or pd.isna(sd):
+            i += 1; continue
+        if sd != -1 or e20 <= 0 or c > e20 * (1 + STRAT_CROSSEMA_EMA20_TOL_PCT / 100):
+            i += 1; continue
+        if vm <= 0 or vol < STRAT_CROSSEMA_VOLUME_MULT * vm:
+            i += 1; continue
+        if v12 <= 0 or vol < STRAT_CROSSEMA_HTF_VOL_MULT * v12:
+            i += 1; continue
+        ni = i + 1
+        if ni >= n:
+            break
+        ema20_n1 = ema20[ni]; high_n1 = high_v[ni]
+        cross_floor = ema20_n1 * (1 - STRAT_CROSSEMA_CROSS_TOL_PCT / 100)
+        if pd.isna(ema20_n1) or high_n1 <= cross_floor:
+            i += 1; continue
+        a = atr_pct[ni] if ni < len(atr_pct) else np.nan
+        sk = stoch_k_arr[i] if i < len(stoch_k_arr) else np.nan
+        if pd.isna(a) or a <= 0:
+            i += 1; continue
+        out.append({'ni': ni, 'atr_pct': float(a),
+                     'stoch_k': float(sk) if not pd.isna(sk) else None})
+        i = ni + STRAT_CROSSEMA_MAX_HOLD + 2
+    return out
+
+
+def _ce2_simulate_trade(df: pd.DataFrame, ni: int, atr_pct_entry: float):
+    """Exit PAKAI fungsi produksi asli. Entry = max(open[ni], cross_floor) sama spt _cxv_simulate,
+    disederhanakan jadi open candle ni (selisihnya kecil, dalam toleransi cross 0.5%)."""
+    open_v = df['open'].values.astype(float)
+    high_v = df['high'].values.astype(float)
+    low_v = df['low'].values.astype(float)
+    close_v = df['close'].values.astype(float)
+    n = len(df)
+    entry = float(open_v[ni])
+    if entry <= 0:
+        return None
+    _, _, hard_stop_final = hard_stop_pct(atr_pct_entry)
+    hard_stop_price = entry * (1 - hard_stop_final / 100)
+    arm_pct = get_arm_pct(atr_pct_entry)
+    peak = entry
+    armed = False
+    last_j = min(ni + STRAT_CROSSEMA_MAX_HOLD, n - 1)
+    if last_j <= ni:
+        return None
+    for j in range(ni + 1, last_j + 1):
+        low_j = float(low_v[j]); high_j = float(high_v[j])
+        if low_j <= hard_stop_price:
+            return (hard_stop_price / entry - 1) * 100 - 0.2
+        peak = max(peak, high_j)
+        peak_profit_pct = (peak / entry - 1) * 100
+        if not armed and peak_profit_pct >= arm_pct:
+            armed = True
+        if armed:
+            trail_dist = trailing_dist_progressive(atr_pct_entry, peak_profit_pct)
+            stop_price = peak * (1 - trail_dist / 100)
+            if low_j <= stop_price:
+                return (stop_price / entry - 1) * 100 - 0.2
+    exit_price = float(close_v[last_j])
+    return (exit_price / entry - 1) * 100 - 0.2
+
+
+def run_crossema_stoch_backtest():
+    """Jalan di thread terpisah (dipicu /api/run_crossema_stoch_backtest). Tidak menyentuh
+    trading live -- cuma baca cache 4h yg sudah ada + simulasi lokal."""
+    global _ce2_status
+    with _ce2_lock:
+        if _ce2_status['running']:
+            return
+        _ce2_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                        "progress": "0/0", "done": False, "results": None, "error": None}
+    try:
+        pairs = get_usdt_spot_pairs()
+        n_pairs = len(pairs)
+        end_ms = int(time.time() * 1000)
+        start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        log(f"[CE2-BT] Mulai backtest CrossEMA-4h + syarat Stoch (exit produksi asli), "
+            f"{n_pairs} pair, 2022-sekarang, TF 4h")
+
+        combo_labels = ["baseline"] + [f"Stoch<{t}" for t in CE2_STOCH_MAX_SWEEP]
+        combo_stats = {label: {} for label in combo_labels}
+
+        for idx, sym in enumerate(pairs):
+            with _ce2_lock:
+                _ce2_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
+            try:
+                df = _stoch_bt_load_or_fetch(sym, start_ms, end_ms)
+                if df is None or len(df) < 120:
+                    continue
+                signals = _ce2_signals_for_symbol(df)
+                if not signals:
+                    continue
+                per_combo_trades = {label: [] for label in combo_labels}
+                for sig in signals:
+                    pct = _ce2_simulate_trade(df, sig['ni'], sig['atr_pct'])
+                    if pct is None:
+                        continue
+                    per_combo_trades["baseline"].append(pct)
+                    sk = sig['stoch_k']
+                    if sk is not None:
+                        for t in CE2_STOCH_MAX_SWEEP:
+                            if sk < t:
+                                per_combo_trades[f"Stoch<{t}"].append(pct)
+                for label, trades in per_combo_trades.items():
+                    if trades:
+                        combo_stats[label][sym] = trades
+            except Exception as e:
+                log(f"WARN [CE2-BT] {sym}: {e}")
+            if (idx + 1) % 50 == 0:
+                log(f"[CE2-BT] progress {idx+1}/{n_pairs}")
+
+        rows = []
+        for label, per_symbol in combo_stats.items():
+            all_pcts = [p for lst in per_symbol.values() for p in lst]
+            n = len(all_pcts)
+            if n < 20:
+                continue
+            wins = [p for p in all_pcts if p > 0]
+            losses = [p for p in all_pcts if p <= 0]
+            wr = len(wins) / n * 100
+            gross_win = sum(wins) if wins else 0.0
+            gross_loss = -sum(losses) if losses else 0.0
+            pf = (gross_win / gross_loss) if gross_loss > 0 else float('inf')
+            avg = sum(all_pcts) / n
+            rows.append({'label': label, 'n': n, 'n_symbols': len(per_symbol), 'wr': wr,
+                         'profit_factor': pf, 'avg_pct': avg})
+        rows.sort(key=lambda r: r['profit_factor'], reverse=True)
+
+        msg_lines = ["📊 CrossEMA-4h + syarat Stoch (exit PRODUKSI ASLI, bukan tiruan spt CXV)",
+                     f"Universe: {n_pairs} pair | 2022-sekarang | TF 4h",
+                     "Exit: hard_stop_pct/get_arm_pct/trailing_dist_progressive, TIMEOUT=STRAT_CROSSEMA_MAX_HOLD", ""]
+        for r in rows:
+            msg_lines.append(
+                f"{r['label']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
+                f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}%"
+            )
+        full_report = "\n".join(msg_lines)
+        log(f"[CE2-BT] SELESAI.\n{full_report}")
+        send_telegram(full_report, parse_mode=None)
+
+        with _ce2_lock:
+            _ce2_status['running'] = False
+            _ce2_status['done'] = True
+            _ce2_status['results'] = rows
+            _ce2_status['progress'] = 'done'
+    except Exception as e:
+        log(f"ERROR [CE2-BT] fatal: {e}")
+        with _ce2_lock:
+            _ce2_status['running'] = False
+            _ce2_status['error'] = str(e)
+
+
 # ===================== ONE-OFF: Reversal-8h + syarat Stoch "belum telat" (12/09/2026) =====================
 # Permintaan Mas Budi: strategi mana yg cocok ditambah syarat Stochastic supaya nangkap deal yg
 # BARU MULAI bullish (bukan yg udah di tengah/akhir rally) -- WR boleh sama/turun sedikit asal
@@ -14947,6 +15146,24 @@ def run_web_dashboard():
         def api_reversal_stoch_backtest_status():
             with _rev_bt_lock:
                 return jsonify(dict(_rev_bt_status))
+
+        @app.route("/api/run_crossema_stoch_backtest", methods=["GET", "POST"])
+        def api_run_crossema_stoch_backtest():
+            """One-off (12/09/2026): uji syarat Stoch tambahan di CrossEMA-4h, exit PRODUKSI
+            ASLI (bukan tiruan spt /api/run_crossema_verify). Cek progress via
+            /api/crossema_stoch_backtest_status."""
+            if request.args.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
+            with _ce2_lock:
+                if _ce2_status.get("running"):
+                    return jsonify({"ok": False, "error": "sudah jalan", "status": _ce2_status})
+            threading.Thread(target=run_crossema_stoch_backtest, daemon=True).start()
+            return jsonify({"ok": True, "message": "Backtest dimulai di background."})
+
+        @app.route("/api/crossema_stoch_backtest_status")
+        def api_crossema_stoch_backtest_status():
+            with _ce2_lock:
+                return jsonify(dict(_ce2_status))
 
         @app.route("/api/hunting_config", methods=["POST"])
         def api_hunting_config():
