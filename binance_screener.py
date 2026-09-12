@@ -14099,25 +14099,36 @@ QSCALP_CACHE_DIR = os.path.join(DATA_DIR, "qscalp_3m_cache")
 QSCALP_LOOKBACK_DAYS = 90
 QSCALP_UNIVERSE_SIZE = 120
 
-# ── Syarat entry (draft awal, BELUM final -- ini yg mau divalidasi backtest) ──────────────────
-QSCALP_VOL_MULT       = 4.0     # volume candle >= 4x rolling MA20(vol, 3m)
-QSCALP_MOMENTUM_PCT   = 1.75    # kenaikan harga >= 1.75% dalam 2 candle terakhir (6 menit)
-QSCALP_BREAKOUT_LOOKBACK = 15   # breakout di atas HH 15 candle (~45 menit)
-QSCALP_EMA_FAST        = 9
-QSCALP_ANTI_FOMO_PCT   = 2.0    # tolak kalau harga sudah >2% di atas EMA9 (sudah telat/extended)
+# ── Ronde 1 (12/09/2026): semua 5 varian exit PF<1 (0.66-0.78), avg negatif semua -- exit
+# TERNYATA BUKAN masalahnya (kelima varian sama-sama jelek, jarak PF cuma 0.66-0.78). Ronde 2:
+# exit DIKUNCI ke varian terbaik ronde 1 (C: arm0.8/trail0.3/stop2.0/timeout15), sweep ENTRY.
+QSCALP_FIXED_EXIT = (0.8, 0.3, 2.0, 15)   # arm%, trail%, stop%, timeout candle
 
-# ── Varian exit yg di-sweep (arm%, trail%, stop%, timeout candle) ────────────────────────────
-QSCALP_EXIT_VARIANTS = [
-    ("A_arm1.0_trail0.4_stop1.5_to15", 1.0, 0.4, 1.5, 15),
-    ("B_arm1.5_trail0.5_stop1.5_to20", 1.5, 0.5, 1.5, 20),
-    ("C_arm0.8_trail0.3_stop2.0_to15", 0.8, 0.3, 2.0, 15),
-    ("D_arm1.2_trail0.6_stop2.0_to20", 1.2, 0.6, 2.0, 20),
-    ("E_arm2.0_trail0.8_stop2.5_to20", 2.0, 0.8, 2.5, 20),
+QSCALP_EMA_FAST = 9
+
+# baseline ronde 1 = (vol_mult=4.0, momentum_pct=1.75, breakout_lookback=15, anti_fomo_pct=2.0).
+# Sweep single-dimensi (ubah 1 parameter, sisanya di baseline) -- longgarkan ke 2 arah (lebih
+# ketat & lebih longgar) tiap dimensi, supaya kelihatan apakah masalahnya "kurang selektif"
+# atau "kebanyakan filter, kehilangan pump yg bagus".
+QSCALP_ENTRY_SWEEP = [
+    ("baseline",     4.0, 1.75, 15, 2.0),
+    ("volmult2.5",   2.5, 1.75, 15, 2.0),
+    ("volmult3.0",   3.0, 1.75, 15, 2.0),
+    ("volmult5.0",   5.0, 1.75, 15, 2.0),
+    ("volmult6.0",   6.0, 1.75, 15, 2.0),
+    ("mom1.0",       4.0, 1.0,  15, 2.0),
+    ("mom1.5",       4.0, 1.5,  15, 2.0),
+    ("mom2.5",       4.0, 2.5,  15, 2.0),
+    ("mom3.5",       4.0, 3.5,  15, 2.0),
+    ("hh5",          4.0, 1.75, 5,  2.0),
+    ("hh10",         4.0, 1.75, 10, 2.0),
+    ("hh20",         4.0, 1.75, 20, 2.0),
+    ("hh30",         4.0, 1.75, 30, 2.0),
+    ("fomo1.0",      4.0, 1.75, 15, 1.0),
+    ("fomo1.5",      4.0, 1.75, 15, 1.5),
+    ("fomo3.0",      4.0, 1.75, 15, 3.0),
+    ("fomo5.0",      4.0, 1.75, 15, 5.0),
 ]
-
-
-def _qscalp_cache_path(symbol: str) -> str:
-    return os.path.join(QSCALP_CACHE_DIR, f"{symbol}.csv")
 
 
 def _qscalp_fetch_history(symbol: str, start_ms: int, end_ms: int):
@@ -14159,28 +14170,19 @@ def _qscalp_fetch_history(symbol: str, start_ms: int, end_ms: int):
     return df
 
 
-def _qscalp_load_or_fetch(symbol: str, start_ms: int, end_ms: int):
-    path = _qscalp_cache_path(symbol)
-    try:
-        if os.path.exists(path):
-            df = pd.read_csv(path)
-            if len(df) > 100 and (end_ms - int(df['ot'].iloc[-1])) < 4 * 3600 * 1000:
-                return df
-    except Exception as e:
-        log(f"WARN [QSCALP-BT] cache baca {symbol}: {e}")
-    df = _qscalp_fetch_history(symbol, start_ms, end_ms)
-    if df is not None:
-        try:
-            os.makedirs(QSCALP_CACHE_DIR, exist_ok=True)
-            df.to_csv(path, index=False)
-        except Exception as e:
-            log(f"WARN [QSCALP-BT] cache simpan {symbol}: {e}")
-    return df
+def _qscalp_fetch_only(symbol: str, start_ms: int, end_ms: int):
+    """Fetch LANGSUNG, TANPA cache disk -- pelajaran dari ronde 1 (cache 3m/90hari/120pair
+    bikin volume Railway penuh ~99% di tengah proses). Tiap symbol cuma di-fetch SEKALI per
+    run (dipakai bareng utk semua kombinasi entry-sweep dari df yg sama), jadi biaya fetch
+    ulang per-run masih wajar tanpa perlu simpan permanen ke disk."""
+    return _qscalp_fetch_history(symbol, start_ms, end_ms)
 
 
-def _qscalp_signals_for_symbol(df: pd.DataFrame):
-    """Scan sinyal entry QScalp-3m (volume surge + momentum + breakout + anti-FOMO EMA9 band).
-    Return list of dict {i} -- index candle konfirmasi sinyal (entry disimulasikan dari i+1)."""
+def _qscalp_signals_for_symbol(df: pd.DataFrame, vol_mult: float, momentum_pct_min: float,
+                                breakout_lookback: int, anti_fomo_pct: float):
+    """Scan sinyal entry QScalp-3m (volume surge + momentum + breakout + anti-FOMO EMA9 band),
+    PARAMETERIZED (ronde 2, sweep entry) -- baseline ronde 1 pakai default fungsi ini via
+    QSCALP_ENTRY_SWEEP. Return list of dict {i} -- index candle konfirmasi sinyal."""
     n = len(df)
     if n < 60:
         return []
@@ -14191,28 +14193,29 @@ def _qscalp_signals_for_symbol(df: pd.DataFrame):
 
     vol_ma20 = pd.Series(vol).rolling(20).mean().values
     ema9 = pd.Series(close).ewm(span=QSCALP_EMA_FAST, adjust=False).mean().values
-    hh_prior = pd.Series(high).rolling(QSCALP_BREAKOUT_LOOKBACK).max().shift(1).values
+    hh_prior = pd.Series(high).rolling(breakout_lookback).max().shift(1).values
+    timeout_buf = QSCALP_FIXED_EXIT[3]
 
     out = []
     i = 20
-    while i < n - max(v[4] for v in QSCALP_EXIT_VARIANTS) - 2:
+    while i < n - timeout_buf - 2:
         vm = vol_ma20[i]
         if pd.isna(vm) or vm <= 0:
             i += 1; continue
-        if vol[i] < QSCALP_VOL_MULT * vm:
+        if vol[i] < vol_mult * vm:
             i += 1; continue
         if close[i] <= open_[i]:
             i += 1; continue
         if i < 2 or close[i-2] <= 0:
             i += 1; continue
         momentum_pct = (close[i] / close[i-2] - 1) * 100
-        if momentum_pct < QSCALP_MOMENTUM_PCT:
+        if momentum_pct < momentum_pct_min:
             i += 1; continue
         hh = hh_prior[i]
         if pd.isna(hh) or close[i] <= hh:
             i += 1; continue
         e9 = ema9[i]
-        if pd.isna(e9) or e9 <= 0 or close[i] > e9 * (1 + QSCALP_ANTI_FOMO_PCT / 100):
+        if pd.isna(e9) or e9 <= 0 or close[i] > e9 * (1 + anti_fomo_pct / 100):
             i += 1; continue
         out.append({'i': i})
         i += 20  # skip ke depan (~1 jam) setelah sinyal, hindari sinyal beruntun di momentum sama
@@ -14279,22 +14282,23 @@ def run_qscalp_backtest():
         log(f"[QSCALP-BT] Mulai backtest QScalp-3m, {n_pairs} pair TERLIKUID, "
             f"{QSCALP_LOOKBACK_DAYS} hari terakhir, TF 3m")
 
-        combo_stats = {label: {} for label, *_ in QSCALP_EXIT_VARIANTS}
+        arm, trail, stop, timeout = QSCALP_FIXED_EXIT
+        combo_stats = {label: {} for label, *_ in QSCALP_ENTRY_SWEEP}
 
         for idx, sym in enumerate(pairs):
             with _qscalp_bt_lock:
                 _qscalp_bt_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
             try:
-                df = _qscalp_load_or_fetch(sym, start_ms, end_ms)
+                df = _qscalp_fetch_only(sym, start_ms, end_ms)
                 if df is None or len(df) < 200:
                     continue
-                signals = _qscalp_signals_for_symbol(df)
-                if not signals:
-                    continue
-                for label, arm, trail, stop, to in QSCALP_EXIT_VARIANTS:
+                for label, vol_mult, mom_pct, hh_lb, fomo_pct in QSCALP_ENTRY_SWEEP:
+                    signals = _qscalp_signals_for_symbol(df, vol_mult, mom_pct, hh_lb, fomo_pct)
+                    if not signals:
+                        continue
                     trades = []
                     for sig in signals:
-                        res = _qscalp_simulate_trade(df, sig['i'], arm, trail, stop, to)
+                        res = _qscalp_simulate_trade(df, sig['i'], arm, trail, stop, timeout)
                         if res is not None:
                             trades.append(res)
                     if trades:
@@ -14321,10 +14325,12 @@ def run_qscalp_backtest():
                          'profit_factor': pf, 'avg_pct': avg})
         rows.sort(key=lambda r: r['profit_factor'], reverse=True)
 
-        msg_lines = ["📊 QScalp-3m -- riset strategi baru (belum live, full rule-based)",
+        msg_lines = ["📊 QScalp-3m Ronde 2 -- sweep ENTRY (exit dikunci ke varian C ronde 1)",
                      f"Universe: {n_pairs} pair TERLIKUID | {QSCALP_LOOKBACK_DAYS} hari terakhir | TF 3m",
-                     f"Entry: vol>={QSCALP_VOL_MULT}xMA20 + momentum>={QSCALP_MOMENTUM_PCT}%/2candle + "
-                     f"breakout HH{QSCALP_BREAKOUT_LOOKBACK}c + close<=EMA9+{QSCALP_ANTI_FOMO_PCT}%", ""]
+                     f"Exit tetap: arm{arm}%/trail{trail}%/stop{stop}%/timeout{timeout}c "
+                     f"(terbaik ronde 1: PF=0.78)",
+                     "Baseline ronde 1: vol>=4xMA20 + momentum>=1.75%/2candle + breakout HH15c + "
+                     "close<=EMA9+2.0%", ""]
         for r in rows:
             msg_lines.append(
                 f"{r['label']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
