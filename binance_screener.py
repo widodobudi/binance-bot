@@ -12686,6 +12686,162 @@ def run_stoch_oversold_backtest():
             _stoch_bt_status['error'] = str(e)
 
 
+# ===================== ONE-OFF: VERIFIKASI FOUNDING BACKTEST CrossEMA-4h (12/09/2026) =====================
+# Konteks: comment kode CrossEMA-4h mengklaim "B_NO_PERF+W1: avg=+24.864% WR=85.5% n=62 wf6=0/6"
+# (backtest_crossema_sweep2.py, 25/07/2026) -- angka ini jauh di atas semua strategi lain (yg
+# lain +0.9% s/d +6%), jadi dicurigai janggal (permintaan Mas Budi, 12/09/2026). Investigasi:
+# file backtest_crossema_sweep2.py di Drive SUDAH di-overwrite 20/08/2026 dgn eksperimen lain
+# (menghapus syarat ST=-1) -- kode ASLI yg menghasilkan angka 25/07 itu TIDAK BISA direproduksi
+# persis lagi. Verifikasi ini pakai SYARAT ENTRY LIVE SAAT INI (bukan versi 25/07 yg hilang):
+#   st_dir_cx==-1 (Supertrend 10/2.5) + close<=EMA20*(1+1.0%) + vol>=0.10xMA20 +
+#   HTF 12h vol>0.7xMA20(12h, proxy 3 candle 4h) + cross EMA20 toleransi 0.5% (next candle)
+# Exit: ARM 2.0% / TRAIL 1.5% / TIMEOUT 15 candle -- SAMA seperti backtest founding aslinya,
+# supaya hasil tetap bisa dibandingkan apple-to-apple dari sisi exit engine.
+# Pakai cache 4h yg SAMA dgn backtest Stoch (_stoch_bt_load_or_fetch, /data/stoch_bt_cache) --
+# tidak fetch ulang dari Binance.
+_cxv_lock = threading.Lock()
+_cxv_status = {"running": False, "started_at": None, "progress": "", "done": False,
+               "results": None, "error": None}
+
+CXV_ARM_PCT = 2.0
+CXV_TRAIL_PCT = 1.5
+CXV_TIMEOUT_CANDLES = 15
+
+
+def _cxv_simulate(df: pd.DataFrame) -> dict:
+    """Simulasikan syarat entry CrossEMA-4h LIVE saat ini di histori 1 symbol.
+    df kolom: open/high/low/close/vol (dari _stoch_bt_load_or_fetch, sudah 4h)."""
+    n = len(df)
+    if n < 60:
+        return {'n': 0}
+    close_v = df['close'].values.astype(float)
+    high_v  = df['high'].values.astype(float)
+    low_v   = df['low'].values.astype(float)
+    open_v  = df['open'].values.astype(float)
+    vol_v   = df['vol'].values.astype(float)
+
+    ema20 = pd.Series(close_v).ewm(span=20, adjust=False).mean().values
+    vol_ma20 = pd.Series(vol_v).rolling(20).mean().values
+    vol_ma12 = pd.Series(vol_v).rolling(12).mean().values  # proxy HTF 12h (3 candle 4h)
+
+    st = ta.supertrend(pd.Series(high_v), pd.Series(low_v), pd.Series(close_v),
+                        length=STRAT4H_ST_LENGTH, multiplier=STRAT_CROSSEMA_ST_MULT)
+    dcol = [c for c in st.columns if "SUPERTd" in c]
+    st_dir = st[dcol[0]].values if dcol else np.full(n, np.nan)
+
+    trades = []
+    i = 1
+    while i < n - CXV_TIMEOUT_CANDLES - 1:
+        e20 = ema20[i]; vm = vol_ma20[i]; vol = vol_v[i]; v12 = vol_ma12[i]; c = close_v[i]
+        sd = st_dir[i] if i < len(st_dir) else np.nan
+        if pd.isna(e20) or pd.isna(vm) or pd.isna(v12) or pd.isna(sd):
+            i += 1; continue
+        if sd != -1:
+            i += 1; continue
+        if e20 <= 0 or c > e20 * (1 + STRAT_CROSSEMA_EMA20_TOL_PCT / 100):
+            i += 1; continue
+        if vm <= 0 or vol < STRAT_CROSSEMA_VOLUME_MULT * vm:
+            i += 1; continue
+        if v12 <= 0 or vol < STRAT_CROSSEMA_HTF_VOL_MULT * v12:
+            i += 1; continue
+
+        ni = i + 1
+        if ni >= n: break
+        open_n1 = open_v[ni]; high_n1 = high_v[ni]; ema20_n1 = ema20[ni]
+        cross_floor = ema20_n1 * (1 - STRAT_CROSSEMA_CROSS_TOL_PCT / 100)
+        if pd.isna(ema20_n1) or high_n1 <= cross_floor:
+            i += 1; continue
+        entry = max(open_n1, cross_floor)
+
+        peak = entry; armed = False; result = None
+        for j in range(ni + 1, min(ni + CXV_TIMEOUT_CANDLES + 1, n)):
+            peak = max(peak, high_v[j])
+            prof_peak = (peak / entry - 1) * 100
+            if not armed and prof_peak >= CXV_ARM_PCT:
+                armed = True
+            if armed:
+                stop = peak * (1 - CXV_TRAIL_PCT / 100)
+                if low_v[j] <= stop:
+                    result = (stop / entry - 1) * 100 - 0.2
+                    break
+        if result is None:
+            exit_c = close_v[min(ni + CXV_TIMEOUT_CANDLES, n - 1)]
+            result = (exit_c / entry - 1) * 100 - 0.2
+        trades.append(result)
+        i += CXV_TIMEOUT_CANDLES + 2
+
+    if not trades:
+        return {'n': 0}
+    eq = 0.0; peak_eq = 0.0; dd = 0.0
+    for t in trades:
+        eq += t; peak_eq = max(peak_eq, eq); dd = min(dd, eq - peak_eq)
+    wins = sum(1 for t in trades if t > 0)
+    return {'n': len(trades), 'wins': wins, 'avg': sum(trades) / len(trades),
+            'total': sum(trades), 'worst': min(trades), 'maxdd': dd}
+
+
+def run_crossema_verify_backtest():
+    """Jalan di thread terpisah (dipicu /api/run_crossema_verify), tidak menyentuh trading live."""
+    global _cxv_status
+    with _cxv_lock:
+        if _cxv_status['running']:
+            return
+        _cxv_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                       "progress": "0/0", "done": False, "results": None, "error": None}
+    try:
+        pairs = get_usdt_spot_pairs()
+        n_pairs = len(pairs)
+        end_ms = int(time.time() * 1000)
+        start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        log(f"[CXV] Mulai verifikasi CrossEMA-4h (syarat live saat ini), {n_pairs} pair, 2022-sekarang, TF 4h")
+        per_symbol = {}
+        for idx, sym in enumerate(pairs):
+            with _cxv_lock:
+                _cxv_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
+            try:
+                df = _stoch_bt_load_or_fetch(sym, start_ms, end_ms)
+                if df is None or len(df) < 60:
+                    continue
+                res = _cxv_simulate(df)
+                if res.get('n', 0) > 0:
+                    per_symbol[sym] = res
+            except Exception as e:
+                log(f"WARN [CXV] {sym}: {e}")
+            if (idx + 1) % 50 == 0:
+                log(f"[CXV] progress {idx+1}/{n_pairs}")
+
+        total_n = sum(r['n'] for r in per_symbol.values())
+        total_wins = sum(r['wins'] for r in per_symbol.values())
+        wr = (total_wins / total_n * 100) if total_n else 0.0
+        avg = (sum(r['avg'] * r['n'] for r in per_symbol.values()) / total_n) if total_n else 0.0
+        worst = min((r['worst'] for r in per_symbol.values()), default=0.0)
+        avg_maxdd = (sum(r['maxdd'] for r in per_symbol.values()) / len(per_symbol)) if per_symbol else 0.0
+        worst_maxdd = min((r['maxdd'] for r in per_symbol.values()), default=0.0)
+
+        report = (
+            f"📊 Verifikasi ulang CrossEMA-4h (syarat entry LIVE saat ini, bukan versi 25/07 yg sudah hilang)\n"
+            f"Universe: {n_pairs} pair ({len(per_symbol)} ada sinyal) | 2022-sekarang | TF 4h\n"
+            f"Exit: ARM {CXV_ARM_PCT}% / TRAIL {CXV_TRAIL_PCT}% / TIMEOUT {CXV_TIMEOUT_CANDLES} candle (sama spt founding backtest)\n"
+            f"N={total_n} WR={wr:.1f}% avg={avg:+.3f}% worst_single_trade={worst:+.2f}%\n"
+            f"maxDD per-symbol: avg={avg_maxdd:.1f}% worst={worst_maxdd:.1f}%\n"
+            f"Pembanding lama (comment kode, 25/07/2026, kode aslinya sudah hilang): avg=+24.864% WR=85.5% n=62"
+        )
+        log(f"[CXV] SELESAI.\n{report}")
+        send_telegram(report, parse_mode=None)
+        with _cxv_lock:
+            _cxv_status['running'] = False
+            _cxv_status['done'] = True
+            _cxv_status['results'] = {'n': total_n, 'wr': wr, 'avg': avg, 'worst': worst,
+                                       'avg_maxdd': avg_maxdd, 'worst_maxdd': worst_maxdd,
+                                       'n_symbols': len(per_symbol)}
+            _cxv_status['progress'] = 'done'
+    except Exception as e:
+        log(f"ERROR [CXV] fatal: {e}")
+        with _cxv_lock:
+            _cxv_status['running'] = False
+            _cxv_status['error'] = str(e)
+
+
 def run_web_dashboard():
     """Thread web dashboard Flask."""
     try:
@@ -14564,6 +14720,24 @@ def run_web_dashboard():
         def api_stoch_backtest_status():
             with _stoch_bt_lock:
                 return jsonify(dict(_stoch_bt_status))
+
+        @app.route("/api/run_crossema_verify", methods=["GET", "POST"])
+        def api_run_crossema_verify():
+            """One-off (12/09/2026): verifikasi ulang founding backtest CrossEMA-4h yg
+            kelihatan janggal (+24.864% avg). Pakai syarat entry LIVE saat ini, cache
+            4h yg sama dgn backtest Stoch. Cek progress via /api/crossema_verify_status."""
+            if request.args.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
+            with _cxv_lock:
+                if _cxv_status.get("running"):
+                    return jsonify({"ok": False, "error": "sudah jalan", "status": _cxv_status})
+            threading.Thread(target=run_crossema_verify_backtest, daemon=True).start()
+            return jsonify({"ok": True, "message": "Verifikasi dimulai di background."})
+
+        @app.route("/api/crossema_verify_status")
+        def api_crossema_verify_status():
+            with _cxv_lock:
+                return jsonify(dict(_cxv_status))
 
         @app.route("/api/hunting_config", methods=["POST"])
         def api_hunting_config():
