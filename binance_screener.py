@@ -14081,6 +14081,271 @@ def run_reversal_ath_backtest():
             _rev_ath_status['error'] = str(e)
 
 
+# ===================== ONE-OFF: QScalp-3m -- riset strategi scalp baru (12/09/2026) =====================
+# Strategi BARU (belum ada di live), didiskusikan dgn Mas Budi: tangkap pump cepat (detik-menit)
+# yg selesai sebelum strategi TF 4h/8h/12h sempat bereaksi. Keputusan desain yg sudah disepakati:
+#   - TF 3 menit, full rule-based (TANPA AI -- delay AI bisa bikin kelewat entry/exit yg tepat)
+#   - Slot 2, modal terpisah (TIDAK mengurangi slot strategi lain)
+#   - Backtest dulu sebelum kunci parameter (spt strategi lain)
+# Scope backtest INI (disepakati Mas Budi, beda dari 4 strategi lain krn data 3m 80x lebih besar
+# dari 4h utk rentang sama): 90 hari terakhir (bukan 2022-sekarang -- pola pump cepat sangat
+# dipengaruhi kondisi likuiditas/market TERKINI, histori lama kurang relevan + storage tidak
+# akan cukup), pair PALING LIKUID saja (top QSCALP_UNIVERSE_SIZE by volume 24h, bukan semua 474).
+_qscalp_bt_lock = threading.Lock()
+_qscalp_bt_status = {"running": False, "started_at": None, "progress": "", "done": False,
+                      "results": None, "error": None}
+
+QSCALP_CACHE_DIR = os.path.join(DATA_DIR, "qscalp_3m_cache")
+QSCALP_LOOKBACK_DAYS = 90
+QSCALP_UNIVERSE_SIZE = 120
+
+# ── Syarat entry (draft awal, BELUM final -- ini yg mau divalidasi backtest) ──────────────────
+QSCALP_VOL_MULT       = 4.0     # volume candle >= 4x rolling MA20(vol, 3m)
+QSCALP_MOMENTUM_PCT   = 1.75    # kenaikan harga >= 1.75% dalam 2 candle terakhir (6 menit)
+QSCALP_BREAKOUT_LOOKBACK = 15   # breakout di atas HH 15 candle (~45 menit)
+QSCALP_EMA_FAST        = 9
+QSCALP_ANTI_FOMO_PCT   = 2.0    # tolak kalau harga sudah >2% di atas EMA9 (sudah telat/extended)
+
+# ── Varian exit yg di-sweep (arm%, trail%, stop%, timeout candle) ────────────────────────────
+QSCALP_EXIT_VARIANTS = [
+    ("A_arm1.0_trail0.4_stop1.5_to15", 1.0, 0.4, 1.5, 15),
+    ("B_arm1.5_trail0.5_stop1.5_to20", 1.5, 0.5, 1.5, 20),
+    ("C_arm0.8_trail0.3_stop2.0_to15", 0.8, 0.3, 2.0, 15),
+    ("D_arm1.2_trail0.6_stop2.0_to20", 1.2, 0.6, 2.0, 20),
+    ("E_arm2.0_trail0.8_stop2.5_to20", 2.0, 0.8, 2.5, 20),
+]
+
+
+def _qscalp_cache_path(symbol: str) -> str:
+    return os.path.join(QSCALP_CACHE_DIR, f"{symbol}.csv")
+
+
+def _qscalp_fetch_history(symbol: str, start_ms: int, end_ms: int):
+    """Paginate /api/v3/klines 3m -- volume data jauh lebih besar dari 4h (80x), jadi
+    dibatasi QSCALP_LOOKBACK_DAYS (90 hari), bukan 2022-sekarang spt cache 4h."""
+    out = []
+    cursor = start_ms
+    while cursor < end_ms:
+        try:
+            r = _binance_get("/api/v3/klines", params={
+                'symbol': symbol, 'interval': '3m', 'startTime': cursor, 'endTime': end_ms, 'limit': 1000,
+            }, timeout=20)
+        except Exception:
+            break
+        if r is None:
+            break
+        try:
+            batch = r.json()
+        except Exception:
+            break
+        if not isinstance(batch, list) or not batch:
+            break
+        out.extend(batch)
+        last_open = int(batch[-1][0])
+        if last_open <= cursor:
+            break
+        cursor = last_open + 1
+        if len(batch) < 1000:
+            break
+        time.sleep(0.12)  # gentle -- IP ini dipakai bareng bot trading live
+    if not out:
+        return None
+    df = pd.DataFrame(out, columns=['ot', 'open', 'high', 'low', 'close', 'vol',
+                                     'ct', 'qav', 'nt', 'tbbav', 'tbqav', 'ig'])
+    for c in ['open', 'high', 'low', 'close', 'vol']:
+        df[c] = pd.to_numeric(df[c], errors='coerce')
+    df['ot'] = df['ot'].astype('int64')
+    df = df.drop_duplicates(subset='ot').sort_values('ot').reset_index(drop=True)
+    return df
+
+
+def _qscalp_load_or_fetch(symbol: str, start_ms: int, end_ms: int):
+    path = _qscalp_cache_path(symbol)
+    try:
+        if os.path.exists(path):
+            df = pd.read_csv(path)
+            if len(df) > 100 and (end_ms - int(df['ot'].iloc[-1])) < 4 * 3600 * 1000:
+                return df
+    except Exception as e:
+        log(f"WARN [QSCALP-BT] cache baca {symbol}: {e}")
+    df = _qscalp_fetch_history(symbol, start_ms, end_ms)
+    if df is not None:
+        try:
+            os.makedirs(QSCALP_CACHE_DIR, exist_ok=True)
+            df.to_csv(path, index=False)
+        except Exception as e:
+            log(f"WARN [QSCALP-BT] cache simpan {symbol}: {e}")
+    return df
+
+
+def _qscalp_signals_for_symbol(df: pd.DataFrame):
+    """Scan sinyal entry QScalp-3m (volume surge + momentum + breakout + anti-FOMO EMA9 band).
+    Return list of dict {i} -- index candle konfirmasi sinyal (entry disimulasikan dari i+1)."""
+    n = len(df)
+    if n < 60:
+        return []
+    close = df['close'].values.astype(float)
+    high = df['high'].values.astype(float)
+    open_ = df['open'].values.astype(float)
+    vol = df['vol'].values.astype(float)
+
+    vol_ma20 = pd.Series(vol).rolling(20).mean().values
+    ema9 = pd.Series(close).ewm(span=QSCALP_EMA_FAST, adjust=False).mean().values
+    hh_prior = pd.Series(high).rolling(QSCALP_BREAKOUT_LOOKBACK).max().shift(1).values
+
+    out = []
+    i = 20
+    while i < n - max(v[4] for v in QSCALP_EXIT_VARIANTS) - 2:
+        vm = vol_ma20[i]
+        if pd.isna(vm) or vm <= 0:
+            i += 1; continue
+        if vol[i] < QSCALP_VOL_MULT * vm:
+            i += 1; continue
+        if close[i] <= open_[i]:
+            i += 1; continue
+        if i < 2 or close[i-2] <= 0:
+            i += 1; continue
+        momentum_pct = (close[i] / close[i-2] - 1) * 100
+        if momentum_pct < QSCALP_MOMENTUM_PCT:
+            i += 1; continue
+        hh = hh_prior[i]
+        if pd.isna(hh) or close[i] <= hh:
+            i += 1; continue
+        e9 = ema9[i]
+        if pd.isna(e9) or e9 <= 0 or close[i] > e9 * (1 + QSCALP_ANTI_FOMO_PCT / 100):
+            i += 1; continue
+        out.append({'i': i})
+        i += 20  # skip ke depan (~1 jam) setelah sinyal, hindari sinyal beruntun di momentum sama
+    return out
+
+
+def _qscalp_simulate_trade(df: pd.DataFrame, i: int, arm_pct: float, trail_pct: float,
+                            stop_pct: float, timeout_candles: int):
+    """Entry = open candle i+1 (no-lookahead). Exit: hard stop tetap dari entry, trailing
+    setelah arm, timeout."""
+    n = len(df)
+    open_v = df['open'].values.astype(float)
+    high_v = df['high'].values.astype(float)
+    low_v = df['low'].values.astype(float)
+    close_v = df['close'].values.astype(float)
+    ni = i + 1
+    if ni >= n:
+        return None
+    entry = float(open_v[ni])
+    if entry <= 0:
+        return None
+    hard_stop_price = entry * (1 - stop_pct / 100)
+    last_j = min(ni + timeout_candles, n - 1)
+    if last_j <= ni:
+        return None
+    peak = entry; armed = False
+    for j in range(ni, last_j + 1):
+        low_j = float(low_v[j]); high_j = float(high_v[j])
+        if low_j <= hard_stop_price:
+            return (hard_stop_price / entry - 1) * 100 - 0.2
+        peak = max(peak, high_j)
+        peak_profit_pct = (peak / entry - 1) * 100
+        if not armed and peak_profit_pct >= arm_pct:
+            armed = True
+        if armed:
+            stop_price = peak * (1 - trail_pct / 100)
+            if low_j <= stop_price:
+                return (stop_price / entry - 1) * 100 - 0.2
+    exit_price = float(close_v[last_j])
+    return (exit_price / entry - 1) * 100 - 0.2
+
+
+def run_qscalp_backtest():
+    """Jalan di thread terpisah (dipicu /api/run_qscalp_backtest). Tidak menyentuh trading
+    live -- cuma baca data historis Binance (3m, 90 hari, pair likuid) + simulasi lokal."""
+    global _qscalp_bt_status
+    with _qscalp_bt_lock:
+        if _qscalp_bt_status['running']:
+            return
+        _qscalp_bt_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                              "progress": "0/0", "done": False, "results": None, "error": None}
+    try:
+        pairs_all = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except: pass
+        ranked = sorted([p for p in pairs_all if p in volmap], key=lambda s: volmap[s], reverse=True)
+        pairs = ranked[:QSCALP_UNIVERSE_SIZE]
+        n_pairs = len(pairs)
+        end_ms = int(time.time() * 1000)
+        start_ms = end_ms - QSCALP_LOOKBACK_DAYS * 24 * 3600 * 1000
+        log(f"[QSCALP-BT] Mulai backtest QScalp-3m, {n_pairs} pair TERLIKUID, "
+            f"{QSCALP_LOOKBACK_DAYS} hari terakhir, TF 3m")
+
+        combo_stats = {label: {} for label, *_ in QSCALP_EXIT_VARIANTS}
+
+        for idx, sym in enumerate(pairs):
+            with _qscalp_bt_lock:
+                _qscalp_bt_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
+            try:
+                df = _qscalp_load_or_fetch(sym, start_ms, end_ms)
+                if df is None or len(df) < 200:
+                    continue
+                signals = _qscalp_signals_for_symbol(df)
+                if not signals:
+                    continue
+                for label, arm, trail, stop, to in QSCALP_EXIT_VARIANTS:
+                    trades = []
+                    for sig in signals:
+                        res = _qscalp_simulate_trade(df, sig['i'], arm, trail, stop, to)
+                        if res is not None:
+                            trades.append(res)
+                    if trades:
+                        combo_stats[label][sym] = trades
+            except Exception as e:
+                log(f"WARN [QSCALP-BT] {sym}: {e}")
+            if (idx + 1) % 20 == 0:
+                log(f"[QSCALP-BT] progress {idx+1}/{n_pairs}")
+
+        rows = []
+        for label, per_symbol in combo_stats.items():
+            all_pcts = [p for lst in per_symbol.values() for p in lst]
+            n = len(all_pcts)
+            if n < 20:
+                continue
+            wins = [p for p in all_pcts if p > 0]
+            losses = [p for p in all_pcts if p <= 0]
+            wr = len(wins) / n * 100
+            gross_win = sum(wins) if wins else 0.0
+            gross_loss = -sum(losses) if losses else 0.0
+            pf = (gross_win / gross_loss) if gross_loss > 0 else float('inf')
+            avg = sum(all_pcts) / n
+            rows.append({'label': label, 'n': n, 'n_symbols': len(per_symbol), 'wr': wr,
+                         'profit_factor': pf, 'avg_pct': avg})
+        rows.sort(key=lambda r: r['profit_factor'], reverse=True)
+
+        msg_lines = ["📊 QScalp-3m -- riset strategi baru (belum live, full rule-based)",
+                     f"Universe: {n_pairs} pair TERLIKUID | {QSCALP_LOOKBACK_DAYS} hari terakhir | TF 3m",
+                     f"Entry: vol>={QSCALP_VOL_MULT}xMA20 + momentum>={QSCALP_MOMENTUM_PCT}%/2candle + "
+                     f"breakout HH{QSCALP_BREAKOUT_LOOKBACK}c + close<=EMA9+{QSCALP_ANTI_FOMO_PCT}%", ""]
+        for r in rows:
+            msg_lines.append(
+                f"{r['label']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
+                f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}%"
+            )
+        full_report = "\n".join(msg_lines)
+        log(f"[QSCALP-BT] SELESAI.\n{full_report}")
+        send_telegram(full_report, parse_mode=None)
+
+        with _qscalp_bt_lock:
+            _qscalp_bt_status['running'] = False
+            _qscalp_bt_status['done'] = True
+            _qscalp_bt_status['results'] = rows
+            _qscalp_bt_status['progress'] = 'done'
+    except Exception as e:
+        log(f"ERROR [QSCALP-BT] fatal: {e}")
+        with _qscalp_bt_lock:
+            _qscalp_bt_status['running'] = False
+            _qscalp_bt_status['error'] = str(e)
+
+
 def run_web_dashboard():
     """Thread web dashboard Flask."""
     try:
@@ -16105,6 +16370,24 @@ def run_web_dashboard():
                 log(f"[CACHE-ZIP] {cache_dir} dihapus permanen atas konfirmasi Mas Budi.")
                 return jsonify({"ok": True, "message": "Cache dihapus."})
             return jsonify({"ok": True, "message": "Cache tidak ada (sudah bersih)."})
+
+        @app.route("/api/run_qscalp_backtest", methods=["GET", "POST"])
+        def api_run_qscalp_backtest():
+            """One-off (12/09/2026): riset strategi baru QScalp-3m (belum live). Fetch data 3m
+            90 hari terakhir, pair paling likuid saja (lihat QSCALP_UNIVERSE_SIZE). Cek progress
+            via /api/qscalp_backtest_status."""
+            if request.args.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
+            with _qscalp_bt_lock:
+                if _qscalp_bt_status.get("running"):
+                    return jsonify({"ok": False, "error": "sudah jalan", "status": _qscalp_bt_status})
+            threading.Thread(target=run_qscalp_backtest, daemon=True).start()
+            return jsonify({"ok": True, "message": "Backtest dimulai di background."})
+
+        @app.route("/api/qscalp_backtest_status")
+        def api_qscalp_backtest_status():
+            with _qscalp_bt_lock:
+                return jsonify(dict(_qscalp_bt_status))
 
         @app.route("/api/hunting_config", methods=["POST"])
         def api_hunting_config():
