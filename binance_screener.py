@@ -303,6 +303,18 @@ STRAT_CROSSEMA_MAX_HOLD     = 15
 STRAT_CROSSEMA_FWDTEST      = 7
 STRAT_CROSSEMA_LIVE_BASELINE = 10   # closed deals saat crossema-4h TERCAPAI target -> LIVE (05/09/2026, #10/7)
 STRAT_CROSSEMA_PHASE2_TARGET = 15   # target fase-2 (counter "2nd") setelah LIVE, 05/09/2026, samain hunting/reversal/4h
+# 12/09/2026: syarat entry CrossEMA-4h berubah (tambah Stoch%K<25 di thread_crossema_scan(),
+# lihat STRAT_CROSSEMA_STOCH_MAX). Counter "2nd" masih #0/15 (belum ada closed) saat patch ini
+# di-deploy -- DIBEKUKAN di angka itu (sama dgn REVERSAL_STOCH_PATCH_BASELINE, lihat
+# komentarnya) supaya trade dgn syarat lama & baru tidak tercampur. Counter "3rd" mulai dari sini.
+STRAT_CROSSEMA_STOCH_PATCH_BASELINE = STRAT_CROSSEMA_LIVE_BASELINE
+STRAT_CROSSEMA_PHASE3_TARGET = 15   # target fase-3 (counter "3rd", pasca syarat Stoch<25)
+STRAT_CROSSEMA_STOCH_MAX = 25       # backtest 12/09/2026 (474 pair, 2022-sekarang, exit produksi
+                                     # asli): monoton naik terus dari baseline (WR=78.9% PF=2.45
+                                     # avg=+1.83%) sampai Stoch<15 (WR=86.8% PF=5.33 avg=+3.56%),
+                                     # belum ketemu titik jenuh -- Stoch<25 dipilih Mas Budi
+                                     # sbg titik tengah (WR=83.6% PF=3.70 avg=+2.70%, n=23988/458
+                                     # pair, masih cakupan pair luas) drpd yg paling ekstrem.
 STRAT_CROSSEMA_VOLUME_MULT  = 0.10    # dilonggarkan dari 0.25→0.10 (30/08/2026) -- pair yg lagi downtrend (syarat ST=-1) wajar volumenya turun, jadi filter 0.25xMA kegedean
 STRAT_CROSSEMA_VOLUME_MA    = 20
 STRAT_CROSSEMA_MIN_VOL_USD  = 1_000_000
@@ -4971,7 +4983,11 @@ def heartbeat_general_tick():
     # TANPA baris Last Close, DENGAN baris "2nd" fase-2). offset fase-2 = offset fase-1 (kalau
     # ada) + baseline saat TERCAPAI, sama persis pola prog_4h2/prog_hunt2 di atas.
     prog_brk2 = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET + FWDTEST_BRKX2_LIVE_BASELINE)
-    prog_cx2  = csv_progress('brkX2_crossema', offset=STRAT_CROSSEMA_LIVE_BASELINE)
+    # 12/09/2026: fase-2 CrossEMA-4h DIBEKUKAN di STRAT_CROSSEMA_STOCH_PATCH_BASELINE (syarat
+    # entry berubah, tambah Stoch<25) -- lihat komentar konstantanya. Masih #0/15 saat patch
+    # di-deploy jadi frozen counter-nya 0, tapi tetap dipisah dari fase-3 (trade dgn syarat baru).
+    prog_cx2  = csv_progress('brkX2_crossema', offset=STRAT_CROSSEMA_LIVE_BASELINE, until=STRAT_CROSSEMA_STOCH_PATCH_BASELINE)
+    prog_cx3  = csv_progress('brkX2_crossema', offset=STRAT_CROSSEMA_STOCH_PATCH_BASELINE)
     lc_akum   = csv_last_close('akumulasi')
     if prog_all is None:
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
@@ -4990,7 +5006,10 @@ def heartbeat_general_tick():
                      f"    brkX2-4h: 2nd {_fmt_strat(prog_4h2, STRAT4H_PHASE2_TARGET)}\n"
                      f"    brkX2-4h: Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
                      f"  - crossema-4h: {_fmt_hunting_live(prog_cx)}\n"
-                     f"    crossema-4h: 2nd {_fmt_strat(prog_cx2, STRAT_CROSSEMA_PHASE2_TARGET)}\n"
+                     f"    crossema-4h: 2nd (dihentikan, syarat entry+Stoch<25): "
+                     f"{prog_cx2['n']}/{STRAT_CROSSEMA_PHASE2_TARGET} FINAL "
+                     f"({prog_cx2['win']}W/{prog_cx2['loss']}L, {prog_cx2['total_pct']:+.1f}%)\n"
+                     f"    crossema-4h: 3rd {_fmt_strat(prog_cx3, STRAT_CROSSEMA_PHASE3_TARGET)}\n"
                      f"  - hunting-4h : {_fmt_hunting_live(prog_hunt)}\n"
                      f"    hunting-4h: 2nd {_fmt_strat(prog_hunt2, HUNTING_PHASE2_TARGET)}\n"
                      f"  - akumulasi-4h: {_fmt_strat(prog_akum, AKUM_ENTRY_FWDTEST_TARGET, lc_akum)}")
@@ -8092,6 +8111,10 @@ def thread_crossema_scan():
             vm = r.get("vol_ma")
             if pd.isna(vm) or vm <= 0 or r["vol"] < STRAT_CROSSEMA_VOLUME_MULT * vm:
                 count_blocker(scan_blockers_cx, "Volume minimum", True)
+                continue
+            sk = r.get("stoch_k")
+            if pd.isna(sk) or sk >= STRAT_CROSSEMA_STOCH_MAX:
+                count_blocker(scan_blockers_cx, "Stoch belum cukup rendah", True)
                 continue
 
             # HTF 12h filter (CrossEMA: vol12h>1.5xMA)
