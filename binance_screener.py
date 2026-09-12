@@ -13166,7 +13166,12 @@ _rev_bt_lock = threading.Lock()
 _rev_bt_status = {"running": False, "started_at": None, "progress": "", "done": False,
                    "results": None, "error": None}
 
-REV_STOCH_MAX_SWEEP = [70, 60, 50, 40, 30]   # syarat tambahan: Stoch%K di candle entry < ambang ini
+# 12/09/2026: sweep awal (70/60/50/40/30) nunjukkin 50 = sweet spot (WR/PF/avg naik semua vs
+# baseline, sudah di-patch ke live) sementara 40/30 lebih jelek -- titik balik ada di antara
+# 30-50 tapi belum jelas persisnya di mana. Diperhalus jadi step 5 (50/45/40/35/30/25/20,
+# permintaan Mas Budi) buat cari titik sebenarnya. 50 tetap disertakan sbg pembanding krn itu
+# angka yg sudah LIVE sekarang.
+REV_STOCH_MAX_SWEEP = [50, 45, 40, 35, 30, 25, 20]   # syarat tambahan: Stoch%K di candle entry < ambang ini
 
 
 def _resample_4h_to_8h(df4h: pd.DataFrame) -> pd.DataFrame:
