@@ -599,6 +599,14 @@ REVERSAL_LIVE_BASELINE  = 8         # closed deals saat Reversal-8h dipromosikan
                                      # (TERCAPAI 28/08/2026 @ #10/8, 8W/2L, +16.4%; baseline=target
                                      # supaya 2 trade yg sudah lewat target ikut kehitung "sejak LIVE")
 REVERSAL_PHASE2_TARGET  = 15        # target fase-2 (counter "2nd") setelah LIVE, 28/08/2026
+# 12/09/2026: syarat entry Reversal-8h berubah (tambah Stoch%K<50 di reversal_blockers(),
+# lihat REVERSAL_STOCH_MAX) -- counter "2nd" DIBEKUKAN di angka ini (REVERSAL_LIVE_BASELINE
+# + 2, sesuai jumlah closed fase-2 SAAT patch di-deploy, dikonfirmasi 0 close baru sejak
+# deploy lewat cek log Railway) supaya trade dgn syarat entry lama & baru tidak tercampur
+# dalam 1 counter. Counter "3rd" (REVERSAL_PHASE3_TARGET) mulai dari sini, hitung KHUSUS
+# trade dgn syarat entry BARU (+Stoch<50).
+REVERSAL_STOCH_PATCH_BASELINE = REVERSAL_LIVE_BASELINE + 2
+REVERSAL_PHASE3_TARGET  = 15        # target fase-3 (counter "3rd", pasca syarat Stoch<50)
 FWDTEST_TARGET_4H       = 7         # target close deal brkX2-4h utk forward-test berhasil
 # Offset untuk multi-tahap forward-test brkX2:
 # Set ke total deal yang sudah selesai di AKHIR tahap sebelumnya.
@@ -1609,11 +1617,15 @@ def _row_indicators(df_row, vol_ma=None) -> dict:
         'atr_pct':        _f(df_row.get('atr_pct'), '.2f'),
     }
 
-def csv_progress(strategy: str = None, offset: int = 0):
+def csv_progress(strategy: str = None, offset: int = 0, until: int = None):
     """Baca CSV, hitung trade SELESAI (CLOSED), berapa menang/kalah, total profit%.
     Jika strategy diberikan ('brkX2'/'reversal'), hanya hitung trade strategi itu.
     Baris lama tanpa kolom strategy dianggap 'brkX2' (kompatibilitas).
     offset: skip N deal pertama (untuk multi-tahap forward-test).
+    until: batas ATAS (index absolut, sebelum offset diterapkan) -- kalau diisi, hitung
+    cuma trade ke-(offset+1) s/d ke-until. Dipakai utk MEMBEKUKAN counter fase lama saat
+    syarat entry berubah (12/09/2026, Reversal-8h Stoch<50) supaya trade dgn syarat entry
+    BARU tidak ikut kehitung ke counter fase LAMA. Tanpa until = counter terbuka (default).
     Return dict atau None kalau CSV belum ada / error."""
     try:
         if not os.path.exists(TRADES_CSV):
@@ -1630,7 +1642,9 @@ def csv_progress(strategy: str = None, offset: int = 0):
                 closed = [r for r in closed if r.get('strategy') in ('akum_entry_a', 'akum_entry_b')]
             else:
                 closed = [r for r in closed if (r.get('strategy') or 'brkX2') == strategy]
-        # Skip deal dari tahap sebelumnya
+        # Batas atas DULU (index absolut thd closed lengkap), baru skip N deal pertama
+        if until is not None:
+            closed = closed[:until]
         if offset > 0:
             closed = closed[offset:]
         n = len(closed)
@@ -4945,7 +4959,11 @@ def heartbeat_general_tick():
     prog_cx   = csv_progress('brkX2_crossema')
     prog_hunt = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
     prog_akum = csv_progress('akumulasi')
-    prog_rev2  = csv_progress('reversal',    offset=REVERSAL_LIVE_BASELINE)
+    # 12/09/2026: fase-2 Reversal-8h DIBEKUKAN di REVERSAL_STOCH_PATCH_BASELINE (syarat entry
+    # berubah, tambah Stoch<50) -- lihat komentar REVERSAL_STOCH_PATCH_BASELINE. Fase-3 (prog_rev3)
+    # mulai dari situ, hitung khusus trade dgn syarat BARU.
+    prog_rev2  = csv_progress('reversal',    offset=REVERSAL_LIVE_BASELINE, until=REVERSAL_STOCH_PATCH_BASELINE)
+    prog_rev3  = csv_progress('reversal',    offset=REVERSAL_STOCH_PATCH_BASELINE)
     prog_4h2   = csv_progress('brkX2_4h',    offset=STRAT4H_LIVE_BASELINE)
     prog_hunt2 = csv_progress('hunting_4h',  offset=HUNTING_FWDTEST_PHASE_OFFSET + HUNTING_LIVE_BASELINE)
     # 05/09/2026 (permintaan Mas Budi): brkX2-12h & crossema-4h baru saja TERCAPAI target
@@ -4964,7 +4982,10 @@ def heartbeat_general_tick():
                      f"  - brkX2-12h  : {_fmt_hunting_live(prog_brk)}\n"
                      f"    brkX2-12h: 2nd {_fmt_strat(prog_brk2, FWDTEST_BRKX2_PHASE2_TARGET)}\n"
                      f"  - reversal-8h: {_fmt_hunting_live(prog_rev)}\n"
-                     f"    reversal-8h: 2nd {_fmt_strat(prog_rev2, REVERSAL_PHASE2_TARGET)}\n"
+                     f"    reversal-8h: 2nd (dihentikan, syarat entry+Stoch<50): "
+                     f"{prog_rev2['n']}/{REVERSAL_PHASE2_TARGET} FINAL "
+                     f"({prog_rev2['win']}W/{prog_rev2['loss']}L, {prog_rev2['total_pct']:+.1f}%)\n"
+                     f"    reversal-8h: 3rd {_fmt_strat(prog_rev3, REVERSAL_PHASE3_TARGET)}\n"
                      f"  - brkX2-4h   : {_fmt_hunting_live(prog_4h)}\n"
                      f"    brkX2-4h: 2nd {_fmt_strat(prog_4h2, STRAT4H_PHASE2_TARGET)}\n"
                      f"    brkX2-4h: Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
@@ -6546,13 +6567,29 @@ def thread2_monitor():
                                             else REVERSAL_PHASE2_TARGET if strat == 'reversal'
                                             else STRAT4H_PHASE2_TARGET)
                         _phase2_offset  = (HUNTING_FWDTEST_PHASE_OFFSET if strat == 'hunting_4h' else 0) + _live_baseline
-                        _p2 = csv_progress(strat, offset=_phase2_offset)
+                        # 12/09/2026: Reversal-8h fase-2 DIBEKUKAN di REVERSAL_STOCH_PATCH_BASELINE
+                        # (syarat entry berubah, tambah Stoch<50) -- notif per-close pakai fase yg
+                        # SEDANG AKTIF (2nd kalau masih di bawah batas beku, 3rd kalau sudah lewat).
+                        if strat == 'reversal':
+                            _since_live = csv_progress('reversal', offset=REVERSAL_LIVE_BASELINE)
+                            _since_live_n = _since_live['n'] if _since_live else 0
+                            _frozen_n = REVERSAL_STOCH_PATCH_BASELINE - REVERSAL_LIVE_BASELINE
+                            if _since_live_n <= _frozen_n:
+                                _phase_label = "2nd"
+                                _p2 = csv_progress('reversal', offset=_phase2_offset, until=REVERSAL_STOCH_PATCH_BASELINE)
+                            else:
+                                _phase_label = "3rd"
+                                _phase2_target = REVERSAL_PHASE3_TARGET
+                                _p2 = csv_progress('reversal', offset=REVERSAL_STOCH_PATCH_BASELINE)
+                        else:
+                            _phase_label = "2nd"
+                            _p2 = csv_progress(strat, offset=_phase2_offset)
                         _p2_n   = _p2['n'] if _p2 else 0
                         _p2_wl  = f"{_p2['win']}W/{_p2['loss']}L" if _p2 and _p2['n'] > 0 else "0W/0L"
                         _p2_tot = _p2['total_pct'] if _p2 else 0.0
                         prog_close = (f"\n{strat_label} LIVE: {done_n} closed"
                                       f"\n  {wl}, total {pstrat['total_pct']:+.1f}%"
-                                      f"\n{strat_label}: 2nd #{_p2_n}/{_phase2_target} ({_p2_wl}, total {_p2_tot:+.1f}%)")
+                                      f"\n{strat_label}: {_phase_label} #{_p2_n}/{_phase2_target} ({_p2_wl}, total {_p2_tot:+.1f}%)")
                     else:
                         prog_close = (f"\nForward-test {strat_label}: #{done_n}/{tgt} ({status})"
                                       f"\n  {wl}, total {pstrat['total_pct']:+.1f}%")
@@ -6641,7 +6678,8 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
     prog_4h   = csv_progress('brkX2_4h')
     prog_cx   = csv_progress('brkX2_crossema')
     prog_hunt = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
-    prog_rev2  = csv_progress('reversal',   offset=REVERSAL_LIVE_BASELINE)
+    prog_rev2  = csv_progress('reversal',   offset=REVERSAL_LIVE_BASELINE, until=REVERSAL_STOCH_PATCH_BASELINE)
+    prog_rev3  = csv_progress('reversal',   offset=REVERSAL_STOCH_PATCH_BASELINE)
     prog_hunt2 = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET + HUNTING_LIVE_BASELINE)
 
     if prog_all is None:
@@ -6652,7 +6690,10 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
         prog_line = (f"Progress forward-test (gabungan): {nn} selesai ({wl}, total {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2    : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2)}\n"
                      f"  - reversal : {_fmt_hunting_live(prog_rev)}\n"
-                     f"    reversal : 2nd {_fmt_strat(prog_rev2, REVERSAL_PHASE2_TARGET)}\n"
+                     f"    reversal : 2nd (dihentikan, syarat entry+Stoch<50): "
+                     f"{prog_rev2['n']}/{REVERSAL_PHASE2_TARGET} FINAL "
+                     f"({prog_rev2['win']}W/{prog_rev2['loss']}L, {prog_rev2['total_pct']:+.1f}%)\n"
+                     f"    reversal : 3rd {_fmt_strat(prog_rev3, REVERSAL_PHASE3_TARGET)}\n"
                      f"  - 4h       : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET)}\n"
                      f"    4h       : Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
                      f"  - crossema : {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST)}\n"
@@ -12868,9 +12909,10 @@ _ce2_status = {"running": False, "started_at": None, "progress": "", "done": Fal
 
 # 12/09/2026: hasil sweep pertama (70/60/50/40/30) monoton naik terus sampai titik paling ketat
 # yg dites (Stoch<30: WR=82.5% PF=3.37 avg=+2.51%, vs baseline WR=78.9% PF=2.45 avg=+1.83%) --
-# belum ketemu titik balik. Diperluas ke 20/15 (permintaan Mas Budi) utk cari titik sebenarnya
-# sebelum dikunci ke live.
-CE2_STOCH_MAX_SWEEP = [70, 60, 50, 40, 30, 20, 15]
+# belum ketemu titik balik. Diperluas ke 20/15 (masih naik terus, Stoch<15: WR=86.8% PF=5.33
+# avg=+3.56% tapi n makin kecil, 8014/435 pair) -- ditambah 25 (permintaan Mas Budi, titik
+# antara 20 & 30 yg belum dites) utk lihat lebih detail sebelum dikunci ke live.
+CE2_STOCH_MAX_SWEEP = [70, 60, 50, 40, 30, 25, 20, 15]
 
 
 def _ce2_signals_for_symbol(df: pd.DataFrame):
