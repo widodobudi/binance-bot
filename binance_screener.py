@@ -10310,6 +10310,54 @@ refreshHuntingSignals();
 </script>
 </div>
 
+<div class="container dash-section-start" data-tab="strategies">
+  <div class="section-title">⚡ Strategi #8 — QScalp-3m</div>
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header" onclick="toggleCard(this)">
+      <h2>QScalp-3m <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Scalp cepat, full rule-based, TANPA AI | TF 3m | Slot 2</span></h2>
+      <span class="scan-time" id="qscalp-scan-time">Scan: —</span>
+    </div>
+    <div class="card-body">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">
+        Entry (Combo G, backtest 12/09/2026): vol&ge;3.0xMA20 + momentum&ge;2.5%/2candle + breakout HH15c + close&le;EMA9+5.0%.
+        Exit flat: arm 0.8% / trail 0.3% / stop 2.0% / timeout 15 candle (45 menit). Parameter tidak bisa diubah dari sini
+        (bukan filter opsional spt Hunting-4h) -- ganti lewat kode kalau perlu pindah ke kombo cadangan E/F/H.
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Slot: <b id="qscalp-slot" style="color:var(--text)">—</b></div>
+      <div id="qscalp-signals"><em style="color:var(--muted);font-size:11px">Belum ada sinyal.</em></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function refreshQscalpSignals() {
+  fetch("/api/qscalp_signals")
+    .then(function(r){ return r.json(); })
+    .then(function(data) {
+      var el = document.getElementById("qscalp-signals");
+      var ts = document.getElementById("qscalp-scan-time");
+      var slot = document.getElementById("qscalp-slot");
+      if (ts) ts.textContent = "Scan: " + (data.scan_ts || "—");
+      if (slot) slot.textContent = data.slot || "—";
+      if (!data.signals || !data.signals.length) {
+        el.innerHTML = "<em style='color:var(--muted);font-size:11px'>Belum ada sinyal.</em>";
+        return;
+      }
+      el.innerHTML = data.signals.map(function(s){
+        return '<div style="font-size:11px;padding:4px 0;border-bottom:1px solid var(--border)">'
+          + '<b>' + s.symbol + '</b>'
+          + ' &nbsp;close=<b>' + s.close + '</b>'
+          + ' &nbsp;momentum=<b style="color:#3fb950">' + (s.momentum_pct !== undefined ? s.momentum_pct.toFixed(2) : '—') + '%</b>'
+          + ' &nbsp;vol=<b>' + (s.vol_ratio !== undefined ? s.vol_ratio.toFixed(1) : '—') + 'xMA20</b>'
+          + '</div>';
+      }).join("");
+    })
+    .catch(function(){});
+}
+setInterval(refreshQscalpSignals, 30000);
+refreshQscalpSignals();
+</script>
+
 <script src="/dash.js?v=1786097338"></script>
 <script>
 // Inject Hunting-4h ke STRAT_SECONDARY setelah dash.js selesai load.
@@ -16712,6 +16760,15 @@ def run_web_dashboard():
                 return jsonify({
                     "signals": list(_hunting_signals),
                     "scan_ts": _hunting_scan_ts,
+                })
+
+        @app.route("/api/qscalp_signals")
+        def api_qscalp_signals():
+            with _qscalp_lock:
+                return jsonify({
+                    "signals": list(_qscalp_signals),
+                    "scan_ts": _qscalp_scan_ts,
+                    "slot": f"{active_deal_count_qscalp()}/{QSCALP_MAX_DEALS}",
                 })
 
         def categorize_exit_reason(reason: str) -> str:
