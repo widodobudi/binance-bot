@@ -9627,7 +9627,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <div class="container dash-section-start" data-tab="monitor">
   <div class="card" style="margin-bottom:16px">
     <div class="card-header" onclick="toggleCard(this)">
-        <h2>Performance per Strategi <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Total % return forward-test kumulatif</span></h2>
+        <h2>Performance per Strategi <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Proporsi menang/kalah forward-test kumulatif</span></h2>
     </div>
     <div class="card-body">
       <div id="perf-chart"><em style="color:var(--muted);font-size:11px">Memuat...</em></div>
@@ -9642,18 +9642,12 @@ function refreshPerfChart() {
       var el = document.getElementById("perf-chart");
       var rows = (data && data.strategies) || [];
       if (!rows.length) { el.innerHTML = "<em style='color:var(--muted);font-size:11px'>Belum ada data.</em>"; return; }
-      var maxAbs = Math.max(1, Math.max.apply(null, rows.map(function(r){ return Math.abs(r.total_pct); })));
       var header = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">'
         + '<div style="width:110px;flex-shrink:0;text-align:right">Strategi</div>'
-        + '<div style="flex:1">Total % (net)</div>'
-        + '<div style="width:70px;flex-shrink:0">&nbsp;</div>'
-        + '<div style="width:140px;flex-shrink:0">Menang/Kalah</div>'
-        + '<div style="width:55px;flex-shrink:0">WR%</div>'
+        + '<div style="flex:1">Menang/Kalah</div>'
+        + '<div style="width:100px;flex-shrink:0">WR%</div>'
         + '</div>';
       var body = rows.map(function(r){
-        var pct = r.total_pct;
-        var widthPct = Math.min(100, Math.abs(pct) / maxAbs * 100);
-        var barColor = pct > 0 ? "#3fb950" : (pct < 0 ? "#f85149" : "var(--muted)");
         var hasDeals = r.n > 0;
         var winPct = hasDeals ? (r.win / r.n * 100) : 0;
         var lossPct = hasDeals ? (100 - winPct) : 0;
@@ -9665,15 +9659,8 @@ function refreshPerfChart() {
           : '';
         return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px">'
           + '<div style="width:110px;flex-shrink:0;text-align:right;color:var(--text)">' + r.label + '</div>'
-          + '<div style="flex:1;background:rgba(255,255,255,0.05);border-radius:3px;height:16px;position:relative">'
-          + '<div style="width:' + widthPct.toFixed(1) + '%;height:100%;background:' + barColor + ';border-radius:3px"></div>'
-          + '</div>'
-          + '<div style="width:70px;flex-shrink:0;color:' + barColor + ';font-weight:600">' + (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%</div>'
-          + '<div style="width:140px;flex-shrink:0;display:flex;align-items:center;gap:6px">'
-          + '<div style="width:90px;background:rgba(255,255,255,0.05);border-radius:3px;height:14px">' + wlBar + '</div>'
-          + '<span style="color:var(--muted);font-size:10px;white-space:nowrap">' + (hasDeals ? (r.win + 'W/' + r.loss + 'L') : '-') + '</span>'
-          + '</div>'
-          + '<div style="width:55px;flex-shrink:0;color:var(--muted)">' + (hasDeals ? winPct.toFixed(0) + '%' : '-') + '</div>'
+          + '<div style="flex:1;background:rgba(255,255,255,0.05);border-radius:3px;height:16px">' + wlBar + '</div>'
+          + '<div style="width:100px;flex-shrink:0;color:var(--muted)">' + (hasDeals ? (winPct.toFixed(0) + '% (' + r.win + 'W/' + r.loss + 'L)') : '-') + '</div>'
           + '</div>';
       }).join("");
       el.innerHTML = header + body;
@@ -16905,7 +16892,7 @@ def run_web_dashboard():
                     p = {"n": 0, "win": 0, "loss": 0, "total_pct": 0.0}
                 rows.append({"key": key, "label": label, "n": p["n"], "win": p["win"],
                              "loss": p["loss"], "total_pct": round(p["total_pct"], 2)})
-            rows.sort(key=lambda r: r["total_pct"], reverse=True)
+            rows.sort(key=lambda r: (r["win"] / r["n"]) if r["n"] > 0 else -1, reverse=True)
             return jsonify({"strategies": rows})
 
         @app.route("/api/qscalp_signals")
