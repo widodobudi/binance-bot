@@ -14302,6 +14302,193 @@ def run_akuma_failsafe_backtest():
             _akuma_fs_status['error'] = str(e)
 
 
+# ===================== ONE-OFF: Akumulasi-4h Entry A (Spring) -- sweep syarat MASUK (12/09/2026) =====================
+# Lanjutan dari backtest exit-dini di atas: hasilnya (474 pair) nunjukkin akar masalah Entry A
+# BUKAN di ketepatan waktu keluar -- baseline PF=0.63 (net rugi) SEBELUM exit apa pun ditambah,
+# dan semua varian exit dini yg dites memotong win rate 11-20 poin (melanggar syarat eksplisit
+# Mas Budi "jangan sampai motong trade yg cuma retest lalu lanjut naik"). Kesimpulan: syarat
+# MASUK (deteksi Spring) sendiri yg kelonggaran, loloskan banyak sinyal kualitas rendah. Sweep
+# ini uji tiap parameter detect_entry_a_spring() satu-satu (baseline + 2 arah), EXIT TETAP
+# produksi asli (TANPA exit dini apa pun -- variabel exit sudah dibuktikan bukan akar masalah),
+# supaya kelihatan parameter MASUK mana yg paling berpengaruh ke kualitas sinyal.
+_akuma_es_lock = threading.Lock()
+_akuma_es_status = {"running": False, "started_at": None, "progress": "", "done": False,
+                     "results": None, "error": None}
+
+# baseline = konstanta AKUM_A_* yg LIVE saat ini (VOL_SPIKE_MULT=1.8, RSI_MIN=40,
+# RSI_MAX_ENTRY=55, OBV_SLOPE_CANDLES=3, SUPPORT_TOUCH_BUFFER=0.004, REENTRY_CANDLES=15).
+# Tiap baris: (label, vol_spike_mult, rsi_min, rsi_max_entry, obv_slope_candles,
+#              support_touch_buffer, reentry_candles)
+AKUMA_ENTRY_SWEEP = [
+    ("baseline",         1.8, 40, 55, 3, 0.004, 15),
+    ("volspike1.2",      1.2, 40, 55, 3, 0.004, 15),
+    ("volspike2.5",      2.5, 40, 55, 3, 0.004, 15),
+    ("rsimin30",         1.8, 30, 55, 3, 0.004, 15),
+    ("rsimin50",         1.8, 50, 55, 3, 0.004, 15),
+    ("rsimax45",         1.8, 40, 45, 3, 0.004, 15),
+    ("rsimax65",         1.8, 40, 65, 3, 0.004, 15),
+    ("obvslope2",        1.8, 40, 55, 2, 0.004, 15),
+    ("obvslope8",        1.8, 40, 55, 8, 0.004, 15),
+    ("touchbuf0.2",      1.8, 40, 55, 3, 0.002, 15),
+    ("touchbuf1.0",      1.8, 40, 55, 3, 0.010, 15),
+    ("reentry6",         1.8, 40, 55, 3, 0.004, 6),
+    ("reentry25",        1.8, 40, 55, 3, 0.004, 25),
+]
+
+
+def _akuma_detect_entry_param(a: dict, vol_ma20, i: int, support_ref: float, support_reentry_ref: float,
+                               vol_spike_mult: float, rsi_min: float, rsi_max_entry: float,
+                               obv_slope_candles: int, support_touch_buffer: float, reentry_candles: int):
+    """Sama persis _akuma_detect_entry() tapi semua ambang PARAMETERIZED (utk sweep entry),
+    default-nya identik dgn konstanta AKUM_A_* produksi kalau dipanggil dgn nilai baseline."""
+    low_arr = a['low']; close_arr = a['close']; vol_arr = a['vol']; rsi_arr = a['rsi']; obv_arr = a['obv']
+    for lookback in range(3, min(reentry_candles + 4, i)):
+        spring_idx = i - lookback
+        if spring_idx < 5:
+            break
+        if low_arr[spring_idx] >= support_ref * (1 + support_touch_buffer):
+            continue
+        vm = vol_ma20[spring_idx]
+        if pd.isna(vm) or vm <= 0:
+            continue
+        if vol_arr[spring_idx] < vol_spike_mult * vm:
+            continue
+        reentry_ok = False
+        for k in range(1, reentry_candles + 1):
+            if spring_idx + k > i:
+                break
+            if close_arr[spring_idx + k] > support_reentry_ref:
+                reentry_ok = True
+                break
+        if not reentry_ok:
+            continue
+        rsi_window = rsi_arr[max(0, spring_idx - 3):spring_idx + 1]
+        if np.all(pd.isna(rsi_window)) or np.nanmin(rsi_window) >= rsi_min:
+            continue
+        rsi_now = rsi_arr[i]
+        if pd.isna(rsi_now) or rsi_now >= rsi_max_entry:
+            continue
+        obv_recent = obv_arr[max(0, i - obv_slope_candles + 1):i + 1]
+        if len(obv_recent) < 2:
+            continue
+        obv_slope = obv_recent[-1] - obv_recent[0]
+        if obv_slope <= 0:
+            continue
+        spring_low = float(low_arr[spring_idx])
+        sl_anchor = min(spring_low, support_ref)
+        sl_price = round(sl_anchor * (1 - AKUM_ENTRY_SL_BUFFER), 8)
+        return {'sl_price': sl_price}
+    return None
+
+
+def run_akuma_entry_sweep_backtest():
+    """Jalan di thread terpisah (dipicu /api/run_akuma_entry_sweep_backtest). Tidak menyentuh
+    trading live. FETCH LANGSUNG dari Binance TANPA disk cache (sama pola dgn backtest exit-dini
+    sebelumnya). Exit TETAP produksi asli (_akuma_simulate_trade tanpa failsafe) -- yg disweep
+    di sini CUMA parameter deteksi entry."""
+    global _akuma_es_status
+    with _akuma_es_lock:
+        if _akuma_es_status['running']:
+            return
+        _akuma_es_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                             "progress": "0/0", "done": False, "results": None, "error": None}
+    try:
+        pairs = get_usdt_spot_pairs()
+        n_pairs = len(pairs)
+        end_ms = int(time.time() * 1000)
+        start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        log(f"[AKUMA-ES-BT] Mulai backtest Entry A (Spring) -- sweep syarat MASUK, exit produksi "
+            f"asli TANPA exit dini, TANPA disk cache, {n_pairs} pair, 2022-sekarang, TF 4h")
+
+        combo_labels = [label for label, *_ in AKUMA_ENTRY_SWEEP]
+        combo_stats = {label: {} for label in combo_labels}
+
+        for idx, sym in enumerate(pairs):
+            with _akuma_es_lock:
+                _akuma_es_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
+            try:
+                df = _stoch_bt_fetch_history(sym, start_ms, end_ms)
+                if df is None or len(df) < AKUM_SIDEWAYS_CANDLES + 100:
+                    continue
+                a = _akumb_precompute(df)
+                vol_ma20 = pd.Series(a['vol']).rolling(20).mean().values
+                n = a['n']
+                # dedup per-KOMBO (bukan global) -- kombo longgar/ketat bisa geser titik entry
+                # jadi masing2 kombo butuh cursor sendiri, tidak bisa berbagi 1 `i` global spt
+                # backtest lain (yg cuma 1 syarat entry, bukan sweep banyak varian sekaligus).
+                last_entry_i = {label: -10**9 for label in combo_labels}
+                per_combo_trades = {label: [] for label in combo_labels}
+                for label, vol_spike, rsi_min, rsi_max_entry, obv_c, touch_buf, reentry_c in AKUMA_ENTRY_SWEEP:
+                    i = AKUM_SIDEWAYS_CANDLES + 60
+                    while i < n - AKUM_ENTRY_TIMEOUT - 1:
+                        if i - last_entry_i[label] < 5:
+                            i += 1; continue
+                        score = _akumb_window_score(a, i)
+                        if score is None:
+                            i += 1; continue
+                        has_struct = (score['support_zone_low'] <= score['support_zone_high'] <=
+                                      score['resistance_zone_low'] <= score['resistance_zone_high'])
+                        support_ref = score['support_zone_low'] if has_struct else score['support']
+                        support_reentry_ref = score['support_zone_high'] if has_struct else score['support']
+                        sig = _akuma_detect_entry_param(a, vol_ma20, i, support_ref, support_reentry_ref,
+                                                         vol_spike, rsi_min, rsi_max_entry, obv_c,
+                                                         touch_buf, reentry_c)
+                        if sig is None:
+                            i += 1; continue
+                        pct = _akuma_simulate_trade(a, i, sig['sl_price'])  # exit produksi asli, tanpa failsafe
+                        if pct is not None:
+                            per_combo_trades[label].append(pct)
+                        last_entry_i[label] = i
+                        i += AKUM_ENTRY_TIMEOUT
+                for label, trades in per_combo_trades.items():
+                    if trades:
+                        combo_stats[label][sym] = trades
+            except Exception as e:
+                log(f"WARN [AKUMA-ES-BT] {sym}: {e}")
+            if (idx + 1) % 50 == 0:
+                log(f"[AKUMA-ES-BT] progress {idx+1}/{n_pairs}")
+
+        rows = []
+        for label, per_symbol in combo_stats.items():
+            all_pcts = [p for lst in per_symbol.values() for p in lst]
+            n_t = len(all_pcts)
+            if n_t < 20:
+                continue
+            wins = [p for p in all_pcts if p > 0]
+            losses = [p for p in all_pcts if p <= 0]
+            wr = len(wins) / n_t * 100
+            gross_win = sum(wins) if wins else 0.0
+            gross_loss = -sum(losses) if losses else 0.0
+            pf = (gross_win / gross_loss) if gross_loss > 0 else float('inf')
+            avg = sum(all_pcts) / n_t
+            rows.append({'label': label, 'n': n_t, 'n_symbols': len(per_symbol), 'wr': wr,
+                         'profit_factor': pf, 'avg_pct': avg})
+        rows.sort(key=lambda r: (r['profit_factor'] if r['profit_factor'] != float('inf') else 1e9), reverse=True)
+
+        msg_lines = ["📊 Akumulasi-4h Entry A (Spring) -- sweep syarat MASUK (exit produksi asli)",
+                     f"Universe: {n_pairs} pair | 2022-sekarang | TF 4h | fetch langsung (no disk cache)",
+                     "baseline = konstanta AKUM_A_* LIVE saat ini, TANPA exit dini apa pun", ""]
+        for r in rows:
+            msg_lines.append(
+                f"{r['label']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
+                f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}%"
+            )
+        full_report = "\n".join(msg_lines)
+        log(f"[AKUMA-ES-BT] SELESAI.\n{full_report}")
+        send_telegram(full_report, parse_mode=None)
+
+        with _akuma_es_lock:
+            _akuma_es_status['running'] = False
+            _akuma_es_status['done'] = True
+            _akuma_es_status['results'] = rows
+            _akuma_es_status['progress'] = 'done'
+    except Exception as e:
+        log(f"ERROR [AKUMA-ES-BT] fatal: {e}")
+        with _akuma_es_lock:
+            _akuma_es_status['running'] = False
+            _akuma_es_status['error'] = str(e)
+
+
 # ===================== ONE-OFF: Reversal-8h ATH-distance filter, layer di atas Stoch<50 LIVE (12/09/2026) =====================
 # Reversal-8h Stoch<50 backtest sebelumnya SENGAJA melewati filter ATH-distance produksi
 # (REVERSAL_ATH_DIST_MIN_PCT=-85%, reversal_blockers(sym=...)) krn fungsi cache-nya asli
@@ -17043,6 +17230,23 @@ def run_web_dashboard():
         def api_akuma_failsafe_backtest_status():
             with _akuma_fs_lock:
                 return jsonify(dict(_akuma_fs_status))
+
+        @app.route("/api/run_akuma_entry_sweep_backtest", methods=["GET", "POST"])
+        def api_run_akuma_entry_sweep_backtest():
+            """One-off (12/09/2026): sweep syarat MASUK Entry A (Spring), exit produksi asli.
+            Cek progress via /api/akuma_entry_sweep_backtest_status."""
+            if request.args.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
+            with _akuma_es_lock:
+                if _akuma_es_status.get("running"):
+                    return jsonify({"ok": False, "error": "sudah jalan", "status": _akuma_es_status})
+            threading.Thread(target=run_akuma_entry_sweep_backtest, daemon=True).start()
+            return jsonify({"ok": True, "message": "Backtest dimulai di background."})
+
+        @app.route("/api/akuma_entry_sweep_backtest_status")
+        def api_akuma_entry_sweep_backtest_status():
+            with _akuma_es_lock:
+                return jsonify(dict(_akuma_es_status))
 
         @app.route("/api/run_reversal_ath_backtest", methods=["GET", "POST"])
         def api_run_reversal_ath_backtest():
