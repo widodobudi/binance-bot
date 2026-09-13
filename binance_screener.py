@@ -14336,24 +14336,22 @@ _akuma_es_lock = threading.Lock()
 _akuma_es_status = {"running": False, "started_at": None, "progress": "", "done": False,
                      "results": None, "error": None}
 
-# baseline = konstanta AKUM_A_* yg LIVE saat ini (VOL_SPIKE_MULT=1.8, RSI_MIN=40,
-# RSI_MAX_ENTRY=55, OBV_SLOPE_CANDLES=3, SUPPORT_TOUCH_BUFFER=0.004, REENTRY_CANDLES=15).
+# RONDE 2 (12/09/2026, permintaan Mas Budi -- pola sama spt QScalp-3m ronde 3): ronde
+# pertama di atas nunjukkin 3 arah menang SENDIRIAN, semua arahnya "longgarkan" --
+# rsimax65 (PF=0.75, n=2615 terbesar+terbaik), reentry25 (PF=0.72, n=2863 terbesar dari
+# semua kombo), volspike1.2 (PF=0.69, n=2890). Ronde ini uji GABUNGAN ketiganya (pasangan
+# + triple penuh) utk lihat apakah efeknya bertumpuk (spt QScalp) atau saling meniadakan.
+# baseline = konstanta AKUM_A_* LIVE saat ini (VOL_SPIKE_MULT=1.8, RSI_MAX_ENTRY=55,
+# REENTRY_CANDLES=15). RSI_MIN/OBV_SLOPE/TOUCH_BUFFER tetap baseline (40/3/0.004) di semua
+# baris -- ronde 1 sudah buktikan ketiganya tidak membantu banyak, tidak diikutkan di sini.
 # Tiap baris: (label, vol_spike_mult, rsi_min, rsi_max_entry, obv_slope_candles,
 #              support_touch_buffer, reentry_candles)
 AKUMA_ENTRY_SWEEP = [
-    ("baseline",         1.8, 40, 55, 3, 0.004, 15),
-    ("volspike1.2",      1.2, 40, 55, 3, 0.004, 15),
-    ("volspike2.5",      2.5, 40, 55, 3, 0.004, 15),
-    ("rsimin30",         1.8, 30, 55, 3, 0.004, 15),
-    ("rsimin50",         1.8, 50, 55, 3, 0.004, 15),
-    ("rsimax45",         1.8, 40, 45, 3, 0.004, 15),
-    ("rsimax65",         1.8, 40, 65, 3, 0.004, 15),
-    ("obvslope2",        1.8, 40, 55, 2, 0.004, 15),
-    ("obvslope8",        1.8, 40, 55, 8, 0.004, 15),
-    ("touchbuf0.2",      1.8, 40, 55, 3, 0.002, 15),
-    ("touchbuf1.0",      1.8, 40, 55, 3, 0.010, 15),
-    ("reentry6",         1.8, 40, 55, 3, 0.004, 6),
-    ("reentry25",        1.8, 40, 55, 3, 0.004, 25),
+    ("baseline",           1.8, 40, 55, 3, 0.004, 15),
+    ("rsimax65_reentry25", 1.8, 40, 65, 3, 0.004, 25),
+    ("rsimax65_volspike",  1.2, 40, 65, 3, 0.004, 15),
+    ("reentry25_volspike", 1.2, 40, 55, 3, 0.004, 25),
+    ("all_three",          1.2, 40, 65, 3, 0.004, 25),
 ]
 
 
@@ -14418,8 +14416,8 @@ def run_akuma_entry_sweep_backtest():
         n_pairs = len(pairs)
         end_ms = int(time.time() * 1000)
         start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
-        log(f"[AKUMA-ES-BT] Mulai backtest Entry A (Spring) -- sweep syarat MASUK, exit produksi "
-            f"asli TANPA exit dini, TANPA disk cache, {n_pairs} pair, 2022-sekarang, TF 4h")
+        log(f"[AKUMA-ES-BT] Mulai backtest Entry A (Spring) Ronde 2 -- gabungan 3 pemenang ronde 1, "
+            f"exit produksi asli TANPA exit dini, TANPA disk cache, {n_pairs} pair, 2022-sekarang, TF 4h")
 
         combo_labels = [label for label, *_ in AKUMA_ENTRY_SWEEP]
         combo_stats = {label: {} for label in combo_labels}
@@ -14486,9 +14484,10 @@ def run_akuma_entry_sweep_backtest():
                          'profit_factor': pf, 'avg_pct': avg})
         rows.sort(key=lambda r: (r['profit_factor'] if r['profit_factor'] != float('inf') else 1e9), reverse=True)
 
-        msg_lines = ["📊 Akumulasi-4h Entry A (Spring) -- sweep syarat MASUK (exit produksi asli)",
+        msg_lines = ["📊 Akumulasi-4h Entry A (Spring) Ronde 2 -- gabungan 3 pemenang ronde 1",
                      f"Universe: {n_pairs} pair | 2022-sekarang | TF 4h | fetch langsung (no disk cache)",
-                     "baseline = konstanta AKUM_A_* LIVE saat ini, TANPA exit dini apa pun", ""]
+                     "baseline = konstanta AKUM_A_* LIVE saat ini | rsimax65=RSI_MAX_ENTRY 55->65",
+                     "reentry25=REENTRY_CANDLES 15->25 | volspike=VOL_SPIKE_MULT 1.8->1.2", ""]
         for r in rows:
             msg_lines.append(
                 f"{r['label']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
