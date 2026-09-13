@@ -12601,7 +12601,10 @@ SHADOW_AKUMA_ALL3_PARAMS  = (1.2, 40, 65, 3, 0.004, 25)
 SHADOW_CONF3_KEYS         = ['stoch_static', 'rsi_lt20', 'bb_crossup0']
 SHADOW_CONF3_SL_K         = 2.0    # sama MULTI_IND_EXIT_CFG (atr_2x_4x)
 SHADOW_CONF3_TP_K         = 4.0
-SHADOW_CONF3_MAX_HOLD_CANDLES = MULTI_IND_MAX_HOLD_CANDLES  # 60 candle 4h = 10 hari
+SHADOW_CONF3_MAX_HOLD_CANDLES = 60  # samakan MULTI_IND_MAX_HOLD_CANDLES (didefinisikan belakangan
+                                     # di file ini, di blok backtest 6Confluence Tahap 1) -- pakai
+                                     # angka langsung supaya tidak NameError saat modul ini diimport
+                                     # (urutan definisi top-to-bottom, blok ini lebih dulu)
 SHADOW_CONF3_MIN_VOL_USD  = 1_000_000  # sama ambang liquiditas AKUM_MIN_VOL_USD
 
 
