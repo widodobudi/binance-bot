@@ -14041,6 +14041,267 @@ def run_akumb_stoch_backtest():
             _akumb_status['error'] = str(e)
 
 
+# ===================== ONE-OFF: Akumulasi-4h Entry A (Spring) + syarat "gagal rally" (12/09/2026) =====================
+# Konteks (permintaan Mas Budi, kejadian QQQB/USDT 11-13/09/2026): deal Entry A dibuka, harga
+# rally naik ke arah/sedikit di atas resistance zone tapi gagal lanjut lalu jatuh balik jauh
+# menembus seluruh range sideways -- exit engine produksi (SL struktural/TP1 swing-high/TP2
+# momentum OB/TP3 pivot wick) belum ada satupun yang tersentuh, jadi deal cuma "digantung"
+# nunggu SL/timeout penuh sambil terus turun. Ide: tambah syarat EXIT DINI -- begitu harga
+# tembus resistance (level struktural yg SAMA dipakai saat scoring akumulasi) lalu BALIK
+# ditutup di bawahnya lagi dalam N candle, anggap "gagal rally" dan keluar saat itu juga,
+# bukan tunggu SL/TP/timeout produksi. PENTING (permintaan eksplisit Mas Budi): jangan sampai
+# ini malah motong trade BAGUS yang cuma retest sesaat lalu lanjut naik -- makanya dibacktest
+# dulu dengan beberapa kombinasi N (candle konfirmasi) & buffer%, dibandingkan vs baseline
+# (exit produksi asli, TANPA syarat baru ini) sebelum dipertimbangkan pasang ke live.
+# Deteksi Entry A pakai detect_entry_a_spring() ASLI (support/resistance structural zone SAMA
+# persis dgn score_akumulasi(), direplikasi via _akumb_precompute()/_akumb_window_score() yg
+# sudah ada dari backtest Entry B sebelumnya -- struktur zona itu entry-agnostic, dipakai
+# bersama A & B). Exit baseline & TP1/TP2/TP3 JUGA replikasi PERSIS exit produksi Akumulasi
+# (SAMA fungsi dgn Entry B, thread2_monitor tidak membedakan A/B di exit engine-nya).
+_akuma_fs_lock = threading.Lock()
+_akuma_fs_status = {"running": False, "started_at": None, "progress": "", "done": False,
+                     "results": None, "error": None}
+
+# 12/09/2026 REVISI (temuan penting): rancangan awal pakai resistance_zone_high (puncak
+# jendela sideways 180 candle) sbg level acuan "gagal rally" -- ternyata di 77 sinyal Entry A
+# uji-coba, harga TIDAK PERNAH sekalipun menyentuh level itu (0%), karena TP3 (exit produksi
+# yg sudah ada, pakai pivot resistance TERDEKAT, bukan puncak jendela) sudah menutup 64% trade
+# duluan sebelum harga sempat mendekati level yg jauh itu. Rule lama jadi tidak pernah nyala
+# sama sekali -- bukan bug, levelnya salah pilih.
+# Desain baru: pakai level SAMA PERSIS yg dipakai TP3 produksi (pivot resistance terdekat di
+# atas harga, look-back 4 candle tiap sisi) -- celah yg ditangkap: TP3 cuma exit kalau HIGH
+# candle nyundul pivot itu DAN close candle yg sama sudah profit bersih >=0.5% SEKALIGUS.
+# Candle yg nyundul pivot (upper wick jelas) tapi closing GAGAL konfirmasi profit itu disebut
+# "candle reject" di sini -- TP3 diam, posisi terus digantung. failsafe_reject_count = berapa
+# kali candle reject terjadi sebelum dianggap "rally-nya emang gagal berulang" dan keluar dini
+# (bukan cuma 1x reject, spy retest sesaat yg lanjut naik tidak ikut kepotong).
+AKUMA_FAILSAFE_SWEEP = [
+    ("baseline",           None, False),
+    ("reject2",            2,    False),
+    ("reject3",            3,    False),
+    ("reject5",            5,    False),
+    ("reject2_vol1.0",     2,    True),
+    ("reject3_vol1.0",     3,    True),
+    ("reject5_vol1.0",     5,    True),
+]
+
+
+def _akuma_detect_entry(a: dict, vol_ma20, i: int, support_ref: float, support_reentry_ref: float):
+    """Replikasi PERSIS detect_entry_a_spring() di index i (window df.iloc[:i+1], 'saat ini'=i)."""
+    low_arr = a['low']; close_arr = a['close']; vol_arr = a['vol']; rsi_arr = a['rsi']; obv_arr = a['obv']
+    for lookback in range(3, min(AKUM_A_REENTRY_CANDLES + 4, i)):
+        spring_idx = i - lookback
+        if spring_idx < 5:
+            break
+        if low_arr[spring_idx] >= support_ref * (1 + AKUM_A_SUPPORT_TOUCH_BUFFER):
+            continue
+        vm = vol_ma20[spring_idx]
+        if pd.isna(vm) or vm <= 0:
+            continue
+        if vol_arr[spring_idx] < AKUM_A_VOL_SPIKE_MULT * vm:
+            continue
+        reentry_ok = False
+        for k in range(1, AKUM_A_REENTRY_CANDLES + 1):
+            if spring_idx + k > i:
+                break
+            if close_arr[spring_idx + k] > support_reentry_ref:
+                reentry_ok = True
+                break
+        if not reentry_ok:
+            continue
+        rsi_window = rsi_arr[max(0, spring_idx - 3):spring_idx + 1]
+        if np.all(pd.isna(rsi_window)) or np.nanmin(rsi_window) >= AKUM_A_RSI_MIN:
+            continue
+        rsi_now = rsi_arr[i]
+        if pd.isna(rsi_now) or rsi_now >= AKUM_A_RSI_MAX_ENTRY:
+            continue
+        obv_recent = obv_arr[max(0, i - AKUM_A_OBV_SLOPE_CANDLES + 1):i + 1]
+        if len(obv_recent) < 2:
+            continue
+        obv_slope = obv_recent[-1] - obv_recent[0]
+        if obv_slope <= 0:
+            continue
+        spring_low = float(low_arr[spring_idx])
+        sl_anchor = min(spring_low, support_ref)
+        sl_price = round(sl_anchor * (1 - AKUM_ENTRY_SL_BUFFER), 8)
+        return {'sl_price': sl_price}
+    return None
+
+
+def _akuma_simulate_trade(a: dict, i: int, sl_price: float,
+                           failsafe_reject_count: int = None, failsafe_require_vol: bool = False,
+                           vol_ma20=None):
+    """Exit engine IDENTIK dgn _akumb_simulate_trade (SL struktural/TP1 swing-high/TP2 momentum
+    OB/TP3 pivot wick -- SAMA fungsi exit produksi yg dipakai Entry A & B keduanya), PLUS syarat
+    BARU opsional yg sedang dibacktest (12/09/2026): 'gagal rally berulang' -- pakai level SAMA
+    PERSIS yg dipakai TP3 (pivot resistance terdekat di atas harga). TP3 cuma exit kalau HIGH
+    candle nyundul pivot itu DAN close candle yg SAMA sudah profit bersih >=0.5% SEKALIGUS --
+    candle yg nyundul pivot (upper wick) tapi closing GAGAL konfirmasi profit itu disebut
+    'candle reject' (TP3 diam, posisi terus digantung, exact skenario QQQB/USDT 11-13/09/2026).
+    failsafe_reject_count = berapa kali candle reject terjadi (TIDAK harus berturut-turut --
+    reject-nya sendiri sudah bukti berulang rally-gagal, beda dari 'confirm N candle' yg lama)
+    sebelum dianggap 'rally-nya emang gagal berulang' dan keluar dini saat itu juga.
+    None/0 = OFF (baseline, exit sama persis produksi). failsafe_require_vol: candle reject
+    wajib volume >= 1.0xMA20 (rejection asli/jual beneran biasanya diiringi volume naik)."""
+    n = a['n']
+    entry = float(a['close'][i])
+    if entry <= 0:
+        return None
+    last_j = min(i + AKUM_ENTRY_TIMEOUT, n - 1)
+    if last_j <= i:
+        return None
+    pivots_high = a['is_pivot']; hi_arr = a['high']; low_arr = a['low']; close_arr = a['close']
+    swing_hi_arr = a['swing_hi']; rsi_arr = a['rsi']; stoch_arr = a['stoch_k']; macd_arr = a['macd_hist']
+
+    use_failsafe = failsafe_reject_count is not None and failsafe_reject_count > 0
+    reject_hits = 0
+
+    for j in range(i + 1, last_j + 1):
+        price_hi = float(hi_arr[j]); price_lo = float(low_arr[j]); price_close = float(close_arr[j])
+        prof_from_entry = (price_close / entry - 1) * 100 - FEE_ROUND_TRIP_PCT
+        if sl_price > 0 and price_lo <= sl_price:
+            return (sl_price / entry - 1) * 100 - FEE_ROUND_TRIP_PCT
+        swing_hi = swing_hi_arr[j]
+        if not pd.isna(swing_hi) and swing_hi > 0 and price_hi >= swing_hi:
+            prof_touch = (swing_hi / entry - 1) * 100 - FEE_ROUND_TRIP_PCT
+            if prof_touch >= AKUM_TP_MIN_PROFIT_PCT:
+                return prof_touch
+        rsi_j = rsi_arr[j]; sk_j = stoch_arr[j]; sk_prev = stoch_arr[j - 1] if j > 0 else np.nan
+        macd_j = macd_arr[j]; macd_prev = macd_arr[j - 1] if j > 0 else np.nan
+        rsi_ob = (not pd.isna(rsi_j)) and rsi_j >= AKUM_TP_RSI_OB
+        stoch_ob_cross = (not pd.isna(sk_j) and not pd.isna(sk_prev) and sk_j > AKUM_TP_STOCH_OB and sk_j < sk_prev)
+        macd_turn = (not pd.isna(macd_j) and not pd.isna(macd_prev) and macd_j < macd_prev)
+        if rsi_ob or (stoch_ob_cross and macd_turn):
+            if prof_from_entry >= AKUM_TP_MIN_PROFIT_PCT:
+                return prof_from_entry
+        known_idx = j - 4
+        if known_idx >= 4:
+            cand_pivots = hi_arr[4:known_idx + 1][pivots_high[4:known_idx + 1]]
+            above = cand_pivots[cand_pivots > price_close]
+            if len(above) > 0:
+                nearest_res = float(np.min(above))
+                if price_hi >= nearest_res:
+                    if prof_from_entry >= AKUM_TP_MIN_PROFIT_PCT:
+                        return prof_from_entry
+                    # --- NEW: candle reject -- nyundul pivot tapi closing gagal konfirmasi profit ---
+                    if use_failsafe:
+                        vol_ok = True
+                        if failsafe_require_vol:
+                            vm = vol_ma20[j] if vol_ma20 is not None else float('nan')
+                            vol_ok = (not pd.isna(vm)) and vm > 0 and a['vol'][j] >= 1.0 * vm
+                        if vol_ok:
+                            reject_hits += 1
+                            if reject_hits >= failsafe_reject_count:
+                                return prof_from_entry
+    exit_price = float(close_arr[last_j])
+    return (exit_price / entry - 1) * 100 - FEE_ROUND_TRIP_PCT
+
+
+def run_akuma_failsafe_backtest():
+    """Jalan di thread terpisah (dipicu /api/run_akuma_failsafe_backtest). Tidak menyentuh
+    trading live. FETCH LANGSUNG dari Binance TANPA disk cache (pelajaran dari insiden disk
+    QScalp ronde 1) -- cache 4h /data/stoch_bt_cache/ sudah dihapus & diarsipkan ke Drive
+    12/09/2026, jangan dibangun ulang."""
+    global _akuma_fs_status
+    with _akuma_fs_lock:
+        if _akuma_fs_status['running']:
+            return
+        _akuma_fs_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                             "progress": "0/0", "done": False, "results": None, "error": None}
+    try:
+        pairs = get_usdt_spot_pairs()
+        n_pairs = len(pairs)
+        end_ms = int(time.time() * 1000)
+        start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        log(f"[AKUMA-FS-BT] Mulai backtest Entry A (Spring) + syarat 'gagal rally' (exit dini), "
+            f"TANPA disk cache (fetch langsung tiap symbol), {n_pairs} pair, 2022-sekarang, TF 4h")
+
+        combo_labels = [label for label, *_ in AKUMA_FAILSAFE_SWEEP]
+        combo_stats = {label: {} for label in combo_labels}
+
+        for idx, sym in enumerate(pairs):
+            with _akuma_fs_lock:
+                _akuma_fs_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
+            try:
+                df = _stoch_bt_fetch_history(sym, start_ms, end_ms)
+                if df is None or len(df) < AKUM_SIDEWAYS_CANDLES + 100:
+                    continue
+                a = _akumb_precompute(df)
+                vol_ma20 = pd.Series(a['vol']).rolling(20).mean().values
+                n = a['n']
+                last_entry_i = -10**9
+                i = AKUM_SIDEWAYS_CANDLES + 60
+                per_combo_trades = {label: [] for label in combo_labels}
+                while i < n - AKUM_ENTRY_TIMEOUT - 1:
+                    if i - last_entry_i < 5:
+                        i += 1; continue
+                    score = _akumb_window_score(a, i)
+                    if score is None:
+                        i += 1; continue
+                    has_struct = (score['support_zone_low'] <= score['support_zone_high'] <=
+                                  score['resistance_zone_low'] <= score['resistance_zone_high'])
+                    support_ref = score['support_zone_low'] if has_struct else score['support']
+                    support_reentry_ref = score['support_zone_high'] if has_struct else score['support']
+                    sig = _akuma_detect_entry(a, vol_ma20, i, support_ref, support_reentry_ref)
+                    if sig is None:
+                        i += 1; continue
+                    for label, reject_count, req_vol in AKUMA_FAILSAFE_SWEEP:
+                        pct = _akuma_simulate_trade(a, i, sig['sl_price'], reject_count, req_vol, vol_ma20)
+                        if pct is not None:
+                            per_combo_trades[label].append(pct)
+                    last_entry_i = i
+                    i += AKUM_ENTRY_TIMEOUT
+                for label, trades in per_combo_trades.items():
+                    if trades:
+                        combo_stats[label][sym] = trades
+            except Exception as e:
+                log(f"WARN [AKUMA-FS-BT] {sym}: {e}")
+            if (idx + 1) % 50 == 0:
+                log(f"[AKUMA-FS-BT] progress {idx+1}/{n_pairs}")
+
+        rows = []
+        for label, per_symbol in combo_stats.items():
+            all_pcts = [p for lst in per_symbol.values() for p in lst]
+            n_t = len(all_pcts)
+            if n_t < 20:
+                continue
+            wins = [p for p in all_pcts if p > 0]
+            losses = [p for p in all_pcts if p <= 0]
+            wr = len(wins) / n_t * 100
+            gross_win = sum(wins) if wins else 0.0
+            gross_loss = -sum(losses) if losses else 0.0
+            pf = (gross_win / gross_loss) if gross_loss > 0 else float('inf')
+            avg = sum(all_pcts) / n_t
+            rows.append({'label': label, 'n': n_t, 'n_symbols': len(per_symbol), 'wr': wr,
+                         'profit_factor': pf, 'avg_pct': avg})
+        rows.sort(key=lambda r: (r['profit_factor'] if r['profit_factor'] != float('inf') else 1e9), reverse=True)
+
+        msg_lines = ["📊 Akumulasi-4h Entry A (Spring) + syarat 'gagal rally berulang' (exit dini)",
+                     f"Universe: {n_pairs} pair | 2022-sekarang | TF 4h | fetch langsung (no disk cache)",
+                     "baseline = exit produksi asli (SL struktural/TP1/TP2/TP3), TANPA exit dini",
+                     "rejectN = keluar setelah N kali candle nyundul pivot resistance (spt TP3) tapi",
+                     "  closing gagal konfirmasi profit >=0.5% -- vol1.0 = wajib vol candle itu >=1xMA20", ""]
+        for r in rows:
+            msg_lines.append(
+                f"{r['label']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
+                f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}%"
+            )
+        full_report = "\n".join(msg_lines)
+        log(f"[AKUMA-FS-BT] SELESAI.\n{full_report}")
+        send_telegram(full_report, parse_mode=None)
+
+        with _akuma_fs_lock:
+            _akuma_fs_status['running'] = False
+            _akuma_fs_status['done'] = True
+            _akuma_fs_status['results'] = rows
+            _akuma_fs_status['progress'] = 'done'
+    except Exception as e:
+        log(f"ERROR [AKUMA-FS-BT] fatal: {e}")
+        with _akuma_fs_lock:
+            _akuma_fs_status['running'] = False
+            _akuma_fs_status['error'] = str(e)
+
+
 # ===================== ONE-OFF: Reversal-8h ATH-distance filter, layer di atas Stoch<50 LIVE (12/09/2026) =====================
 # Reversal-8h Stoch<50 backtest sebelumnya SENGAJA melewati filter ATH-distance produksi
 # (REVERSAL_ATH_DIST_MIN_PCT=-85%, reversal_blockers(sym=...)) krn fungsi cache-nya asli
@@ -16765,6 +17026,23 @@ def run_web_dashboard():
         def api_akumb_stoch_backtest_status():
             with _akumb_lock:
                 return jsonify(dict(_akumb_status))
+
+        @app.route("/api/run_akuma_failsafe_backtest", methods=["GET", "POST"])
+        def api_run_akuma_failsafe_backtest():
+            """One-off (12/09/2026): Entry A (Spring) + syarat exit dini 'gagal rally',
+            cek progress via /api/akuma_failsafe_backtest_status."""
+            if request.args.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
+            with _akuma_fs_lock:
+                if _akuma_fs_status.get("running"):
+                    return jsonify({"ok": False, "error": "sudah jalan", "status": _akuma_fs_status})
+            threading.Thread(target=run_akuma_failsafe_backtest, daemon=True).start()
+            return jsonify({"ok": True, "message": "Backtest dimulai di background."})
+
+        @app.route("/api/akuma_failsafe_backtest_status")
+        def api_akuma_failsafe_backtest_status():
+            with _akuma_fs_lock:
+                return jsonify(dict(_akuma_fs_status))
 
         @app.route("/api/run_reversal_ath_backtest", methods=["GET", "POST"])
         def api_run_reversal_ath_backtest():
