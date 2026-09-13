@@ -12571,6 +12571,306 @@ def run_thread_akum_entry():
         time.sleep(AKUM_ENTRY_SCAN_INTERVAL)
 
 
+# ===================== SHADOW FORWARD-TEST (13/09/2026, permintaan Mas Budi) =====================
+# Dua kandidat dari riset backtest sesi ini yang "layak forward test, TAPI JANGAN live dulu":
+#   1. akuma_all3   -- Entry A (Spring) dgn parameter Ronde 2 "all_three" (VOL_SPIKE_MULT
+#      1.8->1.2, RSI_MAX_ENTRY 55->65, REENTRY_CANDLES 15->25). Backtest metodologinya sendiri
+#      TIDAK meniru ranking top-5 + slot 3 punya live (lihat penjelasan ke Mas Budi) jadi PF
+#      backtest (0.80) kemungkinan understated -- forward-test ini nguji versi LIVE-nya beneran
+#      (dgn kandidat live _akum_near_miss yg SUDAH lolos gating structural score_akumulasi),
+#      TANPA eksekusi order asli.
+#   2. conf3_stochrsibb -- strategi BARU "6Confluence" varian 3-indikator terbaik dari sweep
+#      kombinasi (Stoch statis + RSI<20 + BB%b cross up 0), PF=2.38 offline, sudah lolos
+#      verifikasi tidak didominasi 1 trade -- tapi banyak kemenangan besarnya terkonsentrasi di
+#      1 minggu historis (Mei 2022 LUNA), jadi PERLU forward-test di kondisi pasar SEKARANG
+#      sebelum dipercaya sebagai edge yang berulang.
+# Keduanya PAPER ONLY -- sinyal & exit dicek & dicatat, TIDAK PERNAH kirim order ke Binance,
+# TIDAK menyentuh active_deals/saldo real sama sekali. Reuse fungsi backtest yg SUDAH
+# diverifikasi (_akumb_precompute/_akumb_window_score/_akuma_detect_entry_param utk akuma_all3,
+# _multi_ind_precompute/_multi_ind_signal_arrays utk conf3) supaya syarat ENTRY identik dgn yg
+# dibacktest -- exit dicek ulang tiap siklus terhadap harga live (bukan replay historis).
+SHADOW_FWDTEST_FILE       = os.path.join(DATA_DIR, "shadow_fwdtest.json")
+_shadow_fwdtest_lock      = threading.Lock()
+SHADOW_SCAN_INTERVAL      = 1800   # 30 menit -- cukup responsif utk exit, hemat API utk entry scan
+SHADOW_MAX_OPEN_PER_COMBO = 5      # batas posisi shadow terbuka bersamaan per kombo (anti runaway)
+SHADOW_AKUMA_TARGET       = 20     # target forward-test (paper) akuma_all3
+SHADOW_CONF3_TARGET       = 20     # target forward-test (paper) conf3_stochrsibb
+# Params Ronde 2 "all_three": (vol_spike_mult, rsi_min, rsi_max_entry, obv_slope_candles,
+# support_touch_buffer, reentry_candles) -- sama persis baris 'all_three' di AKUMA_ENTRY_SWEEP.
+SHADOW_AKUMA_ALL3_PARAMS  = (1.2, 40, 65, 3, 0.004, 25)
+SHADOW_CONF3_KEYS         = ['stoch_static', 'rsi_lt20', 'bb_crossup0']
+SHADOW_CONF3_SL_K         = 2.0    # sama MULTI_IND_EXIT_CFG (atr_2x_4x)
+SHADOW_CONF3_TP_K         = 4.0
+SHADOW_CONF3_MAX_HOLD_CANDLES = MULTI_IND_MAX_HOLD_CANDLES  # 60 candle 4h = 10 hari
+SHADOW_CONF3_MIN_VOL_USD  = 1_000_000  # sama ambang liquiditas AKUM_MIN_VOL_USD
+
+
+def _load_shadow_fwdtest() -> dict:
+    default = {"akuma_all3": {"open": [], "closed": []},
+               "conf3_stochrsibb": {"open": [], "closed": []}}
+    try:
+        if os.path.exists(SHADOW_FWDTEST_FILE):
+            with open(SHADOW_FWDTEST_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+            for k in default:
+                if k not in data:
+                    data[k] = default[k]
+            return data
+    except Exception as e:
+        log(f"WARN _load_shadow_fwdtest: {e}")
+    return default
+
+
+def _save_shadow_fwdtest(data: dict) -> None:
+    try:
+        with open(SHADOW_FWDTEST_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN _save_shadow_fwdtest: {e}")
+
+
+def _shadow_akuma_try_open(data: dict) -> None:
+    """Cek kandidat live _akum_near_miss (sudah lolos gating structural score_akumulasi)
+    terhadap syarat Entry A params 'all_three'. Reuse _akumb_window_score()/
+    _akuma_detect_entry_param() -- fungsi PERSIS yg sudah dibacktest, cuma dipanggil di
+    candle LIVE terbaru, bukan replay historis."""
+    with _akum_lock:
+        kandidat = list(_akum_near_miss)
+    if not kandidat:
+        return
+    open_syms = {p['sym'] for p in data['akuma_all3']['open']}
+    if len(data['akuma_all3']['open']) >= SHADOW_MAX_OPEN_PER_COMBO:
+        return
+    vol_spike, rsi_min, rsi_max_entry, obv_c, touch_buf, reentry_c = SHADOW_AKUMA_ALL3_PARAMS
+    for item in kandidat:
+        if len(data['akuma_all3']['open']) >= SHADOW_MAX_OPEN_PER_COMBO:
+            break
+        sym = item.get('sym', '')
+        if not sym or sym in open_syms or sym in SYMBOL_BLACKLIST:
+            continue
+        try:
+            df = get_ohlcv_4h(sym, limit=AKUM_CANDLE_LIMIT)
+            if df is None or len(df) < AKUM_SIDEWAYS_CANDLES + 100:
+                continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            a = _akumb_precompute(df)
+            vol_ma20 = pd.Series(a['vol']).rolling(20).mean().values
+            i = a['n'] - 1
+            score = _akumb_window_score(a, i)
+            if score is None:
+                continue
+            has_struct = (score['support_zone_low'] <= score['support_zone_high'] <=
+                          score['resistance_zone_low'] <= score['resistance_zone_high'])
+            support_ref = score['support_zone_low'] if has_struct else score['support']
+            support_reentry_ref = score['support_zone_high'] if has_struct else score['support']
+            sig = _akuma_detect_entry_param(a, vol_ma20, i, support_ref, support_reentry_ref,
+                                             vol_spike, rsi_min, rsi_max_entry, obv_c,
+                                             touch_buf, reentry_c)
+            if sig is None:
+                continue
+            entry_price = float(a['close'][i])
+            pos = {"sym": sym, "entry_price": entry_price, "sl_price": sig['sl_price'],
+                   "opened_ts": int(time.time()), "opened_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S')}
+            data['akuma_all3']['open'].append(pos)
+            open_syms.add(sym)
+            log(f"[SHADOW-AKUMA] OPEN {sym} @ {entry_price:.8g} (SL {sig['sl_price']:.8g})")
+            send_telegram(
+                f"🔬 Shadow FWD-TEST OPEN -- Entry A 'all_three' (paper, BUKAN order asli)\n"
+                f"{to_display_pair(sym)} @ {_fmt_price(entry_price)} | SL {_fmt_price(sig['sl_price'])}",
+                parse_mode=None)
+        except Exception as e:
+            log(f"WARN [SHADOW-AKUMA] {sym}: {e}")
+
+
+def _shadow_akuma_check_exits(data: dict) -> None:
+    """Cek tiap posisi shadow akuma_all3 yg masih terbuka thd harga LIVE sekarang --
+    replikasi RINGKAS TP1(swing-high)/TP2(momentum OB)/TP3(pivot resistance)/SL yg dipakai
+    live T2 monitor (lihat blok 'Cek TP akumulasi' di thread2), TANPA AI call/eksekusi order
+    (murni evaluasi, paper)."""
+    still_open = []
+    for pos in data['akuma_all3']['open']:
+        sym = pos['sym']; entry_price = pos['entry_price']; sl_price = pos['sl_price']
+        closed = False; exit_price = None; reason = None
+        try:
+            age_sec = time.time() - pos['opened_ts']
+            price = get_price_now(sym)
+            if price <= 0:
+                still_open.append(pos); continue
+            prof_from_entry = (price / entry_price - 1) * 100 - FEE_ROUND_TRIP_PCT
+            if sl_price > 0 and price <= sl_price:
+                closed, exit_price, reason = True, price, f"SL ({_fmt_price(price)} <= {_fmt_price(sl_price)})"
+            if not closed:
+                df4 = get_ohlcv_4h(sym, limit=max(AKUM_TP_SWING_LOOKBACK + 10, 80))
+                if df4 is not None and len(df4) >= 10:
+                    swing_hi = get_akum_swing_high(df4, AKUM_TP_SWING_LOOKBACK)
+                    if swing_hi > 0 and price >= swing_hi and prof_from_entry >= AKUM_TP_MIN_PROFIT_PCT:
+                        closed, exit_price, reason = True, price, f"TP1 swing-high (profit {prof_from_entry:+.2f}%)"
+                    if not closed:
+                        _rsi = ta.rsi(df4['close'], length=14)
+                        _stoch = ta.stoch(df4['high'], df4['low'], df4['close'], k=14, d=3)
+                        _macd = ta.macd(df4['close'], fast=12, slow=26, signal=9)
+                        rsi_now = float(_rsi.iloc[-1]) if _rsi is not None and not pd.isna(_rsi.iloc[-1]) else 0
+                        sk_now = float(_stoch.iloc[-1, 0]) if _stoch is not None and not pd.isna(_stoch.iloc[-1, 0]) else 0
+                        sk_prev = float(_stoch.iloc[-2, 0]) if _stoch is not None and len(_stoch) >= 2 and not pd.isna(_stoch.iloc[-2, 0]) else 0
+                        macd_now = float(_macd.iloc[-1, 2]) if _macd is not None and not pd.isna(_macd.iloc[-1, 2]) else 0
+                        macd_prev = float(_macd.iloc[-2, 2]) if _macd is not None and len(_macd) >= 2 and not pd.isna(_macd.iloc[-2, 2]) else 0
+                        stoch_ob = sk_now > AKUM_TP_STOCH_OB and sk_now < sk_prev
+                        macd_turn = macd_now < macd_prev
+                        rsi_ob = rsi_now >= AKUM_TP_RSI_OB
+                        if (rsi_ob or (stoch_ob and macd_turn)) and prof_from_entry >= AKUM_TP_MIN_PROFIT_PCT:
+                            closed, exit_price, reason = True, price, f"TP2 momentum (profit {prof_from_entry:+.2f}%)"
+                    if not closed:
+                        N4 = 4; hi_arr = df4['high'].values; cur_high = hi_arr[-1]
+                        pivots = [hi_arr[pi] for pi in range(N4, len(hi_arr) - N4)
+                                  if all(hi_arr[pi] > hi_arr[pi - j] for j in range(1, N4 + 1))
+                                  and all(hi_arr[pi] > hi_arr[pi + j] for j in range(1, N4 + 1))]
+                        res_above = sorted(p for p in pivots if p > price)
+                        if res_above and cur_high >= res_above[0] and prof_from_entry >= AKUM_TP_MIN_PROFIT_PCT:
+                            closed, exit_price, reason = True, price, f"TP3 pivot (profit {prof_from_entry:+.2f}%)"
+            if not closed and age_sec >= AKUM_ENTRY_TIMEOUT * STRAT4H_SECONDS:
+                closed, exit_price, reason = True, price, "timeout"
+        except Exception as e:
+            log(f"WARN [SHADOW-AKUMA] check exit {sym}: {e}")
+            still_open.append(pos); continue
+
+        if closed:
+            pct = (exit_price / entry_price - 1) * 100 - FEE_ROUND_TRIP_PCT
+            pos_closed = dict(pos, exit_price=exit_price, closed_ts=int(time.time()),
+                               closed_wib=now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                               pct=round(pct, 2), reason=reason)
+            data['akuma_all3']['closed'].append(pos_closed)
+            n_done = len(data['akuma_all3']['closed'])
+            log(f"[SHADOW-AKUMA] CLOSE {sym} @ {exit_price:.8g} ({pct:+.2f}%) -- {reason} -- #{n_done}/{SHADOW_AKUMA_TARGET}")
+            send_telegram(
+                f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- Entry A 'all_three' (paper)\n"
+                f"{to_display_pair(sym)} @ {_fmt_price(exit_price)} ({pct:+.2f}%) -- {reason}\n"
+                f"Progress: #{n_done}/{SHADOW_AKUMA_TARGET}", parse_mode=None)
+        else:
+            still_open.append(pos)
+    data['akuma_all3']['open'] = still_open
+
+
+def _shadow_conf3_try_open(data: dict) -> None:
+    """Scan universe likuid (sama ambang AKUM_MIN_VOL_USD) cari sinyal 6Confluence
+    'stoch+rsi+bb' (stoch_static AND rsi_lt20 AND bb_crossup0) di candle LIVE terbaru --
+    reuse _multi_ind_precompute()/_multi_ind_signal_arrays() persis yg dibacktest."""
+    if len(data['conf3_stochrsibb']['open']) >= SHADOW_MAX_OPEN_PER_COMBO:
+        return
+    open_syms = {p['sym'] for p in data['conf3_stochrsibb']['open']}
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs
+                    if volmap.get(p, 0) >= SHADOW_CONF3_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST and p not in open_syms]
+    except Exception as e:
+        log(f"WARN [SHADOW-CONF3] gagal ambil universe: {e}")
+        return
+    for sym in universe:
+        if len(data['conf3_stochrsibb']['open']) >= SHADOW_MAX_OPEN_PER_COMBO:
+            break
+        try:
+            df = get_ohlcv_4h(sym, limit=200)
+            if df is None or len(df) < 60:
+                continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            a = _multi_ind_precompute(df)
+            sig_arrays = _multi_ind_signal_arrays(a)
+            i = len(df) - 1
+            if not (sig_arrays['stoch_static'][i] and sig_arrays['rsi_lt20'][i] and sig_arrays['bb_crossup0'][i]):
+                continue
+            atr_now = a['atr'][i]
+            if pd.isna(atr_now) or atr_now <= 0:
+                continue
+            entry_price = float(a['close'][i]) if 'close' in a else float(df['close'].iloc[i])
+            sl_price = entry_price - SHADOW_CONF3_SL_K * float(atr_now)
+            tp_price = entry_price + SHADOW_CONF3_TP_K * float(atr_now)
+            pos = {"sym": sym, "entry_price": entry_price, "sl_price": sl_price, "tp_price": tp_price,
+                   "opened_ts": int(time.time()), "opened_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S')}
+            data['conf3_stochrsibb']['open'].append(pos)
+            open_syms.add(sym)
+            log(f"[SHADOW-CONF3] OPEN {sym} @ {entry_price:.8g} (SL {sl_price:.8g} / TP {tp_price:.8g})")
+            send_telegram(
+                f"🔬 Shadow FWD-TEST OPEN -- 6Confluence stoch+rsi+bb (paper, BUKAN order asli)\n"
+                f"{to_display_pair(sym)} @ {_fmt_price(entry_price)} | SL {_fmt_price(sl_price)} / TP {_fmt_price(tp_price)}",
+                parse_mode=None)
+        except Exception as e:
+            log(f"WARN [SHADOW-CONF3] {sym}: {e}")
+
+
+def _shadow_conf3_check_exits(data: dict) -> None:
+    """Cek posisi shadow conf3 thd SL/TP tetap (ATR di saat entry) atau timeout, pakai
+    harga live sekarang."""
+    still_open = []
+    for pos in data['conf3_stochrsibb']['open']:
+        sym = pos['sym']; entry_price = pos['entry_price']
+        sl_price = pos['sl_price']; tp_price = pos['tp_price']
+        closed = False; exit_price = None; reason = None
+        try:
+            age_sec = time.time() - pos['opened_ts']
+            price = get_price_now(sym)
+            if price <= 0:
+                still_open.append(pos); continue
+            if price <= sl_price:
+                closed, exit_price, reason = True, price, "SL"
+            elif price >= tp_price:
+                closed, exit_price, reason = True, price, "TP"
+            elif age_sec >= SHADOW_CONF3_MAX_HOLD_CANDLES * STRAT4H_SECONDS:
+                closed, exit_price, reason = True, price, "timeout"
+        except Exception as e:
+            log(f"WARN [SHADOW-CONF3] check exit {sym}: {e}")
+            still_open.append(pos); continue
+
+        if closed:
+            pct = (exit_price / entry_price - 1) * 100 - FEE_ROUND_TRIP_PCT
+            pos_closed = dict(pos, exit_price=exit_price, closed_ts=int(time.time()),
+                               closed_wib=now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                               pct=round(pct, 2), reason=reason)
+            data['conf3_stochrsibb']['closed'].append(pos_closed)
+            n_done = len(data['conf3_stochrsibb']['closed'])
+            log(f"[SHADOW-CONF3] CLOSE {sym} @ {exit_price:.8g} ({pct:+.2f}%) -- {reason} -- #{n_done}/{SHADOW_CONF3_TARGET}")
+            send_telegram(
+                f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- 6Confluence stoch+rsi+bb (paper)\n"
+                f"{to_display_pair(sym)} @ {_fmt_price(exit_price)} ({pct:+.2f}%) -- {reason}\n"
+                f"Progress: #{n_done}/{SHADOW_CONF3_TARGET}", parse_mode=None)
+        else:
+            still_open.append(pos)
+    data['conf3_stochrsibb']['open'] = still_open
+
+
+def thread_shadow_fwdtest_scan() -> None:
+    with _shadow_fwdtest_lock:
+        data = _load_shadow_fwdtest()
+        try:
+            _shadow_akuma_check_exits(data)
+            _shadow_conf3_check_exits(data)
+            if len(data['akuma_all3']['closed']) < SHADOW_AKUMA_TARGET:
+                _shadow_akuma_try_open(data)
+            if len(data['conf3_stochrsibb']['closed']) < SHADOW_CONF3_TARGET:
+                _shadow_conf3_try_open(data)
+        except Exception as e:
+            log(f"ERROR [SHADOW-FWDTEST] scan fatal: {e}")
+        _save_shadow_fwdtest(data)
+
+
+def run_thread_shadow_fwdtest():
+    """Thread T-ShadowFwdTest: paper forward-test 2 kandidat riset sesi ini (akuma_all3,
+    conf3_stochrsibb) -- TIDAK PERNAH kirim order asli, murni catat sinyal+exit vs harga live."""
+    log("[SHADOW-FWDTEST] Thread shadow forward-test dimulai (paper only, TIDAK ada order asli).")
+    time.sleep(180)  # tunggu thread lain (T-Akum dkk) selesai scan pertama
+    while True:
+        try:
+            thread_shadow_fwdtest_scan()
+        except Exception as e:
+            log(f"WARN [SHADOW-FWDTEST] thread error: {e}")
+        time.sleep(SHADOW_SCAN_INTERVAL)
+
 
 def run_manual_scan() -> dict:
     """Scan on-demand brkX2-12h dengan filter manual dari _manual_filters.
@@ -17956,6 +18256,25 @@ def run_web_dashboard():
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
 
+        @app.route("/api/shadow_fwdtest_status")
+        def api_shadow_fwdtest_status():
+            """Status 2 kandidat shadow forward-test (paper only): akuma_all3, conf3_stochrsibb."""
+            with _shadow_fwdtest_lock:
+                data = _load_shadow_fwdtest()
+            out = {}
+            for key, target in (("akuma_all3", SHADOW_AKUMA_TARGET), ("conf3_stochrsibb", SHADOW_CONF3_TARGET)):
+                closed = data[key]['closed']
+                n = len(closed)
+                wins = [c for c in closed if c['pct'] > 0]
+                wr = (len(wins) / n * 100) if n else 0
+                gross_win = sum(c['pct'] for c in closed if c['pct'] > 0)
+                gross_loss = -sum(c['pct'] for c in closed if c['pct'] <= 0)
+                pf = (gross_win / gross_loss) if gross_loss > 0 else (float('inf') if gross_win > 0 else 0)
+                out[key] = {"target": target, "n_closed": n, "n_open": len(data[key]['open']),
+                            "wr": round(wr, 1), "pf": (round(pf, 2) if pf != float('inf') else None),
+                            "open": data[key]['open'], "closed": closed[-10:]}
+            return jsonify({"ok": True, **out})
+
         log(f"[WEB] Dashboard jalan di port {WEB_PORT}")
         app.run(host="0.0.0.0", port=WEB_PORT, debug=False, use_reloader=False)
     except Exception as e:
@@ -19063,6 +19382,9 @@ if __name__ == '__main__':
         t_akum_entry = threading.Thread(target=run_thread_akum_entry, daemon=True, name="T-AkumEntry")
         threads.append(t_akum_entry)
         n_threads += 1
+    t_shadow = threading.Thread(target=run_thread_shadow_fwdtest, daemon=True, name="T-ShadowFwdTest")
+    threads.append(t_shadow)
+    n_threads += 1
     t_s6 = threading.Thread(target=run_thread_strat6, daemon=True, name="T-Strat6")
     threads.append(t_s6)
     n_threads += 1
