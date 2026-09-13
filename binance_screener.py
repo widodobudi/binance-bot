@@ -12819,6 +12819,17 @@ STOCH_BT_EXIT_VARIANTS = [
 ]
 STOCH_BT_MAX_HOLD_CANDLES = 60  # 10 hari @4h, batas anti infinite-hold
 
+# 13/09/2026 (permintaan Mas Budi, insiden 6Confluence Tahap 2 "inti_rsi_macd" PF=154.92
+# palsu): LUNAUSDT -- crash Terra LUNA Mei 2022 lalu ticker sama dipakai ulang utk token
+# relaunch (Terra 2.0) yang harganya start ~$18 -- di data candle mentah, dua aset yg SAMA
+# SEKALI beda ini nyambung jadi 1 seri, bikin 1 candle "melompat" ratusan kali lipat padahal
+# bukan pergerakan harga sungguhan (dibuktikan: 1 trade LUNAUSDT +47.701% tunggal yg bikin
+# rata2 29 trade combo itu jadi +1638% -- tanpa trade ini median-nya -7.78%, murni rugi).
+# HANYA dipakai di backtest (LUNA hari ini token sah, tidak diapa-apakan di live scanning/
+# convert candidate). Tambah simbol lain ke sini HANYA kalau sudah terdiagnosis sama
+# persis (bukan dugaan) -- jangan buang data cuma krn hasilnya kelihatan ekstrem.
+BACKTEST_SYMBOL_EXCLUDE = {"LUNAUSDT"}
+
 def _stoch_bt_simulate(df, i: int, exit_cfg: dict, atr_at_signal: float, K, D):
     """Entry di OPEN candle i+1 (bukan close candle sinyal -- no-lookahead, sesuai framework
     Mas Budi sendiri). Return (profit_pct, candle_ditahan) atau None kalau data kurang."""
@@ -12872,7 +12883,7 @@ def run_stoch_oversold_backtest():
         _stoch_bt_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                              "progress": "starting", "done": False, "results": None, "error": None}
     try:
-        pairs = get_usdt_spot_pairs()
+        pairs = [p for p in get_usdt_spot_pairs() if p not in BACKTEST_SYMBOL_EXCLUDE]
         start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
         end_ms = int(time.time() * 1000)
         thresholds = [20.0, 21.0, 25.0, 30.0]
@@ -13076,7 +13087,7 @@ def run_crossema_verify_backtest():
         _cxv_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                        "progress": "0/0", "done": False, "results": None, "error": None}
     try:
-        pairs = get_usdt_spot_pairs()
+        pairs = [p for p in get_usdt_spot_pairs() if p not in BACKTEST_SYMBOL_EXCLUDE]
         n_pairs = len(pairs)
         end_ms = int(time.time() * 1000)
         start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
@@ -13253,7 +13264,7 @@ def run_crossema_stoch_backtest():
         _ce2_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                         "progress": "0/0", "done": False, "results": None, "error": None}
     try:
-        pairs = get_usdt_spot_pairs()
+        pairs = [p for p in get_usdt_spot_pairs() if p not in BACKTEST_SYMBOL_EXCLUDE]
         n_pairs = len(pairs)
         end_ms = int(time.time() * 1000)
         start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
@@ -13432,7 +13443,7 @@ def run_reversal_stoch_backtest():
         _rev_bt_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                            "progress": "0/0", "done": False, "results": None, "error": None}
     try:
-        pairs = get_usdt_spot_pairs()
+        pairs = [p for p in get_usdt_spot_pairs() if p not in BACKTEST_SYMBOL_EXCLUDE]
         n_pairs = len(pairs)
         end_ms = int(time.time() * 1000)
         start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
@@ -13603,7 +13614,7 @@ def run_hunting_stoch_backtest():
         _hunt_bt_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                             "progress": "0/0", "done": False, "results": None, "error": None}
     try:
-        pairs = get_usdt_spot_pairs()
+        pairs = [p for p in get_usdt_spot_pairs() if p not in BACKTEST_SYMBOL_EXCLUDE]
         n_pairs = len(pairs)
         end_ms = int(time.time() * 1000)
         start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
@@ -13964,7 +13975,7 @@ def run_akumb_stoch_backtest():
         _akumb_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                           "progress": "0/0", "done": False, "results": None, "error": None}
     try:
-        pairs = get_usdt_spot_pairs()
+        pairs = [p for p in get_usdt_spot_pairs() if p not in BACKTEST_SYMBOL_EXCLUDE]
         n_pairs = len(pairs)
         end_ms = int(time.time() * 1000)
         start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
@@ -14230,7 +14241,7 @@ def run_akuma_failsafe_backtest():
         _akuma_fs_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                              "progress": "0/0", "done": False, "results": None, "error": None}
     try:
-        pairs = get_usdt_spot_pairs()
+        pairs = [p for p in get_usdt_spot_pairs() if p not in BACKTEST_SYMBOL_EXCLUDE]
         n_pairs = len(pairs)
         end_ms = int(time.time() * 1000)
         start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
@@ -14412,7 +14423,7 @@ def run_akuma_entry_sweep_backtest():
         _akuma_es_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                              "progress": "0/0", "done": False, "results": None, "error": None}
     try:
-        pairs = get_usdt_spot_pairs()
+        pairs = [p for p in get_usdt_spot_pairs() if p not in BACKTEST_SYMBOL_EXCLUDE]
         n_pairs = len(pairs)
         end_ms = int(time.time() * 1000)
         start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
@@ -14620,7 +14631,7 @@ def run_multi_ind_stage1_backtest():
         _multi_ind_s1_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                                  "progress": "0/0", "done": False, "results": None, "error": None}
     try:
-        pairs = get_usdt_spot_pairs()
+        pairs = [p for p in get_usdt_spot_pairs() if p not in BACKTEST_SYMBOL_EXCLUDE]
         n_pairs = len(pairs)
         end_ms = int(time.time() * 1000)
         start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
@@ -14741,7 +14752,7 @@ def run_multi_ind_stage2_backtest():
         _multi_ind_s2_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                                  "progress": "0/0", "done": False, "results": None, "error": None}
     try:
-        pairs = get_usdt_spot_pairs()
+        pairs = [p for p in get_usdt_spot_pairs() if p not in BACKTEST_SYMBOL_EXCLUDE]
         n_pairs = len(pairs)
         end_ms = int(time.time() * 1000)
         start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
@@ -14933,7 +14944,7 @@ def run_reversal_ath_backtest():
         _rev_ath_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                             "progress": "0/0", "done": False, "results": None, "error": None}
     try:
-        pairs = get_usdt_spot_pairs()
+        pairs = [p for p in get_usdt_spot_pairs() if p not in BACKTEST_SYMBOL_EXCLUDE]
         n_pairs = len(pairs)
         end_ms = int(time.time() * 1000)
         start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
