@@ -14489,6 +14489,203 @@ def run_akuma_entry_sweep_backtest():
             _akuma_es_status['error'] = str(e)
 
 
+# ===================== ONE-OFF: Strategi baru "6-indikator konfluensi" -- Tahap 1 (12/09/2026) =====================
+# Riset strategi BARU (belum ada di live), permintaan Mas Budi: 6 indikator (Stoch/RSI/CCI/
+# BB%b/MACD/Supertrend), tiap indikator punya varian "statis" (kondisi level) vs "cross"
+# (crossing-up), RSI tambahan 4 ambang tetap (<20/<25/<30/<35). Total kombinasi penuh (product)
+# bisa 192 -- terlalu berat dijalankan sekaligus (bisa berjam-jam, risiko rate-limit Binance).
+# Disepakati 2 TAHAP: TAHAP 1 (modul ini) -- tiap indikator dites SENDIRIAN sbg satu-satunya
+# syarat entry (16 varian total: Stoch 2 + RSI 6 + CCI 2 + BB%b 2 + MACD 2 + Supertrend 2),
+# exit DIKUNCI ke 1 varian standar (atr_2x_4x, reuse _stoch_bt_simulate/STOCH_BT_EXIT_VARIANTS
+# yg sudah ada) supaya perbandingan murni soal kualitas sinyal ENTRY, bukan exit. TAHAP 2
+# (menyusul) gabungkan varian yg MENANG di tahap ini jadi kombinasi kecil (pola sama spt
+# QScalp-3m ronde 3, menggabung 2 arah yg terbukti membantu sendiri-sendiri).
+# Universe: 474 pair (permintaan Mas Budi -- bukan dibatasi likuid, murni soal kombinasi
+# indikator bukan soal eksekusi cepat). Fetch langsung (no disk cache), sama pola dgn backtest
+# lain sesi ini.
+_multi_ind_s1_lock = threading.Lock()
+_multi_ind_s1_status = {"running": False, "started_at": None, "progress": "", "done": False,
+                         "results": None, "error": None}
+
+MULTI_IND_MAX_HOLD_CANDLES = 60  # skip-ahead antar sinyal per varian per symbol, sama pola bt lain
+MULTI_IND_EXIT_CFG = {'type': 'atr', 'sl_k': 2.0, 'tp_k': 4.0}  # atr_2x_4x, exit standar dikunci
+
+
+def _multi_ind_precompute(df: pd.DataFrame) -> dict:
+    """Hitung SEKALI semua indikator yg dibutuhkan ke-6 varian (vectorized)."""
+    close = df['close']; high = df['high']; low = df['low']
+    stoch = ta.stoch(high, low, close, k=14, d=3, smooth_k=3)
+    kcol = [c for c in stoch.columns if 'STOCHk' in c]; dcol = [c for c in stoch.columns if 'STOCHd' in c]
+    stoch_k = (stoch[kcol[0]] if kcol else pd.Series(np.nan, index=df.index)).values
+    stoch_d = (stoch[dcol[0]] if dcol else pd.Series(np.nan, index=df.index)).values
+    rsi = ta.rsi(close, length=14)
+    rsi_ma = rsi.rolling(14).mean()
+    cci = ta.cci(high, low, close, length=14)
+    cci_ma = cci.rolling(14).mean()
+    bb = ta.bbands(close, length=20, std=2)
+    bbp_col = [c for c in bb.columns if 'BBP' in c] if bb is not None else []
+    bb_pct = (bb[bbp_col[0]] if bbp_col else pd.Series(np.nan, index=df.index)).values
+    macd = ta.macd(close, fast=12, slow=26, signal=9)
+    ml_col = [c for c in macd.columns if c.startswith('MACD_')]
+    ms_col = [c for c in macd.columns if c.startswith('MACDs_')]
+    macd_line = (macd[ml_col[0]] if ml_col else pd.Series(np.nan, index=df.index)).values
+    macd_sig = (macd[ms_col[0]] if ms_col else pd.Series(np.nan, index=df.index)).values
+    st = ta.supertrend(high, low, close, length=10, multiplier=3.0)
+    st_col = [c for c in st.columns if 'SUPERTd' in c] if st is not None else []
+    st_dir = (st[st_col[0]] if st_col else pd.Series(np.nan, index=df.index)).values
+    atr = ta.atr(high, low, close, length=14).values
+    return {
+        'stoch_k': stoch_k, 'stoch_d': stoch_d, 'rsi': rsi.values, 'rsi_ma': rsi_ma.values,
+        'cci': cci.values, 'cci_ma': cci_ma.values, 'bb_pct': bb_pct,
+        'macd_line': macd_line, 'macd_sig': macd_sig, 'st_dir': st_dir, 'atr': atr,
+    }
+
+
+def _multi_ind_signal_arrays(a: dict) -> dict:
+    """Bangun 16 boolean array (1 per varian Tahap 1), vectorized. NaN otomatis jadi False
+    di perbandingan numpy, jadi aman tanpa perlu masking eksplisit (kecuali index 0 hasil
+    np.roll yg wrap-around, dibersihkan manual)."""
+    def _crossup(cur, prev_arr, ref_cur, ref_prev):
+        out = (prev_arr <= ref_prev) & (cur > ref_cur)
+        out[0] = False
+        return out
+
+    sk = a['stoch_k']; sd = a['stoch_d']
+    sk_prev = np.roll(sk, 1); sd_prev = np.roll(sd, 1)
+    stoch_static = (sk < sd) & (sd < 20)
+    stoch_crossup = _crossup(sk, sk_prev, sd, sd_prev) & (sk < 20) & (sd < 20)
+
+    rsi = a['rsi']; rsi_ma = a['rsi_ma']
+    rsi_prev = np.roll(rsi, 1); rsi_ma_prev = np.roll(rsi_ma, 1)
+    rsi_below_ma = rsi < rsi_ma
+    rsi_crossup_ma = _crossup(rsi, rsi_prev, rsi_ma, rsi_ma_prev)
+    rsi_lt20 = rsi < 20; rsi_lt25 = rsi < 25; rsi_lt30 = rsi < 30; rsi_lt35 = rsi < 35
+
+    cci = a['cci']; cci_ma = a['cci_ma']
+    cci_prev = np.roll(cci, 1); cci_ma_prev = np.roll(cci_ma, 1)
+    cci_below_ma = cci < cci_ma
+    cci_crossup_ma = _crossup(cci, cci_prev, cci_ma, cci_ma_prev)
+
+    bb = a['bb_pct']; bb_prev = np.roll(bb, 1)
+    bb_below0 = bb < 0
+    bb_crossup0 = _crossup(bb, bb_prev, np.zeros_like(bb), np.zeros_like(bb))
+
+    ml = a['macd_line']; ms = a['macd_sig']
+    ml_prev = np.roll(ml, 1); ms_prev = np.roll(ms, 1)
+    macd_below_sig = ml < ms
+    macd_crossup_sig = _crossup(ml, ml_prev, ms, ms_prev)
+
+    st = a['st_dir']
+    st_downtrend = st == -1
+    st_uptrend = st == 1
+
+    return {
+        'stoch_static': stoch_static, 'stoch_crossup': stoch_crossup,
+        'rsi_below_ma': rsi_below_ma, 'rsi_crossup_ma': rsi_crossup_ma,
+        'rsi_lt20': rsi_lt20, 'rsi_lt25': rsi_lt25, 'rsi_lt30': rsi_lt30, 'rsi_lt35': rsi_lt35,
+        'cci_below_ma': cci_below_ma, 'cci_crossup_ma': cci_crossup_ma,
+        'bb_below0': bb_below0, 'bb_crossup0': bb_crossup0,
+        'macd_below_sig': macd_below_sig, 'macd_crossup_sig': macd_crossup_sig,
+        'st_downtrend': st_downtrend, 'st_uptrend': st_uptrend,
+    }
+
+
+def run_multi_ind_stage1_backtest():
+    """Jalan di thread terpisah (dipicu /api/run_multi_ind_stage1_backtest). Tidak menyentuh
+    trading live -- riset murni utk strategi BARU yg belum ada di mana pun."""
+    global _multi_ind_s1_status
+    with _multi_ind_s1_lock:
+        if _multi_ind_s1_status['running']:
+            return
+        _multi_ind_s1_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                                 "progress": "0/0", "done": False, "results": None, "error": None}
+    try:
+        pairs = get_usdt_spot_pairs()
+        n_pairs = len(pairs)
+        end_ms = int(time.time() * 1000)
+        start_ms = int(datetime(2022, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        log(f"[MULTIND-S1-BT] Mulai Tahap 1 riset strategi 6-indikator (16 varian tunggal), "
+            f"exit dikunci atr_2x_4x, TANPA disk cache, {n_pairs} pair, 2022-sekarang, TF 4h")
+
+        # label list statis -- harus sinkron dgn key yg di-return _multi_ind_signal_arrays()
+        combo_labels = ['stoch_static', 'stoch_crossup', 'rsi_below_ma', 'rsi_crossup_ma',
+                         'rsi_lt20', 'rsi_lt25', 'rsi_lt30', 'rsi_lt35', 'cci_below_ma',
+                         'cci_crossup_ma', 'bb_below0', 'bb_crossup0', 'macd_below_sig',
+                         'macd_crossup_sig', 'st_downtrend', 'st_uptrend']
+        combo_stats = {label: {} for label in combo_labels}
+
+        for idx, sym in enumerate(pairs):
+            with _multi_ind_s1_lock:
+                _multi_ind_s1_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
+            try:
+                df = _stoch_bt_fetch_history(sym, start_ms, end_ms)
+                if df is None or len(df) < 120:
+                    continue
+                a = _multi_ind_precompute(df)
+                sig_arrays = _multi_ind_signal_arrays(a)
+                atr_arr = a['atr']
+                n = len(df)
+                for label in combo_labels:
+                    mask = sig_arrays[label]
+                    trades = []
+                    i = 30
+                    while i < n - MULTI_IND_MAX_HOLD_CANDLES - 2:
+                        if not mask[i] or pd.isna(atr_arr[i]) or atr_arr[i] <= 0:
+                            i += 1; continue
+                        res = _stoch_bt_simulate(df, i, MULTI_IND_EXIT_CFG, float(atr_arr[i]), None, None)
+                        if res is not None:
+                            pct, _hold = res
+                            trades.append(pct)
+                        i += MULTI_IND_MAX_HOLD_CANDLES
+                    if trades:
+                        combo_stats[label][sym] = trades
+            except Exception as e:
+                log(f"WARN [MULTIND-S1-BT] {sym}: {e}")
+            if (idx + 1) % 50 == 0:
+                log(f"[MULTIND-S1-BT] progress {idx+1}/{n_pairs}")
+
+        rows = []
+        for label, per_symbol in combo_stats.items():
+            all_pcts = [p for lst in per_symbol.values() for p in lst]
+            n_t = len(all_pcts)
+            if n_t < 20:
+                continue
+            wins = [p for p in all_pcts if p > 0]
+            losses = [p for p in all_pcts if p <= 0]
+            wr = len(wins) / n_t * 100
+            gross_win = sum(wins) if wins else 0.0
+            gross_loss = -sum(losses) if losses else 0.0
+            pf = (gross_win / gross_loss) if gross_loss > 0 else float('inf')
+            avg = sum(all_pcts) / n_t
+            rows.append({'label': label, 'n': n_t, 'n_symbols': len(per_symbol), 'wr': wr,
+                         'profit_factor': pf, 'avg_pct': avg})
+        rows.sort(key=lambda r: (r['profit_factor'] if r['profit_factor'] != float('inf') else 1e9), reverse=True)
+
+        msg_lines = ["📊 Strategi baru 6-indikator -- TAHAP 1 (tiap indikator sendirian)",
+                     f"Universe: {n_pairs} pair | 2022-sekarang | TF 4h | fetch langsung (no disk cache)",
+                     "Exit dikunci: ATR 2x SL / 4x TP (sama utk semua varian, isolasi kualitas entry)",
+                     "Tahap 2 (menyusul): gabungkan varian yg MENANG di sini jadi kombo kecil", ""]
+        for r in rows:
+            msg_lines.append(
+                f"{r['label']}: n={r['n']} ({r['n_symbols']} pair) WR={r['wr']:.1f}% "
+                f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}%"
+            )
+        full_report = "\n".join(msg_lines)
+        log(f"[MULTIND-S1-BT] SELESAI.\n{full_report}")
+        send_telegram(full_report, parse_mode=None)
+
+        with _multi_ind_s1_lock:
+            _multi_ind_s1_status['running'] = False
+            _multi_ind_s1_status['done'] = True
+            _multi_ind_s1_status['results'] = rows
+            _multi_ind_s1_status['progress'] = 'done'
+    except Exception as e:
+        log(f"ERROR [MULTIND-S1-BT] fatal: {e}")
+        with _multi_ind_s1_lock:
+            _multi_ind_s1_status['running'] = False
+            _multi_ind_s1_status['error'] = str(e)
+
+
 # ===================== ONE-OFF: Reversal-8h ATH-distance filter, layer di atas Stoch<50 LIVE (12/09/2026) =====================
 # Reversal-8h Stoch<50 backtest sebelumnya SENGAJA melewati filter ATH-distance produksi
 # (REVERSAL_ATH_DIST_MIN_PCT=-85%, reversal_blockers(sym=...)) krn fungsi cache-nya asli
@@ -17247,6 +17444,23 @@ def run_web_dashboard():
         def api_akuma_entry_sweep_backtest_status():
             with _akuma_es_lock:
                 return jsonify(dict(_akuma_es_status))
+
+        @app.route("/api/run_multi_ind_stage1_backtest", methods=["GET", "POST"])
+        def api_run_multi_ind_stage1_backtest():
+            """One-off (12/09/2026): riset strategi BARU 6-indikator, Tahap 1 (16 varian
+            tunggal). Cek progress via /api/multi_ind_stage1_backtest_status."""
+            if request.args.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
+            with _multi_ind_s1_lock:
+                if _multi_ind_s1_status.get("running"):
+                    return jsonify({"ok": False, "error": "sudah jalan", "status": _multi_ind_s1_status})
+            threading.Thread(target=run_multi_ind_stage1_backtest, daemon=True).start()
+            return jsonify({"ok": True, "message": "Backtest dimulai di background."})
+
+        @app.route("/api/multi_ind_stage1_backtest_status")
+        def api_multi_ind_stage1_backtest_status():
+            with _multi_ind_s1_lock:
+                return jsonify(dict(_multi_ind_s1_status))
 
         @app.route("/api/run_reversal_ath_backtest", methods=["GET", "POST"])
         def api_run_reversal_ath_backtest():
