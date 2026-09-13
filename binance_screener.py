@@ -9643,20 +9643,40 @@ function refreshPerfChart() {
       var rows = (data && data.strategies) || [];
       if (!rows.length) { el.innerHTML = "<em style='color:var(--muted);font-size:11px'>Belum ada data.</em>"; return; }
       var maxAbs = Math.max(1, Math.max.apply(null, rows.map(function(r){ return Math.abs(r.total_pct); })));
-      el.innerHTML = rows.map(function(r){
+      var header = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">'
+        + '<div style="width:110px;flex-shrink:0;text-align:right">Strategi</div>'
+        + '<div style="flex:1">Total % (net)</div>'
+        + '<div style="width:70px;flex-shrink:0">&nbsp;</div>'
+        + '<div style="width:140px;flex-shrink:0">Menang/Kalah</div>'
+        + '<div style="width:55px;flex-shrink:0">WR%</div>'
+        + '</div>';
+      var body = rows.map(function(r){
         var pct = r.total_pct;
         var widthPct = Math.min(100, Math.abs(pct) / maxAbs * 100);
         var barColor = pct > 0 ? "#3fb950" : (pct < 0 ? "#f85149" : "var(--muted)");
-        var wl = r.n > 0 ? (r.win + "W/" + r.loss + "L, n=" + r.n) : "belum ada deal";
+        var hasDeals = r.n > 0;
+        var winPct = hasDeals ? (r.win / r.n * 100) : 0;
+        var lossPct = hasDeals ? (100 - winPct) : 0;
+        var wlBar = hasDeals
+          ? ('<div style="width:100%;height:100%;border-radius:3px;overflow:hidden;display:flex">'
+             + '<div style="width:' + winPct.toFixed(1) + '%;height:100%;background:#3fb950" title="' + r.win + ' menang"></div>'
+             + '<div style="width:' + lossPct.toFixed(1) + '%;height:100%;background:#f85149" title="' + r.loss + ' kalah"></div>'
+             + '</div>')
+          : '';
         return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px">'
           + '<div style="width:110px;flex-shrink:0;text-align:right;color:var(--text)">' + r.label + '</div>'
           + '<div style="flex:1;background:rgba(255,255,255,0.05);border-radius:3px;height:16px;position:relative">'
           + '<div style="width:' + widthPct.toFixed(1) + '%;height:100%;background:' + barColor + ';border-radius:3px"></div>'
           + '</div>'
-          + '<div style="width:150px;flex-shrink:0;color:' + barColor + ';font-weight:600">' + (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%</div>'
-          + '<div style="width:130px;flex-shrink:0;color:var(--muted);font-size:10px">' + wl + '</div>'
+          + '<div style="width:70px;flex-shrink:0;color:' + barColor + ';font-weight:600">' + (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%</div>'
+          + '<div style="width:140px;flex-shrink:0;display:flex;align-items:center;gap:6px">'
+          + '<div style="width:90px;background:rgba(255,255,255,0.05);border-radius:3px;height:14px">' + wlBar + '</div>'
+          + '<span style="color:var(--muted);font-size:10px;white-space:nowrap">' + (hasDeals ? (r.win + 'W/' + r.loss + 'L') : '-') + '</span>'
+          + '</div>'
+          + '<div style="width:55px;flex-shrink:0;color:var(--muted)">' + (hasDeals ? winPct.toFixed(0) + '%' : '-') + '</div>'
           + '</div>';
       }).join("");
+      el.innerHTML = header + body;
     })
     .catch(function(){});
 }
