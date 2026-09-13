@@ -1238,7 +1238,12 @@ def get_today_pnl_usd() -> float:
     return realized + unrealized
 
 def get_total_capital_usd() -> float:
-    """Modal total = USDT bebas (free+locked) + modal yang lagi kepakai di semua deal aktif."""
+    """Modal total = USDT bebas (free+locked) + modal yang lagi kepakai di semua deal aktif
+    + nilai aset yang sudah dipindah ke Auto Sell Asset (mis. hasil Convert Aset -- AVA dkk).
+    13/09/2026 (permintaan Mas Budi, insiden notif Batas Rugi Harian -50% palsu): sebelumnya
+    aset Auto Sell Asset TIDAK ikut dihitung -- begitu modal signifikan lagi "parkir" di sana
+    (bukan USDT, bukan active_deals), pembagi P&L% jadi kecil sekali sehingga rugi kecil
+    ($1.43) kebaca sebagai -50%."""
     free_usdt = locked_usdt = 0.0
     try:
         if USE_BINANCE_DIRECT:
@@ -1252,7 +1257,22 @@ def get_total_capital_usd() -> float:
         deployed = sum(estimate_deal_total_usd(d) for d in deals.values())
     except Exception:
         pass
-    return free_usdt + locked_usdt + deployed
+    auto_sell_value = 0.0
+    try:
+        if USE_BINANCE_DIRECT:
+            cfg = load_auto_sell_config()
+            tracked_assets = set(cfg.get("assets", {}).keys())
+            if tracked_assets:
+                spot_free = {item["asset"]: item["free"] for item in get_binance_spot_assets()}
+                for asset in tracked_assets:
+                    qty = spot_free.get(asset, 0.0)
+                    if qty > 0:
+                        price = get_price_now(asset + "USDT")
+                        if price > 0:
+                            auto_sell_value += qty * price
+    except Exception as e:
+        log(f"WARN get_total_capital_usd auto_sell: {e}")
+    return free_usdt + locked_usdt + deployed + auto_sell_value
 
 def get_daily_loss_status() -> dict:
     """Ringkasan buat dashboard: pnl hari ini ($, %), limit, apakah tersulut."""
