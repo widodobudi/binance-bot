@@ -5041,22 +5041,25 @@ def heartbeat_general_tick():
         return base
     def _fmt_shadow(key: str, target: int) -> str:
         """13/09/2026: progress 2 shadow forward-test (paper, BUKAN CSV live) -- baca
-        langsung dari shadow_fwdtest.json, bukan csv_progress()."""
+        langsung dari shadow_fwdtest.json, bukan csv_progress(). Ringkas (1 baris per
+        kombo, "(paper)" cuma disebut 1x di baris induk) -- versi awal kepanjangan sampai
+        kebungkus 2 baris di Telegram, permintaan Mas Budi dipersingkat."""
         try:
             with _shadow_fwdtest_lock:
                 sdata = _load_shadow_fwdtest()
             closed = sdata.get(key, {}).get('closed', [])
             n_open = len(sdata.get(key, {}).get('open', []))
         except Exception:
-            return "#0 (gagal baca status)"
+            return f"{key}: #? (gagal baca)"
         n = len(closed)
+        extra = f" | {n_open} open" if n_open else ""
         if n == 0:
-            return f"#0/{target} (belum ada, {n_open} posisi terbuka)"
+            return f"{key}: #0/{target} (belum ada){extra}"
         win = sum(1 for c in closed if c['pct'] > 0)
         loss = n - win
         total_pct = sum(c['pct'] for c in closed)
         tag = " TERCAPAI!" if n >= target else ""
-        return f"#{n}/{target} ({win}W/{loss}L, total {total_pct:+.1f}%, {n_open} posisi terbuka){tag}"
+        return f"{key}: #{n}/{target} ({win}W/{loss}L, {total_pct:+.1f}%){tag}{extra}"
     prog_all  = csv_progress_active()
     prog_brk  = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)
     prog_rev  = csv_progress('reversal')
@@ -5111,8 +5114,9 @@ def heartbeat_general_tick():
                      f"{prog_akum_stop['n']}/{AKUM_ENTRY_FWDTEST_TARGET} "
                      f"({prog_akum_stop['win']}W/{prog_akum_stop['loss']}L,{prog_akum_stop['total_pct']:+.1f}%)\n"
                      f"    akumulasi-4h: 2nd {_fmt_strat(prog_akum2, AKUM_ENTRY_PHASE2_TARGET)}\n"
-                     f"  - Shadow akuma_all3 (paper, BUKAN live): {_fmt_shadow('akuma_all3', SHADOW_AKUMA_TARGET)}\n"
-                     f"  - Shadow conf3_stochrsibb (paper, BUKAN live): {_fmt_shadow('conf3_stochrsibb', SHADOW_CONF3_TARGET)}")
+                     f"  - Shadow (paper, bukan live):\n"
+                     f"    {_fmt_shadow('akuma_all3', SHADOW_AKUMA_TARGET)}\n"
+                     f"    {_fmt_shadow('conf3_stochrsibb', SHADOW_CONF3_TARGET)}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
     slot_line = (f"Slot brkX2-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2} | "
