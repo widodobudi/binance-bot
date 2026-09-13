@@ -9625,6 +9625,45 @@ document.addEventListener('DOMContentLoaded', function() {
 <!-- SC JS loaded via dash.js -->
 
 <div class="container dash-section-start" data-tab="monitor">
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header" onclick="toggleCard(this)">
+        <h2>Performance per Strategi <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Total % return forward-test kumulatif</span></h2>
+    </div>
+    <div class="card-body">
+      <div id="perf-chart"><em style="color:var(--muted);font-size:11px">Memuat...</em></div>
+    </div>
+  </div>
+</div>
+<script>
+function refreshPerfChart() {
+  fetch("/api/strategy_performance")
+    .then(function(r){ return r.json(); })
+    .then(function(data) {
+      var el = document.getElementById("perf-chart");
+      var rows = (data && data.strategies) || [];
+      if (!rows.length) { el.innerHTML = "<em style='color:var(--muted);font-size:11px'>Belum ada data.</em>"; return; }
+      var maxAbs = Math.max(1, Math.max.apply(null, rows.map(function(r){ return Math.abs(r.total_pct); })));
+      el.innerHTML = rows.map(function(r){
+        var pct = r.total_pct;
+        var widthPct = Math.min(100, Math.abs(pct) / maxAbs * 100);
+        var barColor = pct > 0 ? "#3fb950" : (pct < 0 ? "#f85149" : "var(--muted)");
+        var wl = r.n > 0 ? (r.win + "W/" + r.loss + "L, n=" + r.n) : "belum ada deal";
+        return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px">'
+          + '<div style="width:110px;flex-shrink:0;text-align:right;color:var(--text)">' + r.label + '</div>'
+          + '<div style="flex:1;background:rgba(255,255,255,0.05);border-radius:3px;height:16px;position:relative">'
+          + '<div style="width:' + widthPct.toFixed(1) + '%;height:100%;background:' + barColor + ';border-radius:3px"></div>'
+          + '</div>'
+          + '<div style="width:150px;flex-shrink:0;color:' + barColor + ';font-weight:600">' + (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%</div>'
+          + '<div style="width:130px;flex-shrink:0;color:var(--muted);font-size:10px">' + wl + '</div>'
+          + '</div>';
+      }).join("");
+    })
+    .catch(function(){});
+}
+setInterval(refreshPerfChart, 60000);
+refreshPerfChart();
+</script>
+<div class="container dash-section-start" data-tab="monitor">
   <div class="card">
         <div class="card-header" onclick="toggleCard(this)">
             <h2>Active Deals ({{ active_count }}) <span class="card-toggle">&#9660;</span></h2>
@@ -16825,6 +16864,29 @@ def run_web_dashboard():
                     "signals": list(_hunting_signals),
                     "scan_ts": _hunting_scan_ts,
                 })
+
+        @app.route("/api/strategy_performance")
+        def api_strategy_performance():
+            """Ringkasan total% forward-test kumulatif per strategi, utk bar chart Monitor tab."""
+            defs = [
+                ("brkX2", "brkX2-12h"),
+                ("reversal", "Reversal-8h"),
+                ("brkX2_4h", "brkX2-4h"),
+                ("brkX2_crossema", "CrossEMA-4h"),
+                ("hunting_4h", "Hunting-4h"),
+                ("akumulasi", "Akumulasi-4h"),
+                ("trend_confirm_4h", "TrenKonfirmasi-4h"),
+                ("qscalp_3m", "QScalp-3m"),
+            ]
+            rows = []
+            for key, label in defs:
+                p = csv_progress(key)
+                if p is None:
+                    p = {"n": 0, "win": 0, "loss": 0, "total_pct": 0.0}
+                rows.append({"key": key, "label": label, "n": p["n"], "win": p["win"],
+                             "loss": p["loss"], "total_pct": round(p["total_pct"], 2)})
+            rows.sort(key=lambda r: r["total_pct"], reverse=True)
+            return jsonify({"strategies": rows})
 
         @app.route("/api/qscalp_signals")
         def api_qscalp_signals():
