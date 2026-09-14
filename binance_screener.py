@@ -17782,6 +17782,25 @@ def run_web_dashboard():
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
 
+        @app.route("/api/sell_to_usdt", methods=["POST"])
+        def api_sell_to_usdt():
+            """14/09/2026 (permintaan Mas Budi): jual 1 asset jadi USDT MURNI (market sell,
+            SELURUH saldo bebas kalau qty tidak diisi) -- reuse sell_to_usdt() yg sebelumnya
+            cuma bisa dipicu via /tradingview_webhook (butuh secret). Outward-facing / kirim
+            order Binance sungguhan -- trigger manual dari dashboard (auth sesi login sama
+            spt /api/convert_execute)."""
+            try:
+                payload = request.get_json(force=True, silent=True) or {}
+                asset = str(payload.get("asset", "")).upper().strip()
+                if not asset:
+                    return jsonify({"ok": False, "error": "asset wajib diisi"}), 400
+                symbol = asset if asset.endswith("USDT") else asset + "USDT"
+                qty = payload.get("qty")
+                data = sell_to_usdt(symbol, qty=qty)
+                return jsonify(data), (200 if data.get("ok") else 400)
+            except Exception as error:
+                return jsonify({"ok": False, "error": str(error)}), 500
+
         @app.route("/api/run_stoch_backtest", methods=["GET", "POST"])
         def api_run_stoch_backtest():
             """One-off (11/09/2026): trigger backtest Stoch oversold-cross di background
