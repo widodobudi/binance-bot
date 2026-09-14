@@ -10516,6 +10516,11 @@ var SC_HAS_ADDFUND = {brkX2: true, trend_confirm_4h: true};
 // yang SAMA dgn brkX2 (score_to_target_usd), jadi add fund-nya JUGA otomatis score-based,
 // bukan angka tetap "$20" yg sebelumnya salah ditampilkan sbg field bisa-diedit.
 var SC_ADDFUND_LABEL = {brkX2: 'auto (score-based)', trend_confirm_4h: 'auto (score-based)'};
+// 14/09/2026 (permintaan Mas Budi): tier Conviction brkX2_4h ($30 kalau ATR%>=5 DAN
+// Volume>=2x MA20 sekaligus di candle sinyal, lihat BRKX2_4H_CONVICTION_* di Python) beli
+// LANGSUNG 1x, tidak lewat kolom Add Fund sama sekali -- jadi tidak kelihatan di tabel ini
+// kecuali ditandai manual di sini. Catatan statis (bukan dari /api/strategy_config).
+var SC_BASE_NOTE = {brkX2_4h: '/ $30 conviction'};
 var SC_NO_AI = {qscalp_3m: true};  // strategi full rule-based, checkbox AI-call tidak berlaku
 var _scData = {};
 
@@ -10590,7 +10595,7 @@ function loadStrategyConfig() {
                         ? '<td style="text-align:center;padding:5px 8px"><span style="color:var(--muted);font-size:10px;font-style:italic" title="Strategi full rule-based, tidak pernah memanggil AI sama sekali (desain permanen)">N/A</span></td>'
                         : '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-aicall-' + k + '" ' + (aiCallOpenEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer" title="Kandidat OPEN yang lolos semua filter rule-based masih dikonsultasikan ke AI dulu sebelum dibuka. Default OFF -- ini nggak bisa di-backtest kayak parameter lain."></td>')
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-size-' + k + '" ' + (sizingEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
-                    + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '"></td>'
+                    + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '">' + (SC_BASE_NOTE[k] ? '<span style="' + dim + ';color:var(--muted);font-style:italic;font-size:10px;margin-left:4px" title="Beli langsung $30 sekali kalau ATR%>=5 DAN Volume>=2x MA20 di candle sinyal (tidak lewat Add Fund)">' + SC_BASE_NOTE[k] + '</span>' : '') + '</td>'
                     + addFundCell
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-cooldown-' + k + '" ' + (cooldownEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer" title="Skip re-entry pair yang sama selama masih cooldown"></td>'
                     + '<td style="text-align:center;padding:5px 8px">' + saveButton + '</td>'
