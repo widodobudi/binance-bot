@@ -6734,9 +6734,15 @@ def thread2_monitor():
                                       f"\n  {wl}, total {pstrat['total_pct']:+.1f}%")
                 else:
                     prog_close = f"\nForward-test {strat_label}: #?/{tgt} (CSV belum terbaca)"
-                _base_usd_cl = float(d.get('base_usd', d.get('target_usd', BASE_ORDER_VOLUME)))
-                _add_usd_cl  = float(d.get('add_usd', 0)) if d.get('add_fund_sent') else 0.0
-                _total_usd_cl = _base_usd_cl + _add_usd_cl
+                # 14/09/2026 (permintaan Mas Budi, insiden T/USDT): DULU dihitung sendiri di sini
+                # sebagai base_usd(fallback target_usd) + add_usd -- kalau base_usd tidak
+                # tersimpan terpisah (jatuh ke target_usd, yg SUDAH mencakup base+add), lalu
+                # add_usd ditambahkan LAGI di atasnya -> dobel hitung (T/USDT: target_usd=$60
+                # (base $10 + add $50) + add_usd $50 lagi = $110 salah, seharusnya $60).
+                # `total_usd` di atas (baris ~6620, estimate_deal_total_usd -- qty_coin*entry_price
+                # aktual) SUDAH benar dan sudah dipakai csv_log_close(), History table cocok.
+                # Reuse variabel yang sama di sini, jangan hitung ulang.
+                _total_usd_cl = total_usd
                 _upnl_usd_cl  = round(prof_from_entry / 100 * _total_usd_cl, 2)
                 send_telegram(
                     f"{strat_label} | CLOSE LONG\n"
@@ -10464,8 +10470,14 @@ var SC_LABELS = {
     trend_confirm_4h: 'TrenKonfirmasi-4h',
     qscalp_3m: 'QScalp-3m'
 };
-var SC_HAS_ADDFUND = {brkX2: true, brkX2_4h: true, trend_confirm_4h: true};
-var SC_ADDFUND_LABEL = {brkX2: 'auto (score-based)'};
+// 14/09/2026 (permintaan Mas Budi, ketahuan label dashboard salah): brkX2_4h DIHAPUS dari
+// sini -- open_deal_with_sizing() mengunci add_usd=0 total buat brkX2_4h (skor diabaikan
+// sama sekali), field "$15" yg sempat tampil di sini TIDAK PERNAH benar2 dipakai backend.
+var SC_HAS_ADDFUND = {brkX2: true, trend_confirm_4h: true};
+// 14/09/2026: trend_confirm_4h DITAMBAHKAN -- open_deal_with_sizing() jatuh ke cabang umum
+// yang SAMA dgn brkX2 (score_to_target_usd), jadi add fund-nya JUGA otomatis score-based,
+// bukan angka tetap "$20" yg sebelumnya salah ditampilkan sbg field bisa-diedit.
+var SC_ADDFUND_LABEL = {brkX2: 'auto (score-based)', trend_confirm_4h: 'auto (score-based)'};
 var SC_NO_AI = {qscalp_3m: true};  // strategi full rule-based, checkbox AI-call tidak berlaku
 var _scData = {};
 
