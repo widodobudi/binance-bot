@@ -2047,8 +2047,15 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
     except Exception as e:
         log(f"WARN log_oac file error: {e}")
     threading.Thread(target=drive_append, args=("open-arm-close.txt", text), daemon=True).start()
-    tg_msg = f"📋 *{event}* {to_display_pair(symbol)} `{strategy}`\n" + ind_lines
-    send_telegram(tg_msg, parse_mode="Markdown")
+    # 14/09/2026 (troubleshoot permintaan Mas Budi): parse_mode="Markdown" (legacy) FRAGIL --
+    # Telegram scan seluruh pesan cari pasangan */`/_ , jadi 1 karakter spesial tak sengaja
+    # di MANA PUN field indikator (strategy name berisi underscore spt "brkX2_4h"/
+    # "akum_entry_a" di dalam backtick, exit_reason bebas teks, dst) bikin SELURUH pesan
+    # gagal terkirim ("can't find end of the entity") -- kejadian nyata CAKEUSDT ADD_FUND
+    # 22:35:09 WIB. Semua send_telegram() lain di file ini sudah pakai parse_mode=None
+    # (plain text) justru karena ini -- disamakan di sini, bukan coba escape tiap field.
+    tg_msg = f"📋 {event} {to_display_pair(symbol)} {strategy}\n" + ind_lines
+    send_telegram(tg_msg, parse_mode=None)
 
 # ── Riwayat keputusan AI (04/09/2026, permintaan Mas Budi) ──────────────────────────
 # SKIP individual, ringkasan Babak 1, dan hasil AI Batch Analysis TIDAK LAGI kirim
@@ -4921,13 +4928,16 @@ def heartbeat_4h_tick(status_line: str, near_miss_4h: list = None):
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
     log(f"[T1d] Heartbeat 4h: {status_line}")
     if HEARTBEAT_TELEGRAM_ENABLED:
+        # 14/09/2026 (troubleshoot): near_str berisi teks diagnosa bebas (fail_str, join dari
+        # `fails`) -- bisa memuat karakter spesial Markdown (_/*/`) yg bikin parse_mode="Markdown"
+        # gagal total ("can't find end of the entity"), sama akar masalah dgn log_oac(). Plain text.
         send_telegram(
             f"{header}\n"
-            f"\n*4h* : {status_line}"
+            f"\n4h : {status_line}"
             f"{near_str}\n"
             f"\nSlot 4h: {active_deal_count_4h()}/{STRAT4H_MAX_DEALS}\n"
             f"{prog}",
-            parse_mode="Markdown"
+            parse_mode=None
         )
     heartbeat_4h_last_sent    = now
     heartbeat_4h_window_start = now_dt
@@ -4986,12 +4996,13 @@ def heartbeat_crossema_tick():
     log(f"[T_CX] Heartbeat crossema terkirim")
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
     if HEARTBEAT_TELEGRAM_ENABLED:
+        # 14/09/2026 (troubleshoot): sama alasan spt heartbeat 4h di atas -- near_str bebas teks.
         send_telegram(
             f"{header}\n"
             f"\nCrossEMA : Slot {n_cx}/{STRAT_CROSSEMA_MAX_DEALS}"
             f"{near_str}\n"
             f"\n{prog_cx}",
-            parse_mode="Markdown"
+            parse_mode=None
         )
     heartbeat_cx_last_sent    = now
     heartbeat_cx_window_start = now_dt
