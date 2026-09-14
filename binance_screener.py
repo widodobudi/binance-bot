@@ -10511,11 +10511,16 @@ var SC_LABELS = {
 // 14/09/2026 (permintaan Mas Budi, ketahuan label dashboard salah): brkX2_4h DIHAPUS dari
 // sini -- open_deal_with_sizing() mengunci add_usd=0 total buat brkX2_4h (skor diabaikan
 // sama sekali), field "$15" yg sempat tampil di sini TIDAK PERNAH benar2 dipakai backend.
-var SC_HAS_ADDFUND = {brkX2: true, trend_confirm_4h: true};
+var SC_HAS_ADDFUND = {brkX2: true, trend_confirm_4h: true, brkX2_crossema: true};
 // 14/09/2026: trend_confirm_4h DITAMBAHKAN -- open_deal_with_sizing() jatuh ke cabang umum
 // yang SAMA dgn brkX2 (score_to_target_usd), jadi add fund-nya JUGA otomatis score-based,
 // bukan angka tetap "$20" yg sebelumnya salah ditampilkan sbg field bisa-diedit.
-var SC_ADDFUND_LABEL = {brkX2: 'auto (score-based)', trend_confirm_4h: 'auto (score-based)'};
+// brkX2_crossema DITAMBAHKAN (14/09/2026, ketahuan pas cek brkX2-4h): dipanggil dgn score
+// DIKUNCI 0 (open_deal_with_sizing(sym, 0, ...)) -- jatuh ke cabang umum yg sama juga, dan
+// score_to_target_usd(0)=30, jadi CrossEMA-4h SELALU efektif $30 (base $10 + add otomatis
+// $20), bukan $10 seperti yg sebelumnya tertulis. Perilaku backend TIDAK diubah, cuma label.
+var SC_ADDFUND_LABEL = {brkX2: 'auto (score-based)', trend_confirm_4h: 'auto (score-based)',
+                         brkX2_crossema: 'auto (score dikunci 0 -> selalu $30)'};
 // 14/09/2026 (permintaan Mas Budi): tier Conviction brkX2_4h ($30 kalau ATR%>=5 DAN
 // Volume>=2x MA20 sekaligus di candle sinyal, lihat BRKX2_4H_CONVICTION_* di Python) beli
 // LANGSUNG 1x, tidak lewat kolom Add Fund sama sekali -- jadi tidak kelihatan di tabel ini
