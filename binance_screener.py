@@ -3668,8 +3668,25 @@ def score_to_target_usd(score: int) -> int:
     if score >= 2: return 45
     return 30
 
-def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
+# 14/09/2026 (permintaan Mas Budi): tier sizing brkX2_4h -- backtest retroaktif 39 trade
+# historis (scratchpad/backtest_score_brkx2_4h.py) nemu pola BUKAN gradien linear, tapi
+# efek GABUNGAN: ATR%>=5 SENDIRIAN atau Volume>=2x MA20 SENDIRIAN tidak ada bedanya sama
+# sekali dgn baseline (WR 75-83%, avg +0.12-0.29%), tapi begitu KEDUANYA lolos BERSAMAAN
+# (17/39 trade = 44%), hasilnya jauh menonjol: WR 100%, avg +2.95% (10-25x lebih besar).
+# Korelasi Pearson keseluruhan +0.244. Base Order normal $15 (Strategy Control) tetap
+# dipakai kalau TIDAK conviction; kalau conviction, target dinaikkan ke $30 (rasio 2x,
+# sama seperti brkX2-12h dari tier terendah ke tertinggi $30->$60) -- LANGSUNG $30 sekali
+# beli (bukan base+add terpisah spt brkX2-12h) krn conviction-nya sudah diketahui PERSIS
+# saat sinyal, tidak perlu proses tambahan.
+BRKX2_4H_CONVICTION_ATR_MIN    = 5.0    # ATR% minimum candle sinyal
+BRKX2_4H_CONVICTION_VOL_MIN    = 2.0    # rasio volume vs MA20 minimum candle sinyal
+BRKX2_4H_CONVICTION_TARGET_USD = 30     # modal kalau KEDUA syarat di atas lolos bersamaan
+
+def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
+                          atr_pct: float | None = None, vol_ratio: float | None = None):
     """Buka deal + simpan add_usd di active_deals untuk dikirim T2 setelah deal confirmed.
+    atr_pct/vol_ratio: opsional, cuma dipakai brkX2_4h utk cek tier conviction (lihat
+    BRKX2_4H_CONVICTION_* di atas) -- strategi lain mengabaikannya.
     Return (ok, target_usd, add_usd)."""
     # Guard: circuit breaker rugi harian (lintas SEMUA strategi) -- lihat is_daily_loss_limit_breached()
     if is_daily_loss_limit_breached():
@@ -3722,9 +3739,17 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2'):
     elif strategy in ('akum_entry_a', 'akum_entry_b'):
         target  = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
         add_usd = 0
-    # brkX2_4h di Binance direct: pakai base_usd dari Strategy Control, tanpa sizing skor
+    # brkX2_4h di Binance direct: pakai base_usd dari Strategy Control, KECUALI tier
+    # conviction (ATR%+Volume tinggi bersamaan di candle sinyal, lihat BRKX2_4H_CONVICTION_*)
     elif strategy == 'brkX2_4h' and USE_BINANCE_DIRECT:
-        target  = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
+        is_conviction = (atr_pct is not None and vol_ratio is not None
+                          and atr_pct >= BRKX2_4H_CONVICTION_ATR_MIN
+                          and vol_ratio >= BRKX2_4H_CONVICTION_VOL_MIN)
+        if is_conviction:
+            target = float(BRKX2_4H_CONVICTION_TARGET_USD)
+            log(f"[SIZING] {symbol} brkX2_4h TIER CONVICTION (ATR%={atr_pct:.2f} Vol={vol_ratio:.2f}x) -> modal ${target:.0f}")
+        else:
+            target = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
         add_usd = 0
     else:
         target  = max(score_to_target_usd(score), _cfg_base)
@@ -7911,8 +7936,10 @@ def thread1d_scan_4h():
         v = held_bx[sym]
         signal_price = v['signal_price']; atrp = v['atrp']; score = v['score']
         _quick_reentry = v['quick_reentry']
+        _vol_ratio_bx = v.get('detail', {}).get('rvol')
 
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, strategy="brkX2_4h")
+        ok, target_usd, add_usd = open_deal_with_sizing(
+            sym, score, strategy="brkX2_4h", atr_pct=atrp, vol_ratio=_vol_ratio_bx)
         if not ok: continue
 
         # Konfirmasi real-time: price_now harus cross EMA20 ke atas, jarak 0–0.75%
