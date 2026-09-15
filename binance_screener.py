@@ -5182,7 +5182,8 @@ def heartbeat_general_tick():
                      f"    akumulasi-4h: 2nd {_fmt_strat(prog_akum2, AKUM_ENTRY_PHASE2_TARGET)}\n"
                      f"  - Shadow (paper, bukan live):\n"
                      f"    {_fmt_shadow('akuma_all3', SHADOW_AKUMA_TARGET)}\n"
-                     f"    {_fmt_shadow('conf3_stochrsibb', SHADOW_CONF3_TARGET)}")
+                     f"    {_fmt_shadow('conf3_stochrsibb', SHADOW_CONF3_TARGET)}\n"
+                     f"    {_fmt_shadow('dipbuy_a', SHADOW_DIPBUY_TARGET)}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
     slot_line = (f"Slot brkX2-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2} | "
@@ -12738,10 +12739,27 @@ SHADOW_CONF3_MAX_HOLD_CANDLES = 60  # samakan MULTI_IND_MAX_HOLD_CANDLES (didefi
                                      # (urutan definisi top-to-bottom, blok ini lebih dulu)
 SHADOW_CONF3_MIN_VOL_USD  = 1_000_000  # sama ambang liquiditas AKUM_MIN_VOL_USD
 
+# ── Shadow "dipbuy_a" (15/09/2026, riset malam ini: beli dip ekstrem, kebalikan momentum
+# semua strategi lain) -- Varian A saja (chg_4h<=-15%, drop tajam 1 candle), TERBUKTI
+# lebih kuat dari Varian B (chg_24h<=-15%) di simulasi entry+exit+fee penuh
+# (backtest_dipbuy_sweep2.py, scratchpad sesi ini). TP/SL dipilih dari titik seimbang
+# hasil sweep (TP4%/SL15%: WR 79.7%, avg +0.61%/trade) -- BUKAN yang paling optimal
+# (TP5/SL-none avg lebih tinggi tapi tail risk -69% s/d -81% per trade tanpa stop,
+# terlalu berisiko utk live money). PAPER ONLY -- tidak ada order Binance sungguhan,
+# murni catat sinyal vs harga live, sama seperti akuma_all3/conf3_stochrsibb.
+SHADOW_DIPBUY_TARGET       = 20     # target forward-test (paper) sebelum keputusan lanjut
+SHADOW_DIPBUY_CHG4H_MIN    = -15.0  # syarat sinyal: chg_4h (1 candle 4h) <= -15%
+SHADOW_DIPBUY_TP_PCT       = 4.0
+SHADOW_DIPBUY_SL_PCT       = 15.0
+SHADOW_DIPBUY_MAX_HOLD_CANDLES = 6  # 24h di TF 4h, sama window yg dites di backtest
+SHADOW_DIPBUY_MIN_VOL_USD  = 500_000  # lebih longgar dari strategi lain -- kandidat dip
+                                       # ekstrem sudah jarang muncul, jangan dipersempit lagi
+
 
 def _load_shadow_fwdtest() -> dict:
     default = {"akuma_all3": {"open": [], "closed": []},
-               "conf3_stochrsibb": {"open": [], "closed": []}}
+               "conf3_stochrsibb": {"open": [], "closed": []},
+               "dipbuy_a": {"open": [], "closed": []}}
     try:
         if os.path.exists(SHADOW_FWDTEST_FILE):
             with open(SHADOW_FWDTEST_FILE, encoding="utf-8") as f:
@@ -12978,16 +12996,117 @@ def _shadow_conf3_check_exits(data: dict) -> None:
     data['conf3_stochrsibb']['open'] = still_open
 
 
+def _shadow_dipbuy_try_open(data: dict) -> None:
+    """Scan universe likuid cari sinyal dip ekstrem (chg_4h <= SHADOW_DIPBUY_CHG4H_MIN)
+    di candle 4h TERTUTUP terakhir -- exclude bStock & LUNA (konvensi proyek), 1 posisi
+    per simbol. Temuan riset 15/09/2026: dip ekstrem 1-candle cenderung bounce, kebalikan
+    dari gainer ekstrem yg cenderung lanjut turun (lihat backtest_topgainer_validation.py)."""
+    if len(data['dipbuy_a']['open']) >= SHADOW_MAX_OPEN_PER_COMBO:
+        return
+    open_syms = {p['sym'] for p in data['dipbuy_a']['open']}
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs
+                    if p not in BACKTEST_SYMBOL_EXCLUDE
+                    and not is_bstock_symbol(p)
+                    and volmap.get(p, 0) >= SHADOW_DIPBUY_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST and p not in open_syms]
+    except Exception as e:
+        log(f"WARN [SHADOW-DIPBUY] gagal ambil universe: {e}")
+        return
+    for sym in universe:
+        if len(data['dipbuy_a']['open']) >= SHADOW_MAX_OPEN_PER_COMBO:
+            break
+        try:
+            df = get_ohlcv_4h(sym, limit=10)
+            if df is None or len(df) < 3:
+                continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) < 2:
+                continue
+            close_now, close_prev = float(df['close'].iloc[-1]), float(df['close'].iloc[-2])
+            if close_prev <= 0:
+                continue
+            chg_4h = (close_now / close_prev - 1) * 100
+            if chg_4h > SHADOW_DIPBUY_CHG4H_MIN:
+                continue
+            entry_price = close_now
+            sl_price = entry_price * (1 - SHADOW_DIPBUY_SL_PCT / 100)
+            tp_price = entry_price * (1 + SHADOW_DIPBUY_TP_PCT / 100)
+            pos = {"sym": sym, "entry_price": entry_price, "sl_price": sl_price, "tp_price": tp_price,
+                   "chg_4h": round(chg_4h, 2),
+                   "opened_ts": int(time.time()), "opened_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S')}
+            data['dipbuy_a']['open'].append(pos)
+            open_syms.add(sym)
+            log(f"[SHADOW-DIPBUY] OPEN {sym} @ {entry_price:.8g} (chg_4h {chg_4h:+.2f}%, SL {sl_price:.8g} / TP {tp_price:.8g})")
+            send_telegram(
+                f"🔬 Shadow FWD-TEST OPEN -- Dip Buy Ekstrem Varian A (paper, BUKAN order asli)\n"
+                f"{to_display_pair(sym)} @ {_fmt_price(entry_price)} | drop {chg_4h:+.2f}% (1 candle 4h)\n"
+                f"SL {_fmt_price(sl_price)} / TP {_fmt_price(tp_price)}",
+                parse_mode=None)
+        except Exception as e:
+            log(f"WARN [SHADOW-DIPBUY] {sym}: {e}")
+
+
+def _shadow_dipbuy_check_exits(data: dict) -> None:
+    """Cek posisi shadow dipbuy_a thd SL/TP tetap (dihitung di saat entry) atau timeout
+    SHADOW_DIPBUY_MAX_HOLD_CANDLES, pakai harga live sekarang."""
+    still_open = []
+    for pos in data['dipbuy_a']['open']:
+        sym = pos['sym']; entry_price = pos['entry_price']
+        sl_price = pos['sl_price']; tp_price = pos['tp_price']
+        closed = False; exit_price = None; reason = None
+        try:
+            age_sec = time.time() - pos['opened_ts']
+            price = get_price_now(sym)
+            if price <= 0:
+                still_open.append(pos); continue
+            if price <= sl_price:
+                closed, exit_price, reason = True, price, "SL"
+            elif price >= tp_price:
+                closed, exit_price, reason = True, price, "TP"
+            elif age_sec >= SHADOW_DIPBUY_MAX_HOLD_CANDLES * STRAT4H_SECONDS:
+                closed, exit_price, reason = True, price, "timeout"
+        except Exception as e:
+            log(f"WARN [SHADOW-DIPBUY] check exit {sym}: {e}")
+            still_open.append(pos); continue
+
+        if closed:
+            pct = (exit_price / entry_price - 1) * 100 - FEE_ROUND_TRIP_PCT
+            pos_closed = dict(pos, exit_price=exit_price, closed_ts=int(time.time()),
+                               closed_wib=now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                               pct=round(pct, 2), reason=reason)
+            data['dipbuy_a']['closed'].append(pos_closed)
+            n_done = len(data['dipbuy_a']['closed'])
+            log(f"[SHADOW-DIPBUY] CLOSE {sym} @ {exit_price:.8g} ({pct:+.2f}%) -- {reason} -- #{n_done}/{SHADOW_DIPBUY_TARGET}")
+            send_telegram(
+                f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- Dip Buy Ekstrem Varian A (paper)\n"
+                f"{to_display_pair(sym)} @ {_fmt_price(exit_price)} ({pct:+.2f}%) -- {reason}\n"
+                f"Progress: #{n_done}/{SHADOW_DIPBUY_TARGET}", parse_mode=None)
+        else:
+            still_open.append(pos)
+    data['dipbuy_a']['open'] = still_open
+
+
 def thread_shadow_fwdtest_scan() -> None:
     with _shadow_fwdtest_lock:
         data = _load_shadow_fwdtest()
         try:
             _shadow_akuma_check_exits(data)
             _shadow_conf3_check_exits(data)
+            _shadow_dipbuy_check_exits(data)
             if len(data['akuma_all3']['closed']) < SHADOW_AKUMA_TARGET:
                 _shadow_akuma_try_open(data)
             if len(data['conf3_stochrsibb']['closed']) < SHADOW_CONF3_TARGET:
                 _shadow_conf3_try_open(data)
+            if len(data['dipbuy_a']['closed']) < SHADOW_DIPBUY_TARGET:
+                _shadow_dipbuy_try_open(data)
         except Exception as e:
             log(f"ERROR [SHADOW-FWDTEST] scan fatal: {e}")
         _save_shadow_fwdtest(data)
@@ -18415,7 +18534,8 @@ def run_web_dashboard():
             with _shadow_fwdtest_lock:
                 data = _load_shadow_fwdtest()
             out = {}
-            for key, target in (("akuma_all3", SHADOW_AKUMA_TARGET), ("conf3_stochrsibb", SHADOW_CONF3_TARGET)):
+            for key, target in (("akuma_all3", SHADOW_AKUMA_TARGET), ("conf3_stochrsibb", SHADOW_CONF3_TARGET),
+                                 ("dipbuy_a", SHADOW_DIPBUY_TARGET)):
                 closed = data[key]['closed']
                 n = len(closed)
                 wins = [c for c in closed if c['pct'] > 0]
