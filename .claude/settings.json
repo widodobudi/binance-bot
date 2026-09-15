@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__claude_ai_Railway__list-deployments",
+      "mcp__claude_ai_Railway__get-logs",
+      "Bash(unset MSYS_NO_PATHCONV)",
+      "Bash(tasklist*)",
+      "mcp__claude_ai_Google_Drive__search_files",
+      "mcp__claude_ai_Railway__list-services",
+      "mcp__claude_ai_Railway__get-service-metrics",
+      "Bash(\"/d/Users/widodobudi.DATASCRIP/AppData/Local/Android/Sdk/platform-tools/adb.exe\" logcat*)",
+      "mcp__claude_ai_SDP_Datascrip__get_requests",
+      "mcp__claude_ai_Google_Drive__download_file_content",
+      "Bash(node --check *)",
+      "mcp__claude_ai_SDP_Datascrip__get_project_tasks",
+      "mcp__claude_ai_Railway__get-service-config",
+      "mcp__claude_ai_SDP_Datascrip__get_technicians",
+      "mcp__claude_ai_SDP_Datascrip__get_summary",
+      "mcp__claude_ai_Railway__list-projects",
+      "mcp__claude_ai_Google_Drive__read_file_content",
+      "mcp__claude_ai_SDP_Datascrip__get_request_detail",
+      "mcp__claude_ai_Railway__list-variables",
+      "mcp__claude_ai_SDP_Datascrip__get_requests_by_date"
+    ]
+  }
+}
