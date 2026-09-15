@@ -3598,6 +3598,69 @@ def execute_add_fund(sym: str, add_usd: float) -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def get_idle_wallet_assets(min_value_usdt: float = 5.0) -> list:
+    """Daftar aset nganggur (BUKAN Active Deal, atau kelebihan saldo di luar yang
+    ditrack aktif) senilai >= min_value_usdt. Diekstrak dari /api/addfund_source_assets
+    (05/09/2026) supaya bisa dipakai ulang oleh auto_fund_addfund_from_idle_asset()
+    (15/09/2026) tanpa duplikasi logic. Return list of {"asset","free","value_usdt"},
+    diurutkan dari nilai terbesar."""
+    with active_deals_lock:
+        tracked_qty = {}
+        for s, dd in active_deals.items():
+            a = s.replace("USDT", "")
+            tracked_qty[a] = tracked_qty.get(a, 0.0) + float(dd.get("qty_coin", 0) or 0)
+    price_map = {t.get("symbol"): float(t.get("lastPrice", 0) or 0) for t in (get_ticker_24h() or [])}
+    out = []
+    for item in get_binance_spot_assets():
+        asset = item["asset"]
+        excess_qty = item["free"] - tracked_qty.get(asset, 0.0)
+        if excess_qty <= 0:
+            continue
+        price = price_map.get(item["symbol"], 0.0)
+        if price <= 0:
+            continue
+        value_usdt = excess_qty * price
+        if value_usdt < min_value_usdt:
+            continue
+        out.append({"asset": asset, "free": excess_qty, "value_usdt": round(value_usdt, 2)})
+    out.sort(key=lambda a: -a["value_usdt"])
+    return out
+
+
+AUTOFUND_IDLE_ASSET_BUFFER_PCT = 5.0  # jual sedikit lebih dari kebutuhan pas (fee/slippage)
+
+def auto_fund_addfund_from_idle_asset(target_symbol: str, needed_usd: float) -> dict:
+    """15/09/2026 (permintaan Mas Budi -- ide "convert koin hold_no_sell buat add-fund
+    deal yang menarik"): dipanggil dari thread2_monitor() HANYA saat add-fund gagal
+    murni karena saldo USDT bebas kurang (bukan AI-gate, bukan volatilitas, bukan
+    ditolak Binance) -- sebelum give up & pasang cooldown 15 menit, coba dulu jual SATU
+    aset nganggur (termasuk koin hold_no_sell -- begitu deal-nya di-mark closed
+    internal, koinnya lepas dari active_deals dan otomatis kehitung "nganggur" di sini,
+    persis sumber yang sama dipakai tombol manual '+ Fund dari Aset Lain').
+    Pilih aset TERKECIL yang nilainya masih cukup menutup kebutuhan (+buffer) --
+    supaya tidak asal jual posisi paling besar kalau yang lebih kecil sudah cukup,
+    sisa posisi besar tetap ada kesempatan recover. OTOMATIS PENUH, tanpa konfirmasi
+    dashboard -- tapi selalu kirim notifikasi Telegram terpisah biar tetap transparan
+    aset apa yang dikonversi dan kenapa."""
+    needed_with_buffer = needed_usd * (1 + AUTOFUND_IDLE_ASSET_BUFFER_PCT / 100)
+    candidates = [a for a in get_idle_wallet_assets(min_value_usdt=needed_with_buffer)
+                  if a['value_usdt'] >= needed_with_buffer]
+    if not candidates:
+        return {"ok": False, "error": f"tidak ada aset nganggur senilai >= ${needed_with_buffer:.2f} utk dikonversi"}
+    candidates.sort(key=lambda a: a['value_usdt'])  # terkecil yg masih cukup, bukan terbesar
+    chosen = candidates[0]
+    pct = min(100.0, needed_with_buffer / chosen['value_usdt'] * 100.0)
+    result = execute_add_fund_from_asset(chosen['asset'], target_symbol, pct)
+    if result.get("ok"):
+        send_telegram(
+            f"🔁 AUTO-CONVERT utk Add Fund (otomatis, tanpa konfirmasi dashboard)\n"
+            f"{chosen['asset']} dijual ${result.get('proceeds_usdt', 0):.2f} "
+            f"({pct:.0f}% dari ${chosen['value_usdt']:.2f} nganggur) -- ditambahkan ke "
+            f"{to_display_pair(target_symbol)} (butuh ${needed_usd:.2f})",
+            parse_mode=None)
+    return result
+
+
 def execute_add_fund_from_asset(source_asset: str, target_symbol: str, pct: float) -> dict:
     """
     05/09/2026 (permintaan Mas Budi): jual sebagian/seluruh saldo bebas SATU aset
@@ -6201,12 +6264,26 @@ def thread2_monitor():
                     if _addfund_ai_ok:
                         _free_usdt_now, _ = get_usdt_balance()
                         if _free_usdt_now < add_usd:
-                            log(f"[T2] {sym} add fund di-skip: saldo USDT bebas (${_free_usdt_now:.2f}) < ${add_usd} dibutuhkan -- cooldown 15 menit")
-                            with active_deals_lock:
-                                if sym in active_deals:
-                                    active_deals[sym]['add_fund_fail_until'] = time.time() + 15 * 60
-                            save_active_deals()
-                            _addfund_ai_ok = False
+                            _needed = add_usd - _free_usdt_now
+                            log(f"[T2] {sym} saldo USDT bebas (${_free_usdt_now:.2f}) < ${add_usd} dibutuhkan -- "
+                                f"coba auto-convert aset nganggur (kurang ${_needed:.2f})")
+                            _auto_conv = auto_fund_addfund_from_idle_asset(sym, _needed)
+                            if _auto_conv.get("ok"):
+                                # auto_fund_addfund_from_idle_asset() -> execute_add_fund_from_asset()
+                                # -> execute_add_fund() SUDAH mengirim add fund + update active_deals +
+                                # notif sendiri -- _addfund_ai_ok WAJIB False di sini supaya blok
+                                # send_add_funds() di bawah TIDAK ikut jalan lagi (double add-fund).
+                                log(f"[T2] {sym} auto-convert BERHASIL ({_auto_conv.get('source_asset')} -> "
+                                    f"${_auto_conv.get('proceeds_usdt', 0):.2f}) -- add fund SUDAH selesai lewat jalur ini")
+                                _addfund_ai_ok = False
+                            else:
+                                log(f"[T2] {sym} add fund di-skip: saldo USDT bebas kurang & auto-convert gagal "
+                                    f"({_auto_conv.get('error')}) -- cooldown 15 menit")
+                                with active_deals_lock:
+                                    if sym in active_deals:
+                                        active_deals[sym]['add_fund_fail_until'] = time.time() + 15 * 60
+                                save_active_deals()
+                                _addfund_ai_ok = False
                     if _addfund_ai_ok:
                         log(f"[T2] {sym} kirim add fund ${add_usd} (deal confirmed aktif, ATR={current_atr:.2f}%)")
                         add_ok = send_add_funds(sym, add_usd, strat, delay=0)
@@ -16386,29 +16463,8 @@ def run_web_dashboard():
             ditrack aktif utk aset itu -- selisih positif (>=$5) itu yang ditawarkan
             sbg sumber dana, BUKAN seluruh saldo (supaya porsi yang masih jadi deal
             aktif tidak ikut ketawarkan buat dijual)."""
-            MIN_VALUE_USDT = 5.0
             try:
-                with active_deals_lock:
-                    tracked_qty = {}
-                    for s, dd in active_deals.items():
-                        a = s.replace("USDT", "")
-                        tracked_qty[a] = tracked_qty.get(a, 0.0) + float(dd.get("qty_coin", 0) or 0)
-                price_map = {t.get("symbol"): float(t.get("lastPrice", 0) or 0) for t in (get_ticker_24h() or [])}
-                out = []
-                for item in get_binance_spot_assets():
-                    asset = item["asset"]
-                    excess_qty = item["free"] - tracked_qty.get(asset, 0.0)
-                    if excess_qty <= 0:
-                        continue
-                    price = price_map.get(item["symbol"], 0.0)
-                    if price <= 0:
-                        continue
-                    value_usdt = excess_qty * price
-                    if value_usdt < MIN_VALUE_USDT:
-                        continue
-                    out.append({"asset": asset, "free": excess_qty, "value_usdt": round(value_usdt, 2)})
-                out.sort(key=lambda a: -a["value_usdt"])
-                return jsonify({"ok": True, "assets": out})
+                return jsonify({"ok": True, "assets": get_idle_wallet_assets(min_value_usdt=5.0)})
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)}), 500
 
