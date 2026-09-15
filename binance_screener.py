@@ -12781,6 +12781,16 @@ def _save_shadow_fwdtest(data: dict) -> None:
         log(f"WARN _save_shadow_fwdtest: {e}")
 
 
+def _shadow_wl_tag(closed_list: list) -> str:
+    """15/09/2026 (permintaan Mas Budi -- notif CLOSE shadow cuma nampilin '#5/20' tanpa
+    W/L, jadi tidak jelas): ringkasan menang/kalah kumulatif buat dilampirkan di notif
+    Telegram CLOSE shadow, biar tidak perlu buka dashboard cuma buat lihat W/L sejauh ini."""
+    win = sum(1 for c in closed_list if c['pct'] > 0)
+    loss = len(closed_list) - win
+    total = sum(c['pct'] for c in closed_list)
+    return f"{win}W/{loss}L, total {total:+.1f}%"
+
+
 def _shadow_akuma_try_open(data: dict) -> None:
     """Cek kandidat live _akum_near_miss (sudah lolos gating structural score_akumulasi)
     terhadap syarat Entry A params 'all_three'. Reuse _akumb_window_score()/
@@ -12897,7 +12907,7 @@ def _shadow_akuma_check_exits(data: dict) -> None:
             send_telegram(
                 f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- Entry A 'all_three' (paper)\n"
                 f"{to_display_pair(sym)} @ {_fmt_price(exit_price)} ({pct:+.2f}%) -- {reason}\n"
-                f"Progress: #{n_done}/{SHADOW_AKUMA_TARGET}", parse_mode=None)
+                f"Progress: #{n_done}/{SHADOW_AKUMA_TARGET} ({_shadow_wl_tag(data['akuma_all3']['closed'])})", parse_mode=None)
         else:
             still_open.append(pos)
     data['akuma_all3']['open'] = still_open
@@ -12990,7 +13000,7 @@ def _shadow_conf3_check_exits(data: dict) -> None:
             send_telegram(
                 f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- 6Confluence stoch+rsi+bb (paper)\n"
                 f"{to_display_pair(sym)} @ {_fmt_price(exit_price)} ({pct:+.2f}%) -- {reason}\n"
-                f"Progress: #{n_done}/{SHADOW_CONF3_TARGET}", parse_mode=None)
+                f"Progress: #{n_done}/{SHADOW_CONF3_TARGET} ({_shadow_wl_tag(data['conf3_stochrsibb']['closed'])})", parse_mode=None)
         else:
             still_open.append(pos)
     data['conf3_stochrsibb']['open'] = still_open
@@ -13088,7 +13098,7 @@ def _shadow_dipbuy_check_exits(data: dict) -> None:
             send_telegram(
                 f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- Dip Buy Ekstrem Varian A (paper)\n"
                 f"{to_display_pair(sym)} @ {_fmt_price(exit_price)} ({pct:+.2f}%) -- {reason}\n"
-                f"Progress: #{n_done}/{SHADOW_DIPBUY_TARGET}", parse_mode=None)
+                f"Progress: #{n_done}/{SHADOW_DIPBUY_TARGET} ({_shadow_wl_tag(data['dipbuy_a']['closed'])})", parse_mode=None)
         else:
             still_open.append(pos)
     data['dipbuy_a']['open'] = still_open
