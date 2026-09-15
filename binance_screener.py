@@ -373,6 +373,17 @@ TRENDCONFIRM_RSI_MAX          = 75.0     # syarat wajib BARU (03/09/2026, koreks
                                           # 5 dari 6 strategi lain SEMUA punya RSI_MAX, ini yg
                                           # ketinggalan waktu strategi baru ini dibangun.
 TRENDCONFIRM_BB_PCT_SECONDARY= 0.65      # syarat SEKUNDER (skor/ranking, bukan gerbang wajib)
+TRENDCONFIRM_EMA200_1D_MIN_PCT = -10.0   # syarat wajib BARU (15/09/2026, permintaan Mas Budi setelah
+                                          # insiden IOTA/USDT -8.06%): blokir kandidat yg harganya sudah
+                                          # >=10% DI BAWAH EMA200(1D) -- konteks downtrend HTF yg dalam.
+                                          # DIPERCEPAT jadi gerbang wajib SEBELUM 13 sampel EMA200(1D)
+                                          # watch (project_trendconfirm_htf_watch.md) terkumpul penuh --
+                                          # menyimpang dari rencana awal "jangan gate sebelum backtest +
+                                          # konfirmasi", TAPI sudah dikonfirmasi langsung ke Mas Budi
+                                          # 15/09/2026 sesudah insiden ini. Ambang -10.0% dipilih di antara
+                                          # 1 sampel gagal (IOTA -12.99%, rugi -8.06%) dan 1 sampel lolos
+                                          # (SENT -5.73%, untung +2.25%) -- BELUM divalidasi backtest
+                                          # menyeluruh, murni dari 2 titik data, monitor terus.
 TRENDCONFIRM_CLOSE_HARD_CEILING_EXTRA_PCT = 5.0  # batas absolut close = hard_stop_pct(atr) + ini,
                                           # TIDAK BISA di-override AI (Fase 2, permintaan Mas Budi 03/09/2026)
 TRENDCONFIRM_BATCH_POOL_SIZE = 10        # (03/09/2026, permintaan Mas Budi, direvisi setelah
@@ -4462,6 +4473,25 @@ def get_ohlcv_htf(symbol: str, interval: str = "3d", limit: int = 120):
         log(f"  [HTF] parse error {symbol} {interval}: {e}")
         return None
 
+def get_pct_vs_ema200_1d(symbol: str):
+    """Return (pct_vs_ema200_1d: float, ema200_1d: float) atau (None, None) kalau histori 1D
+    kurang dari 200 candle. Dipakai baik utk logging (log_oac) maupun gate wajib
+    TrenKonfirmasi-4h (TRENDCONFIRM_EMA200_1D_MIN_PCT, 15/09/2026)."""
+    try:
+        import pandas_ta as _pta
+        df1d = get_ohlcv_htf(symbol, interval="1d", limit=250)
+        if df1d is None or len(df1d) < 200:
+            return None, None
+        ema200_1d = _pta.ema(df1d["close"], length=200).iloc[-1]
+        close_1d = df1d["close"].iloc[-1]
+        if ema200_1d is None or pd.isna(ema200_1d) or ema200_1d <= 0:
+            return None, None
+        pct = (close_1d / ema200_1d - 1) * 100
+        return float(pct), float(ema200_1d)
+    except Exception as e:
+        log(f"  [EMA200_1D] error {symbol}: {e}")
+        return None, None
+
 def compute_indicators_htf(df):
     """Hitung EMA50 dan MACD hist untuk HTF dataframe."""
     import pandas_ta as _pta
@@ -8537,6 +8567,16 @@ def thread_trendconfirm_scan():
         if not sym.endswith("USDT"): continue
         if sym in existing: continue
         if sym in SYMBOL_BLACKLIST: continue
+        # 15/09/2026 (permintaan Mas Budi, sesudah insiden HOODB -0.61% & SPCXB -4.62%):
+        # exclude tokenized stocks (bStock) dari kandidat TrenKonfirmasi-4h sepenuhnya --
+        # 2/2 sampel bStock strategi ini KALAH, plus 2/2 sampel bStock di Akumulasi-4h
+        # (NVDAB, QQQB) juga kalah (total 4/4 lintas proyek). Beda dgn exclusion bStock
+        # umum di get_usdt_spot_pairs() (yg cuma exclude kalau tidak ada permission SPOT
+        # sama sekali) -- ini exclusion PENUH khusus utk strategi ini, bStock yg punya
+        # SPOT & lolos NYSE filter pun tetap diblok di sini.
+        if is_bstock_symbol(sym):
+            count_blocker(scan_blockers_tc, "bStock (dikecualikan)", True)
+            continue
         if _trendconfirm_last_candle_ts.get(sym) == candle_open_ms: continue
         if vol_map.get(sym, 0) < TRENDCONFIRM_MIN_VOL_USD: continue
 
@@ -8550,6 +8590,13 @@ def thread_trendconfirm_scan():
             ok, score, detail = check_trendconfirm_entry(df)
             if not ok:
                 count_blocker(scan_blockers_tc, "Syarat wajib belum lolos", True)
+                continue
+            # 15/09/2026 (permintaan Mas Budi, insiden IOTA/USDT -8.06%, DIPERCEPAT dari
+            # rencana awal "tunggu 13 sampel" -- lihat TRENDCONFIRM_EMA200_1D_MIN_PCT):
+            # blokir kandidat yg harganya sudah terlalu dalam di bawah EMA200(1D).
+            pct_ema200_1d, _ = get_pct_vs_ema200_1d(sym)
+            if pct_ema200_1d is not None and pct_ema200_1d < TRENDCONFIRM_EMA200_1D_MIN_PCT:
+                count_blocker(scan_blockers_tc, f"EMA200(1D) terlalu dalam ({pct_ema200_1d:+.1f}%)", True)
                 continue
             r = df.iloc[-1]
             candidates.append((sym, float(r['close']), float(r['atr_pct']), score, detail, df))
