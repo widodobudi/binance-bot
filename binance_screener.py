@@ -3259,8 +3259,21 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
             )
     if hold_minutes > 0 and (time.time() - armed_since) < hold_minutes * 60:
         return
-    quantity = binance_get_asset_qty(asset)
+    # 16/09/2026 (permintaan Mas Budi, root cause insiden QQQB/ENSO/TRB "manual reconcile"):
+    # SEBELUMNYA quantity diambil dari SALDO TOTAL wallet, tanpa mengurangi qty yg sedang
+    # ditrack aktif oleh strategi lain (Akumulasi-4h/brkX2/dst) untuk asset yg sama -- kalau
+    # asset ini KEBETULAN juga jadi Active Deal, Auto Sell Asset ikut menjual porsi yg
+    # sebenarnya "milik" deal itu, bikin qty_coin tracked jadi tidak sinkron dgn wallet
+    # (baru ketahuan belakangan lewat tombol "Reconcile" manual). Sekarang dikurangi
+    # tracked_qty dulu -- sama persis logika get_idle_wallet_assets() -- supaya Auto Sell
+    # Asset CUMA jual porsi yg benar-benar nganggur, tidak pernah menyentuh deal aktif.
+    with active_deals_lock:
+        tracked_qty = sum(float(dd.get("qty_coin", 0) or 0)
+                          for s, dd in active_deals.items() if s.replace("USDT", "") == asset)
+    quantity = binance_get_asset_qty(asset) - tracked_qty
     if quantity <= 0:
+        if tracked_qty > 0:
+            log(f"[AUTO-SELL] {symbol} saldo nganggur habis (semua {tracked_qty:.8g} sedang jadi Active Deal) -- order dibatalkan")
         return
     sell_pct = min(100.0, max(1.0, float(sell_pct or 95)))
     sell_quantity = quantity * (sell_pct / 100.0)
