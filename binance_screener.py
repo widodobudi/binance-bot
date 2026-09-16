@@ -2058,14 +2058,19 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
     except Exception as e:
         log(f"WARN log_oac file error: {e}")
     threading.Thread(target=drive_append, args=("open-arm-close.txt", text), daemon=True).start()
-    # 14/09/2026 (troubleshoot permintaan Mas Budi): parse_mode="Markdown" (legacy) FRAGIL --
-    # Telegram scan seluruh pesan cari pasangan */`/_ , jadi 1 karakter spesial tak sengaja
-    # di MANA PUN field indikator (strategy name berisi underscore spt "brkX2_4h"/
-    # "akum_entry_a" di dalam backtick, exit_reason bebas teks, dst) bikin SELURUH pesan
-    # gagal terkirim ("can't find end of the entity") -- kejadian nyata CAKEUSDT ADD_FUND
-    # 22:35:09 WIB. Semua send_telegram() lain di file ini sudah pakai parse_mode=None
-    # (plain text) justru karena ini -- disamakan di sini, bukan coba escape tiap field.
-    tg_msg = f"📋 {event} {to_display_pair(symbol)} {strategy}\n" + ind_lines
+    # 16/09/2026 (permintaan Mas Budi, temuan dobel notif via screenshot -- CrossEMA-4h OPEN
+    # KAVA/AVA, TrenKonfirmasi-4h OPEN SENT/RED, TrenKonfirmasi-4h CLOSE RED dobel semua):
+    # log_oac() DULU SELALU kirim Telegram sendiri (raw indicator dump, TANPA tanggal
+    # tertanam di teks -- cuma timestamp bubble Telegram di luar isi pesan), padahal
+    # OPEN & CLOSE SUDAH punya notif "ramah" terpisah per-strategi (ada tanggal+jam WIB di
+    # baris kedua, semua indikator penting via _fmt_indicators_open_block(), plus
+    # U/PnL/modal/forward-test progress yg log_oac TIDAK punya) -- jadi selalu dobel.
+    # ARMED beda -- TIDAK punya notif "ramah" lain sama sekali, log_oac() SATU-SATUNYA
+    # notif buat event itu, jadi TETAP dikirim di sini (dengan tanggal ditambahkan,
+    # menjawab keluhan "tidak terdokumentasi tanggal jam"-nya juga).
+    if event.upper() in ("OPEN", "CLOSE"):
+        return
+    tg_msg = f"📋 {ts} WIB | {event} | {to_display_pair(symbol)} | {strategy}\n" + ind_lines
     send_telegram(tg_msg, parse_mode=None)
 
 # ── Riwayat keputusan AI (04/09/2026, permintaan Mas Budi) ──────────────────────────
