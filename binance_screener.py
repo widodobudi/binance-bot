@@ -1196,32 +1196,42 @@ def get_closed_trades_distinct_pairs() -> list:
 # blokir lagi begitu P&L hari ini balik di atas -limit% (atau ganti hari WIB baru).
 DAILY_LOSS_LIMIT_FILE = os.path.join(DATA_DIR, "daily_loss_limit_config.json")
 daily_loss_limit_lock = threading.Lock()
-daily_loss_limit_pct: float = 3.0   # default -- disepakati dari analisis data nyata 29/08/2026
+# 17/09/2026 (permintaan Mas Budi): basis limit diganti dari PERSENTASE modal total ke
+# DOLLAR TETAP. Alasan: modal total sekarang kecil (~$37, hampir semua di 1 posisi CAKE),
+# jadi basis % jadi terlalu sensitif -- rugi $2.50 wajar di 1 posisi saja sudah kebaca
+# -6.79% dan langsung memblokir SEMUA strategi. Basis $ tetap tidak ikut menyusut/membesar
+# mengikuti modal, jadi lebih stabil terlepas dari besar-kecilnya modal saat ini.
+daily_loss_limit_usd: float = 6.0   # default disepakati 17/09/2026 (dulu 3% dari modal)
 
 def load_daily_loss_limit():
-    global daily_loss_limit_pct
+    global daily_loss_limit_usd
     if not os.path.exists(DAILY_LOSS_LIMIT_FILE):
         return
     try:
         with open(DAILY_LOSS_LIMIT_FILE, 'r') as f:
             data = json.load(f)
         with daily_loss_limit_lock:
-            daily_loss_limit_pct = float(data.get("limit_pct", 3.0))
-        log(f"   Loaded daily_loss_limit_pct: {daily_loss_limit_pct}%")
+            # "limit_usd" adalah key baru (17/09/2026) -- fallback ke "limit_pct" LAMA cuma
+            # supaya file config lama (dari sebelum ganti basis) tidak bikin error baca,
+            # BUKAN dipakai sebagai persentase lagi (angkanya langsung dipakai sbg $ dgn
+            # default 6.0 kalau cuma "limit_pct" lama yg ada -- config akan tertimpa benar
+            # begitu Mas Budi save dari dashboard sekali).
+            daily_loss_limit_usd = float(data.get("limit_usd", data.get("limit_pct", 6.0)))
+        log(f"   Loaded daily_loss_limit_usd: ${daily_loss_limit_usd}")
     except Exception as e:
         log(f"WARN gagal baca daily_loss_limit_config.json: {e}")
 
-def save_daily_loss_limit(pct: float) -> float:
-    global daily_loss_limit_pct
-    pct = max(0.0, float(pct))
+def save_daily_loss_limit(usd: float) -> float:
+    global daily_loss_limit_usd
+    usd = max(0.0, float(usd))
     with daily_loss_limit_lock:
-        daily_loss_limit_pct = pct
+        daily_loss_limit_usd = usd
     try:
         with open(DAILY_LOSS_LIMIT_FILE, 'w') as f:
-            json.dump({"limit_pct": pct}, f, indent=2)
+            json.dump({"limit_usd": usd}, f, indent=2)
     except Exception as e:
         log(f"WARN gagal simpan daily_loss_limit_config.json: {e}")
-    return pct
+    return usd
 
 def get_today_pnl_usd() -> float:
     """Realized P&L (trade CLOSED hari ini, WIB) + unrealized P&L (U/PNL semua deal aktif)."""
@@ -1298,15 +1308,17 @@ def get_total_capital_usd() -> float:
     return free_usdt + locked_usdt + deployed + auto_sell_value
 
 def get_daily_loss_status() -> dict:
-    """Ringkasan buat dashboard: pnl hari ini ($, %), limit, apakah tersulut."""
+    """Ringkasan buat dashboard: pnl hari ini ($, %), limit ($ tetap sejak 17/09/2026),
+    apakah tersulut. pnl_pct/capital_usd tetap dihitung & dikembalikan (informasi konteks
+    di dashboard), TAPI keputusan breach sekarang murni dari pnl_usd vs limit_usd."""
     cap = get_total_capital_usd()
     pnl_usd = get_today_pnl_usd()
     pnl_pct = (pnl_usd / cap * 100) if cap > 0 else 0.0
     with daily_loss_limit_lock:
-        limit_pct = daily_loss_limit_pct
-    breached = limit_pct > 0 and pnl_pct <= -abs(limit_pct)
+        limit_usd = daily_loss_limit_usd
+    breached = limit_usd > 0 and pnl_usd <= -abs(limit_usd)
     return {"pnl_usd": pnl_usd, "pnl_pct": pnl_pct, "capital_usd": cap,
-            "limit_pct": limit_pct, "breached": breached}
+            "limit_usd": limit_usd, "breached": breached}
 
 def is_daily_loss_limit_breached() -> bool:
     """09/09/2026 (permintaan Mas Budi, keluhan notif "Batas Rugi Harian Tersulut" bertubi-tubi):
@@ -1318,16 +1330,12 @@ def is_daily_loss_limit_breached() -> bool:
     global _daily_loss_notified_flag
     try:
         with daily_loss_limit_lock:
-            limit_pct = daily_loss_limit_pct
-        if limit_pct <= 0:
+            limit_usd = daily_loss_limit_usd
+        if limit_usd <= 0:
             _daily_loss_notified_flag = False
             return False
-        cap = get_total_capital_usd()
-        if cap <= 0:
-            _daily_loss_notified_flag = False
-            return False
-        pnl_pct = get_today_pnl_usd() / cap * 100
-        breached = pnl_pct <= -abs(limit_pct)
+        pnl_usd = get_today_pnl_usd()
+        breached = pnl_usd <= -abs(limit_usd)
         if not breached:
             _daily_loss_notified_flag = False
         return breached
@@ -3836,7 +3844,7 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
                 send_telegram(
                     f"⛔ Batas Rugi Harian Tersulut\n"
                     f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-                    f"P&L hari ini: {_dls['pnl_pct']:+.2f}% (${_dls['pnl_usd']:+.2f}) | Batas: -{_dls['limit_pct']:.1f}%\n"
+                    f"P&L hari ini: ${_dls['pnl_usd']:+.2f} ({_dls['pnl_pct']:+.2f}% dari modal) | Batas: -${_dls['limit_usd']:.2f}\n"
                     f"SEMUA open long baru diblokir lintas strategi sampai reset jam 00:00 WIB\n"
                     f"(atau P&L membaik). Contoh yg baru diblokir: {to_display_pair(symbol)} ({strategy}).\n"
                     f"Kalau ada notif 'AI Decision: OPEN' SETELAH pesan ini, itu tetap TIDAK akan\n"
@@ -9894,9 +9902,9 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
     <div class="card-body">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border);font-size:11px">
-        <label style="display:flex;align-items:center;gap:6px;color:var(--muted)" title="Circuit breaker lintas semua strategi: dihitung terus-menerus dari P&amp;L hari ini (realized + unrealized deal aktif) vs modal total. Begitu tersulut, cuma blokir OPEN DEAL BARU (deal aktif tetap jalan normal) -- otomatis lepas lagi begitu P&amp;L balik naik.">
-            <span>Batas Rugi Harian (%):</span>
-            <input type="number" id="dll-pct" min="0" step="0.1" value="3" style="width:70px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--muted)" title="Circuit breaker lintas semua strategi: dihitung terus-menerus dari P&amp;L hari ini (realized + unrealized deal aktif), dibandingkan ke angka DOLLAR TETAP ini (bukan persentase modal lagi, sejak 17/09/2026 -- basis % terlalu sensitif saat modal kecil). Begitu tersulut, cuma blokir OPEN DEAL BARU (deal aktif tetap jalan normal) -- otomatis lepas lagi begitu P&amp;L balik naik.">
+            <span>Batas Rugi Harian ($):</span>
+            <input type="number" id="dll-usd" min="0" step="0.5" value="6" style="width:70px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px">
         </label>
         <button type="button" onclick="event.stopPropagation();saveDailyLossLimit()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
         <span id="dll-status" style="color:var(--muted)">Memuat...</span>
@@ -10901,9 +10909,9 @@ function saveAIProviderConfig() {
 function loadDailyLossLimit() {
     fetch('/api/daily_loss_limit').then(function(r){ return r.json(); }).then(function(d) {
         if (!d.ok) return;
-        var input = document.getElementById('dll-pct');
+        var input = document.getElementById('dll-usd');
         var status = document.getElementById('dll-status');
-        if (input && document.activeElement !== input) input.value = d.limit_pct;
+        if (input && document.activeElement !== input) input.value = d.limit_usd;
         if (status) {
             var pnlColor = d.pnl_usd >= 0 ? 'var(--green)' : 'var(--red)';
             status.innerHTML = 'P&amp;L hari ini: <b style="color:' + pnlColor + '">' + (d.pnl_usd>=0?'+':'') + d.pnl_usd.toFixed(2) + ' USD (' + (d.pnl_pct>=0?'+':'') + d.pnl_pct.toFixed(2) + '%)</b> dari modal $' + d.capital_usd.toFixed(2) +
@@ -10912,9 +10920,9 @@ function loadDailyLossLimit() {
     }).catch(function(){});
 }
 function saveDailyLossLimit() {
-    var v = parseFloat(document.getElementById('dll-pct').value);
+    var v = parseFloat(document.getElementById('dll-usd').value);
     if (isNaN(v) || v < 0) { alert('Isi angka batas yang valid.'); return; }
-    fetch('/api/daily_loss_limit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({limit_pct:v})})
+    fetch('/api/daily_loss_limit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({limit_usd:v})})
         .then(function(r){ return r.json(); }).then(function(d){
             if (!d.ok) { alert('Error: ' + d.error); return; }
             loadDailyLossLimit();
@@ -18777,16 +18785,16 @@ def run_web_dashboard():
 
         @app.route("/api/daily_loss_limit", methods=["GET", "POST"])
         def api_daily_loss_limit():
-            """GET: status batas rugi harian (limit, P&L hari ini, tersulut atau tidak).
-            POST: {limit_pct: 3.0} -- update angka batasnya."""
+            """GET: status batas rugi harian (limit $ tetap sejak 17/09/2026, P&L hari ini,
+            tersulut atau tidak). POST: {limit_usd: 6.0} -- update angka batasnya."""
             try:
                 if request.method == "POST":
                     payload = request.get_json(force=True, silent=True) or {}
                     try:
-                        pct = float(payload.get("limit_pct", daily_loss_limit_pct))
+                        usd = float(payload.get("limit_usd", daily_loss_limit_usd))
                     except (TypeError, ValueError):
-                        return jsonify({"ok": False, "error": "limit_pct tidak valid"}), 400
-                    save_daily_loss_limit(pct)
+                        return jsonify({"ok": False, "error": "limit_usd tidak valid"}), 400
+                    save_daily_loss_limit(usd)
                 status = get_daily_loss_status()
                 return jsonify({"ok": True, **status})
             except Exception as error:
