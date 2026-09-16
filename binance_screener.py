@@ -3488,7 +3488,22 @@ def send_open_long(symbol: str, strategy: str = 'brkX2') -> bool:
     if USE_BINANCE_DIRECT:
         try:
             usd = get_strategy_base_usd(strategy)
-            ensure_spot_usdt(float(usd))
+            if not ensure_spot_usdt(float(usd)):
+                # 17/09/2026 (permintaan Mas Budi): kandidat ini SUDAH lolos semua syarat
+                # (teknikal + AI) -- kalau Spot USDT + Earn Flexible (ensure_spot_usdt)
+                # masih kurang, coba dulu jual SATU aset nganggur (worst-performer dulu,
+                # min umur 24 jam kalau asalnya hold_no_sell) sebelum menyerah. Lihat
+                # auto_fund_open_from_idle_asset() -- ini murni jalur PENDANAAN, bukan
+                # gerbang keputusan baru (keputusan open sudah final sebelum sampai sini).
+                _free_now, _ = get_usdt_balance()
+                _needed_open = float(usd) - _free_now
+                if _needed_open > 0:
+                    _auto_conv_open = auto_fund_open_from_idle_asset(_needed_open)
+                    if _auto_conv_open.get("ok"):
+                        log(f"[OPEN] {symbol} auto-convert BERHASIL utk modal open "
+                            f"({_auto_conv_open.get('source_asset')} -> ${_auto_conv_open.get('proceeds_usdt', 0):.2f})")
+                    else:
+                        log(f"[OPEN] {symbol} saldo tetap kurang, auto-convert gagal: {_auto_conv_open.get('error')}")
             result = binance_buy_market(symbol, float(usd))
             if result.get("qty", 0) > 0:
                 # Simpan qty_coin aktual ke active_deals nanti di caller
@@ -3722,6 +3737,62 @@ def auto_fund_addfund_from_idle_asset(target_symbol: str, needed_usd: float) -> 
             f"{chosen['asset']} dijual ${result.get('proceeds_usdt', 0):.2f} "
             f"({pct:.0f}% dari ${chosen['value_usdt']:.2f} nganggur, {_perf_note}) -- ditambahkan ke "
             f"{to_display_pair(target_symbol)} (butuh ${needed_usd:.2f})",
+            parse_mode=None)
+    return result
+
+
+AUTOFUND_OPEN_MIN_IDLE_AGE_SEC = 24 * 3600  # 17/09/2026, permintaan Mas Budi -- lihat docstring
+
+def auto_fund_open_from_idle_asset(needed_usd: float) -> dict:
+    """17/09/2026 (permintaan Mas Budi -- perluasan auto-convert dari add-fund ke OPEN LONG
+    baru): dipanggil dari send_open_long() HANYA saat ensure_spot_usdt() gagal mencukupkan
+    saldo (Spot + redeem Earn Flexible sudah dicoba, masih kurang) utk kandidat yang SUDAH
+    lolos semua syarat (teknikal + AI) -- ini murni soal PENDANAAN, bukan gerbang keputusan
+    baru. Sama logika sumber dgn auto_fund_addfund_from_idle_asset() (jual aset nganggur yg
+    floating-nya PALING JELEK dulu di antara yg nilainya cukup, fallback ke unknown-origin
+    terkecil kalau tidak ada yg diketahui rugi cukup besar) -- BEDANYA: khusus di sini,
+    aset yg ASAL-USULNYA DIKETAHUI (dari hold_no_sell_price.json) HARUS SUDAH NGANGGUR
+    >= AUTOFUND_OPEN_MIN_IDLE_AGE_SEC (24 jam) sebelum boleh dipakai. Alasan: add-fund
+    (fungsi lain) menambah modal ke deal yg SUDAH terbukti sinyalnya benar -- OPEN LONG
+    baru ini keputusan BARU sepenuhnya thd simbol lain; kalau bebas tanpa jeda, aset yg
+    BARU SAJA di-hold_no_sell (mis. 10 menit lalu, harusnya masih dikasih kesempatan
+    pulih) bisa langsung terjual lagi cuma buat danai kandidat lain yg tidak berhubungan
+    sama sekali. Aset tanpa asal-usul diketahui (dust/manual, tidak pernah lewat
+    hold_no_sell) TIDAK kena gate umur ini -- tidak ada "baru dibekukan" yg perlu dijaga.
+    Return dict {"ok","source_asset","proceeds_usdt","error"}."""
+    needed_with_buffer = needed_usd * (1 + AUTOFUND_IDLE_ASSET_BUFFER_PCT / 100)
+    all_assets = get_idle_wallet_assets(min_value_usdt=needed_with_buffer)
+    candidates = []
+    for a in all_assets:
+        if a['value_usdt'] < needed_with_buffer:
+            continue
+        origin = get_hold_no_sell_price(a['asset'])
+        if origin is not None:
+            age_sec = time.time() - float(origin.get('ts', 0) or 0)
+            if age_sec < AUTOFUND_OPEN_MIN_IDLE_AGE_SEC:
+                continue  # baru nganggur, belum lewat jeda 24 jam -- jangan dikorbankan dulu
+        candidates.append(a)
+    if not candidates:
+        return {"ok": False, "error": f"tidak ada aset nganggur (umur >=24j kalau asalnya hold_no_sell) senilai >= ${needed_with_buffer:.2f}"}
+    known = [a for a in candidates if a['floating_pct'] is not None]
+    unknown = [a for a in candidates if a['floating_pct'] is None]
+    if known:
+        known.sort(key=lambda a: a['floating_pct'])
+        chosen = known[0]
+    else:
+        unknown.sort(key=lambda a: a['value_usdt'])
+        chosen = unknown[0]
+    pct = min(100.0, needed_with_buffer / chosen['value_usdt'] * 100.0)
+    sell_qty = chosen['free'] * (pct / 100.0)
+    result = sell_to_usdt(chosen['asset'] + "USDT", qty=sell_qty)
+    if result.get("ok"):
+        _perf_note = (f"floating {chosen['floating_pct']:+.2f}%" if chosen['floating_pct'] is not None
+                      else "performa tidak diketahui (dust/manual)")
+        send_telegram(
+            f"🔁 AUTO-CONVERT utk OPEN LONG baru (otomatis, tanpa konfirmasi dashboard)\n"
+            f"{chosen['asset']} dijual ${result.get('proceeds_usdt', 0):.2f} "
+            f"({pct:.0f}% dari ${chosen['value_usdt']:.2f} nganggur, {_perf_note}) -- "
+            f"dipakai buat modal open long baru (butuh ${needed_usd:.2f})",
             parse_mode=None)
     return result
 
