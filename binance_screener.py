@@ -5355,6 +5355,15 @@ def heartbeat_general_tick():
     # di-deploy jadi frozen counter-nya 0, tapi tetap dipisah dari fase-3 (trade dgn syarat baru).
     prog_cx2  = csv_progress('brkX2_crossema', offset=STRAT_CROSSEMA_LIVE_BASELINE, until=STRAT_CROSSEMA_STOCH_PATCH_BASELINE)
     prog_cx3  = csv_progress('brkX2_crossema', offset=STRAT_CROSSEMA_STOCH_PATCH_BASELINE)
+    # 17/09/2026 (permintaan Mas Budi, temuan bug): trend_confirm_4h (TrenKonfirmasi-4h) dan
+    # qscalp_3m TIDAK PERNAH ditambahkan ke ringkasan General ini sejak awal dibuat -- kedua
+    # strategi ini real & aktif live-trading (TrenKonfirmasi-4h bahkan sudah #15/15 fase
+    # pertamanya, cuma angka target itu KEBETULAN nebeng FWDTEST_TARGET_BRKX2 lewat cabang
+    # 'else' di thread2_monitor(), bukan target dedicated miliknya sendiri -- belum ada
+    # TRENDCONFIRM_FWDTEST_TARGET/PHASE2 dst spt strategi lain, jadi baris di bawah ini BARU
+    # baris ringkasan LIVE sederhana, BELUM ada breakdown fase-2/3 spt strategi lain).
+    prog_trend  = csv_progress('trend_confirm_4h')
+    prog_qscalp = csv_progress('qscalp_3m')
     if prog_all is None:
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
     else:
@@ -5382,6 +5391,8 @@ def heartbeat_general_tick():
                      f"{prog_akum_stop['n']}/{AKUM_ENTRY_FWDTEST_TARGET} "
                      f"({prog_akum_stop['win']}W/{prog_akum_stop['loss']}L,{prog_akum_stop['total_pct']:+.1f}%)\n"
                      f"    akumulasi-4h: 2nd {_fmt_strat(prog_akum2, AKUM_ENTRY_PHASE2_TARGET)}\n"
+                     f"  - trend_confirm_4h: {_fmt_hunting_live(prog_trend)}\n"
+                     f"  - qscalp_3m  : {_fmt_hunting_live(prog_qscalp)}\n"
                      f"  - Shadow (paper, bukan live):\n"
                      f"    {_fmt_shadow('akuma_all3', SHADOW_AKUMA_TARGET)}\n"
                      f"    {_fmt_shadow('conf3_stochrsibb', SHADOW_CONF3_TARGET)}\n"
