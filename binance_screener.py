@@ -3602,8 +3602,14 @@ def get_idle_wallet_assets(min_value_usdt: float = 5.0) -> list:
     """Daftar aset nganggur (BUKAN Active Deal, atau kelebihan saldo di luar yang
     ditrack aktif) senilai >= min_value_usdt. Diekstrak dari /api/addfund_source_assets
     (05/09/2026) supaya bisa dipakai ulang oleh auto_fund_addfund_from_idle_asset()
-    (15/09/2026) tanpa duplikasi logic. Return list of {"asset","free","value_usdt"},
-    diurutkan dari nilai terbesar."""
+    (15/09/2026) tanpa duplikasi logic. Return list of {"asset","free","value_usdt",
+    "floating_pct"} -- floating_pct None kalau asal-usul harga beli-nya tidak diketahui
+    (mis. dust sisa Convert Aset manual), atau angka kalau riwayatnya ada di
+    hold_no_sell_price.json (16/09/2026, permintaan Mas Budi -- dipakai buat pilih
+    "jual yang paling jelek dulu" di auto_fund_addfund_from_idle_asset()). Diurutkan
+    dari nilai terbesar (urutan lama, TIDAK dipakai lagi oleh auto_fund_addfund_from_idle_asset
+    yang sekarang punya sorting sendiri, tapi dipertahankan di sini krn masih dipakai
+    /api/addfund_source_assets buat tampilan dashboard)."""
     with active_deals_lock:
         tracked_qty = {}
         for s, dd in active_deals.items():
@@ -3622,7 +3628,12 @@ def get_idle_wallet_assets(min_value_usdt: float = 5.0) -> list:
         value_usdt = excess_qty * price
         if value_usdt < min_value_usdt:
             continue
-        out.append({"asset": asset, "free": excess_qty, "value_usdt": round(value_usdt, 2)})
+        floating_pct = None
+        origin = get_hold_no_sell_price(asset)
+        if origin and float(origin.get("entry_price", 0) or 0) > 0:
+            floating_pct = (price / float(origin["entry_price"]) - 1) * 100 - FEE_ROUND_TRIP_PCT
+        out.append({"asset": asset, "free": excess_qty, "value_usdt": round(value_usdt, 2),
+                    "floating_pct": round(floating_pct, 2) if floating_pct is not None else None})
     out.sort(key=lambda a: -a["value_usdt"])
     return out
 
@@ -3631,31 +3642,47 @@ AUTOFUND_IDLE_ASSET_BUFFER_PCT = 5.0  # jual sedikit lebih dari kebutuhan pas (f
 
 def auto_fund_addfund_from_idle_asset(target_symbol: str, needed_usd: float) -> dict:
     """15/09/2026 (permintaan Mas Budi -- ide "convert koin hold_no_sell buat add-fund
-    deal yang menarik"): dipanggil dari thread2_monitor() HANYA saat add-fund gagal
-    murni karena saldo USDT bebas kurang (bukan AI-gate, bukan volatilitas, bukan
-    ditolak Binance) -- sebelum give up & pasang cooldown 15 menit, coba dulu jual SATU
-    aset nganggur (termasuk koin hold_no_sell -- begitu deal-nya di-mark closed
-    internal, koinnya lepas dari active_deals dan otomatis kehitung "nganggur" di sini,
-    persis sumber yang sama dipakai tombol manual '+ Fund dari Aset Lain').
-    Pilih aset TERKECIL yang nilainya masih cukup menutup kebutuhan (+buffer) --
-    supaya tidak asal jual posisi paling besar kalau yang lebih kecil sudah cukup,
-    sisa posisi besar tetap ada kesempatan recover. OTOMATIS PENUH, tanpa konfirmasi
-    dashboard -- tapi selalu kirim notifikasi Telegram terpisah biar tetap transparan
-    aset apa yang dikonversi dan kenapa."""
+    deal yang menarik"): dipanggil dari thread2_monitor() (via _pending_addfund_queue,
+    16/09/2026) HANYA saat add-fund gagal murni karena saldo USDT bebas kurang (bukan
+    AI-gate, bukan volatilitas, bukan ditolak Binance) -- sebelum give up & pasang
+    cooldown 15 menit, coba dulu jual SATU aset nganggur (termasuk koin hold_no_sell --
+    begitu deal-nya di-mark closed internal, koinnya lepas dari active_deals dan
+    otomatis kehitung "nganggur" di sini, persis sumber yang sama dipakai tombol manual
+    '+ Fund dari Aset Lain').
+
+    16/09/2026 (permintaan Mas Budi): pemilihan sumber DIUBAH dari "terkecil yg cukup"
+    jadi "yang floating profit-nya PALING JELEK di antara yang nilainya cukup" --
+    starve yg jelek, feed yg bagus. Aset yg tidak diketahui asal-usulnya (floating_pct
+    None -- dust/manual, bukan dari hold_no_sell) SENGAJA diprioritaskan PALING
+    TERAKHIR: kita tidak tahu apakah menjualnya mengunci untung atau rugi, sedangkan
+    aset yg SUDAH DIKETAHUI rugi itu target yg jauh lebih aman & sesuai tujuan
+    mekanisme ini. Baru kalau tidak ada aset yg diketahui rugi & cukup menutup
+    kebutuhan, jatuh ke aset tak diketahui (dipilih yg TERKECIL yg cukup, spt logika
+    lama, minimalkan gangguan krn kita tak tahu ini "baik" atau "jelek").
+    OTOMATIS PENUH, tanpa konfirmasi dashboard -- tapi selalu kirim notifikasi Telegram
+    terpisah biar tetap transparan aset apa yang dikonversi dan kenapa."""
     needed_with_buffer = needed_usd * (1 + AUTOFUND_IDLE_ASSET_BUFFER_PCT / 100)
-    candidates = [a for a in get_idle_wallet_assets(min_value_usdt=needed_with_buffer)
-                  if a['value_usdt'] >= needed_with_buffer]
+    all_assets = get_idle_wallet_assets(min_value_usdt=needed_with_buffer)
+    candidates = [a for a in all_assets if a['value_usdt'] >= needed_with_buffer]
     if not candidates:
         return {"ok": False, "error": f"tidak ada aset nganggur senilai >= ${needed_with_buffer:.2f} utk dikonversi"}
-    candidates.sort(key=lambda a: a['value_usdt'])  # terkecil yg masih cukup, bukan terbesar
-    chosen = candidates[0]
+    known = [a for a in candidates if a['floating_pct'] is not None]
+    unknown = [a for a in candidates if a['floating_pct'] is None]
+    if known:
+        known.sort(key=lambda a: a['floating_pct'])  # paling negatif (paling jelek) dulu
+        chosen = known[0]
+    else:
+        unknown.sort(key=lambda a: a['value_usdt'])  # fallback: terkecil yg masih cukup
+        chosen = unknown[0]
     pct = min(100.0, needed_with_buffer / chosen['value_usdt'] * 100.0)
     result = execute_add_fund_from_asset(chosen['asset'], target_symbol, pct)
     if result.get("ok"):
+        _perf_note = (f"floating {chosen['floating_pct']:+.2f}%" if chosen['floating_pct'] is not None
+                      else "performa tidak diketahui (dust/manual)")
         send_telegram(
             f"🔁 AUTO-CONVERT utk Add Fund (otomatis, tanpa konfirmasi dashboard)\n"
             f"{chosen['asset']} dijual ${result.get('proceeds_usdt', 0):.2f} "
-            f"({pct:.0f}% dari ${chosen['value_usdt']:.2f} nganggur) -- ditambahkan ke "
+            f"({pct:.0f}% dari ${chosen['value_usdt']:.2f} nganggur, {_perf_note}) -- ditambahkan ke "
             f"{to_display_pair(target_symbol)} (butuh ${needed_usd:.2f})",
             parse_mode=None)
     return result
@@ -6163,6 +6190,13 @@ def enrich_deal_open_indicators(symbol: str, deal: dict) -> dict:
 def thread2_monitor():
     global _last_balance_log_ts
     want_fast = False  # jadi True jika ada deal armed yg harganya bergerak cepat
+    # 16/09/2026 (permintaan Mas Budi): deal yg add-fund-nya kepentok saldo USDT kurang TIDAK
+    # lagi langsung dicoba auto-convert satu-satu sesuai urutan loop -- dikumpulkan dulu ke sini,
+    # baru diproses di 1 pass terpisah SESUDAH seluruh loop deal selesai (lihat bawah, sebelum
+    # 'return want_fast'), diurutkan floating profit% TERBAIK dulu. Supaya kalau 2+ deal butuh
+    # add-fund bersamaan tapi aset nganggur terbatas, yang performanya lebih bagus didahulukan,
+    # bukan sekadar siapa lebih dulu diproses loop.
+    _pending_addfund_queue = []
     if USE_BINANCE_DIRECT and (time.time() - _last_balance_log_ts) >= 300:
         _last_balance_log_ts = time.time()
         try:
@@ -6265,25 +6299,16 @@ def thread2_monitor():
                         _free_usdt_now, _ = get_usdt_balance()
                         if _free_usdt_now < add_usd:
                             _needed = add_usd - _free_usdt_now
+                            # 16/09/2026: JANGAN langsung auto-convert inline di sini -- masukkan
+                            # dulu ke _pending_addfund_queue (diproses 1 pass di akhir fungsi ini,
+                            # diurutkan floating profit% terbaik dulu). floating_pct pakai `price`
+                            # (harga live yg baru diambil di awal loop deal ini) vs `entry`.
+                            _floating_pct = (price / entry - 1) * 100 - FEE_ROUND_TRIP_PCT if entry > 0 else 0.0
                             log(f"[T2] {sym} saldo USDT bebas (${_free_usdt_now:.2f}) < ${add_usd} dibutuhkan -- "
-                                f"coba auto-convert aset nganggur (kurang ${_needed:.2f})")
-                            _auto_conv = auto_fund_addfund_from_idle_asset(sym, _needed)
-                            if _auto_conv.get("ok"):
-                                # auto_fund_addfund_from_idle_asset() -> execute_add_fund_from_asset()
-                                # -> execute_add_fund() SUDAH mengirim add fund + update active_deals +
-                                # notif sendiri -- _addfund_ai_ok WAJIB False di sini supaya blok
-                                # send_add_funds() di bawah TIDAK ikut jalan lagi (double add-fund).
-                                log(f"[T2] {sym} auto-convert BERHASIL ({_auto_conv.get('source_asset')} -> "
-                                    f"${_auto_conv.get('proceeds_usdt', 0):.2f}) -- add fund SUDAH selesai lewat jalur ini")
-                                _addfund_ai_ok = False
-                            else:
-                                log(f"[T2] {sym} add fund di-skip: saldo USDT bebas kurang & auto-convert gagal "
-                                    f"({_auto_conv.get('error')}) -- cooldown 15 menit")
-                                with active_deals_lock:
-                                    if sym in active_deals:
-                                        active_deals[sym]['add_fund_fail_until'] = time.time() + 15 * 60
-                                save_active_deals()
-                                _addfund_ai_ok = False
+                                f"masuk antrean auto-convert (kurang ${_needed:.2f}, floating {_floating_pct:+.2f}%)")
+                            _pending_addfund_queue.append({"sym": sym, "needed": _needed,
+                                                            "floating_pct": _floating_pct})
+                            _addfund_ai_ok = False
                     if _addfund_ai_ok:
                         log(f"[T2] {sym} kirim add fund ${add_usd} (deal confirmed aktif, ATR={current_atr:.2f}%)")
                         add_ok = send_add_funds(sym, add_usd, strat, delay=0)
@@ -6925,6 +6950,28 @@ def thread2_monitor():
                         f"  Profit: {prof_from_entry:+.2f}% dari entry",
                         parse_mode=None
                     )
+
+    # 16/09/2026: proses antrean add-fund yg kepentok saldo kurang, SESUDAH seluruh deal aktif
+    # selesai dievaluasi -- diurutkan floating profit% dari yg PALING BAGUS dulu, supaya kalau
+    # aset nganggur yg tersedia terbatas, deal yg trading-nya sedang baik didahulukan dapat modal
+    # ketimbang deal yg sedang lemah/rugi (permintaan Mas Budi).
+    if _pending_addfund_queue:
+        _pending_addfund_queue.sort(key=lambda item: item["floating_pct"], reverse=True)
+        log(f"[T2] {len(_pending_addfund_queue)} deal antre add-fund (saldo kurang) -- urutan: " +
+            ", ".join(f"{it['sym']}({it['floating_pct']:+.2f}%)" for it in _pending_addfund_queue))
+        for item in _pending_addfund_queue:
+            _sym_q = item["sym"]
+            _auto_conv = auto_fund_addfund_from_idle_asset(_sym_q, item["needed"])
+            if _auto_conv.get("ok"):
+                log(f"[T2] {_sym_q} auto-convert BERHASIL ({_auto_conv.get('source_asset')} -> "
+                    f"${_auto_conv.get('proceeds_usdt', 0):.2f})")
+            else:
+                log(f"[T2] {_sym_q} add fund di-skip: auto-convert gagal ({_auto_conv.get('error')}) -- cooldown 15 menit")
+                with active_deals_lock:
+                    if _sym_q in active_deals:
+                        active_deals[_sym_q]['add_fund_fail_until'] = time.time() + 15 * 60
+                save_active_deals()
+
     return want_fast
 
 # ===================== RUNNERS =====================
