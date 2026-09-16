@@ -320,6 +320,18 @@ STRAT_CROSSEMA_STOCH_MAX = 25       # backtest 12/09/2026 (474 pair, 2022-sekara
                                      # belum ketemu titik jenuh -- Stoch<25 dipilih Mas Budi
                                      # sbg titik tengah (WR=83.6% PF=3.70 avg=+2.70%, n=23988/458
                                      # pair, masih cakupan pair luas) drpd yg paling ekstrem.
+CROSSEMA_EMA200_1D_MIN_PCT = -10.0   # 16/09/2026 (permintaan Mas Budi): diperluas dari
+                                     # TrenKonfirmasi-4h (TRENDCONFIRM_EMA200_1D_MIN_PCT, 15/09) --
+                                     # AVA/USDT (CrossEMA-4h) hold_no_sell -10.13% dgn
+                                     # pct_vs_ema200_1d -17.92% saat open, mirip pola IOTA
+                                     # (TrenKonfirmasi-4h, -12.99%, jadi pemicu gate ini pertama
+                                     # kali). CrossEMA-4h SENGAJA didesain masuk saat Supertrend
+                                     # 4h masih downtrend (nangkap early-reversal) -- gate ini
+                                     # BUKAN soal Supertrend 4h, tapi soal SEBERAPA DALAM downtrend
+                                     # itu di timeframe HARIAN (structural), dimensi berbeda.
+                                     # Sama seperti TrenKonfirmasi-4h: ambang -10% dari 1 sampel
+                                     # gagal (AVA) + 1 rujukan lintas-strategi (IOTA), BELUM
+                                     # divalidasi backtest utk CrossEMA-4h spesifik -- pantau terus.
 STRAT_CROSSEMA_VOLUME_MULT  = 0.10    # dilonggarkan dari 0.25→0.10 (30/08/2026) -- pair yg lagi downtrend (syarat ST=-1) wajar volumenya turun, jadi filter 0.25xMA kegedean
 STRAT_CROSSEMA_VOLUME_MA    = 20
 STRAT_CROSSEMA_MIN_VOL_USD  = 1_000_000
@@ -8444,6 +8456,13 @@ def thread_crossema_scan():
             # HTF 12h filter (CrossEMA: vol12h>1.5xMA)
             if not htf_filter_4h_ok(sym, for_crossema=True):
                 count_blocker(scan_blockers_cx, "HTF 12h volume", True)
+                continue
+
+            # 16/09/2026 (permintaan Mas Budi, insiden AVA/USDT): blokir kandidat yg harganya
+            # sudah terlalu dalam di bawah EMA200(1D) -- lihat CROSSEMA_EMA200_1D_MIN_PCT.
+            _pct_ema200_1d_cx, _ = get_pct_vs_ema200_1d(sym)
+            if _pct_ema200_1d_cx is not None and _pct_ema200_1d_cx < CROSSEMA_EMA200_1D_MIN_PCT:
+                count_blocker(scan_blockers_cx, f"EMA200(1D) terlalu dalam ({_pct_ema200_1d_cx:+.1f}%)", True)
                 continue
 
             # Lapis 2: harga live (dari candle berjalan) harus > EMA20 (dengan toleransi kecil, lihat STRAT_CROSSEMA_CROSS_TOL_PCT)
