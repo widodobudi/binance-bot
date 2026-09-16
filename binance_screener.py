@@ -1211,12 +1211,15 @@ def load_daily_loss_limit():
         with open(DAILY_LOSS_LIMIT_FILE, 'r') as f:
             data = json.load(f)
         with daily_loss_limit_lock:
-            # "limit_usd" adalah key baru (17/09/2026) -- fallback ke "limit_pct" LAMA cuma
-            # supaya file config lama (dari sebelum ganti basis) tidak bikin error baca,
-            # BUKAN dipakai sebagai persentase lagi (angkanya langsung dipakai sbg $ dgn
-            # default 6.0 kalau cuma "limit_pct" lama yg ada -- config akan tertimpa benar
-            # begitu Mas Budi save dari dashboard sekali).
-            daily_loss_limit_usd = float(data.get("limit_usd", data.get("limit_pct", 6.0)))
+            # "limit_usd" adalah key baru (17/09/2026). PENTING: kalau file config LAMA
+            # cuma punya "limit_pct" (angka PERSEN, mis. 3.0), JANGAN dipakai ulang sbg
+            # dollar (3.0% != $3.0) -- itu bug yg hampir lolos: nilainya kebetulan mirip
+            # tapi satuannya beda total. Kalau "limit_usd" tidak ada, selalu jatuh ke
+            # default $6.0, abaikan "limit_pct" lama sepenuhnya.
+            if "limit_usd" in data:
+                daily_loss_limit_usd = float(data["limit_usd"])
+            else:
+                daily_loss_limit_usd = 6.0
         log(f"   Loaded daily_loss_limit_usd: ${daily_loss_limit_usd}")
     except Exception as e:
         log(f"WARN gagal baca daily_loss_limit_config.json: {e}")
