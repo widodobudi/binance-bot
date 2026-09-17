@@ -35,7 +35,7 @@ FILTER BTC (Lapis1&2): OFF (toggle). ADD FUND otomatis: OFF.
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pandas_ta")
 import requests, pandas as pd, pandas_ta as ta, numpy as np
-import time, sys, json, threading, os, csv, pickle
+import time, sys, json, threading, os, csv, pickle, re
 sys.stdout.reconfigure(line_buffering=True)   # tiap baris langsung flush ke Railway log
 from datetime import datetime, timedelta, timezone
 import requests as _requests_mod
@@ -4501,6 +4501,15 @@ def entry_detail_reversal(df):
     fails = [lab for ok,lab in checks if not ok]
     return (n_pass, 4, fails)
 
+def _close_reason_kind(reason: str) -> str:
+    """17/09/2026: ekstrak label stabil dari string 'reason' close (yg isinya campur angka
+    live seperti harga/persen, jadi selalu beda tiap dipanggil) -- dipakai buat deteksi
+    'situasi baru' pada notif AI Decision HOLD (lihat pemanggil di thread2_monitor).
+    Ambil huruf/spasi/%/$ di awal string sampai ketemu digit/tanda kurung/titik dua."""
+    m = re.match(r"^([A-Za-z%$ ]+)", reason or "")
+    kind = m.group(1).strip() if m else (reason or "")[:20]
+    return kind or (reason or "")[:20]
+
 def trailing_dist(atr_pct: float) -> float:
     if atr_pct < 1.0: base = 0.5
     elif atr_pct < 2.0: base = 1.0
@@ -6866,10 +6875,21 @@ def thread2_monitor():
                 if time.time() < _close_ai_hold_until:
                     log(f"[T2] {sym} CLOSE di-hold (cooldown AI {(_close_ai_hold_until - time.time())/60:.1f} menit lagi, reason: {reason})")
                     continue
-                if not ai_decision_close(sym, d.get('strategy', 'brkX2'), d, price, peak, reason):
+                # 17/09/2026 (permintaan Mas Budi): notif "AI Decision HOLD" cuma dikirim
+                # SEKALI per "situasi" (reason_kind) -- selama masih HOLD dgn reason_kind
+                # yg SAMA (mis. masih sama-sama "TP harga..."), notif berikutnya di-skip
+                # (AI tetap ditanya tiap cooldown, biar keputusan tetap fresh). Kalau
+                # reason_kind berubah (mis. dari TP jadi hard stop), dianggap situasi baru
+                # -> boleh notif lagi.
+                _reason_kind = _close_reason_kind(reason)
+                _last_notified_kind = d.get('close_ai_last_notified_kind')
+                _should_notify = (_reason_kind != _last_notified_kind)
+                if not ai_decision_close(sym, d.get('strategy', 'brkX2'), d, price, peak, reason, notify=_should_notify):
                     with active_deals_lock:
                         if sym in active_deals:
                             active_deals[sym]['close_ai_hold_until'] = time.time() + 10 * 60
+                            if _should_notify:
+                                active_deals[sym]['close_ai_last_notified_kind'] = _reason_kind
                     save_active_deals()
                     log(f"[T2] {sym} CLOSE di-hold oleh AI decision (reason: {reason})")
                     continue
@@ -13336,7 +13356,7 @@ def _shadow_dipbuy_universe_try_open(data: dict) -> None:
             open_syms.add(sym)
             log(f"[SHADOW-DIPBUY-UNIVERSE] OPEN {sym} @ {entry_price:.8g} (chg_4h {chg_4h:+.2f}%, SL {sl_price:.8g} / TP {tp_price:.8g})")
             send_telegram(
-                f"🔬 Shadow FWD-TEST OPEN -- Dip Buy Varian A, UNIVERSE PENUH (paper, BUKAN order asli)\n"
+                f"🔬 Shadow FWD-TEST OPEN -- Dip Buy Universe (paper, BUKAN order asli)\n"
                 f"{to_display_pair(sym)} @ {_fmt_price(entry_price)} | drop {chg_4h:+.2f}% (1 candle 4h)\n"
                 f"SL {_fmt_price(sl_price)} / TP {_fmt_price(tp_price)}",
                 parse_mode=None)
@@ -13376,7 +13396,7 @@ def _shadow_dipbuy_universe_check_exits(data: dict) -> None:
             n_done = len(data['dipbuy_universe']['closed'])
             log(f"[SHADOW-DIPBUY-UNIVERSE] CLOSE {sym} @ {exit_price:.8g} ({pct:+.2f}%) -- {reason} -- #{n_done}/{SHADOW_DIPBUY_UNIVERSE_TARGET}")
             send_telegram(
-                f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- Dip Buy Varian A, UNIVERSE PENUH (paper)\n"
+                f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- Dip Buy Universe (paper)\n"
                 f"{to_display_pair(sym)} @ {_fmt_price(exit_price)} ({pct:+.2f}%) -- {reason}\n"
                 f"Progress: #{n_done}/{SHADOW_DIPBUY_UNIVERSE_TARGET} ({_shadow_wl_tag(data['dipbuy_universe']['closed'])})", parse_mode=None)
         else:
@@ -19826,11 +19846,15 @@ def ai_decision_near_timeout(symbol: str, strategy: str, d: dict, price: float, 
     return decision
 
 
-def ai_decision_close(symbol: str, strategy: str, d: dict, price: float, peak: float, reason: str) -> bool:
+def ai_decision_close(symbol: str, strategy: str, d: dict, price: float, peak: float, reason: str,
+                       notify: bool = True) -> bool:
     """
     AI decide: close deal sekarang atau hold (override stop).
     Return True = close, False = hold.
     Default True jika AI tidak tersedia / error (fail-open: default close).
+    17/09/2026 (permintaan Mas Budi): notify=False -> tetap tanya AI (biar keputusan tetap
+    fresh tiap cooldown), tapi SKIP kirim notif Telegram HOLD-nya kalau ini cuma lanjutan
+    "hold streak" yang sama (reason kind belum berubah) -- lihat pemanggil di thread2_monitor.
     """
     entry  = d.get('entry_price', 0)
     atrp   = d.get('atr_pct', 0)
@@ -19857,8 +19881,9 @@ def ai_decision_close(symbol: str, strategy: str, d: dict, price: float, peak: f
     if not result:
         return True  # fail-open: default close
     decision = "CLOSE" in result
-    log(f"[AI] CLOSE decision {symbol}: {result} → {'CLOSE' if decision else 'HOLD'}")
-    if not decision:
+    log(f"[AI] CLOSE decision {symbol}: {result} → {'CLOSE' if decision else 'HOLD'}"
+        + ("" if notify else " (notif di-skip, situasi sama)"))
+    if not decision and notify:
         send_telegram(
             f"🤖 AI Decision | {to_display_pair(symbol)}\n"
             f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
