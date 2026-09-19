@@ -8928,6 +8928,25 @@ def check_trendconfirm_entry(df):
     if not (rvol >= TRENDCONFIRM_RVOL_MIN): return False, 0, {}
     if not (float(rsi) < TRENDCONFIRM_RSI_MAX): return False, 0, {}
 
+    # --- Gerbang OVERBOUGHT KERAS (19/09/2026, permintaan Mas Budi, insiden STG/USDT -5%) ---
+    # TrenKonfirmasi-4h sebelumnya cuma cek RSI<75 & gap_ema20>=0 -- TIDAK cek apakah harga
+    # sudah terlalu jauh dari EMA20 / BB%b sudah di luar upper band / Williams %R sudah
+    # overbought. Hasilnya: entry di puncak rally (STG: RSI 70.7, BB%b 1.27, gap +15%,
+    # Williams %R -25) lalu langsung reversal. Sekarang: kalau 3 dari 4 indikator overbought
+    # ini terpenuhi sekaligus, kandidat DITOLAK sebelum masuk AI.
+    williams_r = r.get('williams_r')
+    overbought_signals = sum([
+        float(rsi) > 70,                                    # RSI overbought
+        float(bbp) > 1.0,                                   # di luar upper Bollinger Band
+        gap_ema20 > 8.0,                                    # harga >8% di atas EMA20 (terlalu jauh)
+        williams_r is not None and not pd.isna(williams_r) and float(williams_r) > -20,  # Williams %R overbought
+    ])
+    if overbought_signals >= 3:
+        log(f"[TRENDCONFIRM] {r.get('close',0):.6g} DITOLAK overbought keras "
+            f"(RSI={rsi:.1f} BB%b={bbp:.2f} gap={gap_ema20:+.1f}% WR={williams_r:.1f} "
+            f"-- {overbought_signals}/4 indikator overbought)")
+        return False, 0, {}
+
     # --- Syarat SEKUNDER (dipakai utk skor/ranking, BUKAN gerbang wajib) ---
     score = 2 if float(bbp) >= TRENDCONFIRM_BB_PCT_SECONDARY else 1
 
