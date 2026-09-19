@@ -1,0 +1,16 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^git add binance_screener\\.py; git commit -m \"feat: naikkan base order & Batas Rugi Harian utk strategi terbukti \\(review Base order #2\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^git push origin main$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^git add \\.vscode/settings\\.json; git commit -m \"chore: tambah auto-approve VS Code untuk command git commit/push tertentu\"; git push origin main$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
