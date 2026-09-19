@@ -868,14 +868,20 @@ TRADES_CSV = os.path.join(DATA_DIR, "trades_forwardtest.csv")
 # ── Strategy Control config ──────────────────────────────────────────────────
 STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # Default values — edit hard-coded di sini untuk ubah nilai RESET
+# 19/09/2026 (review Base order #2, permintaan Mas Budi): base_usd brkX2/reversal/brkX2_4h/
+# trend_confirm_4h dinaikkan -- HANYA strategi dgan %profit kumulatif SUDAH besar & LIVE
+# terbukti (brkX2-12h +56.9%, reversal-8h +40.9%, brkX2-4h +53.8%, trend_confirm_4h +59.7%,
+# data dashboard 19/09/2026) yang dinaikkan; crossema/hunting/qscalp/akum %profit-nya belum
+# cukup besar jadi TIDAK diubah. REMARK nilai lama (sebelum kenaikan ini) untuk rollback:
+#   brkX2=12, reversal=15, brkX2_4h=15, trend_confirm_4h=30
 STRATEGY_CONFIG_DEFAULTS = {
-    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 12, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
-    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
-    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 15, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True, "max_deals": 5},
+    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
+    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 90, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
+    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True, "max_deals": 5},
     "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
     "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
     "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
-    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
+    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 70, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
     "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "max_deals": 2},
 }
 # qscalp_3m: ai_call_open=False PERMANEN secara desain (bukan cuma default) -- strategi ini
@@ -940,8 +946,19 @@ def apply_one_time_config_migrations():
     tetap bebas mengubah nilainya lagi lewat dashboard tanpa ditimpa balik oleh kode.
     19/09/2026 (review Base order #1, permintaan Mas Budi): QScalp-3m base_usd 25 -> 10
     (22 deal, win 59%, PnL cuma +$0.25, 5 hard-stop flat 2-3.3% -- belum ada edge; naikkan
-    lagi setelah >=30 deal dgn PF>1.5)."""
-    migrations = {"qscalp_3m_base_usd_10_20260919": ("qscalp_3m", "base_usd", 10)}
+    lagi setelah >=30 deal dgn PF>1.5).
+    19/09/2026 (review Base order #2, permintaan Mas Budi): base_usd dinaikkan HANYA utk
+    strategi dgn %profit kumulatif sudah besar & LIVE terbukti (brkX2/reversal/brkX2_4h/
+    trend_confirm_4h -- lihat REMARK nilai lama di STRATEGY_CONFIG_DEFAULTS). Batas Rugi
+    Harian ikut dinaikkan $6->$15 di migrasi yang sama supaya sepadan (base order lebih
+    besar berarti hard-stop tunggal juga lebih besar dalam $)."""
+    migrations = {
+        "qscalp_3m_base_usd_10_20260919":       ("qscalp_3m",        "base_usd", 10),
+        "brkX2_base_usd_60_20260919":           ("brkX2",            "base_usd", 60),
+        "reversal_base_usd_90_20260919":        ("reversal",         "base_usd", 90),
+        "brkX2_4h_base_usd_50_20260919":        ("brkX2_4h",         "base_usd", 50),
+        "trend_confirm_4h_base_usd_70_20260919":("trend_confirm_4h", "base_usd", 70),
+    }
     try:
         done = {}
         if os.path.exists(CONFIG_MIGRATIONS_FILE):
@@ -957,6 +974,17 @@ def apply_one_time_config_migrations():
                          "old": old_val, "new": new_val}
             changed = True
             log(f"[MIGRASI] {strat}.{field}: {old_val} -> {new_val} (sekali jalan, {key})")
+        # Batas Rugi Harian (daily_loss_limit_config.json, file terpisah dari strategy_config) --
+        # migrasi sekali jalan sama seperti di atas. REMARK nilai lama: $6.0 (disepakati 17/09/2026).
+        dll_key = "daily_loss_limit_usd_15_20260919"
+        if dll_key not in done:
+            load_daily_loss_limit()  # pastikan nilai persisten (kalau ada) sudah termuat sbg "old"
+            old_dll = daily_loss_limit_usd
+            save_daily_loss_limit(15.0)
+            done[dll_key] = {"applied_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                              "old": old_dll, "new": 15.0}
+            changed = True
+            log(f"[MIGRASI] daily_loss_limit_usd: {old_dll} -> 15.0 (sekali jalan, {dll_key})")
         if changed:
             with open(CONFIG_MIGRATIONS_FILE, "w") as f:
                 json.dump(done, f, indent=2)
@@ -1232,7 +1260,11 @@ daily_loss_limit_lock = threading.Lock()
 # jadi basis % jadi terlalu sensitif -- rugi $2.50 wajar di 1 posisi saja sudah kebaca
 # -6.79% dan langsung memblokir SEMUA strategi. Basis $ tetap tidak ikut menyusut/membesar
 # mengikuti modal, jadi lebih stabil terlepas dari besar-kecilnya modal saat ini.
-daily_loss_limit_usd: float = 6.0   # default disepakati 17/09/2026 (dulu 3% dari modal)
+# 19/09/2026 (review Base order #2, permintaan Mas Budi): dinaikkan $6 -> $15 karena base
+# order beberapa strategi ikut dinaikkan (lihat STRATEGY_CONFIG_DEFAULTS) -- hard-stop tunggal
+# di posisi $90-100 bisa sampai -$9 s/d -$12, hampir/lebih besar dari limit lama $6 (satu trade
+# wajar saja sudah bisa mengunci SEMUA strategi). REMARK nilai lama: $6.0.
+daily_loss_limit_usd: float = 15.0   # default direvisi 19/09/2026 (dulu $6.0, sebelumnya 3% dari modal)
 
 def load_daily_loss_limit():
     global daily_loss_limit_usd
@@ -3902,25 +3934,35 @@ def signal_score(row) -> int:
     return sc
 
 # 19/09/2026 (permintaan Mas Budi, review Base order #1): tier tertinggi DITURUNKAN $60 -> $45
-# (brkX2-12h & TrenKonfirmasi-4h) -- satu hard-stop di $60 dgn rugi ~13% = -$8, lebih besar dari
-# Batas Rugi Harian $6 dan otomatis mengunci SEMUA strategi. Total CrossEMA-4h (skor dikunci 0)
-# diturunkan $30 -> $20 sampai gate EMA200(1D) (aktif 16/09) terbukti (minimal 15 deal baru;
-# ekspektasi 15 deal terakhir -0.63%/deal, 3 hard-stop ~-10%).
-SCORE_TIER_TOP_USD          = 45
+# (brkX2-12h & TrenKonfirmasi-4h, SAAT ITU MASIH SATU TIER BERSAMA) -- satu hard-stop di $60
+# dgn rugi ~13% = -$8, lebih besar dari Batas Rugi Harian $6 dan otomatis mengunci SEMUA
+# strategi. Total CrossEMA-4h (skor dikunci 0) diturunkan $30 -> $20 sampai gate EMA200(1D)
+# (aktif 16/09) terbukti (minimal 15 deal baru; ekspektasi 15 deal terakhir -0.63%/deal, 3
+# hard-stop ~-10%).
+# 19/09/2026 (review Base order #2, permintaan Mas Budi): brkX2-12h & TrenKonfirmasi-4h DIPISAH
+# jadi tier independen (dulu berbagi SCORE_TIER_TOP_USD=45 & tier bawah $30 yang sama persis) --
+# TrenKonfirmasi-4h %profit kumulatif & WR lebih tinggi (+59.7%/92.6% vs brkX2-12h +56.9%/83.3%,
+# data dashboard 19/09/2026) jadi dapat tier lebih besar. REMARK nilai lama (SEBELUM split, dulu
+# dipakai bersama): tier bawah=$30, tier atas=$45 (berlaku utk KEDUANYA).
 CROSSEMA_TOTAL_TARGET_USD   = 20
+BRKX2_TIER_LOW_USD          = 60    # skor 0-1 (REMARK lama, sebelum split: $30)
+BRKX2_TIER_HIGH_USD         = 90    # skor >=2 (REMARK lama, sebelum split: $45)
+TRENDCONFIRM_TIER_LOW_USD   = 70    # skor 0-1 (REMARK lama, sebelum split: $30)
+TRENDCONFIRM_TIER_HIGH_USD  = 100   # skor >=2 (REMARK lama, sebelum split: $45)
 
 def score_to_target_usd(score: int, strategy: str = 'brkX2') -> int:
     """Sizing berdasarkan skor sinyal.
     Base order dari Strategy Control; add fund otomatis = target - base.
-    brkX2-12h & TrenKonfirmasi-4h:
-      Skor 0-1 -> $30, Skor 2-3 -> $45, Skor 4-5 -> $45 (dulu $60, dicap 19/09/2026)
-    brkX2_crossema: SELALU $20 (skor dikunci 0; dulu $30, diturunkan 19/09/2026).
-    Basis tier awal: backtest_sizing_v2 (155 trade), direvisi 24/08/2026 dan 19/09/2026."""
+    brkX2-12h:          Skor 0-1 -> BRKX2_TIER_LOW_USD, Skor >=2 -> BRKX2_TIER_HIGH_USD
+    TrenKonfirmasi-4h:  Skor 0-1 -> TRENDCONFIRM_TIER_LOW_USD, Skor >=2 -> TRENDCONFIRM_TIER_HIGH_USD
+    brkX2_crossema:     SELALU $20 (skor dikunci 0; dulu $30, diturunkan 19/09/2026).
+    Basis tier awal: backtest_sizing_v2 (155 trade), direvisi 24/08/2026, 19/09/2026 (cap $45),
+    dan 19/09/2026 (split brkX2-12h vs TrenKonfirmasi-4h, review Base order #2)."""
     if strategy == 'brkX2_crossema':
         return CROSSEMA_TOTAL_TARGET_USD
-    if score >= 4: return min(60, SCORE_TIER_TOP_USD)
-    if score >= 2: return 45
-    return 30
+    if strategy == 'trend_confirm_4h':
+        return TRENDCONFIRM_TIER_HIGH_USD if score >= 2 else TRENDCONFIRM_TIER_LOW_USD
+    return BRKX2_TIER_HIGH_USD if score >= 2 else BRKX2_TIER_LOW_USD
 
 # 14/09/2026 (permintaan Mas Budi): tier sizing brkX2_4h -- backtest retroaktif 39 trade
 # historis (scratchpad/backtest_score_brkx2_4h.py) nemu pola BUKAN gradien linear, tapi
@@ -3934,7 +3976,9 @@ def score_to_target_usd(score: int, strategy: str = 'brkX2') -> int:
 # saat sinyal, tidak perlu proses tambahan.
 BRKX2_4H_CONVICTION_ATR_MIN    = 5.0    # ATR% minimum candle sinyal
 BRKX2_4H_CONVICTION_VOL_MIN    = 2.0    # rasio volume vs MA20 minimum candle sinyal
-BRKX2_4H_CONVICTION_TARGET_USD = 30     # modal kalau KEDUA syarat di atas lolos bersamaan
+# 19/09/2026 (review Base order #2, permintaan Mas Budi): dinaikkan $30 -> $100 (rasio 2x thd
+# base_usd normal tetap dijaga: $50 normal -> $100 conviction). REMARK nilai lama: $30.
+BRKX2_4H_CONVICTION_TARGET_USD = 100    # modal kalau KEDUA syarat di atas lolos bersamaan
 
 def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
                           atr_pct: float | None = None, vol_ratio: float | None = None):
