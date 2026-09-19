@@ -404,8 +404,10 @@ TRENDCONFIRM_EMA200_1D_MIN_PCT = -10.0   # syarat wajib BARU (15/09/2026, permin
                                           # 1 sampel gagal (IOTA -12.99%, rugi -8.06%) dan 1 sampel lolos
                                           # (SENT -5.73%, untung +2.25%) -- BELUM divalidasi backtest
                                           # menyeluruh, murni dari 2 titik data, monitor terus.
-TRENDCONFIRM_CLOSE_HARD_CEILING_EXTRA_PCT = 5.0  # batas absolut close = hard_stop_pct(atr) + ini,
-                                          # TIDAK BISA di-override AI (Fase 2, permintaan Mas Budi 03/09/2026)
+# 19/09/2026 (permintaan Mas Budi): di-GENERALISASIKAN ke SEMUA strategi (dulu khusus
+# TrenKonfirmasi-4h via TRENDCONFIRM_CLOSE_HARD_CEILING_EXTRA_PCT) -- nilai tetap 5.0 poin
+# di atas hard-stop tier, AI tidak bisa menahan lewat titik ini apa pun strateginya.
+CLOSE_HARD_CEILING_EXTRA_PCT = 5.0   # batas absolut close = hard_stop_pct(atr) + ini, semua strategi
 TRENDCONFIRM_BATCH_POOL_SIZE = 10        # (03/09/2026, permintaan Mas Budi, direvisi setelah
                                           # koreksi beliau) batas JUMLAH kandidat yg dievaluasi AI
                                           # individual sebelum babak 2 -- BUKAN batas waktu. Versi
@@ -6972,16 +6974,19 @@ def thread2_monitor():
             if not get_deal_override(sym, 'auto_close', True):
                 log(f"[T2] {sym} close di-skip (auto_close=OFF via dashboard)")
                 continue
-            # Batas absolut TrenKonfirmasi-4h (Fase 2, 03/09/2026, permintaan Mas Budi):
-            # begitu rugi >= hard-stop normal + TRENDCONFIRM_CLOSE_HARD_CEILING_EXTRA_PCT
-            # poin, AI TIDAK BOLEH menahan lagi -- lewati gerbang ai_decision_close supaya
-            # deal ini DIPUTUSKAN (lanjut ke pipeline close normal di bawah, yg masih bisa
-            # kena hold_no_sell kalau toggle itu aktif -- ceiling ini bukan maksa JUAL,
-            # tapi maksa deal-nya berhenti "digantung" AI tanpa batas berkali-kali).
+            # Batas absolut LINTAS SEMUA STRATEGI (19/09/2026, permintaan Mas Budi, digeneralisasi
+            # dari TrenKonfirmasi-4h-only): begitu rugi >= hard-stop normal +
+            # CLOSE_HARD_CEILING_EXTRA_PCT poin, AI TIDAK BOLEH menahan lagi -- lewati gerbang
+            # ai_decision_close supaya deal ini DIPUTUSKAN (lanjut ke pipeline close normal di
+            # bawah, yg masih bisa kena hold_no_sell kalau toggle itu aktif -- ceiling ini bukan
+            # maksa JUAL, tapi maksa deal-nya berhenti "digantung" AI tanpa batas berkali-kali).
             _ai_override_bypassed = False
-            if do_close and d.get('strategy') == 'trend_confirm_4h' and not _is_akum:
-                _hs_label_c, _hs_base_c, _hs_pct_c = hard_stop_pct(atrp)
-                _absolute_ceiling_pct = _hs_pct_c + TRENDCONFIRM_CLOSE_HARD_CEILING_EXTRA_PCT
+            if do_close and not _is_akum:
+                if strat == 'qscalp_3m':
+                    _hs_label_c, _hs_base_c, _hs_pct_c = qscalp_hard_stop_pct()
+                else:
+                    _hs_label_c, _hs_base_c, _hs_pct_c = hard_stop_pct(atrp)
+                _absolute_ceiling_pct = _hs_pct_c + CLOSE_HARD_CEILING_EXTRA_PCT
                 if entry > 0 and price <= entry * (1 - _absolute_ceiling_pct / 100):
                     _ai_override_bypassed = True
                     log(f"[T2] {sym} BATAS ABSOLUT tercapai (rugi >= {_absolute_ceiling_pct:.2f}%) -- AI tidak bisa menahan lagi")
