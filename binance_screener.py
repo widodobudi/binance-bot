@@ -224,6 +224,14 @@ BASE_ORDER_VOLUME       = 8    # diubah ke $8 (17/08/2026, saldo $85, agar semua
 MAX_DEALS_BRKX2         = 2      # slot brkX2 (bot existing) — set Max active trades=2 di 3Commas
 MAX_DEALS_REVERSAL      = 2      # slot reversal (bot 16921019) — set Max active trades=2 di 3Commas
 
+# ── Batas GABUNGAN lintas SEMUA strategi (19/09/2026, permintaan Mas Budi setelah base
+# order dinaikkan di review #2) -- LAPISAN TAMBAHAN di atas slot per-strategi di atas, supaya
+# total risiko riil (jumlah deal DAN dollar) tidak lepas kendali walau tiap strategi masih
+# punya sisa slot sendiri-sendiri. Base order yang lebih besar ($50-100 utk 4 strategi
+# terbukti) berarti beberapa deal saja sudah bisa menghabiskan modal (~$192 saat ini).
+GLOBAL_MAX_ACTIVE_DEALS = 4        # jumlah deal aktif gabungan semua strategi
+GLOBAL_MAX_EXPOSURE_USD = 150.0    # total $ eksposur riil semua deal aktif (dari modal ~$192.52)
+
 # ---- STRATEGI 3: brkX2-4h (intrabar 4h, menit ke 5-60) ----
 # Hasil backtest: MACD+SUPERTREND+ATR_MIN+VOLUME + HTF 3D PRICE_EMA50+MACD+RSI50
 # avg=+3.330% WR=58.4% wf6=OK (backtest_4h_htf.py, 15/07/2026)
@@ -4017,6 +4025,11 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
         return False, BASE_ORDER_VOLUME, 0
     # Guard: base_usd dari Strategy Control (override konstanta)
     _cfg_base = get_strategy_base_usd(strategy)
+    # Guard: batas GABUNGAN lintas semua strategi (jumlah deal & $ eksposur, 19/09/2026)
+    _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=_cfg_base)
+    if not _glob_ok:
+        log(f"[SIZING] {symbol} ({strategy}) skip open -- {_glob_reason}")
+        return False, _cfg_base, 0
     # Guard: bStocks hanya boleh open saat NYSE buka
     if is_bstock_symbol(symbol) and not is_nyse_open():
         log(f"[SIZING] {symbol} adalah bStock, NYSE tutup — open long DIBATALKAN")
@@ -5134,6 +5147,27 @@ def deal_count_by_strategy(strategy: str) -> int:
     with active_deals_lock:
         return sum(1 for d in active_deals.values()
                    if d.get('strategy', 'brkX2') == strategy)
+
+def total_active_exposure_usd() -> float:
+    """Total eksposur $ riil semua deal aktif lintas SEMUA strategi (qty*entry kalau Binance
+    direct, fallback base_usd+add_usd) -- dipakai gerbang GLOBAL_MAX_EXPOSURE_USD."""
+    with active_deals_lock:
+        deals = list(active_deals.values())
+    return sum(estimate_deal_total_usd(d) for d in deals)
+
+def global_deal_limits_ok(planned_usd: float = 0.0) -> tuple:
+    """Cek batas GABUNGAN lintas SEMUA strategi (jumlah deal & total $ eksposur) SEBELUM
+    open baru -- lapisan TAMBAHAN di atas slot per-strategi yang sudah ada (deal_count_by_strategy).
+    planned_usd = perkiraan modal deal yang mau dibuka, ikut dihitung supaya tidak baru lolos
+    pas mepet lalu langsung kelewat begitu deal ini kebuka. Return (ok: bool, reason: str)."""
+    n = active_deal_count()
+    if n >= GLOBAL_MAX_ACTIVE_DEALS:
+        return False, f"batas jumlah deal gabungan tercapai ({n}/{GLOBAL_MAX_ACTIVE_DEALS})"
+    exposure = total_active_exposure_usd()
+    if exposure + planned_usd > GLOBAL_MAX_EXPOSURE_USD:
+        return False, (f"batas eksposur $ gabungan tercapai (terpakai ${exposure:.0f} + "
+                        f"rencana ${planned_usd:.0f} > ${GLOBAL_MAX_EXPOSURE_USD:.0f})")
+    return True, ""
 
 def heartbeat_tick(status_line: str):
     """Heartbeat brkX2-12h — dikirim saat START dan tiap jam ganjil WIB."""
@@ -6261,6 +6295,10 @@ def thread1b_scan_reversal():
             break
         if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL:
             log(f"[T1b] Slot reversal/total penuh, sisa kandidat reversal tidak dibuka.")
+            break
+        _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=get_strategy_base_usd('reversal'))
+        if not _glob_ok:
+            log(f"[T1b] {_glob_reason}, sisa kandidat reversal tidak dibuka.")
             break
         with active_deals_lock:
             if sym in active_deals: continue
@@ -8039,6 +8077,10 @@ def thread_rev_intrabar_scan():
             log(f"[T3-REV] Batas rugi harian tersulut, sisa kandidat reversal intrabar tidak dibuka.")
             break
         if deal_count_by_strategy('reversal') >= MAX_DEALS_REVERSAL:
+            break
+        _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=get_strategy_base_usd('reversal'))
+        if not _glob_ok:
+            log(f"[T3-REV] {_glob_reason}, sisa kandidat reversal intrabar tidak dibuka.")
             break
         with active_deals_lock:
             if sym in active_deals: continue
