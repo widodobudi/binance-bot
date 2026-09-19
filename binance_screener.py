@@ -16422,10 +16422,10 @@ def run_qscalp_backtest():
 #   Combo H: vol_mult=2.5 mom=2.5% hh=15 fomo=5.0%  (PF=1.37 n=1371, 98 pair -- n terbesar)
 # Exit = varian C ronde 1 (arm/trail/stop FLAT %, bukan ATR-tiered spt strategi lain --
 # exit ATR-tiered TIDAK pernah dites utk TF 3m, jangan dicampur tanpa backtest baru).
-QSCALP_LIVE_VOL_MULT          = 3.0   # Combo G
-QSCALP_LIVE_MOMENTUM_PCT      = 2.5   # Combo G (sama di E/F/H -- ini parameter kunci)
-QSCALP_LIVE_BREAKOUT_LOOKBACK = 15    # Combo G (sama di semua kombo pemenang)
-QSCALP_LIVE_ANTI_FOMO_PCT     = 5.0   # Combo G (sama di F/H, cadangan E pakai 3.0)
+QSCALP_LIVE_VOL_MULT          = 4.0   # Combo E (19/09/2026, backtest ronde 3 PF terbaik 1.41)
+QSCALP_LIVE_MOMENTUM_PCT      = 2.5   # Combo E (sama di G/F/H -- ini parameter kunci)
+QSCALP_LIVE_BREAKOUT_LOOKBACK = 15    # Combo E (sama di semua kombo pemenang)
+QSCALP_LIVE_ANTI_FOMO_PCT     = 3.0   # Combo E (lebih ketat dari G=5.0, anti-FOMO)
 QSCALP_LIVE_ARM_PCT           = 0.8   # varian C ronde 1 (arm%)
 QSCALP_LIVE_TRAIL_PCT         = 0.3   # varian C ronde 1 (trail%)
 QSCALP_LIVE_STOP_PCT          = 2.0   # varian C ronde 1 (hard stop%, FLAT dari entry)
@@ -20129,7 +20129,7 @@ if __name__ == '__main__':
         log(f"  Bot : #{COMMAS_BOT_ID_HUNTING}")
     log("  " + "-"*51)
     log("  STRATEGI #8 QScalp-3m: ON | TF 3m | TANPA AI (full rule-based)")
-    log(f"  Entry Combo G: vol>={QSCALP_LIVE_VOL_MULT}xMA20 + momentum>={QSCALP_LIVE_MOMENTUM_PCT}%/2candle + "
+    log(f"  Entry Combo E: vol>={QSCALP_LIVE_VOL_MULT}xMA20 + momentum>={QSCALP_LIVE_MOMENTUM_PCT}%/2candle + "
         f"breakout HH{QSCALP_LIVE_BREAKOUT_LOOKBACK}c + close<=EMA9+{QSCALP_LIVE_ANTI_FOMO_PCT}%")
     log(f"  Exit: arm{QSCALP_LIVE_ARM_PCT}%/trail{QSCALP_LIVE_TRAIL_PCT}%/stop{QSCALP_LIVE_STOP_PCT}% flat, "
         f"timeout {QSCALP_LIVE_TIMEOUT_CANDLES}c(3m) | scan tiap {QSCALP_SCAN_INTERVAL}s")
