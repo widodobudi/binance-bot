@@ -28,6 +28,10 @@ Gig/
 ResTest/
 cache*/
 
+# File referensi/backup dari proyek lain (TiketMIS, WA) yang ketumpuk di sini,
+# tidak ada hubungannya dengan bot trading -- jangan ikut masuk git history repo ini.
+.claude/
+
 # ==========================================
 # 📦 IJINKAN SISTEM UTAMA PYTHON (WAJIB MASUK)
 # ==========================================

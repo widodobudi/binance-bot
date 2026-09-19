@@ -932,6 +932,37 @@ def save_strategy_config(cfg: dict):
     except Exception as e:
         log(f"WARN save_strategy_config: {e}")
 
+CONFIG_MIGRATIONS_FILE = os.path.join(DATA_DIR, "config_migrations_done.json")
+
+def apply_one_time_config_migrations():
+    """Migrasi nilai strategy_config.json yang HARUS jalan SEKALI saja (ditandai di
+    config_migrations_done.json), bukan tiap startup -- supaya setelah dieksekusi, Mas Budi
+    tetap bebas mengubah nilainya lagi lewat dashboard tanpa ditimpa balik oleh kode.
+    19/09/2026 (review Base order #1, permintaan Mas Budi): QScalp-3m base_usd 25 -> 10
+    (22 deal, win 59%, PnL cuma +$0.25, 5 hard-stop flat 2-3.3% -- belum ada edge; naikkan
+    lagi setelah >=30 deal dgn PF>1.5)."""
+    migrations = {"qscalp_3m_base_usd_10_20260919": ("qscalp_3m", "base_usd", 10)}
+    try:
+        done = {}
+        if os.path.exists(CONFIG_MIGRATIONS_FILE):
+            with open(CONFIG_MIGRATIONS_FILE) as f:
+                done = json.load(f)
+        changed = False
+        for key, (strat, field, new_val) in migrations.items():
+            if key in done:
+                continue
+            old_val = load_strategy_config().get(strat, {}).get(field)
+            save_strategy_config({strat: {field: new_val}})
+            done[key] = {"applied_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                         "old": old_val, "new": new_val}
+            changed = True
+            log(f"[MIGRASI] {strat}.{field}: {old_val} -> {new_val} (sekali jalan, {key})")
+        if changed:
+            with open(CONFIG_MIGRATIONS_FILE, "w") as f:
+                json.dump(done, f, indent=2)
+    except Exception as e:
+        log(f"WARN apply_one_time_config_migrations: {e}")
+
 def sync_max_deals_globals():
     """Sinkronkan field "max_deals" per strategi (strategy_config.json, bisa diatur lewat
     dashboard Strategy Control) KE 6 konstanta module-level lama (MAX_DEALS_BRKX2 dst) --
@@ -3870,14 +3901,24 @@ def signal_score(row) -> int:
         return 0
     return sc
 
-def score_to_target_usd(score: int) -> int:
+# 19/09/2026 (permintaan Mas Budi, review Base order #1): tier tertinggi DITURUNKAN $60 -> $45
+# (brkX2-12h & TrenKonfirmasi-4h) -- satu hard-stop di $60 dgn rugi ~13% = -$8, lebih besar dari
+# Batas Rugi Harian $6 dan otomatis mengunci SEMUA strategi. Total CrossEMA-4h (skor dikunci 0)
+# diturunkan $30 -> $20 sampai gate EMA200(1D) (aktif 16/09) terbukti (minimal 15 deal baru;
+# ekspektasi 15 deal terakhir -0.63%/deal, 3 hard-stop ~-10%).
+SCORE_TIER_TOP_USD          = 45
+CROSSEMA_TOTAL_TARGET_USD   = 20
+
+def score_to_target_usd(score: int, strategy: str = 'brkX2') -> int:
     """Sizing berdasarkan skor sinyal.
-    Base order $8 (BASE_ORDER_VOLUME).
-    Skor 0-1 -> $30 (add $22)
-    Skor 2-3 -> $45 (add $37)
-    Skor 4-5 -> $60 (add $52)
-    Basis: backtest_sizing_v2 (155 trade) — aggr lebih tinggi ROI lebih baik. Tier direvisi 24/08/2026."""
-    if score >= 4: return 60
+    Base order dari Strategy Control; add fund otomatis = target - base.
+    brkX2-12h & TrenKonfirmasi-4h:
+      Skor 0-1 -> $30, Skor 2-3 -> $45, Skor 4-5 -> $45 (dulu $60, dicap 19/09/2026)
+    brkX2_crossema: SELALU $20 (skor dikunci 0; dulu $30, diturunkan 19/09/2026).
+    Basis tier awal: backtest_sizing_v2 (155 trade), direvisi 24/08/2026 dan 19/09/2026."""
+    if strategy == 'brkX2_crossema':
+        return CROSSEMA_TOTAL_TARGET_USD
+    if score >= 4: return min(60, SCORE_TIER_TOP_USD)
     if score >= 2: return 45
     return 30
 
@@ -3965,7 +4006,7 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
             target = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
         add_usd = 0
     else:
-        target  = max(score_to_target_usd(score), _cfg_base)
+        target  = max(score_to_target_usd(score, strategy), _cfg_base)
         add_usd = max(0, target - _cfg_base)
     ok = send_open_long(symbol, strategy)
     if not ok:
@@ -6918,27 +6959,27 @@ def thread2_monitor():
             # jangan jual" aktif (default True) untuk deal ini -> SKIP jual, koin tetap di wallet.
             # Cooldown 96 jam berlaku ke symbol ini lintas semua strategi. Timeout yg closing
             # UNTUNG tetap dijual normal seperti biasa.
-            # 05/09/2026 (permintaan Mas Budi, sesudah insiden HBAR/TLM/dll -- baris "koin tidak
-            # dijual" ini berulang kali disalahartikan sbg kinerja strategi beneran, bikin
-            # win-rate/PnL forward-test misleading & butuh dibersihkan manual satu-satu):
-            # DIBALIK dari perilaku lama -- kasus hold_no_sell TIDAK LAGI dicatat ke Closed Trades
-            # CSV/History sama sekali (koinnya toh tidak benar-benar dijual, jadi bukan trade yg
-            # benar-benar selesai). Notifikasi Telegram & bookkeeping active_deals/cooldown lain
-            # tetap jalan seperti biasa -- cuma baris di trades_forwardtest.csv yang di-skip.
+            # 05/09/2026 (permintaan Mas Budi, sesudah insiden HBAR/TLM/dll): kasus hold_no_sell
+            # sempat TIDAK dicatat ke trades_forwardtest.csv sama sekali (koinnya tidak benar2
+            # dijual). 19/09/2026 (permintaan Mas Budi, review Base order #1) DIBALIK LAGI: ternyata
+            # itu bikin CSV menyembunyikan SEMUA hard-stop (15 kasus 29/08-19/09, mis. LSK -13.3%,
+            # IOTA -8.1%) sehingga win-rate/PnL/evaluasi sizing kelihatan jauh lebih bagus dari
+            # kenyataan -- dan P&L harian (get_today_pnl_usd) ikut kehilangan rugi itu begitu deal
+            # keluar dari active_deals. Sekarang SELALU dicatat; baris hold_no_sell tetap bisa
+            # dibedakan lewat penanda "[HOLD: koin tidak dijual, cooldown 96j]" di exit_reason.
             _hold_no_sell = (hard_stop_triggered or (timeout_triggered and prof_from_entry < 0)) \
                              and get_deal_override(sym, 'hold_no_sell', True)
             if _hold_no_sell:
                 reason += " [HOLD: koin tidak dijual, cooldown 96j]"
             if _hold_no_sell or send_close_long(sym, strat):
                 total_usd = estimate_deal_total_usd(d)
-                if not _hold_no_sell:
-                    csv_log_close(
-                        to_display_pair(sym),
-                        now_wib().strftime('%Y-%m-%d %H:%M:%S'),
-                        price, prof_from_entry, reason,
-                        strategy=strat,
-                        base_usd=total_usd
-                    )
+                csv_log_close(
+                    to_display_pair(sym),
+                    now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                    price, prof_from_entry, reason,
+                    strategy=strat,
+                    base_usd=total_usd
+                )
                 # ── DEAL LOG lengkap CLOSE ────────────────────────────────
                 # opened_candle_ts disimpan dalam MILIDETIK -- wajib dibagi 1000 dulu sebelum
                 # dikurangi time.time() (detik), dan pembagi candle wajib sesuai timeframe
@@ -10843,7 +10884,7 @@ var SC_HAS_ADDFUND = {brkX2: true, trend_confirm_4h: true, brkX2_crossema: true}
 // score_to_target_usd(0)=30, jadi CrossEMA-4h SELALU efektif $30 (base $10 + add otomatis
 // $20), bukan $10 seperti yg sebelumnya tertulis. Perilaku backend TIDAK diubah, cuma label.
 var SC_ADDFUND_LABEL = {brkX2: 'auto (score-based)', trend_confirm_4h: 'auto (score-based)',
-                         brkX2_crossema: 'auto (score dikunci 0 -> selalu $30)'};
+                         brkX2_crossema: 'auto (total dikunci $20 sejak 19/09)'};
 // 14/09/2026 (permintaan Mas Budi): tier Conviction brkX2_4h ($30 kalau ATR%>=5 DAN
 // Volume>=2x MA20 sekaligus di candle sinyal, lihat BRKX2_4H_CONVICTION_* di Python) beli
 // LANGSUNG 1x, tidak lewat kolom Add Fund sama sekali -- jadi tidak kelihatan di tabel ini
@@ -19995,6 +20036,7 @@ if __name__ == '__main__':
     load_hold_no_sell_closed()
     load_hold_no_sell_price()
     load_blocked_pairs()
+    apply_one_time_config_migrations()
     sync_max_deals_globals()
     load_scan_blockers()
     load_daily_loss_limit()
