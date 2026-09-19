@@ -9473,6 +9473,22 @@ def _try_swap_hunting_slot(incoming_symbol: str) -> bool:
     # Pilih yang profit positif TERENDAH
     swap_sym = min(positive_armed, key=lambda s: positive_armed[s])
     swap_pct  = positive_armed[swap_sym]
+
+    # Guard baru (19/09/2026, permintaan Mas Budi): cek batas GABUNGAN global SEBELUM benar-benar
+    # menutup swap_sym -- kalau closing swap_sym lalu buka incoming_symbol TETAP akan melanggar
+    # batas global (jumlah deal / $ eksposur), batalkan swap. Tanpa guard ini, deal profit yang
+    # sudah ditutup jadi SIA-SIA kalau open baru-nya ternyata masih diblokir gerbang global.
+    with active_deals_lock:
+        swap_deal_usd = estimate_deal_total_usd(active_deals.get(swap_sym, {}))
+    incoming_base_usd = get_strategy_base_usd("hunting_4h")
+    n_after_swap        = active_deal_count() - 1 + 1        # -1 (swap_sym keluar) +1 (incoming masuk) = tetap
+    exposure_after_swap  = total_active_exposure_usd() - swap_deal_usd + incoming_base_usd
+    if n_after_swap > GLOBAL_MAX_ACTIVE_DEALS or exposure_after_swap > GLOBAL_MAX_EXPOSURE_USD:
+        log(f"[HUNT-SWAP] {incoming_symbol}: batal swap -- closing {swap_sym} lalu buka {incoming_symbol} "
+            f"tetap melanggar batas global (n={n_after_swap}/{GLOBAL_MAX_ACTIVE_DEALS}, "
+            f"exposure=${exposure_after_swap:.0f}/${GLOBAL_MAX_EXPOSURE_USD:.0f})")
+        return False
+
     log(f"[HUNT-SWAP] {incoming_symbol}: swap slot — close {swap_sym} (armed, profit +{swap_pct:.2f}%) → buka untuk {incoming_symbol}")
 
     # Close deal swap_sym via send_close_long
