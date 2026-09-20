@@ -935,15 +935,18 @@ STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # 20/09/2026 (permintaan Mas Budi): reversal 90 -> 30 dan trend_confirm_4h 70 -> 30 (angka aman: satu
 # hard-stop ~-10..-12.5% turun dari ~-$11 jadi ~-$4, batas rugi harian $15). REMARK nilai sebelum
 # penurunan ini (rollback): reversal=90, trend_confirm_4h=70.
+# 20/09/2026 (permintaan Mas Budi): "close_sell_pct" = % koin yg DIJUAL saat close UNTUNG (sisa -> Simple Earn Flexible,
+# lihat close_deal_maybe_partial()). Tahap 1: HANYA brkX2 (brkX2-12h) = 75; strategi lain 100 (= jual semua, nonaktif);
+# QScalp-3m selalu 100 (dikunci di kode + dimmed di dashboard).
 STRATEGY_CONFIG_DEFAULTS = {
-    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
-    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
-    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True, "max_deals": 5},
-    "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
-    "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
-    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
-    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
-    "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "max_deals": 2},
+    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2, "close_sell_pct": 75},
+    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2, "close_sell_pct": 100},
+    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True, "max_deals": 5, "close_sell_pct": 100},
+    "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2, "close_sell_pct": 100},
+    "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3, "close_sell_pct": 100},
+    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3, "close_sell_pct": 100},
+    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3, "close_sell_pct": 100},
+    "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "max_deals": 2, "close_sell_pct": 100},
 }
 # qscalp_3m: ai_call_open=False PERMANEN secara desain (bukan cuma default) -- strategi ini
 # full rule-based TANPA AI sama sekali (disepakati Mas Budi 12/09/2026, alasan: pump 3m
@@ -3927,6 +3930,213 @@ def send_close_long(symbol: str, strategy: str = 'brkX2') -> bool:
         "bot_id":bid,"email_token":tok,
         "delay_seconds":COMMAS_DELAY_SEC,"pair":to_commas_pair(symbol)}, "close_long")
 
+# ── Jual SEBAGIAN saat close UNTUNG + sisa ke Simple Earn Flexible (20/09/2026, permintaan Mas Budi) ──────────
+# Selama ini close SELALU jual 100% koin. Sekarang tiap strategi punya setelan "close_sell_pct" (menu Control,
+# STRATEGY_CONFIG_DEFAULTS): persentase koin yg DIJUAL saat close yg UNTUNG (profit bersih > 0). Sisanya disimpan
+# di Simple Earn Flexible. Aturan yg disepakati:
+#  - close RUGI / hard-stop / manual selalu 100% (hanya jalur close otomatis thread2 yg memakai fungsi ini);
+#  - QScalp-3m selalu 100% (dimmed di dashboard, dikunci di get_close_sell_pct());
+#  - kalau koin tidak punya produk Earn Flexible yg bisa dibeli, sisa < EARN_PARTIAL_MIN_RESIDUAL_USD, atau
+#    sisa < minimum langganan produk -> jual 100% seperti biasa (tidak menyisakan koin menganggur di Spot);
+#  - kalau subscribe Earn GAGAL setelah jual sebagian -> sisa langsung dijual juga (tetap 100%).
+# Tahap 1 (20/09/2026): HANYA brkX2-12h = 75, strategi lain 100 (nonaktif) sampai Mas Budi menyalakan.
+# >>> REMARK EXPAND: setelah EARN_EXPAND_TARGET (10) close untung SUKSES menyisakan koin di Earn, bot kirim Telegram
+# >>> SEKALI -> minta Claude "expand jual sebagian ke strategi berikutnya" (lihat memory project_partial_sell_earn).
+EARN_PARTIAL_MIN_RESIDUAL_USD = 5.0
+EARN_PRODUCT_CACHE_TTL = 6 * 3600
+EARN_PRODUCT_NEG_TTL = 3600
+EARN_EXPAND_TARGET = 10
+EARN_RESIDUAL_FILE = os.path.join(DATA_DIR, "earn_residuals.json")
+EARN_STATE_FILE = os.path.join(DATA_DIR, "earn_partial_state.json")
+_earn_product_cache = {}
+_earn_lock = threading.Lock()
+
+def get_close_sell_pct(strategy: str) -> float:
+    """% koin yg dijual saat close UNTUNG utk `strategy` (default 100 = jual semua, perilaku lama)."""
+    if strategy == 'qscalp_3m':
+        return 100.0
+    try:
+        v = float(load_strategy_config().get(strategy, {}).get("close_sell_pct", 100))
+    except Exception:
+        v = 100.0
+    return min(100.0, max(1.0, v))
+
+def _earn_json_load(path, default):
+    try:
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        log(f"WARN [EARN] baca {os.path.basename(path)}: {e}")
+    return default
+
+def _earn_json_save(path, data):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception as e:
+        log(f"WARN [EARN] tulis {os.path.basename(path)}: {e}")
+
+def get_earn_flexible_product(asset: str):
+    """Produk Simple Earn Flexible yg BISA dibeli utk `asset` (cache), atau None.
+    Return {"productId", "min", "apr"}. Panggilan list berbobot 150 -> cache 6 jam (negatif 1 jam)."""
+    asset = asset.upper()
+    now = time.time()
+    with _earn_lock:
+        hit = _earn_product_cache.get(asset)
+    if hit and now - hit[0] < (EARN_PRODUCT_CACHE_TTL if hit[1] else EARN_PRODUCT_NEG_TTL):
+        return hit[1]
+    prod = None
+    try:
+        data = _binance_trading_request("GET", "/sapi/v1/simple-earn/flexible/list", {"asset": asset, "size": 100})
+        rows = data.get("rows", []) if isinstance(data, dict) else []
+        best = None
+        for r in rows:
+            if str(r.get("asset", "")).upper() != asset:
+                continue
+            if not r.get("canPurchase") or r.get("isSoldOut"):
+                continue
+            cand = {"productId": r.get("productId"), "min": float(r.get("minPurchaseAmount", 0) or 0),
+                    "apr": float(r.get("latestAnnualPercentageRate", 0) or 0)}
+            if cand["productId"] and (best is None or cand["apr"] > best["apr"]):
+                best = cand
+        prod = best
+    except Exception as e:
+        log(f"WARN [EARN] list produk {asset}: {e}")
+    with _earn_lock:
+        _earn_product_cache[asset] = (now, prod)
+    return prod
+
+def _earn_subscribe(product_id: str, amount: float) -> bool:
+    """Subscribe `amount` (dari Spot) ke produk Flexible. Coba presisi 8 desimal, lalu 4."""
+    for dec in (8, 4):
+        amt = int(amount * (10 ** dec)) / float(10 ** dec)
+        if amt <= 0:
+            return False
+        try:
+            data = _binance_trading_request("POST", "/sapi/v1/simple-earn/flexible/subscribe",
+                                            {"productId": product_id, "amount": f"{amt:.{dec}f}", "sourceAccount": "SPOT"})
+            log(f"[EARN] Subscribe flexible productId={product_id} amount={amt:.{dec}f} -> {data}")
+            if isinstance(data, dict) and data.get("success", True):
+                return True
+        except Exception as e:
+            log(f"WARN [EARN] subscribe {product_id} amount={amt:.{dec}f}: {e}")
+    return False
+
+def _earn_state_bump(key: str) -> dict:
+    with _earn_lock:
+        st = _earn_json_load(EARN_STATE_FILE, {})
+        for k in ("ok", "full_no_earn", "full_small", "sub_fail", "err"):
+            st.setdefault(k, 0)
+        st.setdefault("notified", False)
+        st[key] = st.get(key, 0) + 1
+        remind = key == "ok" and st["ok"] >= EARN_EXPAND_TARGET and not st["notified"]
+        if remind:
+            st["notified"] = True
+        _earn_json_save(EARN_STATE_FILE, st)
+    if remind:
+        send_telegram(f"🔔 Kriteria expand tercapai: {st['ok']} close untung sukses menyisakan koin di Simple Earn "
+                      f"(fallback 100%: tanpa produk Earn {st['full_no_earn']}, sisa kecil {st['full_small']}, "
+                      f"subscribe gagal {st['sub_fail']}).\nBilang ke Claude: 'expand jual sebagian ke strategi berikutnya' "
+                      f"untuk cek hasil dan menyalakan strategi lain.")
+    return st
+
+def close_deal_maybe_partial(symbol: str, strategy: str, profit_pct: float, info: dict) -> bool:
+    """Pengganti send_close_long() utk close OTOMATIS di thread2_monitor. Return bool seperti send_close_long().
+    `info` diisi bila terjadi jual sebagian: partial, sold_fraction, sold_pct, residual_qty, residual_usd, asset, product_id."""
+    pct = get_close_sell_pct(strategy)
+    if not (USE_BINANCE_DIRECT and pct < 100.0 and profit_pct > 0):
+        return send_close_long(symbol, strategy)
+    asset = symbol.replace("USDT", "")
+    try:
+        with active_deals_lock:
+            d = dict(active_deals.get(symbol, {}))
+        qty_coin = float(d.get("qty_coin", 0) or 0)
+        wallet_qty = binance_get_asset_qty(asset)
+        if wallet_qty > qty_coin:
+            qty_coin = wallet_qty
+        if qty_coin <= 0:
+            return send_close_long(symbol, strategy)
+        price = get_price_now(symbol)
+        sell_qty = qty_coin * pct / 100.0
+        residual_est = qty_coin - sell_qty
+        if price <= 0 or residual_est * price < EARN_PARTIAL_MIN_RESIDUAL_USD:
+            log(f"[EARN] {symbol}: sisa {100 - pct:.0f}% (~${residual_est * max(price, 0):.2f}) terlalu kecil -> jual 100%")
+            _earn_state_bump("full_small")
+            return send_close_long(symbol, strategy)
+        prod = get_earn_flexible_product(asset)
+        if not prod:
+            log(f"[EARN] {symbol}: tidak ada produk Earn Flexible yg bisa dibeli -> jual 100%")
+            _earn_state_bump("full_no_earn")
+            return send_close_long(symbol, strategy)
+        if residual_est < prod["min"]:
+            log(f"[EARN] {symbol}: sisa {residual_est:.6f} < minimum langganan {prod['min']} -> jual 100%")
+            _earn_state_bump("full_small")
+            return send_close_long(symbol, strategy)
+        # ---- jual sebagian ----
+        res = binance_sell_market(symbol, sell_qty)
+        sold_qty = float(res.get("qty", 0) or 0)
+        left = binance_get_asset_qty(asset)
+        if left < 0:   # gagal baca saldo -> jangan biarkan sisa menggantung, jual semua yg tersisa
+            log(f"WARN [EARN] {symbol}: gagal baca saldo setelah jual sebagian -> jual sisa (100%)")
+            _earn_state_bump("err")
+            return send_close_long(symbol, strategy)
+        if left <= 0 or (left * price) < EARN_PARTIAL_MIN_RESIDUAL_USD:
+            if left > 0:
+                binance_sell_market(symbol, left)   # sisa terlalu kecil -> jual juga
+            _earn_state_bump("full_small")
+            return True
+        if not _earn_subscribe(prod["productId"], left):
+            log(f"WARN [EARN] {symbol}: subscribe gagal -> sisa {left} dijual juga (tetap 100%)")
+            binance_sell_market(symbol, left)
+            _earn_state_bump("sub_fail")
+            send_telegram(f"⚠️ Earn: subscribe sisa {left} {asset} gagal -> sisa dijual juga (close tetap 100%). Cek log [EARN].")
+            return True
+        sold_fraction = sold_qty / (sold_qty + left) if (sold_qty + left) > 0 else pct / 100.0
+        # Subscribe SUKSES -> deal dianggap tertutup APA PUN yg terjadi di bawah (jangan sampai bookkeeping yg
+        # error memicu fallback jual-lagi padahal saldo sisa sudah pindah ke Earn).
+        info.update(partial=True, sold_fraction=sold_fraction, sold_pct=sold_fraction * 100.0, residual_qty=left,
+                    residual_usd=left * price, asset=asset, product_id=prod["productId"])
+        try:
+            with _earn_lock:
+                rows = _earn_json_load(EARN_RESIDUAL_FILE, [])
+                rows.append({"ts_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "strategy": strategy, "symbol": symbol, "asset": asset,
+                             "qty": left, "product_id": prod["productId"], "apr": prod["apr"], "close_price": price,
+                             "entry_price": d.get("entry_price"), "value_usd": round(left * price, 2), "profit_pct": round(profit_pct, 2)})
+                _earn_json_save(EARN_RESIDUAL_FILE, rows[-500:])
+            _earn_state_bump("ok")
+            send_telegram(f"📥 Sisa {100 - info['sold_pct']:.0f}% {asset} ({left:.6g} ~${left * price:.2f}) disimpan di Simple Earn Flexible "
+                          f"(APR {prod['apr'] * 100:.2f}%). {strategy} untung {profit_pct:+.2f}%, {info['sold_pct']:.0f}% terjual.")
+        except Exception as e2:
+            log(f"WARN [EARN] {symbol}: bookkeeping setelah subscribe error (deal tetap dianggap tertutup): {e2}")
+        return True
+    except Exception as e:
+        log(f"WARN [EARN] {symbol} close sebagian gagal ({e}) -> fallback jual 100%")
+        _earn_state_bump("err")
+        info.pop("partial", None)
+        return send_close_long(symbol, strategy)
+
+def earn_partial_progress_line() -> str:
+    """Satu baris utk heartbeat: progres jual-sebagian + sisa di Earn."""
+    try:
+        with _earn_lock:
+            st = _earn_json_load(EARN_STATE_FILE, {})
+            rows = _earn_json_load(EARN_RESIDUAL_FILE, [])
+        ok = st.get("ok", 0); val = sum(float(r.get("value_usd", 0) or 0) for r in rows)
+        return (f"{ok}/{EARN_EXPAND_TARGET} sukses ke Earn ({len(rows)} koin, ~${val:.2f} saat masuk); jual 100% krn: "
+                f"tanpa Earn {st.get('full_no_earn', 0)}, sisa kecil {st.get('full_small', 0)}, gagal {st.get('sub_fail', 0) + st.get('err', 0)}"
+                + (" -- KRITERIA EXPAND TERCAPAI" if st.get("notified") else ""))
+    except Exception:
+        return "n/a"
+
+def earn_selfcheck():
+    """Cek read-only saat startup: apakah API bisa membaca produk Earn Flexible (izin/koneksi)."""
+    try:
+        prod = get_earn_flexible_product("BTC")
+        log(f"[EARN] selfcheck list produk BTC -> {prod if prod else 'tidak ada produk beli / gagal (lihat WARN di atas)'}")
+    except Exception as e:
+        log(f"WARN [EARN] selfcheck: {e}")
+
 def send_add_funds(symbol: str, volume, strategy: str = 'brkX2', delay: int = 15) -> bool:
     """Add fund. Kalau USE_BINANCE_DIRECT=True → tambahan buy Binance."""
     if USE_BINANCE_DIRECT:
@@ -5835,6 +6045,7 @@ def heartbeat_general_tick():
                      f"    akumulasi-4h: 2nd {_fmt_strat(prog_akum2, AKUM_ENTRY_PHASE2_TARGET)}\n"
                      f"  - trend_confirm_4h: {_fmt_hunting_live(prog_trend)}\n"
                      f"    trend_confirm_4h review hard-stop K1.5/cap10.8: {tc_hardstop_progress_line()}\n"
+                     f"    jual-sebagian->Earn (brkX2-12h 75%): {earn_partial_progress_line()}\n"
                      f"  - qscalp_3m  : {_fmt_hunting_live(prog_qscalp)}\n"
                      f"  - Shadow (paper, bukan live):\n"
                      f"    {_fmt_shadow('akuma_all3', SHADOW_AKUMA_TARGET)}\n"
@@ -7372,8 +7583,14 @@ def thread2_monitor():
                              and get_deal_override(sym, 'hold_no_sell', True)
             if _hold_no_sell:
                 reason += " [HOLD: koin tidak dijual, cooldown 96j]"
-            if _hold_no_sell or send_close_long(sym, strat):
+            _close_info = {}   # diisi close_deal_maybe_partial() kalau jual sebagian (sisa -> Earn)
+            if _hold_no_sell or close_deal_maybe_partial(sym, strat, prof_from_entry, _close_info):
                 total_usd = estimate_deal_total_usd(d)
+                if _close_info.get('partial'):
+                    # untung/CSV dihitung dari BAGIAN yg terjual saja; sisa dicatat di earn_residuals.json
+                    total_usd = total_usd * _close_info['sold_fraction']
+                    reason += (f" [JUAL {_close_info['sold_pct']:.0f}%, SISA {100 - _close_info['sold_pct']:.0f}% "
+                               f"({_close_info['residual_qty']:.6g} {_close_info['asset']} ~${_close_info['residual_usd']:.2f}) -> Earn Flexible]")
                 csv_log_close(
                     to_display_pair(sym),
                     now_wib().strftime('%Y-%m-%d %H:%M:%S'),
@@ -10494,10 +10711,11 @@ document.addEventListener('DOMContentLoaded', function() {
           <th style="text-align:center;padding:5px 8px">Gunakan Setting Modal</th>
           <th style="text-align:center;padding:5px 8px">Base Order (USDT)</th>
           <th style="text-align:center;padding:5px 8px">Add Fund (USDT)</th>
+          <th style="text-align:center;padding:5px 8px" title="Persentase koin yang DIJUAL saat close yang UNTUNG. Sisanya disimpan di Simple Earn Flexible.">Jual saat Close Untung (%)</th>
           <th style="text-align:center;padding:5px 8px">Cooldown Re-entry</th>
                     <th style="text-align:center;padding:5px 8px">Action</th>
         </tr></thead>
-                <tbody id="sc-body"><tr><td colspan="9" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
+                <tbody id="sc-body"><tr><td colspan="10" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
     </table>
     </div>
     </div>
@@ -11319,6 +11537,7 @@ var SC_ADDFUND_LABEL = {brkX2: 'auto (score-based)', trend_confirm_4h: 'auto (sc
 // Python) beli LANGSUNG 1x, tidak lewat kolom Add Fund sama sekali -- jadi tidak kelihatan di
 // tabel ini kecuali ditandai manual di sini. Catatan statis (bukan dari /api/strategy_config).
 var SC_BASE_NOTE = {brkX2_4h: '/ $100 conviction'};
+var SC_NO_PARTIAL = {qscalp_3m: true};  // QScalp selalu jual 100% saat close (kolom Jual % dimmed)
 var SC_NO_AI = {qscalp_3m: true};  // strategi full rule-based, checkbox AI-call tidak berlaku
 var _scData = {};
 
@@ -11363,7 +11582,7 @@ function loadStrategyConfig() {
             var tbody = document.getElementById('sc-body');
             if (!tbody) return;
             if (!keys.length || !Object.keys(d || {}).length) {
-                tbody.innerHTML = '<tr><td colspan="9" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
                 return;
             }
             for (var i = 0; i < keys.length; i++) {
@@ -11395,6 +11614,9 @@ function loadStrategyConfig() {
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-size-' + k + '" ' + (sizingEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '">' + (SC_BASE_NOTE[k] ? '<span style="' + dim + ';color:var(--muted);font-style:italic;font-size:10px;margin-left:4px" title="Beli langsung $100 sekali kalau ATR%>=5 DAN Volume>=2x MA20 di candle sinyal (tidak lewat Add Fund)">' + SC_BASE_NOTE[k] + '</span>' : '') + '</td>'
                     + addFundCell
+                    + (SC_NO_PARTIAL[k]
+                        ? '<td style="text-align:center;padding:5px 8px"><span style="opacity:0.35;color:var(--muted);font-size:10px;font-style:italic" title="QScalp selalu jual 100% saat close (setelan ini tidak berlaku)">100% (tetap)</span></td>'
+                        : '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-sellpct-' + k + '" value="' + (cfg.close_sell_pct || 100) + '" min="1" max="100" step="1" style="width:55px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px" title="Persentase koin yang DIJUAL saat close yang UNTUNG. Sisanya disimpan di Simple Earn Flexible (kalau koin tidak punya produk Earn atau sisa terlalu kecil, dijual 100%). Close rugi / hard-stop selalu 100%. 100 = jual semua (perilaku lama)."></td>')
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-cooldown-' + k + '" ' + (cooldownEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer" title="Skip re-entry pair yang sama selama masih cooldown"></td>'
                     + '<td style="text-align:center;padding:5px 8px">' + saveButton + '</td>'
                     + '</tr>';
@@ -11409,7 +11631,7 @@ function loadStrategyConfig() {
         .catch(function(e) {
             var tbody = document.getElementById('sc-body');
             if (tbody) {
-                tbody.innerHTML = '<tr><td colspan="9" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
             }
         });
 }
@@ -11445,6 +11667,11 @@ function saveStrategyConfig(button) {
     };
     if (SC_HAS_ADDFUND[key]) {
         data[key].add_usd = parseFloat(addEl ? addEl.value : 0) || 0;
+    }
+    var sellPctEl = document.getElementById('sc-sellpct-' + key);
+    if (sellPctEl) {
+        var sp = parseFloat(sellPctEl.value);
+        data[key].close_sell_pct = (sp >= 1 && sp <= 100) ? sp : 100;
     }
     fetch('/api/strategy_config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)})
         .then(function(r){ return r.json(); })
@@ -17606,6 +17833,13 @@ def run_web_dashboard():
             sync_max_deals_globals()  # biar perubahan max_deals langsung kepakai tanpa restart
             return jsonify({"ok": True})
 
+        @app.route("/api/earn_residuals")
+        def api_earn_residuals():
+            """Sisa koin hasil jual-sebagian yg disimpan di Simple Earn + counter keberhasilan (utk review/expand)."""
+            with _earn_lock:
+                return jsonify({"state": _earn_json_load(EARN_STATE_FILE, {}), "residuals": _earn_json_load(EARN_RESIDUAL_FILE, []),
+                                "target_expand": EARN_EXPAND_TARGET})
+
         @app.route("/dash.js")
         def dash_js():
             from flask import Response
@@ -20483,6 +20717,7 @@ if __name__ == '__main__':
     apply_one_time_config_migrations()
     migrate_csv_hold_remark_once()
     mcap_refresh_async(force=True)   # 20/09/2026: siapkan cache peringkat CoinGecko sebelum OPEN pertama
+    threading.Thread(target=earn_selfcheck, daemon=True).start()   # 20/09/2026: cek read-only akses Simple Earn
     sync_max_deals_globals()
     load_scan_blockers()
     load_daily_loss_limit()
