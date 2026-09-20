@@ -19837,7 +19837,13 @@ def run_web_dashboard():
                                 "(bug, di-patch 21/09/2026, commit 789eab3)")
                 _WHY_PEAK    = ("peak awal = harga TICKER sesudah order, bukan harga fill -> trailing armed di siklus "
                                 "pertama & close rugi (bug, di-patch 21/09/2026, commit 968373b)")
+                # 21/09/2026 (permintaan Mas Budi): QQQB/USDT Akumulasi Entry A (open 11/09 21:34, "manual reconcile",
+                # -0.92%) juga disembunyikan -- bukan hasil strategi: koinnya terjual di luar jalur normal krn Auto Sell
+                # Asset menjual qty yg dilacak deal lain (bug, di-patch e5c0661); profit % di baris itu hasil rekonsiliasi.
+                _WHY_RECONCILE = ("manual reconcile: koin terjual di luar jalur normal oleh Auto Sell Asset (bug, "
+                                  "di-patch commit e5c0661) -- profit hasil rekonsiliasi, bukan hasil strategi")
                 _patched_hidden = {
+                    ('QQQB/USDT',     'akum_entry_a',     '2026-09-11 21:34'): _WHY_RECONCILE,
                     ('AR/USDT',       'brkX2',            '2026-09-19 10:23'): _WHY_ADDFUND,
                     ('GENIUS/USDT',   'trend_confirm_4h', '2026-09-18 08:12'): _WHY_ADDFUND,
                     ('MARSCOIN/USDT', 'qscalp_3m',        '2026-09-18 20:55'): _WHY_PEAK,
