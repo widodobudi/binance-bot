@@ -85,6 +85,11 @@ USE_BINANCE_DIRECT = os.environ.get("USE_BINANCE_DIRECT", "false").lower() == "t
 # Buffer qty_coin sementara antara send_open_long → add_to_active_deals
 _binance_pending_qty:   dict = {}
 _binance_pending_price: dict = {}
+# 21/09/2026: fill SELL market terakhir per symbol ({'qty','proceeds','ts'}, diakumulasi kalau 1 close = >1 order),
+# diisi binance_sell_market() dan dibaca thread2_monitor lewat pop_recent_sell_fill() supaya EXIT/PROFIT di CSV
+# memakai harga jual SEBENARNYA, bukan harga pantauan saat trigger.
+_binance_sell_fills: dict = {}
+_binance_sell_fills_lock = threading.Lock()
 # Kredensial WAJIB lewat environment variable (jangan hardcode di kode—repo publik!).
 # Set di Railway > Variables: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, COMMAS_BOT_ID, COMMAS_EMAIL_TOKEN
 if not all([TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, COMMAS_EMAIL_TOKEN]) or COMMAS_BOT_ID == 0:
@@ -1638,7 +1643,11 @@ trades_csv_lock = threading.Lock()
 CSV_FIELDS = [
     'open_time_wib','symbol','strategy','signal_price','entry_price','slip_pct','atr_pct',
     'trail_dist_pct','base_usd','score','rsi_open',
-    'close_time_wib','exit_price','profit_pct','exit_reason','status'
+    'close_time_wib','exit_price','profit_pct','exit_reason','status',
+    # 21/09/2026 (permintaan Mas Budi): entry_price/exit_price sekarang = harga FILL sebenarnya (buy/sell), supaya cocok
+    # dgn profit_pct. Harga ticker lama disimpan di 2 kolom ini (DITAMBAH DI UJUNG agar pembaca berbasis posisi kolom
+    # tidak bergeser). Baris lama: kosong (entry_price/exit_price lama = ticker). slip_pct TETAP dihitung dari ticker.
+    'entry_ticker','exit_ticker'
 ]
 
 # 20/09/2026 (permintaan Mas Budi): penanda timeline histori pencatatan hard-stop/timeout-rugi
@@ -1654,18 +1663,56 @@ HOLD_NO_SELL_CSV_REMARK = ("[CATATAN: hold_no_sell dicatat ke CSV lagi sejak 19/
 HOLD_NO_SELL_CSV_RESUMED_WIB = "2026-09-19 12:12:00"
 
 def _csv_ensure_header():
-    """Buat file + header kalau belum ada."""
+    """Buat file + header kalau belum ada; kalau header file LAMA (kurang kolom baru di CSV_FIELDS) -> tulis ulang
+    dgn header baru (baris lama tetap, kolom baru kosong). Wajib di bawah trades_csv_lock oleh pemanggil."""
     if not os.path.exists(TRADES_CSV):
         os.makedirs(os.path.dirname(TRADES_CSV) or '.', exist_ok=True)
         with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
             csv.DictWriter(f, fieldnames=CSV_FIELDS).writeheader()
+        return
+    with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+        rows = list(csv.reader(f))
+    if not rows or rows[0] == CSV_FIELDS:
+        return
+    old_header = rows[0]
+    # hanya migrasi kalau header lama adalah PREFIX dari CSV_FIELDS (kolom baru cuma ditambah di ujung); selain itu
+    # jangan disentuh supaya file yg tak dikenal tidak rusak.
+    if old_header != CSV_FIELDS[:len(old_header)]:
+        log(f"WARN [CSV] header trades_forwardtest.csv tidak dikenal, tidak dimigrasi: {old_header}")
+        return
+    pad = [''] * (len(CSV_FIELDS) - len(old_header))
+    with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
+        w = csv.writer(f)
+        w.writerow(CSV_FIELDS)
+        for r in rows[1:]:
+            w.writerow(r + pad if len(r) == len(old_header) else r)
+    log(f"   [CSV] header dimigrasi: +{len(pad)} kolom ({', '.join(CSV_FIELDS[len(old_header):])})")
+
+def _csv_open_fill_entry(symbol_display: str) -> float:
+    """Harga FILL sebenarnya deal yg BARU dibuka (dari active_deals: entry_price ditimpa fill oleh
+    add_to_active_deals kalau ada qty_coin). 0.0 kalau tidak ketemu / bukan hasil fill. Dipanggil SEBELUM
+    trades_csv_lock diambil (hindari urutan lock terbalik)."""
+    try:
+        sym = str(symbol_display or '').replace('/', '').upper()
+        with active_deals_lock:
+            d = dict(active_deals.get(sym, {}))
+        if not d or not float(d.get('qty_coin', 0) or 0) > 0:
+            return 0.0
+        return float(d.get('entry_price', 0) or 0)
+    except Exception:
+        return 0.0
 
 def csv_log_open(row: dict):
-    """Tulis 1 baris saat OPEN (status=OPEN, kolom exit kosong)."""
+    """Tulis 1 baris saat OPEN (status=OPEN, kolom exit kosong).
+    entry_price = harga FILL sebenarnya kalau tersedia; harga ticker yg dikirim pemanggil disimpan di entry_ticker."""
     try:
+        fill_entry = _csv_open_fill_entry(row.get('symbol', ''))
         with trades_csv_lock:
             _csv_ensure_header()
             full = {k: row.get(k, '') for k in CSV_FIELDS}
+            if fill_entry > 0:
+                full['entry_ticker'] = row.get('entry_price', '')
+                full['entry_price'] = f"{_fmt_price(fill_entry)}"
             full['status'] = 'OPEN'
             if not full.get('strategy'): full['strategy'] = 'brkX2'
             with open(TRADES_CSV, 'a', newline='', encoding='utf-8') as f:
@@ -1676,10 +1723,11 @@ def csv_log_open(row: dict):
         log(f"   [CSV] gagal tulis OPEN: {e}")
 
 def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit_reason: str,
-                 strategy: str = '', base_usd: float | None = None):
+                 strategy: str = '', base_usd: float | None = None, exit_ticker=None):
     """Lengkapi baris OPEN terakhir untuk symbol ini dengan data exit (rewrite seluruh file).
     Jika tidak ada baris OPEN (deal dibuka sebelum CSV), tambah baris CLOSED baru.
     base_usd diisi dari kapital real posisi jika tersedia; ini mencegah default $8 di pasangan multi-buy seperti ONDO/USDT.
+    exit_ticker: harga pantauan saat trigger (kalau exit_price sudah diganti harga fill jual); dicatat di kolom exit_ticker.
     """
     try:
         symbol = to_display_pair(symbol)
@@ -1696,6 +1744,7 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
                     target = r; break
             ep_str  = f"{_fmt_price(exit_price)}" if isinstance(exit_price,(int,float)) else str(exit_price)
             pct_str = f"{profit_pct:.2f}"         if isinstance(profit_pct,(int,float)) else str(profit_pct)
+            et_str  = f"{_fmt_price(exit_ticker)}" if isinstance(exit_ticker,(int,float)) else ''
             if target is None:
                 log(f"   [CSV] tidak ketemu baris OPEN utk {symbol} — tambah baris CLOSED baru")
                 new_row = {f: '' for f in CSV_FIELDS}
@@ -1706,6 +1755,7 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
                 new_row['entry_price']    = ep_str
                 new_row['close_time_wib'] = close_time_wib
                 new_row['exit_price']     = ep_str
+                new_row['exit_ticker']    = et_str
                 new_row['profit_pct']     = pct_str
                 new_row['base_usd']       = f"{float(base_usd):.2f}" if base_usd else ''
                 new_row['exit_reason']    = exit_reason
@@ -1714,6 +1764,7 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
             else:
                 target['close_time_wib'] = close_time_wib
                 target['exit_price']     = ep_str
+                target['exit_ticker']    = et_str
                 target['profit_pct']     = pct_str
                 target['base_usd']       = f"{float(base_usd):.2f}" if base_usd else target.get('base_usd', '')
                 target['exit_reason']    = exit_reason
@@ -2975,8 +3026,31 @@ def binance_sell_market(symbol: str, qty: float) -> dict:
     proceeds  = sum(float(f["price"]) * float(f["qty"]) for f in fills) if fills else 0
     price_avg = proceeds / qty_exec if qty_exec > 0 else 0
     log(f"[BINANCE] SELL {symbol}: qty={qty_exec} avg={price_avg:.6f} proceeds={proceeds:.2f} USDT orderId={data.get('orderId')}")
+    if proceeds > 0 and qty_exec > 0:
+        with _binance_sell_fills_lock:
+            rec = _binance_sell_fills.get(symbol)
+            if not rec or time.time() - rec['ts'] > 120:
+                rec = {'qty': 0.0, 'proceeds': 0.0, 'ts': time.time()}
+            rec['qty'] += qty_exec
+            rec['proceeds'] += proceeds
+            rec['ts'] = time.time()
+            _binance_sell_fills[symbol] = rec
     return {"symbol": symbol, "orderId": data.get("orderId"),
             "qty": qty_exec, "price_avg": price_avg, "proceeds_usdt": proceeds}
+
+
+def clear_sell_fill(symbol: str):
+    with _binance_sell_fills_lock:
+        _binance_sell_fills.pop(symbol, None)
+
+
+def pop_recent_sell_fill(symbol: str, max_age: float = 120.0) -> float:
+    """Harga jual rata-rata (fill) dari close yg BARU SAJA dieksekusi utk symbol ini; 0.0 kalau tidak ada / basi."""
+    with _binance_sell_fills_lock:
+        rec = _binance_sell_fills.pop(symbol, None)
+    if not rec or rec['qty'] <= 0 or time.time() - rec['ts'] > max_age:
+        return 0.0
+    return rec['proceeds'] / rec['qty']
 
 
 def load_auto_sell_config() -> dict:
@@ -7702,7 +7776,22 @@ def thread2_monitor():
             if _hold_no_sell:
                 reason += " [HOLD: koin tidak dijual, cooldown 96j]"
             _close_info = {}   # diisi close_deal_maybe_partial() kalau jual sebagian (sisa -> Earn)
+            clear_sell_fill(sym)   # buang sisa fill jual lama; hanya order jual close INI yg boleh terbaca di bawah
             if _hold_no_sell or close_deal_maybe_partial(sym, strat, prof_from_entry, _close_info):
+                # 21/09/2026 (permintaan Mas Budi): EXIT & PROFIT yg dicatat = harga FILL jual sebenarnya, bukan harga
+                # pantauan saat trigger (deal C/USDT 20/09: trigger 0.0771 tapi fill 0.0770 -> baris History tampak
+                # "exit di atas entry tapi rugi"). Harga trigger disimpan di kolom exit_ticker. hold_no_sell = tidak
+                # ada order jual -> tetap harga pantauan. Fill dipakai hanya kalau wajar (selisih < 15% dari trigger).
+                _exit_ticker = price
+                if not _hold_no_sell:
+                    _sell_fill = pop_recent_sell_fill(sym)
+                    if _sell_fill > 0 and price > 0 and abs(_sell_fill / price - 1) < 0.15:
+                        with active_deals_lock:
+                            _entry_now = float(active_deals.get(sym, {}).get('entry_price', 0) or 0) or entry
+                        price = _sell_fill
+                        prof_from_entry = (price / _entry_now - 1) * 100 - FEE_ROUND_TRIP_PCT
+                        log(f"[T2] {sym} harga jual FILL {_fmt_price(price)} (trigger {_fmt_price(_exit_ticker)}) "
+                            f"-> profit tercatat {prof_from_entry:+.2f}%")
                 total_usd = estimate_deal_total_usd(d)
                 if _close_info.get('partial'):
                     # untung/CSV dihitung dari BAGIAN yg terjual saja; sisa dicatat di earn_residuals.json
@@ -7715,7 +7804,8 @@ def thread2_monitor():
                     price, prof_from_entry,
                     reason + (f" {HOLD_NO_SELL_CSV_REMARK}" if _hold_no_sell else ""),
                     strategy=strat,
-                    base_usd=total_usd
+                    base_usd=total_usd,
+                    exit_ticker=_exit_ticker
                 )
                 # ── DEAL LOG lengkap CLOSE ────────────────────────────────
                 # opened_candle_ts disimpan dalam MILIDETIK -- wajib dibagi 1000 dulu sebelum
@@ -19733,6 +19823,20 @@ def run_web_dashboard():
                     _before = len(rows)
                     rows = [r for r in rows if not _is_hardstop_row(r)]
                     hidden_hardstop = _before - len(rows)
+                # 21/09/2026 (permintaan Mas Budi): 3 close trailing rugi yg penyebabnya sudah di-patch
+                # (add-fund peak lama: AR & GENIUS, commit 789eab3; peak ticker vs fill: MARSCOIN, 968373b)
+                # disembunyikan dari tampilan Closed Deals. Baris TETAP di CSV (counter fase / batas rugi
+                # harian / evaluasi baca CSV yg sama); tampil lagi dgn ?show_hidden=1. Kunci: symbol +
+                # strategi + menit open (detik tidak dicocokkan).
+                _patched_hidden = {
+                    ('AR/USDT',      'brkX2',            '2026-09-19 10:23'),
+                    ('GENIUS/USDT',  'trend_confirm_4h', '2026-09-18 08:12'),
+                    ('MARSCOIN/USDT', 'qscalp_3m',       '2026-09-18 20:55'),
+                }
+                if request.args.get("show_hidden", "") not in ("1", "true", "True"):
+                    rows = [r for r in rows
+                            if ((r.get('symbol') or ''), (r.get('strategy') or 'brkX2'),
+                                (r.get('open_time_wib') or '')[:16]) not in _patched_hidden]
                 if pair_filter:
                     rows = [r for r in rows if (r.get('symbol') or '').replace('/', '').upper() == pair_filter]
                 if date_from:
