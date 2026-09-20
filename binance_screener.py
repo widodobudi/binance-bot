@@ -685,13 +685,48 @@ BTC_EMA20_MULT = 0.98
 BTC_RSI_MIN    = 45
 
 EXCLUDED_BASE_ASSETS = {
+    # ── Stablecoin USD ──────────────────────────────────────────────────────────
     'USDC','USDE','FDUSD','TUSD','DAI','USDP','BUSD','UST','USTC','USD1','U',
     'USDD','PYUSD','FRAX','GUSD','LUSD','USDJ','USDN','USD0','USDY',
     'USDS','SUSD','CRVUSD','GHO','USDX','USDL','RLUSD','XUSD',
+    # Binance yield-bearing / institutional USD products (19/09/2026):
+    # BFUSD = Binance yield-bearing USD (bukan crypto murni, bergerak seperti stablecoin)
+    'BFUSD','WBETH','BETH',
+    # Stablecoin crypto-native tambahan (20/09/2026, audit ulang permintaan Mas Budi):
+    # varian USD yg bergerak seperti peg dollar (yield-bearing / algo / LST) -- semua ini
+    # nggak boleh jadi base currency karena bukan aset trading, tapi produk peg/yield.
+    #   USDF   = Falcon USD (algo-stable)
+    #   USDR   = Real USD (RWA-backed, Polygon)
+    #   SUSDE  = Ethena Staked USDe (yield version of USDE)
+    #   USR    = Resolv USD (delta-neutral stable)
+    #   DEUSD  = Elixir deUSD (yield stable)
+    #   YUSD   = YieldNest USD
+    #   FDUSDT = sudah tercover FDUSD di atas -- tidak perlu ulang
+    'USDF','USDR','SUSDE','USR','DEUSD','YUSD',
+
+    # ── Mata uang Euro & varian ─────────────────────────────────────────────────
     'EUR','EURI','EURS','AEUR','EURT','CEUR','EURC','EURQ',
+    # ── Mata uang negara lain (fiat) ────────────────────────────────────────────
+    # 19/09/2026 (permintaan Mas Budi): semua mata uang negara di-exclude agar tidak
+    # pernah jadi base currency di open deal. Ditambah: SGD, HKD, CAD, NZD, SEK,
+    # NOK, DKK, PLN, CZK, HUF, RON, BGN, HRK, RSD, MKD, ALL, BAM, MDL, GEL,
+    # AMD, AZN, KZT, UZS, KGS, TJS, TMT, BYN, UAH (sudah ada), MXN (sudah ada),
+    # NGN (sudah ada), COP (sudah ada), PEN, CLP, CRC, GTQ, HNL, NIO, PAB, DOP,
+    # BOB, PYG, UYU, VES, TTD, JMD, BBD, BSD, BZD, GYD, SRD, AWG, ANG, KYD,
+    # XCD, HTG, CUP, DZD, MAD, TND, LYD, EGP, SDG, ETB, KES, UGX, TZS, RWF,
+    # GHS, XOF, XAF, ZMW, MWK, MZN, AOA, NAD, BWP, SZL, LSL, MUR, SCR, MGA,
+    # KMF, DJF, ERN, SOS, GMD, GNF, SLL, LRD, CVE, STN, MRU, BIF, CDF, SSP,
+    # SAR, AED, QAR, KWD, BHD, OMR, JOD, ILS, LBP, SYP, IQD, IRR, YER, AFN,
+    # PKR, INR, BDT, LKR, NPR, MVR, BTN, MMK, THB, VND, KHR, LAK, MYR, IDR
+    # (sudah ada via IDRT), PHP, SGD, HKD, TWD, KRW, MNT, CNY, KPW
     'GBP','GBPT','CHF','TRY','TRYB','BRL','BRZ','ARS','ZAR',
     'IDRT','JPY','JPYC','AUD','MXN','NGN','COP','UAH',
-    # Komoditas (emas/perak) — bergerak ikut harga komoditas, bukan kripto:
+    'SGD','HKD','CAD','NZD','KRW','TWD','CNY','PHP','THB','VND','INR',
+    'SAR','AED','QAR','KWD','BHD','OMR','JOD','ILS',
+    'SEK','NOK','DKK','PLN','CZK','HUF',   # 'RON' sengaja TIDAK dimasukkan: bentrok dgn token Ronin (RON)
+    'PEN','CLP','CRC','DOP','BOB','PYG','UYU',
+    'KES','GHS','ZMW','TZS','UGX','RWF','ETB',
+    # ── Komoditas (emas/perak) — bergerak ikut harga komoditas, bukan kripto ───
     'PAXG','XAUT','XAU','XAUM','KAU','TGOLD','XAGT','XAG','KAG',
 }
 
@@ -1575,6 +1610,18 @@ CSV_FIELDS = [
     'close_time_wib','exit_price','profit_pct','exit_reason','status'
 ]
 
+# 20/09/2026 (permintaan Mas Budi): penanda timeline histori pencatatan hard-stop/timeout-rugi
+# yang berujung hold_no_sell (koin tidak dijual) di trades_forwardtest.csv. Ada 3 zaman:
+#   (A) s/d 05/09/2026 18:10 WIB -- dicatat (commit e7c5c6b menghentikannya)
+#   (B) 05/09/2026 18:10 - 19/09/2026 12:12 WIB -- TIDAK dicatat sama sekali (win-rate/PnL di CSV
+#       untuk periode ini terlalu bagus; rugi aslinya cuma ada di open-arm-close.txt)
+#   (C) 19/09/2026 12:12 WIB dst -- dicatat lagi (commit 3541770)
+# Remark ini ditempel di kolom exit_reason SEMUA baris hold_no_sell zaman (C), supaya siapa pun
+# yang membaca CSV/History tahu periode mana yg datanya lengkap dan mana yg bolong.
+HOLD_NO_SELL_CSV_REMARK = ("[CATATAN: hold_no_sell dicatat ke CSV lagi sejak 19/09/2026 12:12 WIB; "
+                           "periode 05/09/2026 18:10 - 19/09/2026 12:12 WIB TIDAK dicatat]")
+HOLD_NO_SELL_CSV_RESUMED_WIB = "2026-09-19 12:12:00"
+
 def _csv_ensure_header():
     """Buat file + header kalau belum ada."""
     if not os.path.exists(TRADES_CSV):
@@ -1646,6 +1693,41 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
         sync_trades_csv_to_drive()
     except Exception as e:
         log(f"   [CSV] gagal tulis CLOSE: {e}")
+
+
+def migrate_csv_hold_remark_once():
+    """Sekali jalan (marker di config_migrations_done.json): tempel HOLD_NO_SELL_CSV_REMARK ke
+    baris hold_no_sell zaman (C) yg SUDAH terlanjur tercatat sebelum remark ini ada (mis. XTZ,
+    ESP, STG 19/09) -- supaya semua baris zaman (C) seragam."""
+    key = "csv_hold_no_sell_remark_20260920"
+    try:
+        done = {}
+        if os.path.exists(CONFIG_MIGRATIONS_FILE):
+            with open(CONFIG_MIGRATIONS_FILE) as f:
+                done = json.load(f)
+        if key in done or not os.path.exists(TRADES_CSV):
+            return
+        changed = 0
+        with trades_csv_lock:
+            with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                rows = list(csv.DictReader(f))
+            for r in rows:
+                er = r.get('exit_reason') or ''
+                if ("[HOLD:" in er and "[CATATAN: hold_no_sell" not in er
+                        and (r.get('close_time_wib') or '') >= HOLD_NO_SELL_CSV_RESUMED_WIB):
+                    r['exit_reason'] = f"{er} {HOLD_NO_SELL_CSV_REMARK}"
+                    changed += 1
+            if changed:
+                with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
+                    w = csv.DictWriter(f, fieldnames=CSV_FIELDS); w.writeheader(); w.writerows(rows)
+        done[key] = {"applied_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "rows_updated": changed}
+        with open(CONFIG_MIGRATIONS_FILE, "w") as f:
+            json.dump(done, f, indent=2)
+        log(f"[MIGRASI] remark hold_no_sell ditempel ke {changed} baris CSV lama")
+        if changed:
+            sync_trades_csv_to_drive()
+    except Exception as e:
+        log(f"WARN migrate_csv_hold_remark_once: {e}")
 
 
 def repair_stale_ondo_base_usd(row: dict) -> dict:
@@ -3558,6 +3640,14 @@ def has_enough_balance_for_hunting(target_usd: float,
 
 def send_open_long(symbol: str, strategy: str = 'brkX2') -> bool:
     """Buka long position. Kalau USE_BINANCE_DIRECT=True → langsung ke Binance market buy."""
+    # 20/09/2026 (permintaan Mas Budi: BFUSD dkk / mata uang negara HARUS ditolak utk open deal):
+    # gerbang TERAKHIR di titik masuk tunggal semua open live, terlepas strategi mana yg
+    # memanggil -- soalnya thread_qscalp_scan() dulu ambil top-liquid pair TANPA cek
+    # SYMBOL_BLACKLIST (stablecoin/fiat justru paling likuid), jadi filter per-scan saja
+    # tidak cukup. Pakai versi HARDCODED (fiat/stablecoin/komoditas), bukan Block Pairs user.
+    if symbol in SYMBOL_BLACKLIST_HARDCODED:
+        log(f"[OPEN] {symbol} DITOLAK -- base asset masuk daftar fiat/stablecoin/komoditas (EXCLUDED_BASE_ASSETS)")
+        return False
     if not is_strategy_enabled(strategy):
         log(f"[OPEN] {symbol} skip — strategi {strategy} di-disable via Strategy Control")
         return False
@@ -7063,7 +7153,8 @@ def thread2_monitor():
                 csv_log_close(
                     to_display_pair(sym),
                     now_wib().strftime('%Y-%m-%d %H:%M:%S'),
-                    price, prof_from_entry, reason,
+                    price, prof_from_entry,
+                    reason + (f" {HOLD_NO_SELL_CSV_REMARK}" if _hold_no_sell else ""),
                     strategy=strat,
                     base_usd=total_usd
                 )
@@ -16610,7 +16701,9 @@ def thread_qscalp_scan():
         for t in ticker:
             try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
             except Exception: pass
-        pairs_all = [s for s in volmap if s.endswith('USDT')]
+        # 20/09/2026: buang fiat/stablecoin/komoditas SEBELUM ambil top-N likuid -- kalau tidak,
+        # pair seperti USDC/FDUSD/USD1/EUR (paling likuid) memakan slot universe QScalp.
+        pairs_all = [s for s in volmap if s.endswith('USDT') and s not in SYMBOL_BLACKLIST]
         pairs = sorted(pairs_all, key=lambda s: volmap[s], reverse=True)[:QSCALP_UNIVERSE_SIZE]
 
         display = []
@@ -17153,6 +17246,7 @@ def run_web_dashboard():
                 "hunting_4h": "Hunting-4h",
                 "akum_entry_a": "Akumulasi-4h", "akum_entry_b": "Akumulasi-4h",
                 "trend_confirm_4h": "TrenKonfirmasi-4h",
+                "qscalp_3m": "QScalp-3m",
             }
             strategy_display = _STRAT_DISPLAY.get(strategy, strategy)
             opened_at = deal.get("opened_at") or deal.get("opened_at_wib") or "-"
@@ -17165,12 +17259,11 @@ def run_web_dashboard():
             # Hitung hold candles dari opened_candle_ts (lebih akurat dari stored counter)
             _opened_ts = deal.get("opened_candle_ts")
             if _opened_ts:
-                _candle_secs = {
-                    "reversal": 8 * 3600,
-                    "brkX2_4h": 4 * 3600, "brkX2_crossema": 4 * 3600,
-                    "hunting_4h": 4 * 3600, "akum_entry_a": 4 * 3600, "akum_entry_b": 4 * 3600,
-                    "trend_confirm_4h": 4 * 3600,
-                }.get(strategy, 12 * 3600)
+                # 20/09/2026 (audit konsistensi strategi): dulu map timeframe di-hardcode lokal
+                # di sini dan KETINGGALAN 'qscalp_3m' -- akibatnya Hold candles QScalp-3m dihitung
+                # pakai fallback 12h (jauh meleset). Sekarang pakai helper global
+                # _candle_seconds_for_strategy() supaya satu sumber kebenaran untuk SEMUA strategi.
+                _candle_secs = _candle_seconds_for_strategy(strategy)
                 hold_candles = int((time.time() - float(_opened_ts) / 1000) / _candle_secs)
             else:
                 hold_candles = deal.get("hold_candle_count", "—")
@@ -20163,6 +20256,7 @@ if __name__ == '__main__':
     load_hold_no_sell_price()
     load_blocked_pairs()
     apply_one_time_config_migrations()
+    migrate_csv_hold_remark_once()
     sync_max_deals_globals()
     load_scan_blockers()
     load_daily_loss_limit()
