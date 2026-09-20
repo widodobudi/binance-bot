@@ -673,6 +673,15 @@ FWDTEST_TARGET_BRKX2    = 15        # target close deal brkX2 utk forward-test b
 FWDTEST_BRKX2_LIVE_BASELINE = 17    # closed deals (tahap 3, sejak FWDTEST_BRKX2_PHASE_OFFSET) saat
                                      # brkX2-12h TERCAPAI target -> LIVE (05/09/2026, #17/15)
 FWDTEST_BRKX2_PHASE2_TARGET = 15    # target fase-2 (counter "2nd") setelah LIVE, 05/09/2026, samain hunting/reversal/4h
+# 21/09/2026 (permintaan Mas Budi): fase-2 brkX2-12h TERCAPAI (#15/15, 13W/2L, +32.1%, tanpa hard-stop) -> DIBEKUKAN
+# di 15 (until=PHASE_OFFSET+LIVE_BASELINE+PHASE2_TARGET) dan fase-3 dibuka. ALASAN fase-3: data fase-2 dikumpulkan
+# dgn ukuran modal LAMA (base $12, tier $30/$45); 19/09/2026 12:54 WIB ukuran dinaikkan (base $60, tier $60/$90,
+# review Base order #2) dan sejak 20/09/2026 23:00 WIB close untung menjual 75% + sisa ke Simple Earn. Hasil
+# ukuran baru harus dinilai TERPISAH supaya tidak tercampur/tertutup data lama. Fase-3 = deal yg DIBUKA >= waktu
+# ini (deal yg dibuka sebelumnya, ukuran lama, tidak dihitung ke 2nd maupun 3rd -- cuma ke total LIVE).
+# >>> REMARK: saat #15/15 tercapai, evaluasi: WR, avg%, rugi terbesar dlm $ vs Batas Rugi Harian $15, hard-stop.
+FWDTEST_BRKX2_PHASE3_TARGET = 15
+FWDTEST_BRKX2_PHASE3_SINCE_WIB = "2026-09-19 12:54:00"
 FWDTEST_TARGET_REVERSAL = 8         # target close deal reversal utk forward-test berhasil
 REVERSAL_LIVE_BASELINE  = 8         # closed deals saat Reversal-8h dipromosikan ke LIVE
                                      # (TERCAPAI 28/08/2026 @ #10/8, 8W/2L, +16.4%; baseline=target
@@ -1960,7 +1969,7 @@ def _row_indicators(df_row, vol_ma=None) -> dict:
         'atr_pct':        _f(df_row.get('atr_pct'), '.2f'),
     }
 
-def csv_progress(strategy: str = None, offset: int = 0, until: int = None):
+def csv_progress(strategy: str = None, offset: int = 0, until: int = None, since_open_wib: str = None):
     """Baca CSV, hitung trade SELESAI (CLOSED), berapa menang/kalah, total profit%.
     Jika strategy diberikan ('brkX2'/'reversal'), hanya hitung trade strategi itu.
     Baris lama tanpa kolom strategy dianggap 'brkX2' (kompatibilitas).
@@ -1969,6 +1978,9 @@ def csv_progress(strategy: str = None, offset: int = 0, until: int = None):
     cuma trade ke-(offset+1) s/d ke-until. Dipakai utk MEMBEKUKAN counter fase lama saat
     syarat entry berubah (12/09/2026, Reversal-8h Stoch<50) supaya trade dgn syarat entry
     BARU tidak ikut kehitung ke counter fase LAMA. Tanpa until = counter terbuka (default).
+    since_open_wib: kalau diisi ("YYYY-MM-DD HH:MM:SS" WIB), HANYA hitung deal yg DIBUKA (open_time_wib) pada/
+    setelah waktu itu -- dipakai counter fase-3 brkX2-12h (21/09/2026) supaya cuma deal dgn ukuran modal BARU
+    yg terhitung, bukan deal yg dibuka dgn ukuran lama tapi kebetulan tutup sesudahnya.
     Return dict atau None kalau CSV belum ada / error."""
     try:
         if not os.path.exists(TRADES_CSV):
@@ -1985,6 +1997,8 @@ def csv_progress(strategy: str = None, offset: int = 0, until: int = None):
                 closed = [r for r in closed if r.get('strategy') in ('akum_entry_a', 'akum_entry_b')]
             else:
                 closed = [r for r in closed if (r.get('strategy') or 'brkX2') == strategy]
+        if since_open_wib:
+            closed = [r for r in closed if str(r.get('open_time_wib') or '').strip() >= since_open_wib]
         # Batas atas DULU (index absolut thd closed lengkap), baru skip N deal pertama
         if until is not None:
             closed = closed[:until]
@@ -6070,7 +6084,9 @@ def heartbeat_general_tick():
     # -> ikutin pola LIVE yg sama spt reversal-8h/brkX2-4h/hunting-4h (format "LIVE: N closed",
     # TANPA baris Last Close, DENGAN baris "2nd" fase-2). offset fase-2 = offset fase-1 (kalau
     # ada) + baseline saat TERCAPAI, sama persis pola prog_4h2/prog_hunt2 di atas.
-    prog_brk2 = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET + FWDTEST_BRKX2_LIVE_BASELINE)
+    prog_brk2 = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET + FWDTEST_BRKX2_LIVE_BASELINE,
+                             until=FWDTEST_BRKX2_PHASE_OFFSET + FWDTEST_BRKX2_LIVE_BASELINE + FWDTEST_BRKX2_PHASE2_TARGET)  # fase-2 dibekukan @15
+    prog_brk3 = csv_progress('brkX2', since_open_wib=FWDTEST_BRKX2_PHASE3_SINCE_WIB)   # fase-3: ukuran modal baru
     # 12/09/2026: fase-2 CrossEMA-4h DIBEKUKAN di STRAT_CROSSEMA_STOCH_PATCH_BASELINE (syarat
     # entry berubah, tambah Stoch<25) -- lihat komentar konstantanya. Masih #0/15 saat patch
     # di-deploy jadi frozen counter-nya 0, tapi tetap dipisah dari fase-3 (trade dgn syarat baru).
@@ -6093,6 +6109,7 @@ def heartbeat_general_tick():
         prog_line = (f"Progress (gabungan): {nn} ({wl}, {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2-12h  : {_fmt_hunting_live(prog_brk)}\n"
                      f"    brkX2-12h: 2nd {_fmt_strat(prog_brk2, FWDTEST_BRKX2_PHASE2_TARGET)}\n"
+                     f"    brkX2-12h: 3rd (ukuran baru $60/$90, dibuka >=19/09 12:54) {_fmt_strat(prog_brk3, FWDTEST_BRKX2_PHASE3_TARGET)}\n"
                      f"  - reversal-8h: {_fmt_hunting_live(prog_rev)}\n"
                      f"    reversal-8h: 2nd STOP@Stoch<50 "
                      f"{prog_rev2['n']}/{REVERSAL_PHASE2_TARGET} "
