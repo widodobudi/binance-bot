@@ -19827,16 +19827,26 @@ def run_web_dashboard():
                 # (add-fund peak lama: AR & GENIUS, commit 789eab3; peak ticker vs fill: MARSCOIN, 968373b)
                 # disembunyikan dari tampilan Closed Deals. Baris TETAP di CSV (counter fase / batas rugi
                 # harian / evaluasi baca CSV yg sama); tampil lagi dgn ?show_hidden=1. Kunci: symbol +
-                # strategi + menit open (detik tidak dicocokkan).
+                # strategi + menit open (detik tidak dicocokkan); baris tanpa waktu open (dibuat saat close,
+                # mis. DASH) memakai 'c:' + menit close.
+                # 21/09/2026 (permintaan Mas Budi, cek seluruh riwayat): +4 baris dgn penyebab yg sama --
+                # DASH (add-fund peak lama, 789eab3) dan STRAX/XRP/SAGA QScalp (peak dari ticker post-order
+                # vs fill, 968373b; peak == ticker ENTRY di CSV). TRUMP/HOODB/C sengaja TIDAK disembunyikan
+                # (hasil nyata, bukan bug yg di-patch).
                 _patched_hidden = {
-                    ('AR/USDT',      'brkX2',            '2026-09-19 10:23'),
-                    ('GENIUS/USDT',  'trend_confirm_4h', '2026-09-18 08:12'),
-                    ('MARSCOIN/USDT', 'qscalp_3m',       '2026-09-18 20:55'),
+                    ('AR/USDT',       'brkX2',            '2026-09-19 10:23'),
+                    ('GENIUS/USDT',   'trend_confirm_4h', '2026-09-18 08:12'),
+                    ('MARSCOIN/USDT', 'qscalp_3m',        '2026-09-18 20:55'),
+                    ('DASH/USDT',     'brkX2',            'c:2026-09-05 20:16'),
+                    ('STRAX/USDT',    'qscalp_3m',        '2026-09-14 19:12'),
+                    ('XRP/USDT',      'qscalp_3m',        '2026-09-15 20:07'),
+                    ('SAGA/USDT',     'qscalp_3m',        '2026-09-17 23:34'),
                 }
                 if request.args.get("show_hidden", "") not in ("1", "true", "True"):
                     rows = [r for r in rows
                             if ((r.get('symbol') or ''), (r.get('strategy') or 'brkX2'),
-                                (r.get('open_time_wib') or '')[:16]) not in _patched_hidden]
+                                (r.get('open_time_wib') or '')[:16]
+                                or 'c:' + (r.get('close_time_wib') or '')[:16]) not in _patched_hidden]
                 if pair_filter:
                     rows = [r for r in rows if (r.get('symbol') or '').replace('/', '').upper() == pair_filter]
                 if date_from:
