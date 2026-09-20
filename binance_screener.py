@@ -2145,6 +2145,113 @@ def send_telegram(message: str, parse_mode: str = None):
 # tidak jelas, tunggu sampel berikutnya, jangan langsung dijadikan gate.
 EMA200_WATCH_TARGET = 13
 
+# 20/09/2026 (permintaan Mas Budi): LOG peringkat market cap CoinGecko tiap OPEN deal (SEMUA strategi)
+# ke open-arm-close.txt -- BUKAN gate, cuma data. Tujuan: kumpulkan sampel utk memutuskan apakah/di N
+# berapa filter "top-N market cap" layak dipasang sebagai syarat open (per strategi). Backtest
+# retroaktif di 159 deal (peringkat SEKARANG, bukan saat trade) menunjukkan hasil campur: top-150
+# menguntungkan TrenKonfirmasi/CrossEMA/Reversal tapi merugikan brkX2-4h/Hunting-4h, dan 3 dari 14
+# hard-stop volatilitas (HBAR #31, TAO #37, TRUMP #103) tetap lolos top-150.
+# >>> REMARK REVIEW: saat counter mcap_sample mencapai MCAP_WATCH_TARGET, bot kirim Telegram
+# >>> pengingat SEKALI. Saat itu: bandingkan hasil deal dgn mcap_rank_cg per strategi (script
+# >>> analisis: scratchpad analyze_rank_overbought.py pola sama), putuskan gate top-N per strategi.
+# Data: CoinGecko /coins/markets (Demo plan gratis cukup: ~4 panggilan/6 jam per 100 koin x 6 halaman).
+# Env opsional COINGECKO_API_KEY (header x-cg-demo-api-key); tanpa key tetap jalan (rate limit publik).
+MCAP_WATCH_TARGET = 50
+MCAP_CACHE_TTL_SEC = 6 * 3600
+MCAP_PAGES = 6                      # 6 x 100 = top-600
+_mcap_cache = {"ts": 0.0, "by_sym": {}, "n": 0}
+_mcap_lock = threading.Lock()
+_mcap_refreshing = False
+
+def _mcap_refresh_worker():
+    """Tarik top-MCAP_PAGES*100 CoinGecko, simpan peta simbol -> (rank, rank tanpa stablecoin/fiat, nama).
+    Simbol kembar: yang peringkatnya tertinggi menang (urutan CoinGecko = market_cap_desc). Nama koin ikut
+    dicatat di log supaya salah-petakan (mis. simbol pendek G/C/A) bisa dikenali saat review."""
+    global _mcap_refreshing
+    try:
+        headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
+        key = os.environ.get("COINGECKO_API_KEY", "").strip()
+        if key:
+            headers["x-cg-demo-api-key"] = key
+        rows = []
+        for page in range(1, MCAP_PAGES + 1):
+            r = requests.get("https://api.coingecko.com/api/v3/coins/markets",
+                             params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 100,
+                                     "page": page, "sparkline": "false"},
+                             headers=headers, timeout=20)
+            if r.status_code != 200:
+                log(f"WARN [MCAP] CoinGecko halaman {page} HTTP {r.status_code}")
+                break
+            batch = r.json()
+            if not isinstance(batch, list) or not batch:
+                break
+            rows.extend(batch)
+            time.sleep(3)
+        if len(rows) < 100:
+            return  # data tidak layak -- pertahankan cache lama
+        by_sym, adj = {}, 0
+        for row in rows:
+            sym = str(row.get("symbol", "")).upper()
+            rank = row.get("market_cap_rank")
+            if not sym or not rank:
+                continue
+            if sym not in EXCLUDED_BASE_ASSETS:
+                adj += 1
+            if sym not in by_sym:
+                by_sym[sym] = (int(rank), adj, str(row.get("name", "")))
+        with _mcap_lock:
+            _mcap_cache.update({"ts": time.time(), "by_sym": by_sym, "n": len(rows)})
+        log(f"[MCAP] cache CoinGecko diperbarui: {len(rows)} koin, {len(by_sym)} simbol unik")
+    except Exception as e:
+        log(f"WARN [MCAP] refresh gagal: {e}")
+    finally:
+        _mcap_refreshing = False
+
+def mcap_refresh_async(force: bool = False):
+    """Jalankan refresh di thread terpisah kalau cache basi (tidak pernah memblokir alur OPEN)."""
+    global _mcap_refreshing
+    with _mcap_lock:
+        stale = (time.time() - _mcap_cache["ts"]) > MCAP_CACHE_TTL_SEC
+        if _mcap_refreshing or not (stale or force):
+            return
+        _mcap_refreshing = True
+    threading.Thread(target=_mcap_refresh_worker, daemon=True).start()
+
+def mcap_rank_label(symbol: str) -> str:
+    """Teks utk log OPEN: '156 (adj 149) Jito' / '>600 (di luar top-600)' / 'n/a (cache belum siap)'."""
+    base = symbol[:-4] if symbol.endswith("USDT") else symbol
+    with _mcap_lock:
+        by_sym, n = _mcap_cache["by_sym"], _mcap_cache["n"]
+    if not by_sym:
+        return "n/a (cache CoinGecko belum siap)"
+    hit = by_sym.get(base.upper())
+    if hit:
+        return f"{hit[0]} (adj {hit[1]}) {hit[2]}"
+    return f">{n} (di luar top-{n})"
+
+def _bump_mcap_watch_count() -> int:
+    """Counter global OPEN yang sudah dicatat mcap-nya; kirim Telegram pengingat SEKALI saat mencapai target."""
+    path = os.path.join("/data", "mcap_watch_state.json")
+    try:
+        state = {"n": 0, "notified": False}
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                state.update(json.load(f))
+        state["n"] += 1
+        remind = state["n"] >= MCAP_WATCH_TARGET and not state.get("notified")
+        if remind:
+            state["notified"] = True
+        with open(path, "w", encoding="utf-8") as f:   # simpan DULU, baru kirim pengingat
+            json.dump(state, f)
+        if remind:
+            send_telegram(f"🔔 REVIEW Top-N Market Cap: sudah {state['n']}/{MCAP_WATCH_TARGET} deal OPEN tercatat "
+                          f"peringkat CoinGecko-nya (field mcap_rank_cg di open-arm-close.txt). Saatnya bandingkan hasil "
+                          f"deal vs peringkat per strategi dan putuskan gate top-N. Bilang ke Claude: 'review mcap top-N'.")
+        return state["n"]
+    except Exception as e:
+        log(f"WARN mcap_watch_state: {e}")
+        return 0
+
 def _bump_ema200_watch_count(strategy: str) -> int:
     """Naikkan counter sampel EMA200(1D) utk `strategy`, simpan ke /data, return count baru.
     Gagal baca/tulis -> return 0 (counter cuma buat visibilitas, bukan data kritikal)."""
@@ -2215,10 +2322,17 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
                     merged.setdefault("ema200_sample", f"{_ema200_n}/{EMA200_WATCH_TARGET}")
         except Exception as error:
             log(f"WARN log_oac ema200_1d enrichment {symbol}: {error}")
+        # 20/09/2026: peringkat market cap CoinGecko (LOG SAJA, bukan gate) -- lihat MCAP_WATCH_TARGET.
+        try:
+            mcap_refresh_async()
+            merged.setdefault("mcap_rank_cg", mcap_rank_label(symbol))
+            merged.setdefault("mcap_sample", f"{_bump_mcap_watch_count()}/{MCAP_WATCH_TARGET} (log saja, review di {MCAP_WATCH_TARGET})")
+        except Exception as error:
+            log(f"WARN log_oac mcap enrichment {symbol}: {error}")
     standard_fields = (
         "entry_price", "peak_price", "peak_profit", "arm_pct", "atr_pct", "rvol", "trail_dist",
         "rsi", "stoch_k", "stoch_d", "macd_hist", "bb_pct", "williams_r", "cci", "obv",
-        "ema20", "st_dir", "ema200_1d", "pct_vs_ema200_1d", "ema200_sample", "add_usd",
+        "ema20", "st_dir", "ema200_1d", "pct_vs_ema200_1d", "ema200_sample", "mcap_rank_cg", "mcap_sample", "add_usd",
         "total_usd", "profit_pct", "exit_reason",
     )
     for field in standard_fields:
@@ -9019,6 +9133,12 @@ def check_trendconfirm_entry(df):
     if not (rvol >= TRENDCONFIRM_RVOL_MIN): return False, 0, {}
     if not (float(rsi) < TRENDCONFIRM_RSI_MAX): return False, 0, {}
 
+    # >>> STATUS 20/09/2026: backtest 92.507 sinyal TrenKonfirmasi (399 pair, 2022-2026) MENOLAK gerbang ini:
+    # >>> sinyal yg kena gerbang (>=3/4) justru lebih baik (avg +2.21% vs +1.55%, PF 2.05 vs 1.89), tidak
+    # >>> memangkas rugi terburuk (-12.3% sama), konsisten tiap tahun. Strategi lain (brkX2-12h, Reversal-8h,
+    # >>> brkX2-4h, CrossEMA-4h, Hunting-4h, Akumulasi-4h) TIDAK diberi gerbang ini. Sampel nyata strategi
+    # >>> lain kecil (brkX2-4h: 9 deal kena gerbang avg +0.60% vs +1.24%), belum diuji skala besar.
+    # >>> Menunggu keputusan Mas Budi utk mencabut gerbang ini dari TrenKonfirmasi-4h.
     # --- Gerbang OVERBOUGHT KERAS (19/09/2026, permintaan Mas Budi, insiden STG/USDT -5%) ---
     # TrenKonfirmasi-4h sebelumnya cuma cek RSI<75 & gap_ema20>=0 -- TIDAK cek apakah harga
     # sudah terlalu jauh dari EMA20 / BB%b sudah di luar upper band / Williams %R sudah
@@ -19035,8 +19155,20 @@ def run_web_dashboard():
                     for key, strategy_rows in rows_by_strategy.items():
                         offset = phase_offsets.get(key, 0)
                         rows.extend(strategy_rows[offset:] if offset else strategy_rows)
-                if exclude_hardstop:
-                    rows = [r for r in rows if not (r.get('exit_reason') or '').lower().startswith('hard stop volatilitas')]
+                # 20/09/2026 (permintaan Mas Budi, batalkan permintaan 19/09 yg menampilkan hard-stop):
+                # baris hard-stop volatilitas / hold_no_sell TETAP ada di CSV (dan tetap dihitung batas
+                # rugi harian & counter fase), tapi DISEMBUNYIKAN dari tampilan Closed Deals secara default.
+                # Muncul lagi hanya kalau filter Alasan "Hard Stop" dipilih atau ?show_hardstop=1.
+                def _is_hardstop_row(r):
+                    er = (r.get('exit_reason') or '').lower()
+                    return er.startswith('hard stop volatilitas') or '[hold:' in er
+                show_hardstop = (request.args.get("show_hardstop", "") in ("1", "true", "True")
+                                 or reason_filter == "Hard Stop")
+                hidden_hardstop = 0
+                if exclude_hardstop or not show_hardstop:
+                    _before = len(rows)
+                    rows = [r for r in rows if not _is_hardstop_row(r)]
+                    hidden_hardstop = _before - len(rows)
                 if pair_filter:
                     rows = [r for r in rows if (r.get('symbol') or '').replace('/', '').upper() == pair_filter]
                 if date_from:
@@ -19097,6 +19229,7 @@ def run_web_dashboard():
                 return jsonify({
                     "trades": trades,
                     "all_pairs": all_pairs,
+                    "hidden_hardstop": hidden_hardstop,
                     "stats": {
                         "total":         total,
                         "wins":          wins,
@@ -20257,6 +20390,7 @@ if __name__ == '__main__':
     load_blocked_pairs()
     apply_one_time_config_migrations()
     migrate_csv_hold_remark_once()
+    mcap_refresh_async(force=True)   # 20/09/2026: siapkan cache peringkat CoinGecko sebelum OPEN pertama
     sync_max_deals_globals()
     load_scan_blockers()
     load_daily_loss_limit()
