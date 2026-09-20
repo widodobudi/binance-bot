@@ -12344,9 +12344,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
     <input type="text" id="ct-filter-search" oninput="renderClosedTradesRows()" placeholder="cari pair..." style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;width:110px">
     <button onclick="exportCtCsv()" style="background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Export CSV</button>
   </div>
-  <div id="ct-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px"></div>
-  <div id="ct-hidden-note" style="display:none;margin-bottom:10px;padding:6px 10px;border:1px dashed var(--border);border-radius:4px;font-size:10px;color:var(--muted);line-height:1.5"></div>
-  <div id="ct-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:10px"></div>
+  <div id="ct-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px"></div>  <div id="ct-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:10px"></div>
   <div id="ct-equity" style="margin-bottom:14px"></div>
   <div style="overflow-x:auto">
     <table id="ct-table" style="width:100%;border-collapse:collapse;font-size:11px">
@@ -12559,29 +12557,6 @@ function ctTimeFilterRange() {
   return null;
 }
 
-var ctShowHidden = false;   // true = tampilkan juga baris trailing rugi yg penyebabnya sudah di-patch
-function toggleCtHidden() { ctShowHidden = !ctShowHidden; loadClosedTrades(); }
-function renderCtHiddenNote(d) {
-  var el = document.getElementById('ct-hidden-note');
-  if (!el) return;
-  var list = d.hidden_patched || [];
-  if (d.show_hidden) {
-    el.style.display = 'block';
-    el.innerHTML = 'Menampilkan juga baris trailing rugi yang penyebabnya sudah di-patch (ditandai di kolom Alasan). ' +
-      '<a href="#" onclick="toggleCtHidden();return false" style="color:var(--accent)">sembunyikan lagi</a>';
-    return;
-  }
-  if (!list.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
-  var items = list.map(function(h) {
-    return '<li><b>' + h.symbol + '</b> (' + h.strategy + ', close ' + String(h.close_time).slice(0, 16) + ', ' +
-      (h.profit_pct >= 0 ? '+' : '') + h.profit_pct.toFixed(2) + '%) &mdash; ' + h.why + '</li>';
-  }).join('');
-  el.style.display = 'block';
-  el.innerHTML = '<b>' + list.length + ' baris disembunyikan</b> dari tampilan &amp; angka di atas: close trailing rugi ' +
-    'yang penyebabnya BUG yang sudah di-patch (bukan hasil strategi). Data tetap ada di CSV. ' +
-    '<a href="#" onclick="toggleCtHidden();return false" style="color:var(--accent)">tampilkan</a>' +
-    '<ul style="margin:4px 0 0 16px;padding:0">' + items + '</ul>';
-}
 function loadClosedTrades() {
   var strat = document.getElementById('ct-filter-strat').value;
   var pairSel = document.getElementById('ct-filter-pair');
@@ -12599,7 +12574,6 @@ function loadClosedTrades() {
     if (range.from) params.push('date_from=' + range.from);
     if (range.to) params.push('date_to=' + range.to);
   }
-  if (ctShowHidden) params.push('show_hidden=1');
   // Simpan pilihan filter ke cookie biar SELAMAT dari reload penuh (auto-refresh 30d / manual refresh) --
   // sebelumnya semua dropdown balik ke default "Semua..." tiap kali halaman reload.
   try {
@@ -12643,7 +12617,6 @@ function loadClosedTrades() {
     ].join('<span style="color:var(--border);margin:0 4px">|</span>');
         closedTradesRows = d.trades || [];
         renderClosedTradesRows();
-        renderCtHiddenNote(d);
   }).catch(function(e){ document.getElementById('ct-body').innerHTML = '<tr><td colspan="12" style="color:var(--red);padding:8px">Error: ' + e + '</td></tr>'; });
 }
 function resetCtFilters() {
