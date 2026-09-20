@@ -919,14 +919,17 @@ STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # data dashboard 19/09/2026) yang dinaikkan; crossema/hunting/qscalp/akum %profit-nya belum
 # cukup besar jadi TIDAK diubah. REMARK nilai lama (sebelum kenaikan ini) untuk rollback:
 #   brkX2=12, reversal=15, brkX2_4h=15, trend_confirm_4h=30
+# 20/09/2026 (permintaan Mas Budi): reversal 90 -> 30 dan trend_confirm_4h 70 -> 30 (angka aman: satu
+# hard-stop ~-10..-12.5% turun dari ~-$11 jadi ~-$4, batas rugi harian $15). REMARK nilai sebelum
+# penurunan ini (rollback): reversal=90, trend_confirm_4h=70.
 STRATEGY_CONFIG_DEFAULTS = {
     "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
-    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 90, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
+    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
     "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True, "max_deals": 5},
     "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2},
     "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
     "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
-    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 70, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
+    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3},
     "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "max_deals": 2},
 }
 # qscalp_3m: ai_call_open=False PERMANEN secara desain (bukan cuma default) -- strategi ini
@@ -1003,6 +1006,9 @@ def apply_one_time_config_migrations():
         "reversal_base_usd_90_20260919":        ("reversal",         "base_usd", 90),
         "brkX2_4h_base_usd_50_20260919":        ("brkX2_4h",         "base_usd", 50),
         "trend_confirm_4h_base_usd_70_20260919":("trend_confirm_4h", "base_usd", 70),
+        # 20/09/2026 (permintaan Mas Budi): turunkan ke angka aman. REMARK nilai lama: 90 dan 70.
+        "reversal_base_usd_30_20260920":        ("reversal",         "base_usd", 30),
+        "trend_confirm_4h_base_usd_30_20260920":("trend_confirm_4h", "base_usd", 30),
     }
     try:
         done = {}
@@ -4161,8 +4167,10 @@ def signal_score(row) -> int:
 CROSSEMA_TOTAL_TARGET_USD   = 20
 BRKX2_TIER_LOW_USD          = 60    # skor 0-1 (REMARK lama, sebelum split: $30)
 BRKX2_TIER_HIGH_USD         = 90    # skor >=2 (REMARK lama, sebelum split: $45)
-TRENDCONFIRM_TIER_LOW_USD   = 70    # skor 0-1 (REMARK lama, sebelum split: $30)
-TRENDCONFIRM_TIER_HIGH_USD  = 100   # skor >=2 (REMARK lama, sebelum split: $45)
+# 20/09/2026 (permintaan Mas Budi): tier TrenKonfirmasi-4h dikembalikan ke angka aman $30/$45.
+# REMARK nilai sebelum penurunan ini (rollback): tier bawah=$70, tier atas=$100.
+TRENDCONFIRM_TIER_LOW_USD   = 30    # skor 0-1
+TRENDCONFIRM_TIER_HIGH_USD  = 45    # skor >=2
 
 def score_to_target_usd(score: int, strategy: str = 'brkX2') -> int:
     """Sizing berdasarkan skor sinyal.
@@ -9133,30 +9141,12 @@ def check_trendconfirm_entry(df):
     if not (rvol >= TRENDCONFIRM_RVOL_MIN): return False, 0, {}
     if not (float(rsi) < TRENDCONFIRM_RSI_MAX): return False, 0, {}
 
-    # >>> STATUS 20/09/2026: backtest 92.507 sinyal TrenKonfirmasi (399 pair, 2022-2026) MENOLAK gerbang ini:
-    # >>> sinyal yg kena gerbang (>=3/4) justru lebih baik (avg +2.21% vs +1.55%, PF 2.05 vs 1.89), tidak
-    # >>> memangkas rugi terburuk (-12.3% sama), konsisten tiap tahun. Strategi lain (brkX2-12h, Reversal-8h,
-    # >>> brkX2-4h, CrossEMA-4h, Hunting-4h, Akumulasi-4h) TIDAK diberi gerbang ini. Sampel nyata strategi
-    # >>> lain kecil (brkX2-4h: 9 deal kena gerbang avg +0.60% vs +1.24%), belum diuji skala besar.
-    # >>> Menunggu keputusan Mas Budi utk mencabut gerbang ini dari TrenKonfirmasi-4h.
-    # --- Gerbang OVERBOUGHT KERAS (19/09/2026, permintaan Mas Budi, insiden STG/USDT -5%) ---
-    # TrenKonfirmasi-4h sebelumnya cuma cek RSI<75 & gap_ema20>=0 -- TIDAK cek apakah harga
-    # sudah terlalu jauh dari EMA20 / BB%b sudah di luar upper band / Williams %R sudah
-    # overbought. Hasilnya: entry di puncak rally (STG: RSI 70.7, BB%b 1.27, gap +15%,
-    # Williams %R -25) lalu langsung reversal. Sekarang: kalau 3 dari 4 indikator overbought
-    # ini terpenuhi sekaligus, kandidat DITOLAK sebelum masuk AI.
-    williams_r = r.get('williams_r')
-    overbought_signals = sum([
-        float(rsi) > 70,                                    # RSI overbought
-        float(bbp) > 1.0,                                   # di luar upper Bollinger Band
-        gap_ema20 > 8.0,                                    # harga >8% di atas EMA20 (terlalu jauh)
-        williams_r is not None and not pd.isna(williams_r) and float(williams_r) > -20,  # Williams %R overbought
-    ])
-    if overbought_signals >= 3:
-        log(f"[TRENDCONFIRM] {r.get('close',0):.6g} DITOLAK overbought keras "
-            f"(RSI={rsi:.1f} BB%b={bbp:.2f} gap={gap_ema20:+.1f}% WR={williams_r:.1f} "
-            f"-- {overbought_signals}/4 indikator overbought)")
-        return False, 0, {}
+    # Gerbang OVERBOUGHT KERAS (RSI>70 + BB%b>1 + gap>8% + WR>-20, >=3 dari 4) DICABUT 20/09/2026
+    # (permintaan Mas Budi setelah backtest): dipasang 19/09/2026 (commit 53ee5dd) setelah insiden STG/USDT
+    # TANPA backtest. Backtest 92.507 sinyal TrenKonfirmasi (399 pair, 2022-2026) menunjukkan sinyal yg
+    # kena gerbang justru LEBIH BAIK (avg +2.21% vs +1.55%, PF 2.05 vs 1.89), tidak memangkas rugi terburuk
+    # (-12.3% sama) dan konsisten tiap tahun. Strategi lain TIDAK diberi gerbang ini. Pengganti yg sedang
+    # dievaluasi: filter top-N market cap (saat ini LOG SAJA, lihat MCAP_WATCH_TARGET).
 
     # --- Syarat SEKUNDER (dipakai utk skor/ranking, BUKAN gerbang wajib) ---
     score = 2 if float(bbp) >= TRENDCONFIRM_BB_PCT_SECONDARY else 1
