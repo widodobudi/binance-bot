@@ -190,6 +190,19 @@ VOLATILITY_GUARD_ATR_MULT = 2.0   # ATR melonjak >=2x ATR saat open: jangan add 
 HARD_STOP_MULT = 1.1              # pengali (K) atas base hard-stop per tier ATR% (lihat hard_stop_pct()).
                                    # K=1.1 disepakati 26/08/2026 studi kasus TLM/USDT: base tier Volatil 9%
                                    # x1.1 = 9.9%, cover wick turun sampai -9.9% tanpa ke-exit (wick TLM -9.55%)
+# 20/09/2026 (permintaan Mas Budi): pengali & batas atas hard-stop SEKARANG PER STRATEGI, supaya satu strategi
+# bisa disetel tanpa mengubah yg lain. HARD_STOP_MULT di atas = default utk strategi yg tidak terdaftar.
+# Semua strategi eksplisit ditulis 1.1 (= perilaku lama, TIDAK berubah) sampai diuji satu per satu.
+# Cap = batas atas hard-stop % dari entry (None = tanpa cap): rugi terburuk ~ cap + fee.
+HARD_STOP_MULT_BY_STRATEGY = {
+    'brkX2': 1.1, 'reversal': 1.1, 'brkX2_4h': 1.1, 'brkX2_crossema': 1.1, 'hunting_4h': 1.1,
+    'trend_confirm_4h': 1.5,   # 20/09/2026: 1.1 -> 1.5 + cap 10.8% (backtest 42.133 sinyal 2022-2026, lihat di bawah)
+}
+# TrenKonfirmasi-4h K1.5 + cap 10.8% (permintaan Mas Budi, prioritas: hard-stop lebih jarang & untung terjaga):
+# hard-stop 18.2% -> 14.0% dari trade, rugi terburuk -12.3% -> -11.0%, avg +1.80% -> +1.85% (2025+: 20.6% -> 16.2%,
+# +1.52% -> +1.53%). Stop per tier ATR: <1% 6.0%, <2% 8.25%, <4% 10.5%, >=4% 10.8% (cap). REMARK nilai lama (rollback):
+# K=1.1 tanpa cap (4.4/6.05/7.7/9.9/12.1%). Cap lebih rapat (<=9%) TIDAK menurunkan frekuensi hard-stop & memotong untung.
+HARD_STOP_CAP_PCT_BY_STRATEGY = {'trend_confirm_4h': 10.8}
 HOLD_NO_SELL_WARN_RATIO = 0.85    # checkbox "hold, jangan jual" muncul di 85% dari ambang hard-stop
                                    # tier deal itu (bukan pas 100%) -- kasih ruang waktu react sebelum
                                    # hard-stop beneran kesulut (disepakati 27/08/2026)
@@ -4830,8 +4843,13 @@ def trailing_dist(atr_pct: float) -> float:
     else: base = 1.5   # ATR>=7%: turun dari 2.5% ke 1.5% (backtest_arm_sweep)
     return round(base * TRAILING_FAKTOR, 4)
 
-def hard_stop_pct(atr_pct: float):
-    """Hard stop % dari entry, di-tier berdasar ATR% (volatilitas pair) lalu dikali HARD_STOP_MULT.
+def hard_stop_mult_for(strategy=None) -> float:
+    """Pengali K hard-stop utk `strategy` (lihat HARD_STOP_MULT_BY_STRATEGY); default HARD_STOP_MULT."""
+    return HARD_STOP_MULT_BY_STRATEGY.get(strategy, HARD_STOP_MULT)
+
+def hard_stop_pct(atr_pct: float, strategy=None):
+    """Hard stop % dari entry, di-tier berdasar ATR% (volatilitas pair) lalu dikali K per strategi
+    (HARD_STOP_MULT_BY_STRATEGY, default HARD_STOP_MULT) dan dibatasi cap per strategi kalau ada.
     Pair makin volatil (ATR% tinggi) dikasih toleransi turun lebih lebar supaya noise wajar
     pair itu sendiri nggak langsung kena stop; pair tenang tetap diproteksi ketat.
     Return: (label_rating, base_pct_sebelum_K, final_pct_setelah_dikali_K)
@@ -4841,7 +4859,11 @@ def hard_stop_pct(atr_pct: float):
     elif atr_pct < 4.0: label, base = "Aktif",   7.0
     elif atr_pct < 7.0: label, base = "Volatil", 9.0
     else:                label, base = "Ekstrem", 11.0
-    return label, base, round(base * HARD_STOP_MULT, 4)
+    final = base * hard_stop_mult_for(strategy)
+    cap = HARD_STOP_CAP_PCT_BY_STRATEGY.get(strategy)
+    if cap:
+        final = min(final, cap)
+    return label, base, round(final, 4)
 
 def get_arm_pct(atr_pct: float) -> float:
     """Arm threshold, 5 tier ATR% (konsisten dgn hard_stop_pct()/trailing_dist()).
@@ -4932,7 +4954,7 @@ def estimate_closest_deal_to_close(deals_display: dict):
                     if gap_pct < 5:
                         tier, urgency, note = 1, gap_pct, f"trailing armed, jarak ke stop {gap_pct:.2f}%"
             if tier == 3:
-                _, _, hs_full = hard_stop_pct(atrp)
+                _, _, hs_full = hard_stop_pct(atrp, strat)
                 hs_price = entry * (1 - hs_full / 100)
                 if hs_price > 0:
                     gap_pct = (last / hs_price - 1) * 100
@@ -7001,13 +7023,14 @@ def thread2_monitor():
                 reason = _tp_reason
                 _tp_hold_armed_since.pop(sym, None)
         if not do_close and not _is_akum:
-            _hs_label, _hs_base, _hs_pct = qscalp_hard_stop_pct() if strat == 'qscalp_3m' else hard_stop_pct(atrp)
+            _hs_label, _hs_base, _hs_pct = qscalp_hard_stop_pct() if strat == 'qscalp_3m' else hard_stop_pct(atrp, strat)
             if price <= entry * (1 - _hs_pct / 100):
                 do_close = True
                 reason = (f"hard stop {_hs_pct:.2f}% flat (varian C ronde 1): price {_fmt_price(price)} turun "
                           f">= {_hs_pct:.2f}% dari entry" if strat == 'qscalp_3m' else
                           f"hard stop volatilitas [{_hs_label}, ATR {atrp:.2f}%]: price {_fmt_price(price)} "
-                          f"turun >= {_hs_pct:.2f}% dari entry (base {_hs_base:.1f}% x K{HARD_STOP_MULT:.2f})")
+                          f"turun >= {_hs_pct:.2f}% dari entry (base {_hs_base:.1f}% x K{hard_stop_mult_for(strat):.2f}"
+                          + (f", cap {HARD_STOP_CAP_PCT_BY_STRATEGY[strat]:g}%" if HARD_STOP_CAP_PCT_BY_STRATEGY.get(strat) else "") + ")")
                 hard_stop_triggered = True
         if not do_close and armed and not _is_akum:
             stop = peak*(1 - tdist/100)
@@ -7197,7 +7220,7 @@ def thread2_monitor():
                 if strat == 'qscalp_3m':
                     _hs_label_c, _hs_base_c, _hs_pct_c = qscalp_hard_stop_pct()
                 else:
-                    _hs_label_c, _hs_base_c, _hs_pct_c = hard_stop_pct(atrp)
+                    _hs_label_c, _hs_base_c, _hs_pct_c = hard_stop_pct(atrp, strat)
                 _absolute_ceiling_pct = _hs_pct_c + CLOSE_HARD_CEILING_EXTRA_PCT
                 if entry > 0 and price <= entry * (1 - _absolute_ceiling_pct / 100):
                     _ai_override_bypassed = True
@@ -16963,7 +16986,7 @@ def run_web_dashboard():
                 # Akumulasi dikecualikan -- exit-nya via SL/TP sendiri, bukan hard_stop_pct().
                 _near_hardstop = False
                 if dd.get("strategy", "") not in ("akum_entry_a", "akum_entry_b"):
-                    _hs_lbl, _hs_bs, _hs_full = hard_stop_pct(dd.get("atr_pct", 3.0))
+                    _hs_lbl, _hs_bs, _hs_full = hard_stop_pct(dd.get("atr_pct", 3.0), dd.get("strategy"))
                     dd["hardstop_full_pct"] = _hs_full
                     dd["hardstop_warn_pct"] = round(_hs_full * HOLD_NO_SELL_WARN_RATIO, 4)
                     _near_hardstop = dd["upnl_pct"] <= -1 * dd["hardstop_warn_pct"]
