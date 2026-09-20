@@ -1717,6 +1717,75 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
         log(f"   [CSV] gagal tulis CLOSE: {e}")
 
 
+def backfill_qscalp_rsi_once():
+    """Sekali jalan (marker di config_migrations_done.json): isi kolom rsi_open baris QScalp-3m LAMA yg kosong
+    (21/09/2026, permintaan Mas Budi -- RSI@Open QScalp dulu tidak pernah dicatat). RSI(14) dihitung ulang dari
+    candle 3m historis Binance (endTime = open_time - 1 detik, candle terakhir yg sudah tutup, sama seperti
+    yg dipakai jalur live sekarang). Ini REKONSTRUKSI, bukan nilai live otentik. Marker baru dipasang kalau
+    tidak ada error (kalau ada yg gagal, dicoba lagi di restart berikutnya; baris yg sudah terisi dilewati)."""
+    key = "csv_qscalp_rsi_backfill_20260921"
+    try:
+        done = {}
+        if os.path.exists(CONFIG_MIGRATIONS_FILE):
+            with open(CONFIG_MIGRATIONS_FILE) as f:
+                done = json.load(f)
+        if key in done or not os.path.exists(TRADES_CSV):
+            return
+        with trades_csv_lock:
+            with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                rows = list(csv.DictReader(f))
+        todo = [(r.get('symbol', ''), r.get('open_time_wib', '')) for r in rows
+                if r.get('strategy') == 'qscalp_3m' and not str(r.get('rsi_open', '')).strip()
+                and r.get('open_time_wib') and r.get('symbol')]
+        vals, errors = {}, 0
+        for sym_disp, open_wib in todo:
+            try:
+                dt_utc = datetime.strptime(str(open_wib).strip(), '%Y-%m-%d %H:%M:%S') - timedelta(hours=7)
+                end_ms = int(dt_utc.replace(tzinfo=timezone.utc).timestamp() * 1000) - 1000
+                resp = _binance_get("/api/v3/klines", params={
+                    'symbol': sym_disp.replace('/', '').upper(), 'interval': '3m', 'endTime': end_ms, 'limit': 100}, timeout=15)
+                if resp is None or resp.status_code != 200:
+                    errors += 1
+                    continue
+                data = resp.json()
+                if not isinstance(data, list) or len(data) < 20:
+                    errors += 1
+                    continue
+                rsi_val = ta.rsi(pd.Series([float(k[4]) for k in data]), length=14).iloc[-1]
+                if pd.isna(rsi_val):
+                    errors += 1
+                    continue
+                vals[(sym_disp, open_wib)] = f"{float(rsi_val):.1f}"
+            except Exception:
+                errors += 1
+            time.sleep(0.15)
+        filled = 0
+        if vals:
+            with trades_csv_lock:   # baca ULANG di dalam lock supaya tidak menimpa baris baru yg masuk selama fetch
+                with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                    rows = list(csv.DictReader(f))
+                for r in rows:
+                    k = (r.get('symbol', ''), r.get('open_time_wib', ''))
+                    if r.get('strategy') == 'qscalp_3m' and not str(r.get('rsi_open', '')).strip() and k in vals:
+                        r['rsi_open'] = vals[k]
+                        filled += 1
+                if filled:
+                    with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
+                        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+                        w.writeheader()
+                        w.writerows(rows)
+            if filled:
+                sync_trades_csv_to_drive()
+        if errors == 0:
+            done[key] = {"applied_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "rows_filled": filled, "rows_todo": len(todo)}
+            with open(CONFIG_MIGRATIONS_FILE, "w") as f:
+                json.dump(done, f, indent=2)
+        log(f"[MIGRASI] QScalp RSI@Open backfill: terisi {filled}/{len(todo)} baris, error {errors}"
+            + ("" if errors == 0 else " (marker belum dipasang, dicoba lagi saat restart)"))
+    except Exception as e:
+        log(f"WARN backfill_qscalp_rsi_once: {e}")
+
+
 def migrate_csv_hold_remark_once():
     """Sekali jalan (marker di config_migrations_done.json): tempel HOLD_NO_SELL_CSV_REMARK ke
     baris hold_no_sell zaman (C) yg SUDAH terlanjur tercatat sebelum remark ini ada (mis. XTZ,
@@ -20729,6 +20798,7 @@ if __name__ == '__main__':
     load_blocked_pairs()
     apply_one_time_config_migrations()
     migrate_csv_hold_remark_once()
+    threading.Thread(target=backfill_qscalp_rsi_once, daemon=True).start()   # 21/09/2026: isi RSI@Open QScalp lama
     mcap_refresh_async(force=True)   # 20/09/2026: siapkan cache peringkat CoinGecko sebelum OPEN pertama
     threading.Thread(target=earn_selfcheck, daemon=True).start()   # 20/09/2026: cek read-only akses Simple Earn
     sync_max_deals_globals()
