@@ -12345,6 +12345,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
     <button onclick="exportCtCsv()" style="background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Export CSV</button>
   </div>
   <div id="ct-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px"></div>
+  <div id="ct-hidden-note" style="display:none;margin-bottom:10px;padding:6px 10px;border:1px dashed var(--border);border-radius:4px;font-size:10px;color:var(--muted);line-height:1.5"></div>
   <div id="ct-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:10px"></div>
   <div id="ct-equity" style="margin-bottom:14px"></div>
   <div style="overflow-x:auto">
@@ -12558,6 +12559,29 @@ function ctTimeFilterRange() {
   return null;
 }
 
+var ctShowHidden = false;   // true = tampilkan juga baris trailing rugi yg penyebabnya sudah di-patch
+function toggleCtHidden() { ctShowHidden = !ctShowHidden; loadClosedTrades(); }
+function renderCtHiddenNote(d) {
+  var el = document.getElementById('ct-hidden-note');
+  if (!el) return;
+  var list = d.hidden_patched || [];
+  if (d.show_hidden) {
+    el.style.display = 'block';
+    el.innerHTML = 'Menampilkan juga baris trailing rugi yang penyebabnya sudah di-patch (ditandai di kolom Alasan). ' +
+      '<a href="#" onclick="toggleCtHidden();return false" style="color:var(--accent)">sembunyikan lagi</a>';
+    return;
+  }
+  if (!list.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  var items = list.map(function(h) {
+    return '<li><b>' + h.symbol + '</b> (' + h.strategy + ', close ' + String(h.close_time).slice(0, 16) + ', ' +
+      (h.profit_pct >= 0 ? '+' : '') + h.profit_pct.toFixed(2) + '%) &mdash; ' + h.why + '</li>';
+  }).join('');
+  el.style.display = 'block';
+  el.innerHTML = '<b>' + list.length + ' baris disembunyikan</b> dari tampilan &amp; angka di atas: close trailing rugi ' +
+    'yang penyebabnya BUG yang sudah di-patch (bukan hasil strategi). Data tetap ada di CSV. ' +
+    '<a href="#" onclick="toggleCtHidden();return false" style="color:var(--accent)">tampilkan</a>' +
+    '<ul style="margin:4px 0 0 16px;padding:0">' + items + '</ul>';
+}
 function loadClosedTrades() {
   var strat = document.getElementById('ct-filter-strat').value;
   var pairSel = document.getElementById('ct-filter-pair');
@@ -12575,6 +12599,7 @@ function loadClosedTrades() {
     if (range.from) params.push('date_from=' + range.from);
     if (range.to) params.push('date_to=' + range.to);
   }
+  if (ctShowHidden) params.push('show_hidden=1');
   // Simpan pilihan filter ke cookie biar SELAMAT dari reload penuh (auto-refresh 30d / manual refresh) --
   // sebelumnya semua dropdown balik ke default "Semua..." tiap kali halaman reload.
   try {
@@ -12618,6 +12643,7 @@ function loadClosedTrades() {
     ].join('<span style="color:var(--border);margin:0 4px">|</span>');
         closedTradesRows = d.trades || [];
         renderClosedTradesRows();
+        renderCtHiddenNote(d);
   }).catch(function(e){ document.getElementById('ct-body').innerHTML = '<tr><td colspan="12" style="color:var(--red);padding:8px">Error: ' + e + '</td></tr>'; });
 }
 function resetCtFilters() {
@@ -19833,20 +19859,33 @@ def run_web_dashboard():
                 # DASH (add-fund peak lama, 789eab3) dan STRAX/XRP/SAGA QScalp (peak dari ticker post-order
                 # vs fill, 968373b; peak == ticker ENTRY di CSV). TRUMP/HOODB/C sengaja TIDAK disembunyikan
                 # (hasil nyata, bukan bug yg di-patch).
+                # Alasan tiap baris dicatat (remark) & ditampilkan di halaman Closed Deals (ct-hidden-note).
+                _WHY_ADDFUND = ("add-fund: peak LAMA dipakai thd entry rata-rata baru -> trailing armed & close rugi "
+                                "(bug, di-patch 21/09/2026, commit 789eab3)")
+                _WHY_PEAK    = ("peak awal = harga TICKER sesudah order, bukan harga fill -> trailing armed di siklus "
+                                "pertama & close rugi (bug, di-patch 21/09/2026, commit 968373b)")
                 _patched_hidden = {
-                    ('AR/USDT',       'brkX2',            '2026-09-19 10:23'),
-                    ('GENIUS/USDT',   'trend_confirm_4h', '2026-09-18 08:12'),
-                    ('MARSCOIN/USDT', 'qscalp_3m',        '2026-09-18 20:55'),
-                    ('DASH/USDT',     'brkX2',            'c:2026-09-05 20:16'),
-                    ('STRAX/USDT',    'qscalp_3m',        '2026-09-14 19:12'),
-                    ('XRP/USDT',      'qscalp_3m',        '2026-09-15 20:07'),
-                    ('SAGA/USDT',     'qscalp_3m',        '2026-09-17 23:34'),
+                    ('AR/USDT',       'brkX2',            '2026-09-19 10:23'): _WHY_ADDFUND,
+                    ('GENIUS/USDT',   'trend_confirm_4h', '2026-09-18 08:12'): _WHY_ADDFUND,
+                    ('MARSCOIN/USDT', 'qscalp_3m',        '2026-09-18 20:55'): _WHY_PEAK,
+                    ('DASH/USDT',     'brkX2',            'c:2026-09-05 20:16'): _WHY_ADDFUND,
+                    ('STRAX/USDT',    'qscalp_3m',        '2026-09-14 19:12'): _WHY_PEAK,
+                    ('XRP/USDT',      'qscalp_3m',        '2026-09-15 20:07'): _WHY_PEAK,
+                    ('SAGA/USDT',     'qscalp_3m',        '2026-09-17 23:34'): _WHY_PEAK,
                 }
-                if request.args.get("show_hidden", "") not in ("1", "true", "True"):
-                    rows = [r for r in rows
-                            if ((r.get('symbol') or ''), (r.get('strategy') or 'brkX2'),
-                                (r.get('open_time_wib') or '')[:16]
-                                or 'c:' + (r.get('close_time_wib') or '')[:16]) not in _patched_hidden]
+                def _patched_key(r):
+                    return ((r.get('symbol') or ''), (r.get('strategy') or 'brkX2'),
+                            (r.get('open_time_wib') or '')[:16] or 'c:' + (r.get('close_time_wib') or '')[:16])
+                show_hidden = request.args.get("show_hidden", "") in ("1", "true", "True")
+                hidden_patched_rows = []
+                if not show_hidden:
+                    _kept = []
+                    for r in rows:
+                        if _patched_key(r) in _patched_hidden:
+                            hidden_patched_rows.append(r)
+                        else:
+                            _kept.append(r)
+                    rows = _kept
                 if pair_filter:
                     rows = [r for r in rows if (r.get('symbol') or '').replace('/', '').upper() == pair_filter]
                 if date_from:
@@ -19859,6 +19898,24 @@ def run_web_dashboard():
                     rows = [r for r in rows if float(r.get('profit_pct') or 0) <= 0]
                 if reason_filter:
                     rows = [r for r in rows if categorize_exit_reason(r.get('exit_reason', '')) == reason_filter]
+                # baris yg disembunyikan ikut filter yg sama (pair/tanggal/outcome/alasan) supaya catatannya cuma
+                # menyebut baris yg MEMANG akan tampil kalau tidak disembunyikan
+                def _hidden_passes(r):
+                    if pair_filter and (r.get('symbol') or '').replace('/', '').upper() != pair_filter: return False
+                    ct = (r.get('close_time_wib') or '')[:10]
+                    if date_from and ct < date_from: return False
+                    if date_to and ct > date_to: return False
+                    pv = float(r.get('profit_pct') or 0)
+                    if outcome_filter == "win" and not pv > 0: return False
+                    if outcome_filter == "loss" and not pv <= 0: return False
+                    if reason_filter and categorize_exit_reason(r.get('exit_reason', '')) != reason_filter: return False
+                    return True
+                hidden_patched = [{
+                    "symbol": r.get('symbol', ''), "strategy": r.get('strategy') or 'brkX2',
+                    "close_time": r.get('close_time_wib', ''), "profit_pct": float(r.get('profit_pct') or 0),
+                    "why": _patched_hidden[_patched_key(r)],
+                } for r in sorted(hidden_patched_rows, key=lambda r: r.get('close_time_wib', ''), reverse=True)
+                    if _hidden_passes(r)]
                 # Sort terbaru dulu
                 rows.sort(key=lambda r: r.get('close_time_wib',''), reverse=True)
                 # Hitung stats dan profit$
@@ -19896,7 +19953,9 @@ def run_web_dashboard():
                         "profit_pct":   pct,
                         "profit_usd":   p_usd,
                         "base_usd":     base,
-                        "exit_reason":  r.get('exit_reason',''),
+                        "exit_reason":  r.get('exit_reason','') + (
+                            f" [DISEMBUNYIKAN DI TAMPILAN NORMAL -- {_patched_hidden[_patched_key(r)]}]"
+                            if show_hidden and _patched_key(r) in _patched_hidden else ""),
                         "reason_category": categorize_exit_reason(r.get('exit_reason','')),
                         "duration":     dur,
                         "rsi_open":     r.get('rsi_open',''),
@@ -19908,6 +19967,8 @@ def run_web_dashboard():
                     "trades": trades,
                     "all_pairs": all_pairs,
                     "hidden_hardstop": hidden_hardstop,
+                    "hidden_patched": hidden_patched,
+                    "show_hidden": show_hidden,
                     "stats": {
                         "total":         total,
                         "wins":          wins,
