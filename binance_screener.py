@@ -17036,8 +17036,18 @@ def check_qscalp_signal(df: pd.DataFrame, symbol: str):
     except Exception:
         atr_pct = 1.0
 
+    # 21/09/2026 (temuan Mas Budi: kolom RSI@Open QScalp selalu kosong di web History & notif Telegram):
+    # jalur QScalp tidak pernah menghitung/menyimpan RSI -- sinyalnya rule-based murni (vol/momentum/
+    # breakout/EMA9), jadi RSI(14) TF 3m cuma dihitung utk DICATAT (bukan syarat entry).
+    rsi_now = None
+    try:
+        _rs = ta.rsi(pd.Series(df['close']), length=14).iloc[-1]
+        rsi_now = float(_rs) if _rs == _rs else None
+    except Exception:
+        rsi_now = None
+
     return {'symbol': symbol, 'close': float(close[i]), 'momentum_pct': float(momentum_pct),
-            'vol_ratio': float(vol[i] / vm), 'atr_pct': atr_pct,
+            'vol_ratio': float(vol[i] / vm), 'atr_pct': atr_pct, 'rsi': rsi_now,
             'candle_ot': int(df['ot'].iloc[i])}
 
 
@@ -17087,6 +17097,7 @@ def open_qscalp_if_signal(sig: dict) -> bool:
         "tf":               "3m",
         "momentum_pct_open": sig['momentum_pct'],
         "vol_ratio_open":    sig['vol_ratio'],
+        "rsi_open":          sig.get('rsi'),   # RSI(14) 3m saat sinyal (21/09/2026) -> notif CLOSE & CSV
     })
     # ai_call=False permanen (bukan cuma default dashboard) -- gate langsung di thread2_monitor
     # via `strat == 'qscalp_3m'`, tapi override ini dipasang juga sbg lapis kedua eksplisit.
@@ -17104,6 +17115,7 @@ def open_qscalp_if_signal(sig: dict) -> bool:
         f"Entry pasar: {_fmt_price(entry_price)}  |  Sinyal: {_fmt_price(close)}\n"
         f"Slippage   : {slip_pct:+.2f}%\n"
         f"Momentum 2c: {sig['momentum_pct']:.2f}%  |  Vol: {sig['vol_ratio']:.1f}xMA20\n"
+        + (f"RSI(14,3m) : {sig['rsi']:.1f}\n" if sig.get('rsi') is not None else "") +
         f"Arm {QSCALP_LIVE_ARM_PCT}% / Trail {QSCALP_LIVE_TRAIL_PCT}% / Stop {QSCALP_LIVE_STOP_PCT}% / "
         f"Timeout {QSCALP_LIVE_TIMEOUT_CANDLES}c(3m)\n"
         f"Modal: ${target_usd:.0f}\n"
@@ -17120,6 +17132,7 @@ def open_qscalp_if_signal(sig: dict) -> bool:
         'trail_dist_pct': QSCALP_LIVE_TRAIL_PCT,
         'base_usd':       target_usd,
         'score':          1,
+        'rsi_open':       f"{sig['rsi']:.1f}" if sig.get('rsi') is not None else '',
         'strategy':       'qscalp_3m',
     })
     return True
