@@ -4236,6 +4236,19 @@ def send_add_funds(symbol: str, volume, strategy: str = 'brkX2', delay: int = 15
                         new_cost  = prev_cost + result["qty"] * result["price_avg"]
                         active_deals[symbol]["qty_coin"]    = new_qty
                         active_deals[symbol]["entry_price"] = new_cost / new_qty if new_qty > 0 else result["price_avg"]
+                        # 21/09/2026 (BUG, temuan Mas Budi: trailing menutup deal rugi): add-fund menurunkan harga
+                        # rata-rata (entry), tapi `peak` LAMA (harga tinggi sebelum turun) tetap dipakai. Dihitung
+                        # thd entry BARU, peak lama itu tampak untung besar (AR +4.9%, GENIUS +3.7%) -> trailing
+                        # langsung "armed" ~20 detik setelah add-fund padahal harga sedang di BAWAH entry, garis
+                        # trailing (peak-0.4%) berada di atas harga sekarang -> deal ditutup rugi seketika
+                        # (AR -2.20%, GENIUS -7.34%, DASH -1.97%). Sekarang peak direset ke harga fill / entry baru
+                        # (mana yg lebih tinggi) dan status armed dihapus: trailing baru arm kalau harga BENAR2 naik
+                        # di atas entry rata-rata yang baru.
+                        _fill_px = float(result.get("price_avg") or 0)
+                        active_deals[symbol]["peak"] = max(_fill_px, float(active_deals[symbol]["entry_price"]))
+                        active_deals[symbol]["trailing_armed"] = False
+                        for _k in ("trail_htf_grace_started_at", "armed_at_wib", "armed_price", "armed_prof_pct"):
+                            active_deals[symbol].pop(_k, None)
                 log(f"[BINANCE] ADD_FUND {symbol}: +qty={result['qty']} avg={result['price_avg']:.6f}")
                 return True
             return False
@@ -4294,7 +4307,7 @@ def execute_add_fund(sym: str, add_usd: float) -> dict:
                     avg_price = (BASE_ORDER_VOLUME * entry_price_before + add_usd * price_now) / (BASE_ORDER_VOLUME + add_usd)
                     active_deals[sym]['entry_price'] = avg_price
                 active_deals[sym]['add_fund_sent'] = True
-                active_deals[sym]['peak']          = max(active_deals[sym].get('peak', avg_price), avg_price)
+                active_deals[sym]['peak']          = max(price_now, avg_price)   # 21/09/2026: JANGAN pertahankan peak lama (lihat send_add_funds)
                 active_deals[sym]['trailing_armed'] = False
             else:
                 avg_price = price_now
@@ -7216,6 +7229,9 @@ def thread2_monitor():
                                 if sym in active_deals:
                                     active_deals[sym]['add_fund_sent'] = True
                             save_active_deals()
+                            # 21/09/2026: variabel lokal siklus ini (entry/peak) sudah BASI setelah add-fund --
+                            # lewati sisa siklus utk deal ini (dicek lagi 15 detik lagi dgn entry & peak baru).
+                            continue
 
         # update peak
         peak = max(d.get('peak',entry), price)
@@ -7576,8 +7592,12 @@ def thread2_monitor():
         # simpan peak/armed/last_price
         with active_deals_lock:
             if sym in active_deals:
-                active_deals[sym]['peak']=peak
-                active_deals[sym]['trailing_armed']=armed
+                # 21/09/2026: kalau entry_price berubah sejak snapshot siklus ini (add-fund dari thread lain --
+                # manual/+Fund/Add Fund dari Aset Lain), JANGAN menimpa peak/armed hasil reset add-fund dgn
+                # nilai basi dari snapshot lama.
+                if float(active_deals[sym].get('entry_price', entry) or 0) == float(entry):
+                    active_deals[sym]['peak']=peak
+                    active_deals[sym]['trailing_armed']=armed
                 active_deals[sym]['last_price']=price
         save_active_deals()
 
