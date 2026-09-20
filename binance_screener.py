@@ -13894,6 +13894,125 @@ def _shadow_wl_tag(closed_list: list) -> str:
     return f"{win}W/{loss}L, total {total:+.1f}%"
 
 
+# ── Paper test dgn TP/SL TETAP: harga keluar di LEVEL, bukan harga live saat cek (21/09/2026) ────────────
+# BUG (temuan Mas Budi): dipbuy_universe tampil #20/20 (18W/2L, +262.4%) padahal TP cuma 4% -- rata-rata +13%/deal
+# mustahil. Penyebab: posisi shadow dicek tiap SHADOW_SCAN_INTERVAL (30 menit) dan begitu harga live SUDAH melewati TP/SL,
+# harga keluar dicatat = harga live saat cek (mis. +25% setelah pantulan cepat), bukan level TP/SL yg dipakai backtest
+# dan yg akan terisi di order limit sungguhan. Berlaku utk 3 kombo ber-level tetap: dipbuy_universe, dipbuy_bluechip,
+# conf3_stochrsibb. (akuma_all3 TIDAK ikut: exit-nya meniru T2 live = tutup market saat kondisi TP/SL terpenuhi.)
+# Sekarang: telusuri candle 15m (hold <= 2 hari) / 1h dari batas candle 4h sinyal s/d sekarang; sentuhan PERTAMA
+# menentukan exit di harga LEVEL (SL diisi di open candle kalau gap ke bawah SL; satu candle menyentuh keduanya -> SL
+# dulu, konservatif). Timeout tetap pakai harga live saat batas hold lewat.
+SHADOW_LEVEL_TF_MS = 4 * 3600 * 1000
+
+def _shadow_entry_candle_start_ms(pos: dict) -> int:
+    """Entry shadow = close candle 4h sinyal (backtest: entry di close, exit dilihat dari candle BERIKUTNYA); posisi
+    dibuka scan <=30 menit sesudah candle itu tutup. Penelusuran level mulai dari batas 4h tsb."""
+    ots = int(pos.get('opened_ts', 0)) * 1000
+    return (ots // SHADOW_LEVEL_TF_MS) * SHADOW_LEVEL_TF_MS
+
+def _shadow_scan_levels(sym: str, start_ms: int, end_ms: int, sl_price: float, tp_price: float, hold_sec: float):
+    """Return (reason, exit_price, exit_ms) utk sentuhan PERTAMA SL/TP, None kalau belum ada. Raise kalau data gagal diambil."""
+    interval = '15m' if hold_sec <= 2 * 86400 else '1h'
+    step = 900000 if interval == '15m' else 3600000
+    end_ms = min(int(end_ms), int(start_ms + hold_sec * 1000))
+    candles, cur = [], int(start_ms)
+    while cur < end_ms:
+        resp = _binance_get("/api/v3/klines", params={'symbol': sym, 'interval': interval, 'startTime': cur,
+                                                       'endTime': end_ms, 'limit': 1000}, timeout=15)
+        if resp is None or resp.status_code != 200:
+            raise RuntimeError("klines gagal")
+        batch = resp.json()
+        if not isinstance(batch, list) or not batch:
+            break
+        candles.extend(batch)
+        nxt = int(batch[-1][0]) + step
+        if nxt <= cur or len(batch) < 1000:
+            break
+        cur = nxt
+    for k in candles:
+        o, h, l, ot = float(k[1]), float(k[2]), float(k[3]), int(k[0])
+        if l <= sl_price:
+            return "SL", min(sl_price, o), ot + step
+        if h >= tp_price:
+            return "TP", tp_price, ot + step
+    return None
+
+def _shadow_levels_exit(sym: str, pos: dict, sl_price: float, tp_price: float, hold_sec: float, price_now: float):
+    """Return (closed, exit_price, reason). Pengganti blok 'price <= sl / price >= tp / timeout' di 3 kombo ber-level tetap."""
+    now_ms = int(time.time() * 1000)
+    start_ms = _shadow_entry_candle_start_ms(pos)
+    try:
+        hit = _shadow_scan_levels(sym, start_ms, now_ms, sl_price, tp_price, hold_sec)
+    except Exception as e:
+        log(f"WARN [SHADOW] {sym} telusur level gagal ({e}) -> fallback harga live (TP dibatasi di level)")
+        if price_now <= sl_price:
+            return True, price_now, "SL"
+        if price_now >= tp_price:
+            return True, tp_price, "TP"
+        hit = None
+    if hit:
+        return True, hit[1], hit[0]
+    if now_ms >= start_ms + hold_sec * 1000:
+        return True, price_now, "timeout"
+    return False, None, None
+
+def recompute_shadow_levels_once():
+    """Sekali jalan (marker di config_migrations_done.json): hitung ULANG posisi shadow dipbuy_universe / dipbuy_bluechip /
+    conf3_stochrsibb yg SUDAH tutup dgn logika level baru (harga keluar di level TP/SL dari penelusuran candle antara
+    entry dan waktu tutup). Nilai lama disimpan (pct_raw / exit_price_raw / reason_raw). Marker dipasang kalau tanpa error."""
+    key = "shadow_levels_recompute_20260921"
+    try:
+        done = {}
+        if os.path.exists(CONFIG_MIGRATIONS_FILE):
+            with open(CONFIG_MIGRATIONS_FILE) as f:
+                done = json.load(f)
+        if key in done:
+            return
+        data = _load_shadow_fwdtest()
+        combos = {"dipbuy_universe": SHADOW_DIPBUY_UNIVERSE_MAX_HOLD_CANDLES,
+                  "dipbuy_bluechip": SHADOW_DIPBUY_BC_MAX_HOLD_CANDLES,
+                  "conf3_stochrsibb": SHADOW_CONF3_MAX_HOLD_CANDLES}
+        errors, summary = 0, []
+        for name, hold_candles in combos.items():
+            closed = data.get(name, {}).get("closed", [])
+            n_re = 0
+            raw_total = sum(float(p.get("pct_raw", p.get("pct", 0)) or 0) for p in closed)
+            for pos in closed:
+                if pos.get("level_recomputed") or pos.get("reason") not in ("TP", "SL", "timeout"):
+                    continue
+                try:
+                    sl, tp, entry = float(pos["sl_price"]), float(pos["tp_price"]), float(pos["entry_price"])
+                    end_ms = int(float(pos.get("closed_ts", time.time())) * 1000)
+                    hit = _shadow_scan_levels(pos["sym"], _shadow_entry_candle_start_ms(pos), end_ms, sl, tp, hold_candles * 4 * 3600)
+                except Exception:
+                    errors += 1
+                    continue
+                if hit:
+                    reason, px = hit[0], hit[1]
+                elif pos.get("reason") == "TP":   # data candle tidak menunjukkan sentuhan tapi exit lama TP -> pakai level TP
+                    reason, px = "TP", tp
+                else:
+                    reason, px = pos.get("reason"), float(pos.get("exit_price", entry))
+                pos["pct_raw"], pos["exit_price_raw"], pos["reason_raw"] = pos.get("pct"), pos.get("exit_price"), pos.get("reason")
+                pos.update(exit_price=px, reason=reason, pct=round((px / entry - 1) * 100 - FEE_ROUND_TRIP_PCT, 2), level_recomputed=True)
+                n_re += 1
+                time.sleep(0.15)
+            if closed:
+                win = sum(1 for p in closed if p["pct"] > 0)
+                summary.append(f"{name}: {len(closed)} deal, dihitung ulang {n_re}, {win}W/{len(closed) - win}L, "
+                               f"total {raw_total:+.1f}% -> {sum(p['pct'] for p in closed):+.1f}%")
+        _save_shadow_fwdtest(data)
+        if errors == 0:
+            done[key] = {"applied_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S')}
+            with open(CONFIG_MIGRATIONS_FILE, "w") as f:
+                json.dump(done, f, indent=2)
+        log(f"[MIGRASI] shadow level recompute: error {errors}" + ("" if errors == 0 else " (marker belum dipasang, retry saat restart)")
+            + " | " + " | ".join(summary))
+    except Exception as e:
+        log(f"WARN recompute_shadow_levels_once: {e}")
+
+
 def _shadow_akuma_try_open(data: dict) -> None:
     """Cek kandidat live _akum_near_miss (sudah lolos gating structural score_akumulasi)
     terhadap syarat Entry A params 'all_three'. Reuse _akumb_window_score()/
@@ -14082,12 +14201,8 @@ def _shadow_conf3_check_exits(data: dict) -> None:
             price = get_price_now(sym)
             if price <= 0:
                 still_open.append(pos); continue
-            if price <= sl_price:
-                closed, exit_price, reason = True, price, "SL"
-            elif price >= tp_price:
-                closed, exit_price, reason = True, price, "TP"
-            elif age_sec >= SHADOW_CONF3_MAX_HOLD_CANDLES * STRAT4H_SECONDS:
-                closed, exit_price, reason = True, price, "timeout"
+            # 21/09/2026: exit di LEVEL TP/SL (penelusuran candle), bukan harga live saat cek -- lihat _shadow_levels_exit()
+            closed, exit_price, reason = _shadow_levels_exit(sym, pos, sl_price, tp_price, SHADOW_CONF3_MAX_HOLD_CANDLES * STRAT4H_SECONDS, price)
         except Exception as e:
             log(f"WARN [SHADOW-CONF3] check exit {sym}: {e}")
             still_open.append(pos); continue
@@ -14180,12 +14295,8 @@ def _shadow_dipbuy_universe_check_exits(data: dict) -> None:
             price = get_price_now(sym)
             if price <= 0:
                 still_open.append(pos); continue
-            if price <= sl_price:
-                closed, exit_price, reason = True, price, "SL"
-            elif price >= tp_price:
-                closed, exit_price, reason = True, price, "TP"
-            elif age_sec >= SHADOW_DIPBUY_UNIVERSE_MAX_HOLD_CANDLES * STRAT4H_SECONDS:
-                closed, exit_price, reason = True, price, "timeout"
+            # 21/09/2026: exit di LEVEL TP/SL (penelusuran candle), bukan harga live saat cek -- lihat _shadow_levels_exit()
+            closed, exit_price, reason = _shadow_levels_exit(sym, pos, sl_price, tp_price, SHADOW_DIPBUY_UNIVERSE_MAX_HOLD_CANDLES * STRAT4H_SECONDS, price)
         except Exception as e:
             log(f"WARN [SHADOW-DIPBUY-UNIVERSE] check exit {sym}: {e}")
             still_open.append(pos); continue
@@ -14265,12 +14376,8 @@ def _shadow_dipbuy_bc_check_exits(data: dict) -> None:
             price = get_price_now(sym)
             if price <= 0:
                 still_open.append(pos); continue
-            if price <= sl_price:
-                closed, exit_price, reason = True, price, "SL"
-            elif price >= tp_price:
-                closed, exit_price, reason = True, price, "TP"
-            elif age_sec >= SHADOW_DIPBUY_BC_MAX_HOLD_CANDLES * STRAT4H_SECONDS:
-                closed, exit_price, reason = True, price, "timeout"
+            # 21/09/2026: exit di LEVEL TP/SL (penelusuran candle), bukan harga live saat cek -- lihat _shadow_levels_exit()
+            closed, exit_price, reason = _shadow_levels_exit(sym, pos, sl_price, tp_price, SHADOW_DIPBUY_BC_MAX_HOLD_CANDLES * STRAT4H_SECONDS, price)
         except Exception as e:
             log(f"WARN [SHADOW-DIPBUY-BLUECHIP] check exit {sym}: {e}")
             still_open.append(pos); continue
@@ -20836,6 +20943,7 @@ if __name__ == '__main__':
     apply_one_time_config_migrations()
     migrate_csv_hold_remark_once()
     threading.Thread(target=backfill_qscalp_rsi_once, daemon=True).start()   # 21/09/2026: isi RSI@Open QScalp lama
+    threading.Thread(target=recompute_shadow_levels_once, daemon=True).start()   # 21/09/2026: hitung ulang paper test ber-level tetap
     mcap_refresh_async(force=True)   # 20/09/2026: siapkan cache peringkat CoinGecko sebelum OPEN pertama
     threading.Thread(target=earn_selfcheck, daemon=True).start()   # 20/09/2026: cek read-only akses Simple Earn
     sync_max_deals_globals()
