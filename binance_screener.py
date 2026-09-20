@@ -5947,7 +5947,8 @@ def heartbeat_rev_tick(status_line: str):
         prog = f"Progress reversal-8h: #0/{FWDTEST_TARGET_REVERSAL} (belum ada)"
     else:
         nn=prev['n']; wl=f"{prev['win']}W/{prev['loss']}L"
-        prog = f"Progress reversal-8h: #{nn}/{FWDTEST_TARGET_REVERSAL} ({wl}, total {prev['total_pct']:+.1f}%)"
+        tag=" TERCAPAI!" if nn>=FWDTEST_TARGET_REVERSAL else ""
+        prog = f"Progress reversal-8h: #{nn}/{FWDTEST_TARGET_REVERSAL} ({wl}, total {prev['total_pct']:+.1f}%){tag}"
     log(f"[T1b] Heartbeat Reversal-8h — ({status_line})")
     if HEARTBEAT_TELEGRAM_ENABLED:
         send_telegram(
@@ -5989,14 +5990,16 @@ def heartbeat_4h_tick(status_line: str, near_miss_4h: list = None):
         prog = f"Progress brkX2-4h: #0/{STRAT4H_FWDTEST_TARGET} (belum ada deal)"
     else:
         nn  = prev['n']; wl = f"{prev['win']}W/{prev['loss']}L"
-        prog = f"Progress brkX2-4h: #{nn}/{STRAT4H_FWDTEST_TARGET} ({wl}, total {prev['total_pct']:+.1f}%)"
+        tag = " TERCAPAI!" if nn >= STRAT4H_FWDTEST_TARGET else ""
+        prog = f"Progress brkX2-4h: #{nn}/{STRAT4H_FWDTEST_TARGET} ({wl}, total {prev['total_pct']:+.1f}%){tag}"
 
     prev_cx = csv_progress('brkX2_crossema')
     if prev_cx is None or prev_cx['n'] == 0:
         prog_cx = f"Progress crossema: #0/{STRAT_CROSSEMA_FWDTEST} (belum ada deal)"
     else:
         nn_cx = prev_cx['n']; wl_cx = f"{prev_cx['win']}W/{prev_cx['loss']}L"
-        prog_cx = f"Progress crossema: #{nn_cx}/{STRAT_CROSSEMA_FWDTEST} ({wl_cx}, total {prev_cx['total_pct']:+.1f}%)"
+        tag_cx = " TERCAPAI!" if nn_cx >= STRAT_CROSSEMA_FWDTEST else ""
+        prog_cx = f"Progress crossema: #{nn_cx}/{STRAT_CROSSEMA_FWDTEST} ({wl_cx}, total {prev_cx['total_pct']:+.1f}%){tag_cx}"
 
     # Kandidat terdekat 4h
     near_str = ""
@@ -6062,7 +6065,8 @@ def heartbeat_crossema_tick():
         prog_cx = f"Progress crossema: #0/{STRAT_CROSSEMA_FWDTEST} (belum ada deal)"
     else:
         nn_cx = prev_cx['n']; wl_cx = f"{prev_cx['win']}W/{prev_cx['loss']}L"
-        prog_cx = f"Progress crossema: #{nn_cx}/{STRAT_CROSSEMA_FWDTEST} ({wl_cx}, total {prev_cx['total_pct']:+.1f}%)"
+        tag_cx = " TERCAPAI!" if nn_cx >= STRAT_CROSSEMA_FWDTEST else ""
+        prog_cx = f"Progress crossema: #{nn_cx}/{STRAT_CROSSEMA_FWDTEST} ({wl_cx}, total {prev_cx['total_pct']:+.1f}%){tag_cx}"
 
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
 
@@ -6119,10 +6123,11 @@ def heartbeat_general_tick():
         header = (f"HEARTBEAT — General\n"
                   f"Periode: {start_str} -> {end_str} WIB")
     # Progress semua strategi
-    def _fmt_strat(p, tgt, last_close=None):
+    def _fmt_strat(p, tgt, last_close=None, tercapai=True):
         if p is None or p['n']==0: return f"#0/{tgt} (belum ada)"
         nn=p['n']; wl=f"{p['win']}W/{p['loss']}L"
-        base = f"#{nn}/{tgt} ({wl}, total {p['total_pct']:+.1f}%)"
+        tag=" TERCAPAI!" if (tercapai and nn>=tgt) else ""
+        base = f"#{nn}/{tgt} ({wl}, total {p['total_pct']:+.1f}%){tag}"
         if last_close and last_close.get('time'):
             sym = last_close.get('symbol','?')
             t   = last_close.get('time','?')
@@ -6136,6 +6141,10 @@ def heartbeat_general_tick():
         if last_close and last_close.get('time'):
             base += f"\n    ↳ Last Close: {last_close.get('symbol','?')} {last_close.get('time','?')} WIB {last_close.get('profit_pct','?')}%"
         return base
+    # 21/09/2026 (permintaan Mas Budi): tulisan "TERCAPAI!" DIHILANGKAN hanya utk 2 baris yg sudah lama tercapai --
+    # brkX2-12h fase-2 (dibekukan @15/15, lihat prog_brk2 di bawah) dan dipbuy_universe (#20/20). Counter LAIN
+    # tetap ditandai TERCAPAI! seperti biasa begitu mencapai targetnya.
+    _SHADOW_NO_TERCAPAI = {'dipbuy_universe'}
     def _fmt_shadow(key: str, target: int) -> str:
         """13/09/2026: progress 2 shadow forward-test (paper, BUKAN CSV live) -- baca
         langsung dari shadow_fwdtest.json, bukan csv_progress(). Ringkas (1 baris per
@@ -6155,7 +6164,8 @@ def heartbeat_general_tick():
         win = sum(1 for c in closed if c['pct'] > 0)
         loss = n - win
         total_pct = sum(c['pct'] for c in closed)
-        return f"{key}: #{n}/{target} ({win}W/{loss}L, {total_pct:+.1f}%){extra}"
+        tag = " TERCAPAI!" if (n >= target and key not in _SHADOW_NO_TERCAPAI) else ""
+        return f"{key}: #{n}/{target} ({win}W/{loss}L, {total_pct:+.1f}%){tag}{extra}"
     prog_all  = csv_progress_active()
     prog_brk  = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)
     prog_rev  = csv_progress('reversal')
@@ -6201,7 +6211,7 @@ def heartbeat_general_tick():
         prog_qr = quick_reentry_progress()
         prog_line = (f"Progress (gabungan): {nn} ({wl}, {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2-12h  : {_fmt_hunting_live(prog_brk)}\n"
-                     f"    brkX2-12h: 2nd {_fmt_strat(prog_brk2, FWDTEST_BRKX2_PHASE2_TARGET)}\n"
+                     f"    brkX2-12h: 2nd {_fmt_strat(prog_brk2, FWDTEST_BRKX2_PHASE2_TARGET, tercapai=False)}\n"
                      f"    brkX2-12h: 3rd (ukuran baru $60/$90, dibuka >=19/09 12:54) {_fmt_strat(prog_brk3, FWDTEST_BRKX2_PHASE3_TARGET)}\n"
                      f"  - reversal-8h: {_fmt_hunting_live(prog_rev)}\n"
                      f"    reversal-8h: 2nd STOP@Stoch<50 "
@@ -8007,7 +8017,8 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
     def _fmt_strat(p, tgt):
         if p is None or p['n']==0: return f"#0/{tgt} (belum ada)"
         nn=p['n']; wl=f"{p['win']}W/{p['loss']}L"
-        return f"#{nn}/{tgt} ({wl}, total {p['total_pct']:+.1f}%)"
+        tag=" TERCAPAI!" if nn>=tgt else ""
+        return f"#{nn}/{tgt} ({wl}, total {p['total_pct']:+.1f}%){tag}"
     def _fmt_hunting_live(p):
         if p is None or p['n'] == 0:
             return "LIVE (belum ada close fase aktif)"
