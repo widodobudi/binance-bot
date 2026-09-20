@@ -2750,7 +2750,19 @@ def add_to_active_deals(symbol: str, data: dict):
     # Kalau Binance direct mode: inject qty_coin dan entry_price aktual dari order fill
     if USE_BINANCE_DIRECT and symbol in _binance_pending_qty:
         enriched['qty_coin']    = _binance_pending_qty.pop(symbol)
-        enriched['entry_price'] = _binance_pending_price.pop(symbol, enriched.get('entry_price', 0))
+        _fill_price = _binance_pending_price.pop(symbol, enriched.get('entry_price', 0))
+        enriched['entry_price'] = _fill_price
+        # 21/09/2026: peak HARUS mulai dari harga fill, bukan dari ticker yang dibaca caller setelah order.
+        # Sebelumnya entry ditimpa fill tapi peak tetap harga ticker; kalau ticker > fill (koin tipis, dampak order
+        # sendiri) peak tampak +X% di atas entry -> trailing armed di siklus pertama padahal harga sudah di bawah
+        # entry, garis trailing di atas harga -> close rugi seketika (MARSCOIN QScalp 18/09: fill 0.1098, peak
+        # ticker 0.1114, CLOSE 9 detik setelah beli -0.47%). Pola sama dgn bug add-fund.
+        if _fill_price and _fill_price > 0:
+            _old_peak = enriched.get('peak')
+            enriched['peak'] = _fill_price
+            if _old_peak and abs(_old_peak / _fill_price - 1) > 0.001:
+                log(f"   [OPEN] {symbol} peak awal {_old_peak:.8g} != harga fill {_fill_price:.8g} "
+                    f"({(_old_peak / _fill_price - 1) * 100:+.2f}%) -> peak di-reset ke harga fill")
     with active_deals_lock:
         active_deals[symbol] = enriched
     save_active_deals()
