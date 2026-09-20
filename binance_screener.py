@@ -6141,10 +6141,6 @@ def heartbeat_general_tick():
         if last_close and last_close.get('time'):
             base += f"\n    ↳ Last Close: {last_close.get('symbol','?')} {last_close.get('time','?')} WIB {last_close.get('profit_pct','?')}%"
         return base
-    # 21/09/2026 (permintaan Mas Budi): tulisan "TERCAPAI!" DIHILANGKAN hanya utk 2 baris yg sudah lama tercapai --
-    # brkX2-12h fase-2 (dibekukan @15/15, lihat prog_brk2 di bawah) dan dipbuy_universe (#20/20). Counter LAIN
-    # tetap ditandai TERCAPAI! seperti biasa begitu mencapai targetnya.
-    _SHADOW_NO_TERCAPAI = {'dipbuy_universe'}
     def _fmt_shadow(key: str, target: int) -> str:
         """13/09/2026: progress 2 shadow forward-test (paper, BUKAN CSV live) -- baca
         langsung dari shadow_fwdtest.json, bukan csv_progress(). Ringkas (1 baris per
@@ -6164,7 +6160,7 @@ def heartbeat_general_tick():
         win = sum(1 for c in closed if c['pct'] > 0)
         loss = n - win
         total_pct = sum(c['pct'] for c in closed)
-        tag = " TERCAPAI!" if (n >= target and key not in _SHADOW_NO_TERCAPAI) else ""
+        tag = " TERCAPAI!" if n >= target else ""
         return f"{key}: #{n}/{target} ({win}W/{loss}L, {total_pct:+.1f}%){tag}{extra}"
     prog_all  = csv_progress_active()
     prog_brk  = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)
@@ -13930,7 +13926,20 @@ SHADOW_CONF3_MIN_VOL_USD  = 1_000_000  # sama ambang liquiditas AKUM_MIN_VOL_USD
 # (TP5/SL-none avg lebih tinggi tapi tail risk -69% s/d -81% per trade tanpa stop,
 # terlalu berisiko utk live money). PAPER ONLY -- tidak ada order Binance sungguhan,
 # murni catat sinyal vs harga live, sama seperti akuma_all3/conf3_stochrsibb.
-SHADOW_DIPBUY_UNIVERSE_TARGET       = 20     # target forward-test (paper) sebelum keputusan lanjut
+# >>> REMARK 21/09/2026 (permintaan Mas Budi) -- KENAPA TARGET 20 -> 40 (paper TETAP, BUKAN live):
+# >>> Di #20/20 (18W/2L, +40.5%; angka ini SESUDAH koreksi bug exit di level TP/SL -- sebelumnya tampak +262%) pemindai berhenti buka deal
+# >>> baru (thread_shadow_fwdtest_scan: hanya buka selama closed < TARGET). Mas Budi sempat mengusulkan dijadikan strategi live; DITUNDA karena:
+# >>>  1) titik impas WR ~80% (menang TP +3.8% bersih vs kalah SL -15.2% => 1 kalah = ~4 menang), backtest-nya WR 79.7% avg +0.61%/deal
+# >>>     = tepat di impas; 18W/2L hanya bilang WR sebenarnya 70-97% (rentang 95%) -- impas 80% masih di dalamnya;
+# >>>  2) rata-rata forward +2.0%/deal >> backtest +0.61% => sebagian mungkin keberuntungan/regime;
+# >>>  3) kerugian cenderung berkelompok (sinyal chg_4h<=-15% muncul barengan saat pasar jatuh), belum ada mekanisme order TP/SL live.
+# >>> Dua cara lanjut yang dipertimbangkan: (a) target jadi 40 (DIPILIH -- paling sederhana, data 20 deal pertama tetap utuh),
+# >>> (b) fase "2nd #x/20" terpisah (perlu kode fase di heartbeat/CLOSE/API). Keduanya memberi 20 deal tambahan di luar sampel.
+# >>> EVALUASI di #40/40 (bot kirim TERCAPAI!): bandingkan deal 1-20 vs 21-40 (WR, PF, avg%/deal, rugi terburuk) vs impas WR 80%;
+# >>> kalau deal 21-40 WR < 80% atau avg <= +0.61% => edge tipis, jangan live. Kandidat live yg lebih masuk akal: dipbuy_bluechip
+# >>> (butuh data forward-nya dulu, #0/20 saat catatan ini ditulis) lewat pilot kecil yg dirancang bersama contoh kasus.
+# >>> ROLLBACK: kembalikan ke 20 => pemindai berhenti buka deal baru lagi (data tidak hilang).
+SHADOW_DIPBUY_UNIVERSE_TARGET       = 40     # target forward-test (paper) sebelum keputusan lanjut
 SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN    = -15.0  # syarat sinyal: chg_4h (1 candle 4h) <= -15%
 SHADOW_DIPBUY_UNIVERSE_TP_PCT       = 4.0
 SHADOW_DIPBUY_UNIVERSE_SL_PCT       = 15.0
