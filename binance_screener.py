@@ -2257,19 +2257,92 @@ def _bump_mcap_watch_count() -> int:
             with open(path, encoding="utf-8") as f:
                 state.update(json.load(f))
         state["n"] += 1
-        remind = state["n"] >= MCAP_WATCH_TARGET and not state.get("notified")
-        if remind:
-            state["notified"] = True
-        with open(path, "w", encoding="utf-8") as f:   # simpan DULU, baru kirim pengingat
+        # 20/09/2026: pengingat Telegram DIMATIKAN -- keputusan final: TIDAK ada gate top-N market cap
+        # (lihat memory project_hard_stop_per_strategy_sep20). Peringkat tetap dicatat sbg data riset.
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(state, f)
-        if remind:
-            send_telegram(f"🔔 REVIEW Top-N Market Cap: sudah {state['n']}/{MCAP_WATCH_TARGET} deal OPEN tercatat "
-                          f"peringkat CoinGecko-nya (field mcap_rank_cg di open-arm-close.txt). Saatnya bandingkan hasil "
-                          f"deal vs peringkat per strategi dan putuskan gate top-N. Bilang ke Claude: 'review mcap top-N'.")
         return state["n"]
     except Exception as e:
         log(f"WARN mcap_watch_state: {e}")
         return 0
+
+# ── REMINDER cek hasil hard-stop baru TrenKonfirmasi-4h (20/09/2026, permintaan Mas Budi) ──────────
+# TrenKonfirmasi-4h dipindah ke K1.5 + cap 10.8% (commit e6bc773, live sejak 20/09/2026 19:23 WIB) berdasarkan
+# BACKTEST (fill tepat di harga stop, hard-stop dianggap terjual). Bot live menahan koin hard-stop (hold_no_sell)
+# dan bisa terisi lebih buruk saat harga jatuh cepat, jadi hasil nyata harus dicek. Bot menghitung tiap deal
+# TrenKonfirmasi yg CLOSE sejak itu dan mengirim Telegram SEKALI di TC_HS_REVIEW_TARGET deal.
+# >>> REMARK REVIEW: harapan backtest (data 2025+): hard-stop ~16% dari trade, rata-rata ~+1.5%/trade, rugi terburuk
+# >>> ~-11.0%. Kalau hard-stop nyata jauh di atas ~16% ATAU ada rugi lebih dalam dari ~-11% (slippage/hold_no_sell),
+# >>> pertimbangkan rollback ke K1.1 (lihat HARD_STOP_MULT_BY_STRATEGY). Minta Claude: "review hard-stop TrenKonfirmasi".
+TC_HS_REVIEW_TARGET = 15
+TC_HS_REVIEW_FILE = os.path.join(DATA_DIR, "tc_hardstop_review.json")
+TC_HS_EXPECT = {"hs_pct": 16.0, "avg_pct": 1.5, "worst_pct": -11.0}
+_tc_hs_lock = threading.Lock()
+
+def _tc_json_load(path, default):
+    try:
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        log(f"WARN [TC-HS] baca {os.path.basename(path)}: {e}")
+    return default
+
+def _tc_json_save(path, data):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception as e:
+        log(f"WARN [TC-HS] tulis {os.path.basename(path)}: {e}")
+
+def _tc_hs_state():
+    st = _tc_json_load(TC_HS_REVIEW_FILE, {})
+    for k, v in (("n", 0), ("hs", 0), ("sum_pct", 0.0), ("worst", 0.0), ("notified", False)):
+        st.setdefault(k, v)
+    st.setdefault("deals", [])
+    return st
+
+def tc_hardstop_track_close(symbol: str, strategy: str, indicators: dict):
+    """Dipanggil dari log_oac('CLOSE'): hitung deal TrenKonfirmasi-4h yg tutup sejak K1.5/cap10.8 live."""
+    if strategy != 'trend_confirm_4h':
+        return
+    try:
+        pct = float(str(indicators.get('profit_pct', '')).replace('%', '').replace('+', ''))
+    except Exception:
+        return
+    hs = str(indicators.get('exit_reason', '')).lower().startswith('hard stop')
+    remind = None
+    with _tc_hs_lock:
+        st = _tc_hs_state()
+        st["n"] += 1; st["hs"] += int(hs); st["sum_pct"] += pct; st["worst"] = pct if st["n"] == 1 else min(st["worst"], pct)
+        st["deals"].append([now_wib().strftime('%d/%m %H:%M'), to_display_pair(symbol), round(pct, 2), bool(hs)])
+        if st["n"] >= TC_HS_REVIEW_TARGET and not st["notified"]:
+            st["notified"] = True
+            remind = dict(st)
+        _tc_json_save(TC_HS_REVIEW_FILE, st)
+    if remind:
+        n = remind["n"]
+        lines = "\n".join(f"  {d[0]} {d[1]} {d[2]:+.2f}%{' [HARD-STOP]' if d[3] else ''}" for d in remind["deals"][-TC_HS_REVIEW_TARGET:])
+        send_telegram(
+            f"🔔 REVIEW Hard-Stop baru TrenKonfirmasi-4h (K1.5 + cap 10.8%)\n"
+            f"{n} deal tutup sejak 20/09/2026 19:23 WIB.\n"
+            f"Hard-stop: {remind['hs']} ({remind['hs'] / n * 100:.0f}%) -- harapan backtest ~{TC_HS_EXPECT['hs_pct']:.0f}%\n"
+            f"Rata-rata: {remind['sum_pct'] / n:+.2f}%/deal -- harapan ~{TC_HS_EXPECT['avg_pct']:+.1f}%\n"
+            f"Rugi terburuk: {remind['worst']:+.2f}% -- rencana ~{TC_HS_EXPECT['worst_pct']:.0f}%\n{lines}\n\n"
+            f"Bilang ke Claude: 'review hard-stop TrenKonfirmasi' untuk evaluasi (lanjut / rollback ke K1.1).")
+
+def tc_hardstop_progress_line() -> str:
+    """Satu baris utk heartbeat: progres counter review hard-stop baru TrenKonfirmasi."""
+    try:
+        with _tc_hs_lock:
+            st = _tc_hs_state()
+        n = st["n"]
+        if n == 0:
+            return f"0/{TC_HS_REVIEW_TARGET} deal (review hard-stop K1.5/cap10.8 dimulai 20/09 19:23 WIB)"
+        return (f"{n}/{TC_HS_REVIEW_TARGET} deal, hard-stop {st['hs']} ({st['hs'] / n * 100:.0f}%), "
+                f"avg {st['sum_pct'] / n:+.2f}%, terburuk {st['worst']:+.2f}%" + (" -- REVIEW SIAP" if st["notified"] else ""))
+    except Exception:
+        return "n/a"
 
 def _bump_ema200_watch_count(strategy: str) -> int:
     """Naikkan counter sampel EMA200(1D) utk `strategy`, simpan ke /data, return count baru.
@@ -2296,6 +2369,11 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
     """
     ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
     merged = dict(indicators)
+    if event.upper() == "CLOSE":
+        try:
+            tc_hardstop_track_close(symbol, strategy, indicators)   # counter review hard-stop K1.5/cap10.8
+        except Exception as error:
+            log(f"WARN log_oac tc_hardstop_track {symbol}: {error}")
     if event.upper() == "OPEN":
         try:
             strat_key = strategy.lower()
@@ -2345,7 +2423,7 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
         try:
             mcap_refresh_async()
             merged.setdefault("mcap_rank_cg", mcap_rank_label(symbol))
-            merged.setdefault("mcap_sample", f"{_bump_mcap_watch_count()}/{MCAP_WATCH_TARGET} (log saja, review di {MCAP_WATCH_TARGET})")
+            merged.setdefault("mcap_sample", f"{_bump_mcap_watch_count()} (log saja, tanpa gate)")
         except Exception as error:
             log(f"WARN log_oac mcap enrichment {symbol}: {error}")
     standard_fields = (
@@ -5756,6 +5834,7 @@ def heartbeat_general_tick():
                      f"({prog_akum_stop['win']}W/{prog_akum_stop['loss']}L,{prog_akum_stop['total_pct']:+.1f}%)\n"
                      f"    akumulasi-4h: 2nd {_fmt_strat(prog_akum2, AKUM_ENTRY_PHASE2_TARGET)}\n"
                      f"  - trend_confirm_4h: {_fmt_hunting_live(prog_trend)}\n"
+                     f"    trend_confirm_4h review hard-stop K1.5/cap10.8: {tc_hardstop_progress_line()}\n"
                      f"  - qscalp_3m  : {_fmt_hunting_live(prog_qscalp)}\n"
                      f"  - Shadow (paper, bukan live):\n"
                      f"    {_fmt_shadow('akuma_all3', SHADOW_AKUMA_TARGET)}\n"
