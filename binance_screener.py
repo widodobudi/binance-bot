@@ -390,7 +390,16 @@ TRENDCONFIRM_TIMEFRAME       = "4h"
 TRENDCONFIRM_MAX_DEALS       = 3        # mulai konservatif -- frekuensi sinyal mentah jauh
                                           # lebih tinggi dari strategi lain (lihat memory)
 TRENDCONFIRM_MAX_HOLD_CANDLES= 15        # timeout 15 candle 4h = 2.5 hari, sama spt brkX2-4h/hunting
-TRENDCONFIRM_SCAN_INTERVAL   = 180       # scan tiap 3 menit, sama spt brkX2-4h
+TRENDCONFIRM_SCAN_INTERVAL   = 240       # 22/09/2026 (audit biaya AI, permintaan Mas Budi): naik dari
+                                          # 180 -- sebelumnya scan 24 jam nonstop TANPA jendela intrabar
+                                          # sama sekali (beda dari brkX2-4h/CrossEMA-4h/Hunting-4h yg
+                                          # semua dibatasi ~25% awal candle), terbukti jadi penyumbang
+                                          # panggilan AI TERBESAR (100+ babak-2/hari). Fix utamanya
+                                          # jendela TRENDCONFIRM_ENTRY_MIN/MAX_PCT di bawah -- interval
+                                          # ini cuma pemanis kecil, TIDAK dilebarin jauh spt brkX2-4h dkk
+                                          # (tetap scan cukup rapat SELAMA jendela aktif).
+TRENDCONFIRM_ENTRY_MIN_PCT   = 5/240     # jendela intrabar (22/09/2026) -- samakan pola brkX2-4h:
+TRENDCONFIRM_ENTRY_MAX_PCT   = 60/240    # mulai menit ke-5, tutup menit ke-60 (~25% elapsed candle 4h)
 TRENDCONFIRM_MIN_VOL_USD     = 2_000_000 # sama spt brkX2-4h (STRAT4H_MIN_VOL_USD)
 TRENDCONFIRM_ATR_MEDIAN_WINDOW = 100     # "ATR tinggi" = relatif thd median ATR% 100 candle terakhir
                                           # koin itu sendiri (self-relative, bukan angka mutlak)
@@ -6240,6 +6249,7 @@ def heartbeat_general_tick():
                      f"    reversal-8h: 3rd {_fmt_strat(prog_rev3, REVERSAL_PHASE3_TARGET)}\n"
                      f"  - brkX2-4h   : {_fmt_hunting_live(prog_4h)}\n"
                      f"    brkX2-4h: 2nd {_fmt_strat(prog_4h2, STRAT4H_PHASE2_TARGET)}\n"
+                     f"    Akumulasi-4h: all_three (LIVE, slot 2, param Ronde-2) {_fmt_strat(akum2_progress(), AKUM2_TARGET)}\n"
                      f"    brkX2-4h: Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
                      f"  - crossema-4h: {_fmt_hunting_live(prog_cx)}\n"
                      f"    crossema-4h: 2nd STOP@Stoch<25 "
@@ -7884,6 +7894,7 @@ def thread2_monitor():
                 if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
                 if strat == 'brkX2_4h' and trail_stop_triggered: record_trail_close(sym, price)
                 if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof_from_entry)
+                if strat == 'akum_entry_a' and d.get('akum2'): record_akum2_close(sym, prof_from_entry)
                 if _hold_no_sell:
                     record_hold_no_sell_closed(sym)
                     record_hold_no_sell_price(sym, d.get('entry_price', 0) or 0, strat)
@@ -9730,6 +9741,15 @@ def thread_trendconfirm_scan():
     now_ms = int(time.time() * 1000)
     sec4h  = STRAT4H_SECONDS
     candle_open_ms = (now_ms // (sec4h * 1000)) * (sec4h * 1000)
+    elapsed_pct    = (now_ms - candle_open_ms) / (sec4h * 1000)
+
+    # 22/09/2026 (audit biaya AI, permintaan Mas Budi): jendela intrabar -- sebelumnya scan
+    # penuh universe USDT 24 jam nonstop tiap TRENDCONFIRM_SCAN_INTERVAL detik, jauh beda dari
+    # brkX2-4h/CrossEMA-4h/Hunting-4h yg semua dibatasi ~25% awal candle. Ini akar penyebab
+    # volume panggilan AI TrenKonfirmasi-4h jauh di atas strategi 4h lain (lihat audit log
+    # 22/09/2026: 100+ trigger babak-2/hari, nyaris tiap siklus scan).
+    if not (TRENDCONFIRM_ENTRY_MIN_PCT <= elapsed_pct <= TRENDCONFIRM_ENTRY_MAX_PCT):
+        return
 
     ticker = get_ticker_24h()
     if not ticker: return
@@ -13906,6 +13926,204 @@ def run_thread_akum_entry():
         time.sleep(AKUM_ENTRY_SCAN_INTERVAL)
 
 
+# ===== Akumulasi-4h "all_three" -- slot LIVE kedua (22/09/2026, promosi dari shadow akuma_all3 =====
+# setelah forward-test paper #21/20, 17W/4L +26.4%, permintaan Mas Budi). TERPISAH dari Akumulasi-4h
+# yang sekarang (bukan ganti) -- 2 slot baru, base_usd SAMA dgn Akumulasi-4h sekarang ($20, ambil
+# dari Strategy Control key 'akum_entry_a' krn reuse strat itu). Pembeda HANYA di deteksi entry:
+# pakai _akuma_detect_entry_param + SHADOW_AKUMA_ALL3_PARAMS (persis fungsi yg sudah diverifikasi
+# shadow test), BUKAN detect_entry_a_spring milik Entry A biasa. Posisi kandidat ditandai
+# akum2=True di active_deals -- dipakai utk slot cap sendiri (AKUM2_MAX_DEALS) dan counter
+# forward-test sendiri (target 20, dibekukan kalau tercapai, direview lagi sebelum naik target,
+# pola sama brkX2-12h phase 2). Exit (TP1/TP2/TP3/SL/timeout/cooldown) full ikut mesin Entry A
+# yang sudah ada -- reuse strat 'akum_entry_a', TIDAK bikin whitelist strat baru di puluhan
+# tempat lain di file ini (CSV/dashboard/JS strat_map/dst) supaya risiko integrasi minimal.
+AKUM2_MAX_DEALS = 2
+AKUM2_TARGET    = 20
+AKUM2_FILE      = os.path.join(DATA_DIR, "akum2_trades.json")
+akum2_trades    = []
+akum2_lock      = threading.Lock()
+
+def load_akum2_trades():
+    global akum2_trades
+    if not os.path.exists(AKUM2_FILE):
+        return
+    try:
+        with open(AKUM2_FILE, 'r') as f: data = json.load(f)
+        with akum2_lock:
+            akum2_trades = data
+        log(f"   Loaded akum2_trades: {len(akum2_trades)} trade.")
+    except Exception as e:
+        log(f"WARN gagal baca akum2_trades.json: {e}")
+
+def save_akum2_trades():
+    try:
+        with akum2_lock: data = list(akum2_trades)
+        with open(AKUM2_FILE, 'w') as f: json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan akum2_trades.json: {e}")
+
+def record_akum2_close(symbol: str, profit_pct: float):
+    with akum2_lock:
+        akum2_trades.append({'symbol': symbol, 'ts': time.time(), 'profit_pct': profit_pct})
+    save_akum2_trades()
+
+def akum2_progress() -> dict:
+    with akum2_lock:
+        trades = list(akum2_trades)
+    n = len(trades)
+    if n == 0:
+        return {'n': 0, 'win': 0, 'loss': 0, 'total_pct': 0.0}
+    win = sum(1 for t in trades if t.get('profit_pct', 0) > 0)
+    total = sum(t.get('profit_pct', 0) for t in trades)
+    return {'n': n, 'win': win, 'loss': n - win, 'total_pct': total}
+
+def active_deal_count_akum2() -> int:
+    with active_deals_lock:
+        return sum(1 for d in active_deals.values() if d.get('strategy') == 'akum_entry_a' and d.get('akum2'))
+
+def thread_akum2_entry_scan():
+    """Scan LIVE Entry A varian 'all_three' (Ronde-2 params) -- 2 slot terpisah dari Akumulasi-4h
+    biasa. Nebeng toggle/cooldown/AI-toggle 'akum_entry_a' yg sudah ada (belum ada baris
+    Strategy Control sendiri -- kalau mau off, matikan 'akum_entry_a' akan matikan keduanya)."""
+    if not is_strategy_enabled('akum_entry_a'):
+        return
+    if akum2_progress()['n'] >= AKUM2_TARGET:
+        return  # target tercapai -- dibekukan sampai Mas Budi review & naikkan target (lihat memory)
+    with _akum_lock:
+        kandidat = list(_akum_near_miss)
+    if not kandidat:
+        return
+    n_akum2 = active_deal_count_akum2()
+    if n_akum2 >= AKUM2_MAX_DEALS:
+        return
+    vol_spike, rsi_min, rsi_max_entry, obv_c, touch_buf, reentry_c = SHADOW_AKUMA_ALL3_PARAMS
+    for item in kandidat:
+        n_akum2 = active_deal_count_akum2()
+        if n_akum2 >= AKUM2_MAX_DEALS:
+            break
+        sym = item.get('sym', '')
+        if not sym or sym in SYMBOL_BLACKLIST:
+            continue
+        with active_deals_lock:
+            if sym in active_deals: continue
+        if is_cooldown_enabled('akum_entry_a') and cooldown_remaining(sym) > 0:
+            continue
+        if sizing_fail_remaining(sym) > 0:
+            continue
+        try:
+            df = get_ohlcv_4h(sym, limit=AKUM_CANDLE_LIMIT)
+            if df is None or len(df) < AKUM_SIDEWAYS_CANDLES + 100:
+                continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            a = _akumb_precompute(df)
+            vol_ma20 = pd.Series(a['vol']).rolling(20).mean().values
+            i = a['n'] - 1
+            wscore = _akumb_window_score(a, i)
+            if wscore is None:
+                continue
+            has_struct = (wscore['support_zone_low'] <= wscore['support_zone_high'] <=
+                          wscore['resistance_zone_low'] <= wscore['resistance_zone_high'])
+            support_ref = wscore['support_zone_low'] if has_struct else wscore['support']
+            support_reentry_ref = wscore['support_zone_high'] if has_struct else wscore['support']
+            cand_score = item.get('weighted_score') or item.get('total_score') or item.get('score', 0)
+            sig = _akuma_detect_entry_param(a, vol_ma20, i, support_ref, support_reentry_ref,
+                                             vol_spike, rsi_min, rsi_max_entry, obv_c,
+                                             touch_buf, reentry_c)
+            if sig is None:
+                continue
+            entry_price = float(a['close'][i])
+
+            _rsi_a2 = None
+            try:
+                _rsi_a2 = float(ta.rsi(df['close'], length=14).iloc[-1])
+                if pd.isna(_rsi_a2): _rsi_a2 = None
+            except Exception:
+                pass
+            _rvol_a2 = None
+            try:
+                _vm2 = df['vol'].rolling(20).mean().iloc[-1]
+                _rvol_a2 = float(df['vol'].iloc[-1]) / float(_vm2) if pd.notna(_vm2) and _vm2 > 0 else None
+            except Exception:
+                pass
+
+            if is_ai_call_open_enabled('akum_entry_a'):
+                _ai_ind = {'variant': 'all_three (Ronde-2)', 'price_now': _fmt_price(entry_price),
+                           'sl_price': _fmt_price(sig['sl_price'])}
+                if _rsi_a2 is not None: _ai_ind['rsi'] = f"{_rsi_a2:.1f}"
+                if _rvol_a2 is not None: _ai_ind['rvol'] = f"{_rvol_a2:.2f}x"
+                if not ai_decision_open(sym, 'Akumulasi-4h all_three', _ai_ind, active_deal_count(), notify=False):
+                    log(f"[T_AKUM2] {sym} di-skip oleh AI individual")
+                    continue
+
+            ok, target_usd, add_usd = open_deal_with_sizing(sym, cand_score, 'akum_entry_a')
+            if not ok:
+                log_open_fail("Akumulasi-4h all_three", to_display_pair(sym),
+                               "Binance order ditolak (cek saldo/lot size)" if USE_BINANCE_DIRECT else "3Commas tolak (cek saldo/slot)",
+                               extra=f"Harga: {_fmt_price(entry_price)}")
+                continue
+
+            ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+            add_to_active_deals(sym, {
+                'strategy':         'akum_entry_a',
+                'akum2':            True,
+                'entry_price':      entry_price,
+                'peak':             entry_price,
+                'signal_price':     entry_price,
+                'sl_price':         sig['sl_price'],
+                'atr_pct':          3.0,
+                'opened_candle_ts': int(a['ct'][i]) if 'ct' in a else int(df['ct'].iloc[-1]),
+                'trailing_armed':   False,
+                'opened_at':        ts,
+                'target_usd':       target_usd,
+                'add_usd':          add_usd,
+                'tf':               AKUM_TIMEFRAME,
+                'entry_type':       'A (all_three)',
+                'timeout_candles':  AKUM_ENTRY_TIMEOUT,
+                'rsi_open':         _rsi_a2,
+            })
+            csv_log_open({
+                'open_time_wib':  ts,
+                'symbol':         to_display_pair(sym),
+                'signal_price':   f"{_fmt_price(entry_price)}",
+                'entry_price':    f"{_fmt_price(entry_price)}",
+                'slip_pct':       '0.00',
+                'atr_pct':        '3.00',
+                'trail_dist_pct': f"{trailing_dist(3.0)}",
+                'base_usd':       target_usd,
+                'score':          cand_score,
+                'strategy':       'akum_entry_a',
+                'rsi_open':       f"{_rsi_a2:.1f}" if _rsi_a2 is not None else '',
+            })
+            log(f"[T_AKUM2] {sym} OPEN all_three @ {_fmt_price(entry_price)} SL={_fmt_price(sig['sl_price'])}")
+            send_telegram(
+                f"Akumulasi-4h all_three (LIVE, slot 2) | OPEN LONG\n"
+                f"{ts} WIB\n"
+                f"Pair : {to_display_pair(sym)}\n"
+                f"Entry: {_fmt_price(entry_price)}\n"
+                f"SL   : {_fmt_price(sig['sl_price'])}\n"
+                f"Target: ${target_usd}"
+            )
+            log_oac('OPEN', sym, 'Akumulasi-4h all_three', {
+                'entry_price': _fmt_price(entry_price), 'sl_price': _fmt_price(sig['sl_price']),
+                'target_usd': f"${target_usd}",
+            })
+        except Exception as e:
+            log(f"WARN [T_AKUM2] {sym}: {e}")
+
+
+def run_thread_akum2_entry():
+    """Thread T_AKUM2: scan Akumulasi-4h all_three (slot live kedua) tiap AKUM_ENTRY_SCAN_INTERVAL."""
+    log("[T_AKUM2] Thread entry akumulasi all_three dimulai.")
+    time.sleep(150)  # geser dikit dari T_AKUM_ENTRY (120s) biar nggak race baca _akum_near_miss
+    while True:
+        try:
+            thread_akum2_entry_scan()
+        except Exception as e:
+            log(f"WARN [T_AKUM2] thread error: {e}")
+        time.sleep(AKUM_ENTRY_SCAN_INTERVAL)
+
+
 # ===================== SHADOW FORWARD-TEST (13/09/2026, permintaan Mas Budi) =====================
 # Dua kandidat dari riset backtest sesi ini yang "layak forward test, TAPI JANGAN live dulu":
 #   1. akuma_all3   -- Entry A (Spring) dgn parameter Ronde 2 "all_three" (VOL_SPIKE_MULT
@@ -17900,6 +18118,7 @@ def run_web_dashboard():
                     remove_from_active_deals(sym)
                     if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
                     if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof)
+                    if strat == 'akum_entry_a' and d.get('akum2'): record_akum2_close(sym, prof)
                     log(f"[MANUAL-CLOSE] {sym} @ {price_now:.6g} profit={prof:.2f}%")
                     send_telegram(
                         f"CLOSE MANUAL (dashboard)\n"
@@ -21154,6 +21373,7 @@ if __name__ == '__main__':
     load_daily_loss_limit()
     load_trail_reentry()
     load_quick_reentry_trades()
+    load_akum2_trades()
     sync_base_usd_from_binance()  # auto-fix base_usd dari Binance API saat startup
     try:
         import math as _math
@@ -21191,6 +21411,9 @@ if __name__ == '__main__':
         n_threads += 1
         t_akum_entry = threading.Thread(target=run_thread_akum_entry, daemon=True, name="T-AkumEntry")
         threads.append(t_akum_entry)
+        n_threads += 1
+        t_akum2 = threading.Thread(target=run_thread_akum2_entry, daemon=True, name="T-Akum2")
+        threads.append(t_akum2)
         n_threads += 1
     t_shadow = threading.Thread(target=run_thread_shadow_fwdtest, daemon=True, name="T-ShadowFwdTest")
     threads.append(t_shadow)
