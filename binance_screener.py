@@ -390,16 +390,18 @@ TRENDCONFIRM_TIMEFRAME       = "4h"
 TRENDCONFIRM_MAX_DEALS       = 3        # mulai konservatif -- frekuensi sinyal mentah jauh
                                           # lebih tinggi dari strategi lain (lihat memory)
 TRENDCONFIRM_MAX_HOLD_CANDLES= 15        # timeout 15 candle 4h = 2.5 hari, sama spt brkX2-4h/hunting
-TRENDCONFIRM_SCAN_INTERVAL   = 240       # 22/09/2026 (audit biaya AI, permintaan Mas Budi): naik dari
-                                          # 180 -- sebelumnya scan 24 jam nonstop TANPA jendela intrabar
-                                          # sama sekali (beda dari brkX2-4h/CrossEMA-4h/Hunting-4h yg
-                                          # semua dibatasi ~25% awal candle), terbukti jadi penyumbang
-                                          # panggilan AI TERBESAR (100+ babak-2/hari). Fix utamanya
-                                          # jendela TRENDCONFIRM_ENTRY_MIN/MAX_PCT di bawah -- interval
-                                          # ini cuma pemanis kecil, TIDAK dilebarin jauh spt brkX2-4h dkk
-                                          # (tetap scan cukup rapat SELAMA jendela aktif).
-TRENDCONFIRM_ENTRY_MIN_PCT   = 5/240     # jendela intrabar (22/09/2026) -- samakan pola brkX2-4h:
-TRENDCONFIRM_ENTRY_MAX_PCT   = 60/240    # mulai menit ke-5, tutup menit ke-60 (~25% elapsed candle 4h)
+TRENDCONFIRM_SCAN_INTERVAL   = 600       # 23/09/2026 (audit biaya AI 22/09 + sweep window 23/09,
+                                          # permintaan Mas Budi): naik dari 180 -- sebelumnya scan 24 jam
+                                          # nonstop, terbukti jadi penyumbang panggilan AI TERBESAR
+                                          # (100+ babak-2/hari). SEMPAT dipasang jendela intrabar 25%
+                                          # (menit 5-60) meniru brkX2-4h, TAPI sweep data riil (30 pair,
+                                          # 619 candle valid) membuktikan itu SALAH BENTUK utk strategi
+                                          # ini: cuma 3.9% sinyal asli matang di 25% pertama candle, 43.5%
+                                          # justru baru matang di 25% TERAKHIR (menit 180-240) -- beda dari
+                                          # brkX2-4h yg breakout (sinyal sekali di titik waktu), TrenKonfirmasi
+                                          # itu KONFIRMASI tren yg butuh waktu matang, jadi window dicabut
+                                          # (revert), interval-lah yg jadi lever utama (scan lebih jarang
+                                          # tapi tetap SEPANJANG candle, tidak ada bagian yg permanen tertutup).
 TRENDCONFIRM_MIN_VOL_USD     = 2_000_000 # sama spt brkX2-4h (STRAT4H_MIN_VOL_USD)
 TRENDCONFIRM_ATR_MEDIAN_WINDOW = 100     # "ATR tinggi" = relatif thd median ATR% 100 candle terakhir
                                           # koin itu sendiri (self-relative, bukan angka mutlak)
@@ -9741,15 +9743,12 @@ def thread_trendconfirm_scan():
     now_ms = int(time.time() * 1000)
     sec4h  = STRAT4H_SECONDS
     candle_open_ms = (now_ms // (sec4h * 1000)) * (sec4h * 1000)
-    elapsed_pct    = (now_ms - candle_open_ms) / (sec4h * 1000)
 
-    # 22/09/2026 (audit biaya AI, permintaan Mas Budi): jendela intrabar -- sebelumnya scan
-    # penuh universe USDT 24 jam nonstop tiap TRENDCONFIRM_SCAN_INTERVAL detik, jauh beda dari
-    # brkX2-4h/CrossEMA-4h/Hunting-4h yg semua dibatasi ~25% awal candle. Ini akar penyebab
-    # volume panggilan AI TrenKonfirmasi-4h jauh di atas strategi 4h lain (lihat audit log
-    # 22/09/2026: 100+ trigger babak-2/hari, nyaris tiap siklus scan).
-    if not (TRENDCONFIRM_ENTRY_MIN_PCT <= elapsed_pct <= TRENDCONFIRM_ENTRY_MAX_PCT):
-        return
+    # 22/09/2026: sempat dipasang jendela intrabar di sini (meniru brkX2-4h) untuk hemat biaya
+    # AI -- DICABUT 23/09/2026 setelah sweep data riil (lihat komentar TRENDCONFIRM_SCAN_INTERVAL
+    # di atas) membuktikan sinyal TrenKonfirmasi banyak baru matang di paruh KEDUA candle, jadi
+    # window bikin strategi ini kehilangan mayoritas sinyal asli. Scan tetap sepanjang candle,
+    # levernya cuma TRENDCONFIRM_SCAN_INTERVAL (600s, dari 180s).
 
     ticker = get_ticker_24h()
     if not ticker: return
@@ -9953,118 +9952,6 @@ def run_thread_trendconfirm():
         except Exception as e:
             log(f"WARN T_TRENDCONFIRM error: {e}")
         time.sleep(TRENDCONFIRM_SCAN_INTERVAL)
-
-
-# ===== SWEEP SEKALI-PAKAI (23/09/2026, permintaan Mas Budi) =========================
-# Jawab: kalau window scan TrenKonfirmasi-4h dibatasi elapsed 25%/50%/75% candle 4h, berapa
-# persen sinyal ASLI (lolos gate wajib di CLOSE candle) bakal KELEWAT krn baru matang setelah
-# window itu tutup? Jalan SEKALI di startup (results dicek Mas Budi lewat log Railway, bukan
-# endpoint dashboard -- laptop lokal Mas Budi/Claude tidak bisa akses api.binance.com langsung,
-# jadi jalankan di sini yg network-nya sudah terbukti jalan). HAPUS blok ini setelah hasil didapat
-# -- bukan bagian permanen dari bot, murni riset satu kali.
-_TC_SWEEP_RESULT_FILE = os.path.join(DATA_DIR, "tc_window_sweep_result.json")
-
-def _tc_sweep_top_symbols(n=30):
-    ticker = get_ticker_24h()
-    if not ticker: return []
-    stable = {"USDCUSDT","FDUSDUSDT","TUSDUSDT","BUSDUSDT","DAIUSDT","USDPUSDT","EURUSDT"}
-    rows = [t for t in ticker if t["symbol"].endswith("USDT") and t["symbol"] not in stable
-            and "UP" not in t["symbol"] and "DOWN" not in t["symbol"]]
-    rows.sort(key=lambda t: float(t.get("quoteVolume", 0)), reverse=True)
-    return [t["symbol"] for t in rows[:n]]
-
-def _tc_sweep_gate(atr_pct_series, close_now, ema20_now, rvol_now, rsi_now):
-    if pd.isna(ema20_now) or ema20_now <= 0: return False
-    atrp_now = atr_pct_series.iloc[-1]
-    if pd.isna(atrp_now): return False
-    atr_med = atr_pct_series.rolling(TRENDCONFIRM_ATR_MEDIAN_WINDOW).median().iloc[-1]
-    if pd.isna(atr_med) or pd.isna(rvol_now) or pd.isna(rsi_now): return False
-    return (atrp_now >= atr_med) and (close_now >= ema20_now) and (rvol_now >= TRENDCONFIRM_RVOL_MIN) and (float(rsi_now) < TRENDCONFIRM_RSI_MAX)
-
-def _tc_sweep_indicators(closes, highs, lows, vols):
-    c = pd.Series(closes); h = pd.Series(highs); l = pd.Series(lows); v = pd.Series(vols)
-    ema20 = ta.ema(c, length=20)
-    atr_pct = ta.atr(h, l, c, length=14) / c * 100
-    rsi = ta.rsi(c, length=14)
-    vol_ma20 = v.rolling(20).mean()
-    rvol = v.iloc[-1] / vol_ma20.iloc[-1] if pd.notna(vol_ma20.iloc[-1]) and vol_ma20.iloc[-1] > 0 else float('nan')
-    return ema20.iloc[-1], atr_pct, rsi.iloc[-1], rvol, c.iloc[-1]
-
-def run_tc_window_sweep_once():
-    if os.path.exists(_TC_SWEEP_RESULT_FILE):
-        log("[TC-SWEEP] Hasil sudah ada, skip (hapus file kalau mau re-run).")
-        return
-    time.sleep(45)  # biar startup thread lain selesai dulu
-    log("[TC-SWEEP] Mulai sweep window TrenKonfirmasi-4h (satu kali, riset)...")
-    TEST_TAIL = 200
-    symbols = _tc_sweep_top_symbols(30)
-    log(f"[TC-SWEEP] Universe {len(symbols)} pair: {symbols}")
-    earliest_hist = {1: 0, 2: 0, 3: 0, 4: 0}
-    total_true = 0
-    per_symbol = {}
-    for si, sym in enumerate(symbols):
-        try:
-            df4 = get_ohlcv_4h(sym, limit=1000)
-            if df4 is None or len(df4) < 300:
-                continue
-            df1 = get_ohlcv(sym, interval="1h", limit=1000)
-            if df1 is None or len(df1) < TEST_TAIL * 4:
-                continue
-            n4 = len(df4)
-            df1_ot = df1["ot"].values
-            sym_true = 0
-            for i in range(max(TRENDCONFIRM_ATR_MEDIAN_WINDOW + 20, n4 - TEST_TAIL - 1), n4 - 1):
-                candle_open_ms = int(df4["ts"].iloc[i])
-                candle_close_ms = candle_open_ms + 4 * 3600 * 1000
-                mask = (df1_ot >= candle_open_ms) & (df1_ot < candle_close_ms)
-                sub1 = df1.loc[mask].sort_values("ot")
-                if len(sub1) != 4:
-                    continue
-                hist_n = min(i, 260)
-                hist = df4.iloc[i - hist_n:i]
-                c_full = list(hist["close"]) + [float(df4["close"].iloc[i])]
-                h_full = list(hist["high"])  + [float(df4["high"].iloc[i])]
-                l_full = list(hist["low"])   + [float(df4["low"].iloc[i])]
-                v_full = list(hist["vol"])   + [float(df4["vol"].iloc[i])]
-                ema20_4, atrp_series_4, rsi_4, rvol_4, close_4 = _tc_sweep_indicators(c_full, h_full, l_full, v_full)
-                if not _tc_sweep_gate(atrp_series_4, close_4, ema20_4, rvol_4, rsi_4):
-                    continue
-                total_true += 1; sym_true += 1
-                first_k = None
-                for k in (1, 2, 3, 4):
-                    if k < 4:
-                        sk = sub1.iloc[:k]
-                        o = float(sk["open"].iloc[0]); hh = float(sk["high"].max())
-                        ll = float(sk["low"].min()); cc = float(sk["close"].iloc[-1]); vv = float(sk["vol"].sum())
-                    else:
-                        cc = float(df4["close"].iloc[i]); hh = float(df4["high"].iloc[i])
-                        ll = float(df4["low"].iloc[i]); vv = float(df4["vol"].iloc[i])
-                    c_k = list(hist["close"]) + [cc]; h_k = list(hist["high"]) + [hh]
-                    l_k = list(hist["low"]) + [ll]; v_k = list(hist["vol"]) + [vv]
-                    ema20_k, atrp_series_k, rsi_k, rvol_k, close_k = _tc_sweep_indicators(c_k, h_k, l_k, v_k)
-                    if _tc_sweep_gate(atrp_series_k, close_k, ema20_k, rvol_k, rsi_k):
-                        first_k = k; break
-                if first_k is not None:
-                    earliest_hist[first_k] += 1
-            per_symbol[sym] = sym_true
-            log(f"[TC-SWEEP] [{si+1}/{len(symbols)}] {sym}: {sym_true} true-signal candle")
-        except Exception as e:
-            log(f"WARN [TC-SWEEP] {sym}: {e}")
-    log(f"[TC-SWEEP] === HASIL === total true-signal candle: {total_true}")
-    cum = 0
-    for k, label in ((1, "25%"), (2, "50%"), (3, "75%"), (4, "100%")):
-        cum += earliest_hist[k]
-        coverage = (cum / total_true * 100) if total_true else 0
-        log(f"[TC-SWEEP] elapsed<={label} (menit {k*60}): baru lolos di sini={earliest_hist[k]} | "
-            f"KUMULATIF ke-cover={cum}/{total_true} ({coverage:.1f}%)")
-    out = {"universe": symbols, "test_tail": TEST_TAIL, "total_true_signals": total_true,
-           "earliest_k_histogram": earliest_hist, "per_symbol": per_symbol}
-    try:
-        with open(_TC_SWEEP_RESULT_FILE, "w") as f:
-            json.dump(out, f, indent=2)
-        log(f"[TC-SWEEP] Hasil disimpan ke {_TC_SWEEP_RESULT_FILE}")
-    except Exception as e:
-        log(f"WARN [TC-SWEEP] gagal simpan hasil: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -21610,7 +21497,6 @@ if __name__ == '__main__':
     n_threads += 1
 
     for t in threads: t.start()
-    threading.Thread(target=run_tc_window_sweep_once, daemon=True, name="T-TCSweep").start()
     # Delay kecil agar banner startup selesai sebelum thread mulai print
     time.sleep(0.5)
     t_web = threading.Thread(target=run_web_dashboard, daemon=True, name="T-Web")
