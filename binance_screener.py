@@ -9960,7 +9960,7 @@ def run_thread_trendconfirm():
 # dilonggarkan dari 50% tapi belum diverifikasi coverage), Hunting-4h (TIDAK punya window
 # sendiri, nebeng punya brkX2-4h krn scan-nya nested di thread1d_scan_4h). Jalan SEKALI di
 # startup, log via log() (baca lewat Railway MCP), HAPUS blok ini setelah hasil didapat.
-_MWSWEEP_RESULT_FILE = os.path.join(DATA_DIR, "multi_window_sweep_result.json")
+_MWSWEEP_RESULT_FILE = os.path.join(DATA_DIR, "multi_window_sweep_result_v2.json")  # v2: fix blocker_counts=None crash
 
 def _mwsweep_partial_df(hist_df, o, h, l, c, v, qv):
     row = pd.DataFrame([{"open": o, "high": h, "low": l, "close": c, "vol": v, "qvol": qv}])
@@ -9988,7 +9988,7 @@ def _mwsweep_gate_crossema(partial_raw_df):
     return True
 
 def _mwsweep_gate_hunting(partial_raw_df, sym):
-    hit = check_hunting_strategy(partial_raw_df, {"symbol": sym}, {})
+    hit = check_hunting_strategy(partial_raw_df, {"symbol": sym}, {}, blocker_counts={})
     return hit is not None
 
 def run_multi_window_sweep_once():
