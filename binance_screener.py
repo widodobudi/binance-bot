@@ -3012,6 +3012,27 @@ def _binance_earn_request(method: str, path: str, params: dict) -> dict:
     return _binance_trading_request(method, path, params, api_key=key, api_secret=secret)
 
 
+def binance_transfer_sub_to_master(asset: str, amount: float) -> bool:
+    """Transfer `asset` dari Sub Account (akun trading, BINANCE_TRADING_KEY) ke Master --
+    jembatan supaya residual koin dari jual-sebagian (yg mendarat di Spot wallet Sub Account,
+    krn situ tempat trading sekarang) bisa disubscribe ke Earn pakai key Master (23/09/2026,
+    permintaan Mas Budi). Endpoint POST /sapi/v1/sub-account/transfer/subToMaster -- dipanggil
+    dari SISI SUB ACCOUNT sendiri (bukan Master), izin yg dibutuhkan cuma 'Enable Spot & Margin
+    Trading' yg BINANCE_TRADING_KEY sudah punya -- TIDAK perlu izin 'Enable Universal Transfer'
+    tambahan. Return True kalau request diterima Binance."""
+    try:
+        amt = round(amount, 8)
+        if amt <= 0:
+            return False
+        data = _binance_trading_request("POST", "/sapi/v1/sub-account/transfer/subToMaster",
+                                         {"asset": asset, "amount": f"{amt:.8f}"})
+        log(f"[EARN] Transfer Sub->Master {amt} {asset} -> {data}")
+        return True
+    except Exception as e:
+        log(f"WARN [EARN] binance_transfer_sub_to_master {asset} {amount}: {e}")
+        return False
+
+
 def binance_buy_market(symbol: str, usdt_amount: float) -> dict:
     """
     Beli MARKET sejumlah usdt_amount USDT untuk symbol.
@@ -4230,7 +4251,7 @@ def _earn_subscribe(product_id: str, amount: float) -> bool:
 def _earn_state_bump(key: str) -> dict:
     with _earn_lock:
         st = _earn_json_load(EARN_STATE_FILE, {})
-        for k in ("ok", "full_no_earn", "full_small", "sub_fail", "err"):
+        for k in ("ok", "full_no_earn", "full_small", "sub_fail", "err", "transfer_fail"):
             st.setdefault(k, 0)
         st.setdefault("notified", False)
         st[key] = st.get(key, 0) + 1
@@ -4290,11 +4311,29 @@ def close_deal_maybe_partial(symbol: str, strategy: str, profit_pct: float, info
                 binance_sell_market(symbol, left)   # sisa terlalu kecil -> jual juga
             _earn_state_bump("full_small")
             return True
-        if not _earn_subscribe(prod["productId"], left):
-            log(f"WARN [EARN] {symbol}: subscribe gagal -> sisa {left} dijual juga (tetap 100%)")
+        # 23/09/2026 (permintaan Mas Budi): residual koin ini masih di Spot wallet SUB ACCOUNT
+        # (situ tempat trading sekarang), tapi Earn subscribe di bawah pakai key MASTER --
+        # Binance cuma bisa subscribe dari saldo akun yg SAMA dgn API key, jadi harus dipindah
+        # dulu Sub->Master sebelum subscribe, atau subscribe pasti gagal terus.
+        if not binance_transfer_sub_to_master(asset, left):
+            log(f"WARN [EARN] {symbol}: transfer Sub->Master {left} {asset} gagal -> sisa dijual juga (tetap 100%)")
             binance_sell_market(symbol, left)
+            _earn_state_bump("transfer_fail")
+            send_telegram(f"⚠️ Earn: transfer Sub->Master {left} {asset} gagal -> sisa dijual juga (close tetap 100%). Cek log [EARN].")
+            return True
+        time.sleep(2)  # jeda kecil biar saldo transfer settle sebelum subscribe dicoba
+        if not _earn_subscribe(prod["productId"], left):
+            # PENTING: sisa koin ini SUDAH pindah ke Spot wallet Master (transfer di atas sukses),
+            # jadi TIDAK BISA lagi dijual pakai binance_sell_market() biasa (itu jual dari Sub
+            # Account, saldo di sana sudah 0 utk jumlah ini -- bakal salah/gagal kalau dipaksa).
+            # Daripada coba jual lintas-akun yang belum ada jalurnya, biarkan di Spot Master apa
+            # adanya dan minta Mas Budi tangani manual (deal tetap dianggap closed -- eksposur
+            # harga sudah lepas sepenuhnya, cuma sisa ini belum masuk Earn/belum terjual).
+            log(f"WARN [EARN] {symbol}: subscribe gagal -> sisa {left} {asset} SUDAH di Spot Master (bukan Sub), "
+                f"dibiarkan apa adanya, TIDAK dicoba jual otomatis (butuh key Master utk itu). Tangani manual.")
             _earn_state_bump("sub_fail")
-            send_telegram(f"⚠️ Earn: subscribe sisa {left} {asset} gagal -> sisa dijual juga (close tetap 100%). Cek log [EARN].")
+            send_telegram(f"⚠️ Earn: sisa {left} {asset} sudah dipindah ke Spot Master tapi subscribe gagal.\n"
+                          f"TIDAK dijual otomatis (beda akun) -- tolong cek Spot wallet Master dan jual/subscribe manual. Cek log [EARN].")
             return True
         sold_fraction = sold_qty / (sold_qty + left) if (sold_qty + left) > 0 else pct / 100.0
         # Subscribe SUKSES -> deal dianggap tertutup APA PUN yg terjadi di bawah (jangan sampai bookkeeping yg
@@ -4328,7 +4367,8 @@ def earn_partial_progress_line() -> str:
             rows = _earn_json_load(EARN_RESIDUAL_FILE, [])
         ok = st.get("ok", 0); val = sum(float(r.get("value_usd", 0) or 0) for r in rows)
         return (f"{ok}/{EARN_EXPAND_TARGET} sukses ke Earn ({len(rows)} koin, ~${val:.2f} saat masuk); jual 100% krn: "
-                f"tanpa Earn {st.get('full_no_earn', 0)}, sisa kecil {st.get('full_small', 0)}, gagal {st.get('sub_fail', 0) + st.get('err', 0)}"
+                f"tanpa Earn {st.get('full_no_earn', 0)}, sisa kecil {st.get('full_small', 0)}, "
+                f"gagal {st.get('sub_fail', 0) + st.get('err', 0) + st.get('transfer_fail', 0)}"
                 + (" -- KRITERIA EXPAND TERCAPAI" if st.get("notified") else ""))
     except Exception:
         return "n/a"
