@@ -11943,14 +11943,29 @@ document.addEventListener('DOMContentLoaded', function() {
     loadAutoSellConfig();
     loadDailyLossLimit();
     setInterval(loadDailyLossLimit, 30000);
+    setInterval(loadAIProviderConfig, 30000);  // 23/09/2026: biar status DOWN/siap ke-update live
 });
 
+function _aiHealthHtml(label, configured, health) {
+    if (!configured) return label + ': <span style="color:#8892a4">belum di-set</span>';
+    if (health && health.ok === false) {
+        return label + ': <span style="color:#ff4f6a;font-weight:bold">DOWN sejak ' + (health.since_wib || '?') + ' WIB (' + (health.error || 'gagal') + ')</span>';
+    }
+    return label + ': <span style="color:#4ade80">siap</span>';
+}
 function loadAIProviderConfig() {
+    // 23/09/2026: sebelumnya cuma nampilin "siap"/"belum" dari ADA-TIDAKNYA API key (bukan
+    // status kesehatan riil) -- jadi dashboard tetap bilang "siap" walau providernya sudah
+    // gagal berjam-jam (credit habis dll). Sekarang pakai anthropic_health/gemini_health
+    // (status panggilan TERAKHIR, real-time) supaya kelihatan jelas kalau lagi DOWN + sejak kapan.
     fetch('/api/ai_provider_config').then(function(r){ return r.json(); }).then(function(d) {
         var mode = document.getElementById('ai-provider-mode');
         var status = document.getElementById('ai-provider-status');
         if (mode) mode.value = d.mode || 'anthropic_gemini';
-        if (status) status.textContent = 'Mode aktif: ' + (mode && mode.options[mode.selectedIndex] ? mode.options[mode.selectedIndex].text : 'Anthropic → Gemini otomatis') + ' | Anthropic: ' + (d.anthropic_configured ? 'siap' : 'belum') + ' | Gemini: ' + (d.gemini_configured ? 'siap' : 'belum') + ' | Terakhir: ' + (d.last_provider || 'Belum ada keputusan AI');
+        if (status) status.innerHTML = 'Mode aktif: ' + (mode && mode.options[mode.selectedIndex] ? mode.options[mode.selectedIndex].text : 'Anthropic → Gemini otomatis')
+            + ' | ' + _aiHealthHtml('Anthropic', d.anthropic_configured, d.anthropic_health)
+            + ' | ' + _aiHealthHtml('Gemini', d.gemini_configured, d.gemini_health)
+            + ' | Terakhir: ' + (d.last_provider || 'Belum ada keputusan AI');
     });
 }
 
@@ -20336,6 +20351,54 @@ AI_LAST_PROVIDER = "Belum ada keputusan AI"
 
 _ai_quota_notif_sent = False  # flag agar notif quota habis tidak berulang
 
+# 23/09/2026 (permintaan Mas Budi, insiden "tolol" -- pertanyaan lama soal bug belum dipatch):
+# sebelumnya /api/ai_provider_config cuma expose anthropic_configured/gemini_configured =
+# bool(API_KEY) -- ITU CUMA CEK KEY-NYA ADA DI ENV, BUKAN CEK PROVIDER-NYA LAGI SEHAT ATAU
+# TIDAK. Jadi walau Anthropic/Gemini sudah gagal berjam-jam (credit habis dsb), dashboard tetap
+# nampilin "siap" terus -- padahal yang dimaksud Mas Budi "info di web kalau API disabled" itu
+# justru status KESEHATAN real-time, bukan status konfigurasi. Ini state itu + persist ke disk
+# (supaya "sejak kapan down" tidak ke-reset tiap restart/redeploy Railway).
+AI_PROVIDER_HEALTH_FILE = os.path.join(DATA_DIR, "ai_provider_health.json")
+_ai_provider_health = {"anthropic": {"ok": True, "error": None, "since_wib": None},
+                        "gemini":    {"ok": True, "error": None, "since_wib": None}}
+_ai_provider_health_lock = threading.Lock()
+
+def load_ai_provider_health():
+    global _ai_provider_health
+    if not os.path.exists(AI_PROVIDER_HEALTH_FILE):
+        return
+    try:
+        with open(AI_PROVIDER_HEALTH_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        with _ai_provider_health_lock:
+            for k in ("anthropic", "gemini"):
+                if k in data: _ai_provider_health[k] = data[k]
+        log(f"   Loaded ai_provider_health: {data}")
+    except Exception as e:
+        log(f"WARN load_ai_provider_health: {e}")
+
+def _save_ai_provider_health():
+    try:
+        with _ai_provider_health_lock: data = dict(_ai_provider_health)
+        with open(AI_PROVIDER_HEALTH_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN _save_ai_provider_health: {e}")
+
+def _mark_ai_provider_ok(provider: str):
+    with _ai_provider_health_lock:
+        was_down = not _ai_provider_health[provider]["ok"]
+        _ai_provider_health[provider] = {"ok": True, "error": None, "since_wib": None}
+    if was_down:
+        _save_ai_provider_health()
+
+def _mark_ai_provider_down(provider: str, error_text: str):
+    with _ai_provider_health_lock:
+        prev = _ai_provider_health[provider]
+        since = prev["since_wib"] if not prev["ok"] and prev["since_wib"] else now_wib().strftime('%Y-%m-%d %H:%M:%S')
+        _ai_provider_health[provider] = {"ok": False, "error": _classify_ai_error(error_text), "since_wib": since}
+    _save_ai_provider_health()
+
 # 06/09/2026 (permintaan Mas Budi): cooldown SKIP per (symbol, strategi) utk ai_decision_open()
 # -- SEBELUMNYA kandidat yang terus lolos filter rule-based tapi di-SKIP AI bakal ditanya ULANG
 # tiap siklus scan (3-4 menit) SELAMA kandidat itu masih lolos filter, walau kondisi pasarnya
@@ -20509,11 +20572,13 @@ def _ai_call(prompt: str, model: str = None) -> str:
             result = _anthropic_ai_call(prompt, model=model) if provider == "anthropic" else _gemini_ai_call(prompt)
             if result:
                 AI_LAST_PROVIDER = "Anthropic" if provider == "anthropic" else "Gemini AI Studio"
+                _mark_ai_provider_ok(provider)
                 if provider == "gemini": log("[AI] Keputusan memakai Gemini fallback")
                 return result
         except Exception as error:
             error_text = str(error)
             provider_errors[provider] = error_text
+            _mark_ai_provider_down(provider, error_text)
             log(f"WARN [AI] {provider} gagal: {error_text[:160]}")
     AI_LAST_PROVIDER = "rule-based Python"
     if not _ai_quota_notif_sent:
@@ -20555,10 +20620,16 @@ def load_ai_provider_config() -> dict:
                     default["mode"] = mode
     except Exception as error:
         log(f"WARN load_ai_provider_config: {error}")
+    with _ai_provider_health_lock:
+        _health = {k: dict(v) for k, v in _ai_provider_health.items()}
     return {**default, "primary": AI_PRIMARY_PROVIDER, "fallback": AI_FALLBACK_PROVIDER,
             "last_provider": AI_LAST_PROVIDER,
             "anthropic_configured": bool(ANTHROPIC_API_KEY),
-            "gemini_configured": bool(GEMINI_API_KEY)}
+            "gemini_configured": bool(GEMINI_API_KEY),
+            # 23/09/2026: status KESEHATAN real-time (beda dari *_configured di atas yg cuma
+            # cek env var ada/tidak) -- ok=False berarti panggilan TERAKHIR ke provider itu
+            # gagal, error = alasannya (credit habis/rate limit/dll), since_wib = sejak kapan.
+            "anthropic_health": _health["anthropic"], "gemini_health": _health["gemini"]}
 
 
 def save_ai_provider_config(mode: str) -> None:
@@ -21374,6 +21445,7 @@ if __name__ == '__main__':
     load_trail_reentry()
     load_quick_reentry_trades()
     load_akum2_trades()
+    load_ai_provider_health()
     sync_base_usd_from_binance()  # auto-fix base_usd dari Binance API saat startup
     try:
         import math as _math
