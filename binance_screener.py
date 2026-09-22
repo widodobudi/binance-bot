@@ -2956,11 +2956,14 @@ _auto_sell_armed_since: dict = {}
 # ATAU tp1_hold_minutes-nya diubah selagi timer jalan (lihat /set_tp_target, /set_tp_hold).
 _tp_hold_armed_since: dict = {}
 
-def _binance_trading_request(method: str, path: str, params: dict) -> dict:
-    """Helper HMAC-signed request ke Binance trading API menggunakan BINANCE_TRADING_KEY."""
+def _binance_trading_request(method: str, path: str, params: dict, api_key: str = None, api_secret: str = None) -> dict:
+    """Helper HMAC-signed request ke Binance trading API menggunakan BINANCE_TRADING_KEY.
+    api_key/api_secret: override opsional (22/09/2026, dipakai _binance_earn_request supaya
+    Earn bisa jalan di kredensial akun lain -- Master -- terlepas dari BINANCE_TRADING_KEY
+    yang sejak migrasi Sub Account dipakai utk trading)."""
     import hmac, hashlib, urllib.parse as _up
-    api_key    = os.environ.get("BINANCE_TRADING_KEY", "")
-    api_secret = os.environ.get("BINANCE_TRADING_SECRET", "")
+    api_key    = api_key or os.environ.get("BINANCE_TRADING_KEY", "")
+    api_secret = api_secret or os.environ.get("BINANCE_TRADING_SECRET", "")
     if not api_key or not api_secret:
         raise ValueError("BINANCE_TRADING_KEY/SECRET tidak di-set di env")
     ts = int(time.time() * 1000)
@@ -2975,6 +2978,27 @@ def _binance_trading_request(method: str, path: str, params: dict) -> dict:
     if resp.status_code != 200:
         raise RuntimeError(f"Binance API {resp.status_code}: {data}")
     return data
+
+
+_earn_master_key_warned = False  # flag agar warning "belum ada BINANCE_EARN_KEY" cuma sekali
+
+def _binance_earn_request(method: str, path: str, params: dict) -> dict:
+    """Sama seperti _binance_trading_request tapi khusus endpoint Simple Earn, pakai
+    BINANCE_EARN_KEY/SECRET (Master account) kalau di-set -- supaya Earn TETAP di Master
+    walau BINANCE_TRADING_KEY sudah pindah ke Sub Account (permintaan Mas Budi, 22/09/2026).
+    Fallback ke BINANCE_TRADING_KEY/SECRET (dengan warning sekali) kalau belum di-set, supaya
+    fitur Earn tidak mendadak mati total sebelum key Master-nya dibuat."""
+    global _earn_master_key_warned
+    key    = os.environ.get("BINANCE_EARN_KEY", "")
+    secret = os.environ.get("BINANCE_EARN_SECRET", "")
+    if not key or not secret:
+        if not _earn_master_key_warned:
+            _earn_master_key_warned = True
+            log("WARN [EARN] BINANCE_EARN_KEY/SECRET belum di-set -- Earn sementara masih pakai "
+                "BINANCE_TRADING_KEY (Sub Account), BUKAN Master. Set env var itu dari API key "
+                "Master (permission: Enable Spot & Margin Trading) supaya Earn pindah ke Master.")
+        return _binance_trading_request(method, path, params)
+    return _binance_trading_request(method, path, params, api_key=key, api_secret=secret)
 
 
 def binance_buy_market(symbol: str, usdt_amount: float) -> dict:
@@ -3679,7 +3703,7 @@ def get_earn_flexible_usdt_positions() -> list:
     """List posisi Simple Earn Flexible untuk asset USDT.
     Return list of {"productId": str, "totalAmount": float}. Return [] kalau gagal/kosong."""
     try:
-        data = _binance_trading_request("GET", "/sapi/v1/simple-earn/flexible/position", {"asset": "USDT"})
+        data = _binance_earn_request("GET", "/sapi/v1/simple-earn/flexible/position", {"asset": "USDT"})
         rows = data.get("rows", []) if isinstance(data, dict) else []
         out = []
         for r in rows:
@@ -3700,7 +3724,7 @@ def redeem_earn_flexible(product_id: str, amount: float = None, redeem_all: bool
             params["redeemAll"] = "true"
         else:
             params["amount"] = str(round(amount, 8))
-        data = _binance_trading_request("POST", "/sapi/v1/simple-earn/flexible/redeem", params)
+        data = _binance_earn_request("POST", "/sapi/v1/simple-earn/flexible/redeem", params)
         log(f"[EARN] Redeem flexible productId={product_id} amount={amount if not redeem_all else 'ALL'} -> {data}")
         return True
     except Exception as e:
@@ -4157,7 +4181,7 @@ def get_earn_flexible_product(asset: str):
         return hit[1]
     prod = None
     try:
-        data = _binance_trading_request("GET", "/sapi/v1/simple-earn/flexible/list", {"asset": asset, "size": 100})
+        data = _binance_earn_request("GET", "/sapi/v1/simple-earn/flexible/list", {"asset": asset, "size": 100})
         rows = data.get("rows", []) if isinstance(data, dict) else []
         best = None
         for r in rows:
@@ -4183,7 +4207,7 @@ def _earn_subscribe(product_id: str, amount: float) -> bool:
         if amt <= 0:
             return False
         try:
-            data = _binance_trading_request("POST", "/sapi/v1/simple-earn/flexible/subscribe",
+            data = _binance_earn_request("POST", "/sapi/v1/simple-earn/flexible/subscribe",
                                             {"productId": product_id, "amount": f"{amt:.{dec}f}", "sourceAccount": "SPOT"})
             log(f"[EARN] Subscribe flexible productId={product_id} amount={amt:.{dec}f} -> {data}")
             if isinstance(data, dict) and data.get("success", True):
