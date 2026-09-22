@@ -9954,6 +9954,127 @@ def run_thread_trendconfirm():
         time.sleep(TRENDCONFIRM_SCAN_INTERVAL)
 
 
+# ===== SWEEP SEKALI-PAKAI #2 (23/09/2026, permintaan Mas Budi) ======================
+# Sama metodologi dgn sweep TrenKonfirmasi-4h (lihat commit 13dd4dd) -- kali ini verifikasi
+# window brkX2-4h (25%, sudah ada backtest lama tapi beda metodologi), CrossEMA-4h (75%, pernah
+# dilonggarkan dari 50% tapi belum diverifikasi coverage), Hunting-4h (TIDAK punya window
+# sendiri, nebeng punya brkX2-4h krn scan-nya nested di thread1d_scan_4h). Jalan SEKALI di
+# startup, log via log() (baca lewat Railway MCP), HAPUS blok ini setelah hasil didapat.
+_MWSWEEP_RESULT_FILE = os.path.join(DATA_DIR, "multi_window_sweep_result.json")
+
+def _mwsweep_partial_df(hist_df, o, h, l, c, v, qv):
+    row = pd.DataFrame([{"open": o, "high": h, "low": l, "close": c, "vol": v, "qvol": qv}])
+    return pd.concat([hist_df[["open", "high", "low", "close", "vol", "qvol"]], row], ignore_index=True)
+
+def _mwsweep_gate_brkx2_4h(partial_raw_df):
+    df = compute_indicators_4h(partial_raw_df.copy())
+    return len(blockers_entry_4h(df)) == 0
+
+def _mwsweep_gate_crossema(partial_raw_df):
+    df = compute_indicators_4h(partial_raw_df.copy())
+    r = df.iloc[-1]
+    sd = r.get("st_dir_cx")
+    if pd.isna(sd) or sd != -1: return False
+    ef = r.get("ema20")
+    if pd.isna(ef) or r["close"] > ef * (1 + STRAT_CROSSEMA_EMA20_TOL_PCT / 100): return False
+    vm = r.get("vol_ma")
+    if pd.isna(vm) or vm <= 0 or r["vol"] < STRAT_CROSSEMA_VOLUME_MULT * vm: return False
+    sk = r.get("stoch_k")
+    if pd.isna(sk) or sk >= STRAT_CROSSEMA_STOCH_MAX: return False
+    price_now = float(r["close"])  # proksi: live price = close candle parsial di checkpoint ini
+    if price_now <= 0 or price_now <= float(ef) * (1 - STRAT_CROSSEMA_CROSS_TOL_PCT / 100): return False
+    open_now = float(r["open"])    # proksi: open candle 4h penuh (bukan 15m spt live, data 15m historis tak tersedia)
+    if price_now <= open_now: return False
+    return True
+
+def _mwsweep_gate_hunting(partial_raw_df, sym):
+    hit = check_hunting_strategy(partial_raw_df, {"symbol": sym}, {})
+    return hit is not None
+
+def run_multi_window_sweep_once():
+    if os.path.exists(_MWSWEEP_RESULT_FILE):
+        log("[MW-SWEEP] Hasil sudah ada, skip (hapus file kalau mau re-run).")
+        return
+    time.sleep(45)
+    log("[MW-SWEEP] Mulai sweep window brkX2-4h / CrossEMA-4h / Hunting-4h (satu kali, riset)...")
+    TEST_TAIL = 200
+    ticker = get_ticker_24h()
+    if not ticker:
+        log("WARN [MW-SWEEP] ticker kosong, batal."); return
+    stable = {"USDCUSDT","FDUSDUSDT","TUSDUSDT","BUSDUSDT","DAIUSDT","USDPUSDT","EURUSDT"}
+    rows = [t for t in ticker if t["symbol"].endswith("USDT") and t["symbol"] not in stable
+            and "UP" not in t["symbol"] and "DOWN" not in t["symbol"]]
+    rows.sort(key=lambda t: float(t.get("quoteVolume", 0)), reverse=True)
+    symbols = [t["symbol"] for t in rows[:30]]
+    log(f"[MW-SWEEP] Universe 30 pair: {symbols}")
+
+    strategies = {
+        "brkX2_4h":  {"gate": lambda pdf, sym: _mwsweep_gate_brkx2_4h(pdf), "earliest": {1:0,2:0,3:0,4:0}, "total": 0},
+        "crossema":  {"gate": lambda pdf, sym: _mwsweep_gate_crossema(pdf), "earliest": {1:0,2:0,3:0,4:0}, "total": 0},
+        "hunting":   {"gate": lambda pdf, sym: _mwsweep_gate_hunting(pdf, sym), "earliest": {1:0,2:0,3:0,4:0}, "total": 0},
+    }
+
+    for si, sym in enumerate(symbols):
+        try:
+            df4 = get_ohlcv_4h(sym, limit=1000)
+            if df4 is None or len(df4) < 300: continue
+            df1 = get_ohlcv(sym, interval="1h", limit=1000)
+            if df1 is None or len(df1) < TEST_TAIL * 4: continue
+            n4 = len(df4)
+            df1_ot = df1["ot"].values
+            counted = {k: 0 for k in strategies}
+            for i in range(max(120, n4 - TEST_TAIL - 1), n4 - 1):
+                candle_open_ms = int(df4["ts"].iloc[i])
+                candle_close_ms = candle_open_ms + 4 * 3600 * 1000
+                mask = (df1_ot >= candle_open_ms) & (df1_ot < candle_close_ms)
+                sub1 = df1.loc[mask].sort_values("ot")
+                if len(sub1) != 4: continue
+                hist_n = min(i, 260)
+                hist = df4.iloc[i - hist_n:i]
+                o_full = float(df4["open"].iloc[i]); h_full = float(df4["high"].iloc[i])
+                l_full = float(df4["low"].iloc[i]); c_full = float(df4["close"].iloc[i])
+                v_full = float(df4["vol"].iloc[i]); qv_full = float(df4["qvol"].iloc[i])
+                pdf_full = _mwsweep_partial_df(hist, o_full, h_full, l_full, c_full, v_full, qv_full)
+
+                for skey, sinfo in strategies.items():
+                    if not sinfo["gate"](pdf_full, sym): continue
+                    sinfo["total"] += 1; counted[skey] += 1
+                    first_k = None
+                    for k in (1, 2, 3, 4):
+                        if k < 4:
+                            sk_ = sub1.iloc[:k]
+                            o = float(sk_["open"].iloc[0]); hh = float(sk_["high"].max())
+                            ll = float(sk_["low"].min()); cc = float(sk_["close"].iloc[-1])
+                            vv = float(sk_["vol"].sum()); qvv = vv * cc
+                        else:
+                            o, hh, ll, cc, vv, qvv = o_full, h_full, l_full, c_full, v_full, qv_full
+                        pdf_k = _mwsweep_partial_df(hist, o, hh, ll, cc, vv, qvv)
+                        if sinfo["gate"](pdf_k, sym):
+                            first_k = k; break
+                    if first_k is not None:
+                        sinfo["earliest"][first_k] += 1
+            log(f"[MW-SWEEP] [{si+1}/{len(symbols)}] {sym}: brkX2_4h={counted['brkX2_4h']} crossema={counted['crossema']} hunting={counted['hunting']} true-signal")
+        except Exception as e:
+            log(f"WARN [MW-SWEEP] {sym}: {e}")
+
+    out = {}
+    for skey, sinfo in strategies.items():
+        total = sinfo["total"]; eh = sinfo["earliest"]
+        log(f"[MW-SWEEP] === {skey} === total true-signal candle: {total}")
+        cum = 0
+        for k, label in ((1,"25%"),(2,"50%"),(3,"75%"),(4,"100%")):
+            cum += eh[k]
+            cov = (cum/total*100) if total else 0
+            log(f"[MW-SWEEP]   {skey} elapsed<={label}: baru lolos={eh[k]} | KUMULATIF={cum}/{total} ({cov:.1f}%)")
+        out[skey] = {"total_true_signals": total, "earliest_k_histogram": eh}
+    try:
+        with open(_MWSWEEP_RESULT_FILE, "w") as f:
+            json.dump({"universe": symbols, "results": out}, f, indent=2)
+        log(f"[MW-SWEEP] Hasil disimpan ke {_MWSWEEP_RESULT_FILE}")
+    except Exception as e:
+        log(f"WARN [MW-SWEEP] gagal simpan hasil: {e}")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # STRATEGI #6: Momentum Filter 4h (observasi, tidak buka deal)
 # Kondisi: price_live >= EMA20 AND price_live >= EMA50 AND ST dir == +1
@@ -21497,6 +21618,7 @@ if __name__ == '__main__':
     n_threads += 1
 
     for t in threads: t.start()
+    threading.Thread(target=run_multi_window_sweep_once, daemon=True, name="T-MWSweep").start()
     # Delay kecil agar banner startup selesai sebelum thread mulai print
     time.sleep(0.5)
     t_web = threading.Thread(target=run_web_dashboard, daemon=True, name="T-Web")
