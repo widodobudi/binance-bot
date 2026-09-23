@@ -211,6 +211,17 @@ HARD_STOP_CAP_PCT_BY_STRATEGY = {'trend_confirm_4h': 10.8}
 HOLD_NO_SELL_WARN_RATIO = 0.85    # checkbox "hold, jangan jual" muncul di 85% dari ambang hard-stop
                                    # tier deal itu (bukan pas 100%) -- kasih ruang waktu react sebelum
                                    # hard-stop beneran kesulut (disepakati 27/08/2026)
+# REMARK 24/09/2026 (backtest awal cancel-vs-close hold_no_sell, permintaan Mas Budi setelah
+# insiden WIF/USDT): dicek 6 kejadian hard-stop hold_no_sell riil (TAO 28/08, XTZ/ESP/STG 19/09,
+# STRK 20/09, ZAMA 21/09) dgn jendela waktu TETAP (+1/+3/+7/+14/+30 hari dari trigger, bukan
+# "sampai sekarang" yg bias ke kejadian lama). Hasil: 6 dari 6 (100%) sempat turun LEBIH DALAM
+# LAGI dari harga hard-stop (rata2 tambahan -11.5%, STG -24.75% dalam 4 hari) sebelum ada tanda
+# pemulihan. Cuma TAO yg punya jendela panjang (26 hari): sempat -9.9% lebih dalam, akhirnya
+# +24% untung. 5 lainnya (STG/XTZ/ESP/STRK/ZAMA) masih 1-4 hari saat dicek, BELUM CUKUP DATA
+# +7/+14/+30 hari utk simpulkan cancel (jual langsung) vs close/hold_no_sell (tahan) mana lebih
+# baik -- JANGAN ambil keputusan kebijakan dari temuan ini dulu. Cek ulang lewat routine sekali-
+# jalan ~22/10/2026 (lihat scheduled routine "Hold_no_sell 30-day backtest revisit") setelah
+# kelima kejadian itu genap 30 hari.
 MAX_HOLD_DAYS     = 5
 # detik per candle sesuai timeframe (utk batas hold yg benar di TF apa pun).
 # 1d=86400, 12h=43200, 6h=21600, 4h=14400. Batas hold = MAX_HOLD_DAYS candle.
