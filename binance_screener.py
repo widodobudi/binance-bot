@@ -211,17 +211,34 @@ HARD_STOP_CAP_PCT_BY_STRATEGY = {'trend_confirm_4h': 10.8}
 HOLD_NO_SELL_WARN_RATIO = 0.85    # checkbox "hold, jangan jual" muncul di 85% dari ambang hard-stop
                                    # tier deal itu (bukan pas 100%) -- kasih ruang waktu react sebelum
                                    # hard-stop beneran kesulut (disepakati 27/08/2026)
-# REMARK 24/09/2026 (backtest awal cancel-vs-close hold_no_sell, permintaan Mas Budi setelah
-# insiden WIF/USDT): dicek 6 kejadian hard-stop hold_no_sell riil (TAO 28/08, XTZ/ESP/STG 19/09,
-# STRK 20/09, ZAMA 21/09) dgn jendela waktu TETAP (+1/+3/+7/+14/+30 hari dari trigger, bukan
-# "sampai sekarang" yg bias ke kejadian lama). Hasil: 6 dari 6 (100%) sempat turun LEBIH DALAM
-# LAGI dari harga hard-stop (rata2 tambahan -11.5%, STG -24.75% dalam 4 hari) sebelum ada tanda
-# pemulihan. Cuma TAO yg punya jendela panjang (26 hari): sempat -9.9% lebih dalam, akhirnya
-# +24% untung. 5 lainnya (STG/XTZ/ESP/STRK/ZAMA) masih 1-4 hari saat dicek, BELUM CUKUP DATA
-# +7/+14/+30 hari utk simpulkan cancel (jual langsung) vs close/hold_no_sell (tahan) mana lebih
-# baik -- JANGAN ambil keputusan kebijakan dari temuan ini dulu. Cek ulang lewat routine sekali-
-# jalan ~22/10/2026 (lihat scheduled routine "Hold_no_sell 30-day backtest revisit") setelah
-# kelima kejadian itu genap 30 hari.
+# REMARK 24/09/2026 v2 (backtest cancel-vs-close hold_no_sell, permintaan Mas Budi setelah
+# insiden WIF/USDT -- REVISI dari catatan v1 yg cuma pakai 6 sampel dari trades_forwardtest.csv,
+# yg TERNYATA bolong -- lihat catatan gap CSV sendiri "hold_no_sell TIDAK dicatat 05/09-19/09".
+# Sumber lengkap: open-arm-close.txt (log mentah). Hasil scan ulang: "hard stop volatilitas"
+# (varian ATR-tiered, BEDA dari "hard stop 2.00% flat" punya qscalp_3m) terjadi 15x, bukan 6x:
+# trend_confirm_4h=6 (BONK/SPCXB/IOTA/LSK/STG/WIF), reversal=3 (TLM x2/BICO), brkX2_crossema=3
+# (SCR/AVA/AXL), brkX2_4h=2 (TAO/TRUMP), brkX2=1 (HBAR). hunting_4h & akum_entry_a/b = 0.
+#
+# Backtest jendela TETAP (+1/+3/+7/+14/+30 hari dari trigger): hasilnya JAUH lebih beragam &
+# ekstrem drpd temuan 6-sampel sebelumnya -- BUKAN lagi "100% turun lebih dalam": SPCXB malah
+# TIDAK PERNAH turun di bawah harga trigger (+8.17% di +7d, min +0.03%). Rentang hasil sangat
+# lebar: LSK -59.53% (terus ambruk) sampai AVA +91.29% dlm 1 hari. trend_confirm_4h (paling
+# sering kena) hasilnya paling tidak konsisten (BONK/LSK/STG buruk, SPCXB/IOTA bagus).
+#
+# Cek trend Supertrend saat ENTRY (length10/mult3, TF sesuai strategi) -- cuma berhasil dicocokkan
+# 7 dari 15 (OPEN log 8 lainnya tidak ketemu/di luar retensi open-arm-close.txt): TAO/SCR/BONK/
+# STG/WIF = UPTREND saat entry, SPCXB/LSK = DOWNTREND saat entry. TAPI hasil akhirnya TIDAK
+# konsisten dgn trend saat entry: LSK (downtrend saat entry) jadi TERBURUK (-59%), SPCXB
+# (downtrend saat entry juga) jadi salah satu TERBAIK (+8%). Jadi hipotesis "wajibkan entry
+# cuma saat Uptrend bakal cegah hard-stop ini" TIDAK terbukti dari data -- baik uptrend maupun
+# downtrend saat entry sama-sama menghasilkan outcome baik & buruk.
+#
+# KESIMPULAN: baik kebijakan cancel (jual langsung saat hard-stop) maupun close/hold_no_sell
+# (tahan) TIDAK ada bukti kuat salah satu lebih unggul dari data ini -- variasi hasilnya
+# ekor-gemuk (fat-tailed) di dua arah, sampel per-strategi masih kecil (1-6). JANGAN ambil
+# keputusan kebijakan permanen dari temuan ini. Cek ulang lewat routine sekali-jalan ~22/10/2026
+# (scheduled routine "Hold_no_sell 30-day backtest revisit") setelah kejadian yg masih baru
+# (WIF/STG/LSK/AVA/AXL/IOTA/SPCXB) genap/mendekati 30 hari.
 MAX_HOLD_DAYS     = 5
 # detik per candle sesuai timeframe (utk batas hold yg benar di TF apa pun).
 # 1d=86400, 12h=43200, 6h=21600, 4h=14400. Batas hold = MAX_HOLD_DAYS candle.
