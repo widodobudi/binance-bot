@@ -20374,6 +20374,10 @@ import urllib.request as _urllib_req
 import urllib.error as _urllib_err
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# 23/09/2026 (permintaan Mas Budi): akun Anthropic KEDUA, opsional, dipakai HANYA sbg
+# fallback saat akun utama kehabisan kredit (lihat _anthropic_ai_call) -- bukan round-robin/
+# load-balancing antar akun. Kosongkan (default) = perilaku lama, tidak ada perubahan.
+ANTHROPIC_API_KEY_2 = os.environ.get("ANTHROPIC_API_KEY_2", "")
 AI_DECISION_MODEL  = "claude-sonnet-5"   # naik dari Haiku 4.5 (29/08/2026, maksimalkan kredit Anthropic yg jarang kepakai)
 # 04/09/2026: premis 29/08 di atas ("kredit jarang kepakai") sudah nggak berlaku lagi --
 # kredit Anthropic (dipakai lintas bot + Claude Code) terbukti terpakai deras, Sep 3 saja
@@ -20493,53 +20497,52 @@ _ai_open_skip_cooldown = {}   # {(symbol, strategy): until_timestamp}
 # selalu OPEN tanpa evaluasi AI beneran) + spam notif Telegram ON/OFF bolak-balik (128+ notif).
 _ADAPTIVE_THINKING_MODELS = {"claude-sonnet-5"}
 
-def _anthropic_ai_call(prompt: str, model: str = None) -> str:
-    """Panggil Anthropic sebagai provider utama.
-    model: override model per-panggilan (04/09/2026, dipakai babak 1 -> Haiku 4.5
-    utk hemat biaya) -- default None berarti pakai AI_DECISION_MODEL (Sonnet 5)."""
-    global _ai_quota_notif_sent
-    if not ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY belum di-set")
+def _anthropic_http_call(prompt: str, model: str, api_key: str) -> str:
+    """Satu panggilan HTTP mentah ke Anthropic pakai 1 API key tertentu (23/09/2026,
+    dipecah dari _anthropic_ai_call supaya bisa dipanggil ulang dgn key BEDA -- lihat
+    _anthropic_ai_call utk logika retry akun cadangan). Pesan error format-nya
+    dipertahankan sama persis spt sebelum dipecah, supaya _classify_ai_error() dan
+    pengecekan "credit"/"billing" di _anthropic_ai_call tetap jalan spt biasa."""
+    import json as _json
+    effective_model = model or AI_DECISION_MODEL
+    body = {
+        "model": effective_model,
+        "max_tokens": 1024,  # dinaikkan dari 200 (30/08/2026) -- Sonnet 5 kadang isi block "thinking"
+        # dulu sebelum jawaban teks; budget 200 abis semua kepakai thinking, jawaban teksnya sendiri
+        # nggak pernah kebentuk (response cuma berisi block "thinking", 0 block "text").
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if effective_model in _ADAPTIVE_THINKING_MODELS:
+        # baru (01/09/2026) -- ROOT CAUSE asli: Sonnet 5 defaultnya ADAPTIVE THINKING SELALU
+        # AKTIF walau parameter "thinking" nggak pernah dikirim sama sekali, jadi kadang proses
+        # "mikir"-nya sendiri abisin seluruh max_tokens sebelum sempat nulis jawaban teks (masih
+        # kejadian lagi walau max_tokens udah dinaikkan ke 1024). Fix resmi yg direkomendasikan
+        # Anthropic: bukan matiin thinking total (bisa bikin model bocorin tag internal ke teks
+        # visible), tapi batasi KEDALAMAN-nya lewat effort="low" -- thinking tetap jalan tapi jauh
+        # lebih ringkas, cocok buat tugas sederhana kayak keputusan open/close ini. HANYA valid
+        # utk model yg dukung adaptive thinking (lihat _ADAPTIVE_THINKING_MODELS di atas) --
+        # JANGAN dikirim ke model lain (mis. Haiku 4.5), ditolak 400 Bad Request.
+        body["output_config"] = {"effort": "low"}
+    payload = _json.dumps(body).encode()
+    req = _urllib_req.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST"
+    )
     try:
-        import json as _json
-        effective_model = model or AI_DECISION_MODEL
-        body = {
-            "model": effective_model,
-            "max_tokens": 1024,  # dinaikkan dari 200 (30/08/2026) -- Sonnet 5 kadang isi block "thinking"
-            # dulu sebelum jawaban teks; budget 200 abis semua kepakai thinking, jawaban teksnya sendiri
-            # nggak pernah kebentuk (response cuma berisi block "thinking", 0 block "text").
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        if effective_model in _ADAPTIVE_THINKING_MODELS:
-            # baru (01/09/2026) -- ROOT CAUSE asli: Sonnet 5 defaultnya ADAPTIVE THINKING SELALU
-            # AKTIF walau parameter "thinking" nggak pernah dikirim sama sekali, jadi kadang proses
-            # "mikir"-nya sendiri abisin seluruh max_tokens sebelum sempat nulis jawaban teks (masih
-            # kejadian lagi walau max_tokens udah dinaikkan ke 1024). Fix resmi yg direkomendasikan
-            # Anthropic: bukan matiin thinking total (bisa bikin model bocorin tag internal ke teks
-            # visible), tapi batasi KEDALAMAN-nya lewat effort="low" -- thinking tetap jalan tapi jauh
-            # lebih ringkas, cocok buat tugas sederhana kayak keputusan open/close ini. HANYA valid
-            # utk model yg dukung adaptive thinking (lihat _ADAPTIVE_THINKING_MODELS di atas) --
-            # JANGAN dikirim ke model lain (mis. Haiku 4.5), ditolak 400 Bad Request.
-            body["output_config"] = {"effort": "low"}
-        payload = _json.dumps(body).encode()
-        req = _urllib_req.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-            },
-            method="POST"
-        )
         with _urllib_req.urlopen(req, timeout=AI_DECISION_TIMEOUT) as resp:
-            body = _json.loads(resp.read())
+            resp_body = _json.loads(resp.read())
             # content bisa berisi lebih dari satu block (mis. block "thinking" muncul
             # sebelum block "text" tergantung request-nya) -- jangan asumsikan block
             # pertama selalu berisi "text". Ini penyebab bug lama: KeyError('text')
             # intermiten yang salah dikira "Anthropic API down" (bolak-balik notif ON/OFF)
             # padahal response-nya sebenarnya valid, cuma block teksnya bukan di index 0.
-            blocks = body.get("content", []) or []
+            blocks = resp_body.get("content", []) or []
             text = ""
             for block in blocks:
                 if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
@@ -20548,17 +20551,6 @@ def _anthropic_ai_call(prompt: str, model: str = None) -> str:
             if not text:
                 block_types = [b.get("type", "?") for b in blocks if isinstance(b, dict)]
                 raise RuntimeError(f"Response tidak berisi block teks (block types: {block_types or 'kosong'})")
-            # Reset flag kalau API kembali normal -- taruh SETELAH berhasil ambil teks,
-            # supaya nggak kirim "kembali ON" untuk call yang ternyata masih gagal.
-            if _ai_quota_notif_sent:
-                _ai_quota_notif_sent = False
-                _msg_ok = "✅ AI Decision kembali ON\nAnthropic API sudah normal kembali."
-                send_telegram(_msg_ok, parse_mode=None)
-                threading.Thread(
-                    target=send_email_open_long,
-                    args=("✅ AI Decision kembali ON", _msg_ok),
-                    daemon=True
-                ).start()
             return text
     except _urllib_err.HTTPError as e:
         # 06/09/2026 (permintaan Mas Budi): SEBELUMNYA str(HTTPError) cuma kasih status
@@ -20576,8 +20568,43 @@ def _anthropic_ai_call(prompt: str, model: str = None) -> str:
         except Exception:
             pass
         raise RuntimeError(f"HTTP {e.code}: {err_msg or err_body or e.reason}")
-    except Exception:
-        raise
+
+
+def _anthropic_ai_call(prompt: str, model: str = None) -> str:
+    """Panggil Anthropic sebagai provider utama.
+    model: override model per-panggilan (04/09/2026, dipakai babak 1 -> Haiku 4.5
+    utk hemat biaya) -- default None berarti pakai AI_DECISION_MODEL (Sonnet 5).
+    23/09/2026 (permintaan Mas Budi, 2 akun Anthropic -- widodobudi@ & vassistbywbudi@):
+    kalau akun utama (ANTHROPIC_API_KEY) gagal KARENA KREDIT HABIS SPESIFIK (bukan 401/404/
+    model salah/dll -- itu tetap langsung dilempar ke atas spt biasa, jangan disamarkan jadi
+    'coba akun lain'), dan ANTHROPIC_API_KEY_2 (opsional) di-set, coba SEKALI lagi pakai akun
+    cadangan sebelum benar2 dianggap gagal & lanjut ke Gemini/rule-based. Kalau
+    ANTHROPIC_API_KEY_2 kosong, perilaku PERSIS SAMA seperti sebelum ini ada."""
+    global _ai_quota_notif_sent
+    if not ANTHROPIC_API_KEY:
+        raise RuntimeError("ANTHROPIC_API_KEY belum di-set")
+    try:
+        text = _anthropic_http_call(prompt, model, ANTHROPIC_API_KEY)
+    except RuntimeError as e:
+        _msg = str(e).lower()
+        _is_credit_error = "credit" in _msg or "billing" in _msg or "insufficient" in _msg
+        if _is_credit_error and ANTHROPIC_API_KEY_2:
+            log("WARN [AI] Anthropic akun utama kehabisan kredit -- coba akun cadangan (ANTHROPIC_API_KEY_2)")
+            text = _anthropic_http_call(prompt, model, ANTHROPIC_API_KEY_2)
+        else:
+            raise
+    # Reset flag kalau API kembali normal -- taruh SETELAH berhasil ambil teks,
+    # supaya nggak kirim "kembali ON" untuk call yang ternyata masih gagal.
+    if _ai_quota_notif_sent:
+        _ai_quota_notif_sent = False
+        _msg_ok = "✅ AI Decision kembali ON\nAnthropic API sudah normal kembali."
+        send_telegram(_msg_ok, parse_mode=None)
+        threading.Thread(
+            target=send_email_open_long,
+            args=("✅ AI Decision kembali ON", _msg_ok),
+            daemon=True
+        ).start()
+    return text
 
 
 def _gemini_ai_call(prompt: str) -> str:
@@ -20916,8 +20943,11 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     )
     # 04/09/2026: babak 1 pakai Haiku 4.5 (bukan AI_DECISION_MODEL/Sonnet 5 default) --
     # ini call terbanyak (per-kandidat, tiap siklus scan), jadi target pertama diturunkan
-    # buat hemat biaya. Babak 2 (batch-rank) & semua ai_decision_* aktif-deal lain TETAP
-    # Sonnet 5 lewat default _ai_call(prompt) tanpa param model.
+    # buat hemat biaya. 23/09/2026 UPDATE: babak 2 (batch-rank) & semua ai_decision_*
+    # aktif-deal lain (armed/close/add_fund/near_timeout) JUGA sudah diturunkan ke Haiku 4.5
+    # (lihat masing2 pemanggilannya) -- AI_DECISION_MODEL (Sonnet 5) di atas TIDAK dipakai
+    # lagi di jalur manapun saat ini, dibiarkan ada sbg default/fallback kalau suatu saat ada
+    # kode baru yg panggil _ai_call() TANPA param model eksplisit.
     result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
     if not result:
         # AI tidak tersedia sama sekali -- fail-open ke OPEN, tapi tetap dicatat (04/09/2026)
