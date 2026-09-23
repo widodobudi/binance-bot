@@ -249,6 +249,12 @@ MAX_DEALS_REVERSAL      = 2      # slot reversal (bot 16921019) — set Max acti
 # terbukti) berarti beberapa deal saja sudah bisa menghabiskan modal (~$192 saat ini).
 GLOBAL_MAX_ACTIVE_DEALS = 4        # jumlah deal aktif gabungan semua strategi
 GLOBAL_MAX_EXPOSURE_USD = 150.0    # total $ eksposur riil semua deal aktif (dari modal ~$192.52)
+# 23/09/2026 (permintaan Mas Budi, insiden GRT/USDT -- AI approve OPEN tapi ditolak diam2 oleh
+# batas eksposur gabungan, tidak ada notif sama sekali sebelum ini): cooldown notif Telegram
+# supaya tidak senyap lagi, tapi tidak spam kalau beberapa kandidat kena batas yg sama di
+# siklus scan yg sama/berdekatan -- 1 notif per cooldown window, bukan 1 per kandidat.
+GLOBAL_EXPOSURE_NOTIF_COOLDOWN_SEC = 20 * 60
+_global_exposure_notif_until = 0.0
 
 # ---- STRATEGI 3: brkX2-4h (intrabar 4h, menit ke 5-60) ----
 # Hasil backtest: MACD+SUPERTREND+ATR_MIN+VOLUME + HTF 3D PRICE_EMA50+MACD+RSI50
@@ -4811,6 +4817,19 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=_cfg_base)
     if not _glob_ok:
         log(f"[SIZING] {symbol} ({strategy}) skip open -- {_glob_reason}")
+        # 23/09/2026: kandidat ini sudah lolos AI (open_deal_with_sizing dipanggil SETELAH
+        # AI approve) tapi ditolak di tahap terakhir oleh batas eksposur gabungan -- kasih
+        # notif (dgn cooldown, lihat GLOBAL_EXPOSURE_NOTIF_COOLDOWN_SEC) supaya tidak senyap.
+        global _global_exposure_notif_until
+        if time.time() >= _global_exposure_notif_until:
+            _global_exposure_notif_until = time.time() + GLOBAL_EXPOSURE_NOTIF_COOLDOWN_SEC
+            send_telegram(
+                f"⚠️ {to_display_pair(symbol)} ({strategy}) disetujui AI tapi TIDAK dibuka\n"
+                f"Alasan: {_glob_reason}\n"
+                f"(notif ini dibatasi 1x per {GLOBAL_EXPOSURE_NOTIF_COOLDOWN_SEC // 60} menit, "
+                f"kandidat lain yg kena batas sama di jendela ini cuma dicatat log)",
+                parse_mode=None
+            )
         return False, _cfg_base, 0
     # Guard: bStocks hanya boleh open saat NYSE buka
     if is_bstock_symbol(symbol) and not is_nyse_open():
