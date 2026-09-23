@@ -973,6 +973,16 @@ STRATEGY_CONFIG_DEFAULTS = {
     "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3, "close_sell_pct": 100},
     "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "max_deals": 2, "close_sell_pct": 100},
 }
+# REMARK 23/09/2026 (bahan review -- opsi ini DITOLAK, dicatat supaya tidak diusulkan ulang tanpa
+# cek data dulu): insiden SYRUP/PENDLE 23/09/2026 (Anthropic + Gemini dua-duanya kehabisan kredit)
+# memicu audit profit trading vs biaya AI bulanan. Sempat diusulkan: MATIKAN ai_call_open utk
+# brkX2_crossema & akum_entry_a dgn alasan base_usd config keduanya cuma $8 (dianggap "kecil,
+# biaya AI > margin"). ALASAN INI SALAH -- dicek ke data trade riil (trades_forwardtest.csv):
+# base_usd $8 di STRATEGY_CONFIG_DEFAULTS itu cuma FLOOR/minimum, bukan ukuran posisi sungguhan
+# (ada scaling score_to_target_usd()). Posisi riil brkX2_crossema rata2 $25.64 (n=17, setara brkX2
+# yg base_usd config-nya $60), akum_entry_a rata2 $100.14 (n=2, SALAH SATU YG TERBESAR, bukan
+# terkecil). Jadi TIDAK diterapkan -- kalau mau pangkas biaya AI per-strategi lagi ke depannya,
+# cek base_usd RIIL dari CSV dulu, jangan dari angka default di config ini.
 # qscalp_3m: ai_call_open=False PERMANEN secara desain (bukan cuma default) -- strategi ini
 # full rule-based TANPA AI sama sekali (disepakati Mas Budi 12/09/2026, alasan: pump 3m
 # selesai dalam hitungan menit, latency AI bisa bikin kelewat entry/exit). Toggle
@@ -20376,6 +20386,15 @@ AI_DECISION_MODEL  = "claude-sonnet-5"   # naik dari Haiku 4.5 (29/08/2026, maks
 # (ai_decision_batch_rank) dan semua ai_decision_* aktif-deal (armed/add_fund/
 # near_timeout/close) TETAP Sonnet 5 -- volume jauh lebih kecil, keputusannya lebih
 # konsekuensial (langsung pengaruhi deal aktif), jadi belum diturunkan.
+# 23/09/2026 (permintaan Mas Budi, audit profit trading vs biaya AI setelah insiden SYRUP/PENDLE):
+# asumsi "volume jauh lebih kecil" di atas SUDAH TIDAK BENAR -- diukur ulang dari log Railway riil
+# 21/09/2026 (hari AI masih sehat, sebelum kredit habis): BATCH rank 437 panggilan/hari, jauh
+# lebih banyak dari CLOSE+ARMED+ADD-FUND+NEAR-TIMEOUT digabung (104/hari). Babak-2 (batch-rank)
+# jadi kontributor volume Sonnet 5 TERBESAR, bukan yg terkecil seperti diasumsikan 04/09. Karena
+# itu batch_rank/armed/add_fund/near_timeout/close SEMUA diturunkan ke Haiku 4.5 juga (lihat
+# masing-masing pemanggilan _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1) di fungsi terkait) --
+# proyeksi biaya AI turun dari ~$75/bulan ke ~$51/bulan dari langkah ini saja (estimasi, belum
+# diverifikasi dari billing riil -- ukur ulang setelah top-up berikutnya).
 AI_DECISION_MODEL_BABAK1 = "claude-haiku-4-5-20251001"
 GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_AI_MODEL    = os.environ.get("GEMINI_AI_MODEL", "gemini-flash-latest")
@@ -21009,7 +21028,7 @@ def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: i
         f"Baris pertama HARUS diawali 'PILIH:'. Kalau tidak ada yang layak sama sekali, "
         f"tulis 'PILIH: TIDAK ADA'."
     )
-    result = _ai_call(prompt)
+    result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
     if not result:
         log(f"[AI] BATCH rank {strategy_label}: AI tidak tersedia, fallback ke urutan ranking asli ({len(fallback)}/{len(candidates)})")
         log_ai_decision(
@@ -21110,7 +21129,7 @@ def ai_decision_armed(symbol: str, strategy: str, d: dict, price: float, peak: f
         f"Warning: risiko yang perlu diwaspadai (atau 'Tidak ada')\n\n"
         f"Baris pertama HARUS hanya kata ARM atau HOLD."
     )
-    result = _ai_call(prompt)
+    result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
     if not result:
         return True
     lines = result.strip().split("\n")
@@ -21174,7 +21193,7 @@ def ai_decision_add_fund(symbol: str, strategy: str, d: dict, add_usd: float, cu
         f"Alasan: alasan singkat\n\n"
         f"Baris pertama HARUS hanya kata ADD atau TUNDA."
     )
-    result = _ai_call(prompt)
+    result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
     if not result:
         return True
     lines = result.strip().split("\n")
@@ -21301,7 +21320,7 @@ def ai_decision_near_timeout(symbol: str, strategy: str, d: dict, price: float, 
         f"Alasan: penjelasan singkat keputusan berdasarkan semua indikator\n\n"
         f"Baris pertama HARUS hanya kata CLOSE atau EXTEND."
     )
-    result = _ai_call(prompt)
+    result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
     if not result:
         return False
     lines = result.strip().split("\n")
@@ -21354,7 +21373,7 @@ def ai_decision_close(symbol: str, strategy: str, d: dict, price: float, peak: f
         f"Apakah CLOSE sekarang atau HOLD (tahan, skip close ini)?\n"
         f"Jawab hanya: CLOSE atau HOLD"
     )
-    result = _ai_call(prompt)
+    result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
     if not result:
         return True  # fail-open: default close
     decision = "CLOSE" in result
