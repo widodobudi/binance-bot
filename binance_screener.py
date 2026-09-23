@@ -251,10 +251,13 @@ GLOBAL_MAX_ACTIVE_DEALS = 4        # jumlah deal aktif gabungan semua strategi
 GLOBAL_MAX_EXPOSURE_USD = 150.0    # total $ eksposur riil semua deal aktif (dari modal ~$192.52)
 # 23/09/2026 (permintaan Mas Budi, insiden GRT/USDT -- AI approve OPEN tapi ditolak diam2 oleh
 # batas eksposur gabungan, tidak ada notif sama sekali sebelum ini): cooldown notif Telegram
-# supaya tidak senyap lagi, tapi tidak spam kalau beberapa kandidat kena batas yg sama di
-# siklus scan yg sama/berdekatan -- 1 notif per cooldown window, bukan 1 per kandidat.
+# PER (symbol, strategy) -- bukan global -- supaya 1 simbol yg baru kena notif tidak menahan
+# notif simbol LAIN yg kena batas sama di siklus/batch yg sama (mis. GRT ditolak tepat setelah
+# NIL/SUPER/ZRO berhasil dibuka -- urutannya sudah otomatis benar krn loop open sinkron, tapi
+# cooldown GLOBAL bisa tanpa sengaja menahan notif GRT kalau simbol lain baru saja trigger
+# notif ini). Pola sama persis dgn cooldown armed/close/add-fund yg sudah ada (per simbol).
 GLOBAL_EXPOSURE_NOTIF_COOLDOWN_SEC = 20 * 60
-_global_exposure_notif_until = 0.0
+_global_exposure_notif_until = {}   # {(symbol, strategy): until_timestamp}
 
 # ---- STRATEGI 3: brkX2-4h (intrabar 4h, menit ke 5-60) ----
 # Hasil backtest: MACD+SUPERTREND+ATR_MIN+VOLUME + HTF 3D PRICE_EMA50+MACD+RSI50
@@ -4819,15 +4822,19 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
         log(f"[SIZING] {symbol} ({strategy}) skip open -- {_glob_reason}")
         # 23/09/2026: kandidat ini sudah lolos AI (open_deal_with_sizing dipanggil SETELAH
         # AI approve) tapi ditolak di tahap terakhir oleh batas eksposur gabungan -- kasih
-        # notif (dgn cooldown, lihat GLOBAL_EXPOSURE_NOTIF_COOLDOWN_SEC) supaya tidak senyap.
-        global _global_exposure_notif_until
-        if time.time() >= _global_exposure_notif_until:
-            _global_exposure_notif_until = time.time() + GLOBAL_EXPOSURE_NOTIF_COOLDOWN_SEC
+        # notif (cooldown PER simbol+strategi, bukan global -- lihat komentar di deklarasi
+        # _global_exposure_notif_until) supaya tidak senyap, dan urutan notif di Telegram
+        # otomatis benar (tepat setelah notif OPEN LONG kandidat lain di batch yg sama) krn
+        # loop yg buka deal sinkron/berurutan.
+        _exp_key = (symbol, strategy)
+        _exp_until = _global_exposure_notif_until.get(_exp_key, 0)
+        if time.time() >= _exp_until:
+            _global_exposure_notif_until[_exp_key] = time.time() + GLOBAL_EXPOSURE_NOTIF_COOLDOWN_SEC
             send_telegram(
                 f"⚠️ {to_display_pair(symbol)} ({strategy}) disetujui AI tapi TIDAK dibuka\n"
                 f"Alasan: {_glob_reason}\n"
-                f"(notif ini dibatasi 1x per {GLOBAL_EXPOSURE_NOTIF_COOLDOWN_SEC // 60} menit, "
-                f"kandidat lain yg kena batas sama di jendela ini cuma dicatat log)",
+                f"(notif {to_display_pair(symbol)} ini dibatasi 1x per "
+                f"{GLOBAL_EXPOSURE_NOTIF_COOLDOWN_SEC // 60} menit)",
                 parse_mode=None
             )
         return False, _cfg_base, 0
