@@ -276,7 +276,15 @@ MAX_DEALS_REVERSAL      = 2      # slot reversal (bot 16921019) — set Max acti
 # punya sisa slot sendiri-sendiri. Base order yang lebih besar ($50-100 utk 4 strategi
 # terbukti) berarti beberapa deal saja sudah bisa menghabiskan modal (~$192 saat ini).
 GLOBAL_MAX_ACTIVE_DEALS = 4        # jumlah deal aktif gabungan semua strategi
-GLOBAL_MAX_EXPOSURE_USD = 150.0    # total $ eksposur riil semua deal aktif (dari modal ~$192.52)
+# 24/09/2026 (review base order #3, permintaan Mas Budi): diturunkan 150 -> 100. Modal saat itu
+# $178.79, jadi $150 = 84% modal boleh nyangkut bersamaan, reserve cuma ~$29. Hard-stop historis
+# per strategi ada di kisaran 10-13% (WIF -11.18%, STG -10.11%, dst, bukan hipotetis) -- kalau
+# beberapa deal kena hard-stop BERSAMAAN (market ambruk luas) di titik $150, potensi rugi serentak
+# ~$16.5 MELEBIHI Batas Rugi Harian $15 dalam SATU kejadian (batas harian cuma menahan open BARU,
+# tidak bisa hentikan deal yg sedang jalan kena hard-stop). Di $100 (56% modal), worst-case serentak
+# turun ke ~$11 (di bawah batas harian) dan reserve naik jadi ~$79. Bukan trade-level backtest --
+# ini portofolio brake, bukan sinyal entry/exit, jadi dasarnya analisis risiko bukan sweep hasil.
+GLOBAL_MAX_EXPOSURE_USD = 100.0    # total $ eksposur riil semua deal aktif (dari modal ~$178.79)
 # 23/09/2026 (permintaan Mas Budi, insiden GRT/USDT -- AI approve OPEN tapi ditolak diam2 oleh
 # batas eksposur gabungan, tidak ada notif sama sekali sebelum ini): cooldown notif Telegram
 # PER (symbol, strategy) -- bukan global -- supaya 1 simbol yg baru kena notif tidak menahan
@@ -346,11 +354,19 @@ STRAT4H_STOCH_MAX       = 89
 STRAT4H_ATR_MAX_PCT     = 7.0   # batas atas ATR% brkX2-4h (08/08/2026): hindari entry puncak pump
 STRAT4H_VOL_MAX_MULT    = 5.0   # batas atas volume brkX2-4h (08/08/2026): simetris dengan brkX2-12h
 STRAT4H_CHG_MAX_PCT     = 3.0   # max price change% dari open candle (11/08/2026, backtest_elapsed_sweep_brkx2_4h: WR 72.7% avg +0.659% vs baseline -0.349%)
-STRAT4H_EMA20_BAND_MAX_PCT = 0.3   # harga wajib 0% s/d +0.3% di atas EMA20 (30/08/2026, keputusan Budi setelah
+STRAT4H_EMA20_BAND_MAX_PCT = 1.0   # harga wajib 0% s/d +1.0% di atas EMA20 (30/08/2026, keputusan Budi setelah
 # backtest sweep lebar pita 0.05%-2.0% pakai fungsi asli bot, 76 pair likuid ~83 hari data 4h: 0.3% adalah
 # titik terbaik (WR 57.5% avg +1.38% worst -13.06% n=87, vs baseline tanpa syarat EMA WR 45.9% avg +0.95%
 # worst -29.69% n=2389). MACD histogram TETAP >0 apa adanya -- backtest ATR-scaled/normalized MACD threshold
 # konsisten menunjukkan pelonggaran MACD selalu menurunkan kualitas, jadi tidak diubah.
+# 24/09/2026: dilebarkan 0.3% -> 1.0% (keputusan Mas Budi) setelah brkX2-4h dormant TOTAL 25 hari
+# (0 open sejak persis hari pita 0.3% di-deploy). Backtest khusus September 2026 (data real, fungsi
+# asli bot, 90 pair likuid): tanpa syarat pita ini SAMA SEKALI, 511 kandidat lolos semua syarat lain
+# bulan ini (market TIDAK sepi) -- dgn pita 0.3% cuma 6. Pita 1.0% ditemukan titik seimbang: n=32
+# (~5x lipat drpd 0.3%), WR60j 77.4% avg+6.21% (vs 0.3%: WR83.3% avg+8.36%, TAPI baseline n=6 itu
+# sendiri terlalu kecil dipercaya) -- kualitas baru mulai jelas turun di atas 1.5%. Catatan: live
+# scan mengevaluasi candle yg BELUM tertutup (2-25% elapsed, volume biasanya masih rendah), jadi
+# angka kandidat riil kemungkinan lebih rendah dari backtest closed-candle ini.
 STRAT4H_RSI_MIN         = 40    # RSI minimum brkX2-4h (14/08/2026, backtest_brkx2_4h_comprehensive_sweep: RSI>40 sweet spot avg +3.785% WR 87%)
 STRAT4H_RSI_MAX         = 70    # RSI maximum brkX2-4h (diubah dari 60→70, 18/08/2026, keputusan Budi)
 STRAT4H_PERF_MIN        = 0.5    # Perf Grade minimum (sama dengan brkX2-12h)    # Stoch%K < 80 (backtest_4h_rsi_stoch_sweep.py, 31/07/2026): worst -48.39% vs -63.96%, delta avg -0.121%, wf6 OK
@@ -694,7 +710,15 @@ REVERSAL_DROP_MIN_PCT = 3.0      # total drop minimum, dilonggarkan dari 5%
 #                            Di bawah 45 (40/35/30/25) makin ketat makin jelek -- Stoch<20
 #                            sempat melonjak (PF 2.39) tapi n=51/49 pair terlalu kecil dipercaya.
 #                            Keputusan Mas Budi (12/09/2026): kunci di 45, bukan 50.
-REVERSAL_STOCH_MAX    = 45
+# 24/09/2026: dilonggarkan balik ke 50 (keputusan Mas Budi) setelah backtest khusus September
+# nunjukkin Reversal-8h dormant sejak 3/09 BUKAN krn gate ini atau ATH-distance -- keduanya nyaris
+# tidak pernah kesulut bulan ini (ATH-distance 0x, Stoch<45 vs <50 cuma beda 1 kandidat di seluruh
+# September, n=6160 candle x pair). Penyebab sesungguhnya: pola dasar reversal (cross-up EMA20,
+# turun>=3%, doji) memang jarang muncul di market yang lagi bullish luas (lihat temuan brkX2-4h
+# 511 kandidat breakout bulan yg sama -- kebalikan dari reversal, market trending naik). 50 tidak
+# terbukti merugikan kualitas (1 kandidat tambahan yg ditemukan, ONDOUSDT, malah profit +22.7%
+# di horizon 60j) -- dilonggarkan lagi krn tidak ada bukti ruginya, BUKAN krn gate ini "diperbaiki".
+REVERSAL_STOCH_MAX    = 50
 REVERSAL_SECONDS_PER_CANDLE = _TF_SECONDS.get(REVERSAL_TIMEFRAME, 28800)
 REVERSAL_MAX_HOLD_CANDLES   = 30 # batas aman hold (8h*30=10 hari) supaya tdk gantung
 # add fund reversal OFF dulu (forward-test slippage; sesuai keputusan)
@@ -1108,7 +1132,13 @@ def apply_one_time_config_migrations():
     strategi dgn %profit kumulatif sudah besar & LIVE terbukti (brkX2/reversal/brkX2_4h/
     trend_confirm_4h -- lihat REMARK nilai lama di STRATEGY_CONFIG_DEFAULTS). Batas Rugi
     Harian ikut dinaikkan $6->$15 di migrasi yang sama supaya sepadan (base order lebih
-    besar berarti hard-stop tunggal juga lebih besar dalam $)."""
+    besar berarti hard-stop tunggal juga lebih besar dalam $).
+    24/09/2026 (review Base order #3, permintaan Mas Budi): QScalp-3m & CrossEMA-4h base_usd
+    sempat naik ke $40 masing-masing (lewat dashboard, di luar proses review ini) TANPA memenuhi
+    syarat re-evaluasi yang sudah ditetapkan sendiri -- QScalp butuh >=30 deal PF>1.5 (window
+    20-24/09 aktualnya n=6, PF~0.96, rugi tipis), CrossEMA butuh >=15 deal baru pasca-gate 16/09
+    (PF historisnya masih 0.64 per review #2). Diturunkan lagi ke nilai yang sudah pernah
+    divalidasi/dikunci sebelumnya, BUKAN angka baru."""
     migrations = {
         "qscalp_3m_base_usd_10_20260919":       ("qscalp_3m",        "base_usd", 10),
         "brkX2_base_usd_60_20260919":           ("brkX2",            "base_usd", 60),
@@ -1118,6 +1148,9 @@ def apply_one_time_config_migrations():
         # 20/09/2026 (permintaan Mas Budi): turunkan ke angka aman. REMARK nilai lama: 90 dan 70.
         "reversal_base_usd_30_20260920":        ("reversal",         "base_usd", 30),
         "trend_confirm_4h_base_usd_30_20260920":("trend_confirm_4h", "base_usd", 30),
+        # 24/09/2026 (review Base order #3, permintaan Mas Budi): lihat docstring di atas.
+        "qscalp_3m_base_usd_10_20260924":       ("qscalp_3m",        "base_usd", 10),
+        "brkX2_crossema_base_usd_20_20260924":  ("brkX2_crossema",   "base_usd", 20),
     }
     try:
         done = {}
@@ -5991,9 +6024,9 @@ def check_entry_4h(df) -> bool:
       - Vol24h >= $3jt
       - Stoch%K < 80 (backtest_4h_rsi_stoch_sweep.py, 31/07/2026)
       - RSI < 60 (07/08/2026, keputusan Budi): hindari entry saat harga sudah terlalu tinggi
-      - Harga 0% s/d +0.3% di atas EMA20 (30/08/2026, keputusan Budi, hasil backtest sweep lebar pita):
-        entry harus masih dekat EMA20 (baru saja cross-up / belum lari jauh), bukan momentum yang sudah
-        lama berjalan jauh dari EMA20
+      - Harga 0% s/d +1.0% di atas EMA20 (30/08/2026, keputusan Budi, dilebarkan dari 0.3% 24/09/2026
+        setelah dormant 25 hari -- lihat STRAT4H_EMA20_BAND_MAX_PCT): entry harus masih dekat EMA20
+        (baru saja cross-up / belum lari jauh), bukan momentum yang sudah lama berjalan jauh dari EMA20
     """
     return not blockers_entry_4h(df)
 
