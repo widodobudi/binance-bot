@@ -471,6 +471,15 @@ TRENDCONFIRM_RSI_MAX          = 75.0     # syarat wajib BARU (03/09/2026, koreks
                                           # 5 dari 6 strategi lain SEMUA punya RSI_MAX, ini yg
                                           # ketinggalan waktu strategi baru ini dibangun.
 TRENDCONFIRM_BB_PCT_SECONDARY= 0.65      # syarat SEKUNDER (skor/ranking, bukan gerbang wajib)
+# 24/09/2026 (Tahap 1 filter diferensial, permintaan Mas Budi -- backtest turunan pertama gap
+# harga-EMA20 antar-candle, "akselerasi momentum"). Sweet spot dari sweep threshold: kandidat dgn
+# gap_ema20_accel <= -1.0pp (momentum melambat/berbalik tajam sejak candle sebelumnya) secara
+# historis performanya jauh lebih buruk. TAPI bukan gerbang tolak permanen -- reject dulu (skip
+# babak-1 default), lalu kasih kesempatan kedua via ai_decision_open(fail_closed=True): AI boleh
+# tetap OPEN kalau indikator lain (RSI/volume/BB%b) cukup meyakinkan; kalau AI tidak tersedia saat
+# itu, TETAP DITOLAK (fail-closed, bukan fail-open spt bagian lain file ini -- keputusan eksplisit
+# Mas Budi: "tetap mau saya: reject dulu baru direview AI", lalu pilih fail-closed drpd fail-open).
+TRENDCONFIRM_ACCEL_REJECT_THRESHOLD = -1.0
 TRENDCONFIRM_EMA200_1D_MIN_PCT = -10.0   # syarat wajib BARU (15/09/2026, permintaan Mas Budi setelah
                                           # insiden IOTA/USDT -8.06%): blokir kandidat yg harganya sudah
                                           # >=10% DI BAWAH EMA200(1D) -- konteks downtrend HTF yg dalam.
@@ -9540,23 +9549,24 @@ def run_thread1d_4h():
 _crossema_last_candle_ts: dict = {}   # sym -> candle_open_ms yg sudah di-entry
 _crossema_near_miss: list = []        # [(sym, fails)] — kandidat lolos Lapis 1 tapi gagal Lapis 2
 
-# REMARK 24/09/2026 (Tahap 2/3 eksplorasi filter diferensial, permintaan Mas Budi -- BELUM
-# diterapkan, cuma temuan backtest tersimpan): dicek "akselerasi selisih EMA9-EMA26" --
-# (ema9-ema26)/close, lalu diff() antar candle 4h -- di 16/16 closed deal brkX2_crossema (semua
-# ketemu OPEN log-nya). Baseline TANPA filter: strategi ini RUGI bersih (winrate 75%, avg -0.34%,
-# total -5.4%). Sweep threshold (tolak kandidat kalau akselerasi <= threshold):
-#   <= -0.45pp (SWEET SPOT): keep n=14/16, winrate 85.7%, avg +1.07%, total +15.0% -- BALIK dari
-#     rugi jadi untung, dan HANYA membuang AVA (-10.13%) & AXL (-10.32%), yaitu 2 dari 3 hard-stop
-#     volatilitas historis strategi ini -- TIDAK ADA trade profitable yg ikut terbuang (beda dari
-#     Tahap 1/trend_confirm_4h yg masih mengorbankan beberapa winner).
+# REMARK 24/09/2026 (Tahap 2 filter diferensial, permintaan Mas Budi): dicek "akselerasi selisih
+# EMA9-EMA26" -- (ema9-ema26)/close, lalu diff() antar candle 4h -- di 16/16 closed deal
+# brkX2_crossema (semua ketemu OPEN log-nya). Baseline TANPA filter: strategi ini RUGI bersih
+# (winrate 75%, avg -0.34%, total -5.4%). Sweep threshold (tolak kandidat kalau akselerasi <= threshold):
+#   <= -0.45pp (SWEET SPOT, dipakai): keep n=14/16, winrate 85.7%, avg +1.07%, total +15.0% --
+#     BALIK dari rugi jadi untung, dan HANYA membuang AVA (-10.13%) & AXL (-10.32%), yaitu 2 dari
+#     3 hard-stop volatilitas historis strategi ini -- TIDAK ADA trade profitable yg ikut terbuang
+#     (beda dari Tahap 1/trend_confirm_4h yg masih mengorbankan beberapa winner).
 #   <= -0.10pp (lebih agresif): winrate 90%/avg+1.13% tapi mulai buang WBTC/WLFI/ASTR/ASTER yg
 #     sebagian profitable -- tidak lebih baik dari -0.45pp secara net.
 # SCR (-8.97%, 1 dari 3 hard-stop historis) TIDAK tertangkap (akselerasi +0.223pp, positif saat
 # entry) -- sama seperti WIF/STG di Tahap 1, tidak semua kegagalan punya sinyal pendahulu di sini.
 # CATATAN RISIKO: sampel kecil (n=16), threshold dicari dari data yg sama yg diuji (in-sample) --
-# validasi ulang out-of-sample begitu ada trade baru sebelum benar2 dipertimbangkan utk diterapkan.
-# Belum ditulis ke kode -- tunggu keputusan eksplisit Mas Budi, idealnya dibandingkan bareng
-# Tahap 1 & Tahap 3 (Reversal, half-life OU, belum dikerjakan).
+# monitor trade baru sesudah live utk validasi out-of-sample.
+# Pola implementasi SAMA persis dgn Tahap 1: reject dulu (skip babak-1 default), AI dapat
+# kesempatan kedua via ai_decision_open(fail_closed=True) -- kalau AI tidak tersedia saat itu,
+# TETAP DITOLAK (fail-closed, keputusan eksplisit Mas Budi berlaku sama utk Tahap 2).
+CROSSEMA_ACCEL_REJECT_THRESHOLD = -0.45
 
 def thread_crossema_scan():
     """Scan CrossEMA intrabar: ST=-1, close<EMA20, lalu price_now>EMA20 (cross-up)."""
@@ -9677,11 +9687,25 @@ def thread_crossema_scan():
 
             _rsi_ai_cx = r.get('rsi') if 'rsi' in r.index else None
             _rsi_val_cx = float(_rsi_ai_cx) if _rsi_ai_cx is not None and not pd.isna(_rsi_ai_cx) else None
+
+            # 24/09/2026 Tahap 2 (lihat REMARK di atas): akselerasi selisih EMA9-EMA26, dihitung
+            # langsung dari df 4h (belum ada kolom ema9/ema26 tetap -- sama spt backtest asalnya).
+            _accel_cx = None
+            if len(df) >= 2:
+                _ema9_cx = df['close'].ewm(span=9, adjust=False).mean()
+                _ema26_cx = df['close'].ewm(span=26, adjust=False).mean()
+                _gap9_26_now = (_ema9_cx.iloc[-1] - _ema26_cx.iloc[-1]) / float(df['close'].iloc[-1]) * 100
+                _gap9_26_prev = (_ema9_cx.iloc[-2] - _ema26_cx.iloc[-2]) / float(df['close'].iloc[-2]) * 100
+                _accel_cx = _gap9_26_now - _gap9_26_prev
+
             if is_ai_call_open_enabled('brkX2_crossema'):
                 _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'signal_price': _fmt_price(signal_price)}
                 if _rsi_val_cx is not None: _ai_ind['rsi'] = f"{_rsi_val_cx:.1f}"
-                if not ai_decision_open(sym, 'CrossEMA-4h', _ai_ind, active_deal_count(), notify=False):
-                    log(f"[T_CROSSEMA] {sym} babak-1 di-skip oleh AI individual")
+                if _accel_cx is not None: _ai_ind['ema9_26_accel'] = f"{_accel_cx:+.2f}pp"
+                _fail_closed_cx = _accel_cx is not None and _accel_cx <= CROSSEMA_ACCEL_REJECT_THRESHOLD
+                if not ai_decision_open(sym, 'CrossEMA-4h', _ai_ind, active_deal_count(), notify=False, fail_closed=_fail_closed_cx):
+                    log(f"[T_CROSSEMA] {sym} babak-1 di-skip oleh AI individual"
+                        f"{' (fail-closed, akselerasi EMA9-26 melambat)' if _fail_closed_cx else ''}")
                     continue
 
             _vm_cx = r.get('vol_ma')
@@ -9890,8 +9914,23 @@ def check_trendconfirm_entry(df):
     # --- Syarat SEKUNDER (dipakai utk skor/ranking, BUKAN gerbang wajib) ---
     score = 2 if float(bbp) >= TRENDCONFIRM_BB_PCT_SECONDARY else 1
 
+    # 24/09/2026 (Tahap 1 filter diferensial, permintaan Mas Budi -- lihat REMARK 24/09/2026 di
+    # dekat HOLD_NO_SELL_WARN_RATIO utk hasil backtest lengkapnya): akselerasi gap_ema20 = gap
+    # candle ini dikurangi gap candle SEBELUMNYA -- momentum melambat (negatif besar) = sinyal
+    # peringatan, BUKAN gerbang wajib di sini (supaya tidak langsung mencoret kandidat spt
+    # FTT/UNI/ZEC yg tetap profitable meski akselerasinya negatif) -- dipakai caller (thread_
+    # trendconfirm_scan) utk nentuin kandidat ini butuh "kesempatan kedua" fail-closed atau tidak.
+    gap_ema20_accel = None
+    if len(df) >= 2:
+        r_prev = df.iloc[-2]
+        ema20_prev = r_prev.get('ema20')
+        if not pd.isna(ema20_prev) and ema20_prev > 0 and not pd.isna(r_prev.get('close')):
+            gap_ema20_prev = (float(r_prev['close']) / float(ema20_prev) - 1) * 100
+            gap_ema20_accel = gap_ema20 - gap_ema20_prev
+
     detail = {'atr_pct': float(atrp), 'atr_median100': float(atr_med), 'rvol': rvol,
-               'bb_pct': float(bbp), 'gap_ema20_pct': gap_ema20, 'rsi': float(rsi)}
+               'bb_pct': float(bbp), 'gap_ema20_pct': gap_ema20, 'rsi': float(rsi),
+               'gap_ema20_accel': gap_ema20_accel}
     return True, score, detail
 
 def thread_trendconfirm_scan():
@@ -10004,12 +10043,18 @@ def thread_trendconfirm_scan():
         r = df.iloc[-1]
         rsi_val = r.get('rsi', float('nan'))
         if is_ai_call_open_enabled('trend_confirm_4h'):
+            _accel = detail.get('gap_ema20_accel')
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price),
                        'rvol': f"{detail.get('rvol',0):.2f}x", 'bb_pct': f"{detail.get('bb_pct',0):.2f}",
                        'gap_ema20': f"{detail.get('gap_ema20_pct',0):+.2f}%"}
+            if _accel is not None: _ai_ind['gap_ema20_accel'] = f"{_accel:+.2f}pp"
             if not pd.isna(rsi_val): _ai_ind['rsi'] = f"{float(rsi_val):.1f}"
-            if not ai_decision_open(sym, 'TrenKonfirmasi-4h', _ai_ind, active_deal_count(), notify=False):
-                log(f"[T_TRENDCONFIRM] {sym} babak-1 di-skip oleh AI individual")
+            # 24/09/2026 Tahap 1: momentum melambat/berbalik tajam (lihat TRENDCONFIRM_ACCEL_REJECT_THRESHOLD)
+            # -> reject dulu, AI cuma dapat kesempatan kedua lewat jalur fail-closed (bukan fail-open biasa).
+            _fail_closed = _accel is not None and _accel <= TRENDCONFIRM_ACCEL_REJECT_THRESHOLD
+            if not ai_decision_open(sym, 'TrenKonfirmasi-4h', _ai_ind, active_deal_count(), notify=False, fail_closed=_fail_closed):
+                log(f"[T_TRENDCONFIRM] {sym} babak-1 di-skip oleh AI individual"
+                    f"{' (fail-closed, akselerasi momentum melambat)' if _fail_closed else ''}")
                 continue
         held[sym] = (signal_price, atrp, score, detail, df, rsi_val)
 
@@ -21024,11 +21069,12 @@ def get_full_4h_indicator_context(symbol: str) -> str:
         return ""
 
 
-def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int, notify: bool = True) -> bool:
+def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int, notify: bool = True,
+                      fail_closed: bool = False) -> bool:
     """
     AI decide: buka deal atau skip.
     Return True = buka, False = skip.
-    Default True jika AI tidak tersedia / error.
+    Default True jika AI tidak tersedia / error -- KECUALI fail_closed=True (lihat bawah).
     Fetch HTF 1D/3D/1W dan LTF 1h untuk konteks tambahan (tidak time-critical).
     (29/08/2026: nambah 1D + LTF 1h, plus fix bug lama HTF yg selalu kosong.)
     notify=False (03/09/2026, dipakai TrenKonfirmasi-4h babak 1/batch): skip kirim
@@ -21036,6 +21082,12 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     ulang di babak 2/batch), supaya user tidak dapat notif "OPEN" yang lalu ternyata
     dibuang di babak berikutnya. Caller yang tanggung jawab kirim notif final sendiri.
     06/09/2026: cooldown SKIP per (symbol, strategi) -- lihat AI_OPEN_SKIP_COOLDOWN_SEC.
+    24/09/2026 (permintaan Mas Budi, Tahap 1/2 filter diferensial): fail_closed=True dipakai
+    KHUSUS utk kandidat yg SUDAH ditolak filter rule tambahan (mis. akselerasi gap_ema20/EMA9-26
+    negatif) dan sekarang diberi "kesempatan kedua" lewat AI -- kalau fail_closed, AI tidak
+    tersedia berarti TETAP DITOLAK (bukan fail-open spt biasa), krn gerbang ini dibangun justru
+    supaya tetap berfungsi walau AI mati (insiden SYRUP 23/09) -- beda dari semua ai_decision_*
+    lain di file ini yg sengaja fail-open. Prompt-nya juga ditandai beda (lihat _second_look_note).
     """
     _cd_key = (symbol, strategy)
     _cd_until = _ai_open_skip_cooldown.get(_cd_key, 0)
@@ -21049,10 +21101,17 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     htf_section  = f"\nKonteks HTF (1D/3D/1W):\n{htf_str}\n" if htf_str else ""
     ltf_section  = f"\nKonteks LTF (1h):\n{ltf_str}\n" if ltf_str else ""
     ind4h_section = f"\n{ind4h_str}\n" if ind4h_str else ""
+    _second_look_note = (
+        "\nPERHATIAN: kandidat ini AWALNYA DITOLAK oleh filter momentum otomatis (akselerasi "
+        "melambat/negatif) -- ini kesempatan kedua. Kalau ragu atau indikator lain juga lemah, "
+        "SKIP. Cuma OPEN kalau kombinasi indikator lain (RSI, volume, BB%b, dst) tetap meyakinkan "
+        "meski momentum sempat melambat.\n"
+    ) if fail_closed else ""
     prompt = (
         f"Kamu adalah AI analyst trading crypto. Berikan analisis singkat.\n\n"
         f"Strategi: {strategy} | Pair: {to_display_pair(symbol)}\n"
-        f"Deal aktif saat ini: {n_active}\n\n"
+        f"Deal aktif saat ini: {n_active}\n"
+        f"{_second_look_note}\n"
         f"Indikator saat sinyal:\n{ind_str}\n"
         f"{ind4h_section}"
         f"{htf_section}"
@@ -21075,10 +21134,21 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     # kode baru yg panggil _ai_call() TANPA param model eksplisit.
     result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
     if not result:
-        # AI tidak tersedia sama sekali -- fail-open ke OPEN, tapi tetap dicatat (04/09/2026)
-        # supaya kelihatan di riwayat kalau ada open yg terjadi TANPA analisis AI riil.
         # 08/09/2026: pasang cooldown pendek juga di sini -- lihat AI_UNAVAILABLE_COOLDOWN_SEC.
         _ai_open_skip_cooldown[_cd_key] = time.time() + AI_UNAVAILABLE_COOLDOWN_SEC
+        if fail_closed:
+            # 24/09/2026: kandidat "kesempatan kedua" (sudah ditolak rule filter) -- AI tidak
+            # tersedia berarti TETAP DITOLAK, jangan fail-open (lihat docstring fail_closed).
+            log(f"[AI] OPEN decision {symbol} ({strategy}): SKIP (fail-CLOSED, AI tidak tersedia, "
+                f"kandidat kesempatan-kedua tetap ditolak)")
+            log_ai_decision(
+                f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] OPEN-DECISION | {strategy} | "
+                f"{to_display_pair(symbol)} | SKIP (fail-closed, AI tidak tersedia, kesempatan kedua) "
+                f"| notify={notify}\n{'─'*36}\n"
+            )
+            return False
+        # AI tidak tersedia sama sekali -- fail-open ke OPEN, tapi tetap dicatat (04/09/2026)
+        # supaya kelihatan di riwayat kalau ada open yg terjadi TANPA analisis AI riil.
         log_ai_decision(
             f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] OPEN-DECISION | {strategy} | "
             f"{to_display_pair(symbol)} | OPEN (fail-open, AI tidak tersedia) | notify={notify}\n"
