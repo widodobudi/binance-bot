@@ -4923,20 +4923,31 @@ BRKX2_TIER_HIGH_USD         = 90    # skor >=2 (REMARK lama, sebelum split: $45)
 # 20/09/2026 (permintaan Mas Budi): tier TrenKonfirmasi-4h dikembalikan ke angka aman $30/$45.
 # REMARK nilai sebelum penurunan ini (rollback): tier bawah=$70, tier atas=$100.
 TRENDCONFIRM_TIER_LOW_USD   = 30    # skor 0-1
-TRENDCONFIRM_TIER_HIGH_USD  = 45    # skor >=2
+# 24/09/2026 (permintaan Mas Budi): upsize otomatis-by-score DIMATIKAN (TRENDCONFIRM_TIER_HIGH_USD
+# tidak dipakai lagi di score_to_target_usd di bawah -- dikunci flat TRENDCONFIRM_TIER_LOW_USD,
+# sama seperti CrossEMA-4h). Data real 48 trade closed: tier skor>=2 (avg base $52.9, yg dulu naik
+# ke sini) WR cuma 73.9% avg rugi -6.92%, vs tier skor rendah (avg base $26.5) WR 96.0% avg rugi
+# cuma -0.28% -- SEMUA 3 hard-stop besar (STG/WIF/MET) kena upsize skor tinggi ini. Simulasi flat
+# $30 utk semua skor: total profit strategi cuma turun $0.49 dari $17.72 (~3%), tapi kerugian di
+# 3 hard-stop itu turun $7.40 (~43%, dari -$17.13 jadi -$9.73) -- skor tinggi terbukti TIDAK
+# menandakan sinyal lebih aman di data nyata, upsize-nya net merugikan. Nilai lama disimpan di
+# bawah (bukan dihapus) kalau perlu rollback/analisis lebih lanjut.
+TRENDCONFIRM_TIER_HIGH_USD  = 45    # TIDAK DIPAKAI LAGI sejak 24/09/2026 -- lihat REMARK di atas
 
 def score_to_target_usd(score: int, strategy: str = 'brkX2') -> int:
     """Sizing berdasarkan skor sinyal.
     Base order dari Strategy Control; add fund otomatis = target - base.
     brkX2-12h:          Skor 0-1 -> BRKX2_TIER_LOW_USD, Skor >=2 -> BRKX2_TIER_HIGH_USD
-    TrenKonfirmasi-4h:  Skor 0-1 -> TRENDCONFIRM_TIER_LOW_USD, Skor >=2 -> TRENDCONFIRM_TIER_HIGH_USD
+    TrenKonfirmasi-4h:  SELALU TRENDCONFIRM_TIER_LOW_USD (upsize by-score dimatikan 24/09/2026,
+                        lihat REMARK di TRENDCONFIRM_TIER_HIGH_USD -- data nyata menunjukkan skor
+                        tinggi tidak menandakan sinyal lebih aman, malah net merugikan).
     brkX2_crossema:     SELALU $20 (skor dikunci 0; dulu $30, diturunkan 19/09/2026).
     Basis tier awal: backtest_sizing_v2 (155 trade), direvisi 24/08/2026, 19/09/2026 (cap $45),
     dan 19/09/2026 (split brkX2-12h vs TrenKonfirmasi-4h, review Base order #2)."""
     if strategy == 'brkX2_crossema':
         return CROSSEMA_TOTAL_TARGET_USD
     if strategy == 'trend_confirm_4h':
-        return TRENDCONFIRM_TIER_HIGH_USD if score >= 2 else TRENDCONFIRM_TIER_LOW_USD
+        return TRENDCONFIRM_TIER_LOW_USD
     return BRKX2_TIER_HIGH_USD if score >= 2 else BRKX2_TIER_LOW_USD
 
 # 14/09/2026 (permintaan Mas Budi): tier sizing brkX2_4h -- backtest retroaktif 39 trade
