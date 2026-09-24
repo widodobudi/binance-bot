@@ -9779,6 +9779,30 @@ def run_thread_crossema():
 # ══════════════════════════════════════════════════════════════════════════════
 _trendconfirm_last_candle_ts: dict = {}
 
+# REMARK 24/09/2026 (Tahap 1/3 eksplorasi filter diferensial/integral, permintaan Mas Budi --
+# BELUM diterapkan di check_trendconfirm_entry() di bawah, cuma temuan backtest tersimpan):
+# dicek "akselerasi EMA20-gap" -- gap_ema20.diff() antar candle -- di 38 dari 45 closed deal
+# trend_confirm_4h (7 tidak ketemu OPEN log-nya). Sweep threshold cutoff (tolak kandidat kalau
+# akselerasi <= threshold):
+#   Tanpa filter (baseline)   : n=38, winrate 78.9%, avg +0.24%
+#   threshold <= 0            : n=19, winrate 84.2%, avg +0.29% (buang separuh trade, termasuk
+#                                beberapa winner besar spt FTT +4.12%/ORCA +8.99% -- kurang baik)
+#   threshold <= -1.0pp (SWEET SPOT): n=24, winrate 83.3%, avg +0.81% (avg profit naik 3x drpd
+#                                baseline), cuma buang 14/38 trade, TETAP LOLOSKAN FTT/ORCA/dll.
+#                                Berhasil hindari 4 dari 6 hard-stop-volatilitas historis
+#                                (BONK/SPCXB/IOTA/LSK) -- TAPI TIDAK menangkap WIF & STG (akselerasi
+#                                mereka POSITIF saat entry, filter ini tidak relevan utk kasus itu).
+# Sudah dicoba kombinasi RSI(14) + volume-ratio(vs MA20) khusus utk cari sinyal yg bisa tangkap
+# WIF/STG juga -- HASIL NEGATIF: RSI WIF (76.8) memang tertinggi di 39 sampel, tapi 11 trade lain
+# dgn RSI 70-76 SEMUA profit (UNI+5%, FTT+4%, ZEN+3%, dst) -- RSI tinggi bukan prediktor gagal di
+# data ini. Volume ratio WIF/STG (~3.1-3.4x) juga biasa saja dibanding trade profitable lain yg
+# vol_ratio-nya jauh lebih ekstrem (SENT/NXPC 35x). SENGAJA TIDAK dipaksakan bikin rule khusus utk
+# "menangkap" WIF/STG -- itu overfitting ke 2 kejadian yg sudah diketahui hasilnya, bukan pola nyata.
+# KESIMPULAN Tahap 1: kandidat filter yg layak dipertimbangkan buat diterapkan = akselerasi
+# gap_ema20 <= -1.0pp (tolak kandidat). Belum ditulis ke kode -- tunggu keputusan eksplisit
+# Mas Budi sebelum diterapkan live, dan idealnya divalidasi lagi begitu Tahap 2 (CrossEMA-4h,
+# metode serupa) & Tahap 3 (Reversal, half-life OU) selesai supaya bisa dibandingkan sekaligus.
+
 def check_trendconfirm_entry(df):
     """Cek syarat TrenKonfirmasi-4h di candle TERAKHIR df (sudah closed & sudah
     lewat compute_indicators_4h()). Return (lolos, score, detail) -- score
