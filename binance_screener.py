@@ -9820,6 +9820,17 @@ _trendconfirm_last_candle_ts: dict = {}
 # gap_ema20 <= -1.0pp (tolak kandidat). Belum ditulis ke kode -- tunggu keputusan eksplisit
 # Mas Budi sebelum diterapkan live, dan idealnya divalidasi lagi begitu Tahap 2 (CrossEMA-4h,
 # metode serupa) & Tahap 3 (Reversal, half-life OU) selesai supaya bisa dibandingkan sekaligus.
+#
+# KEPUTUSAN DESAIN 24/09/2026 (soal korban trade bagus spt FTT/CVC/ARK/UNI/ZEC yg kefilter):
+# BUKAN direject langsung, tapi direject dulu OLEH RULE, baru dikasih kesempatan kedua lewat
+# review AI (babak-1 ai_decision_open) -- kalau AI bilang OPEN meski akselerasi jelek, tetap
+# dibuka. TAPI kalau AI TIDAK TERSEDIA (kredit habis dkk) saat kandidat yg sudah direject rule
+# ini butuh second opinion, defaultnya FAIL-CLOSED (tetap ditolak) -- SENGAJA BEDA dari semua
+# ai_decision_* lain di kode ini (yg semua fail-OPEN). Alasan: gerbang ini dibangun justru supaya
+# ada perlindungan yg tetap jalan walau AI mati (insiden SYRUP 23/09) -- kalau dibuat fail-open
+# juga, gerbangnya jadi percuma persis di momen paling dibutuhkan. Prinsip fail-closed ini
+# berlaku sbg default jg utk pola serupa di Tahap 2/3 kalau muncul pertanyaan sama, kecuali
+# Mas Budi bilang lain utk kasus spesifik.
 
 def check_trendconfirm_entry(df):
     """Cek syarat TrenKonfirmasi-4h di candle TERAKHIR df (sudah closed & sudah
