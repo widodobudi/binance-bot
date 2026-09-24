@@ -1051,6 +1051,17 @@ STRATEGY_CONFIG_DEFAULTS = {
     "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True, "max_deals": 5, "close_sell_pct": 100},
     "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2, "close_sell_pct": 100},
     "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3, "close_sell_pct": 100},
+    # 24/09/2026 (permintaan Mas Budi, ketahuan dashboard "Akumulasi-4h" cuma 1 baris tapi Entry A
+    # & Entry B ternyata beda base_usd riil): sebelum ini, 'akum_entry_b' TIDAK PERNAH punya entry
+    # sendiri di config -- get_strategy_base_usd('akum_entry_b') selalu jatuh ke fallback global
+    # BASE_ORDER_VOLUME=$8 (bukan angka $20 yg tertulis di dashboard, itu cuma milik akum_entry_a).
+    # base_usd=8 di sini SENGAJA disamakan dgn perilaku riil yg sudah berjalan -- supaya nambah baris
+    # UI ini TIDAK diam-diam mengubah sizing live, cuma bikin nilainya kelihatan & bisa diedit.
+    # CATATAN: max_deals/strategy_enabled/cooldown_enabled/ai_call_open di sini BELUM benar2
+    # independen -- thread_akum_entry_scan() masih baca semua itu dari key 'akum_entry_a' saja utk
+    # KEDUA entry (AKUM_ENTRY_MAX_DEALS satu pool bersama). Base order SUDAH independen (send_open_long
+    # -> get_strategy_base_usd(strategy) pakai key asli tiap entry).
+    "akum_entry_b":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3, "close_sell_pct": 100},
     "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3, "close_sell_pct": 100},
     "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3, "close_sell_pct": 100},
     "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "max_deals": 2, "close_sell_pct": 100},
@@ -12156,11 +12167,18 @@ var SC_LABELS = {
     reversal: 'Reversal-8h',
     brkX2_4h: 'brkX2-4h',
     brkX2_crossema: 'CrossEMA-4h',
-    akum_entry_a: 'Akumulasi-4h',
+    akum_entry_a: 'Akumulasi-4h Entry A',
+    akum_entry_b: 'Akumulasi-4h Entry B',
     hunting_4h: 'Hunting-4h',
     trend_confirm_4h: 'TrenKonfirmasi-4h',
     qscalp_3m: 'QScalp-3m'
 };
+// 24/09/2026 (permintaan Mas Budi): Entry A & Entry B sekarang baris terpisah supaya base_usd
+// masing-masing kelihatan & bisa diedit sendiri-sendiri (base_usd MEMANG sudah independen di
+// backend -- get_strategy_base_usd() baca per-key). TAPI kolom Max Deals/Izinkan Open Long/AI
+// Call/Cooldown di baris Entry B ini masih SEKADAR TAMPILAN -- thread_akum_entry_scan() masih
+// baca semua itu dari 'akum_entry_a' saja utk kedua entry (satu pool slot bersama). Kalau mau
+// itu juga independen, itu perubahan backend terpisah, belum dikerjakan.
 // 14/09/2026 (permintaan Mas Budi, ketahuan label dashboard salah): brkX2_4h DIHAPUS dari
 // sini -- open_deal_with_sizing() mengunci add_usd=0 total buat brkX2_4h (skor diabaikan
 // sama sekali), field "$15" yg sempat tampil di sini TIDAK PERNAH benar2 dipakai backend.
