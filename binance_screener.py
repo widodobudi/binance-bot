@@ -9522,6 +9522,24 @@ def run_thread1d_4h():
 _crossema_last_candle_ts: dict = {}   # sym -> candle_open_ms yg sudah di-entry
 _crossema_near_miss: list = []        # [(sym, fails)] — kandidat lolos Lapis 1 tapi gagal Lapis 2
 
+# REMARK 24/09/2026 (Tahap 2/3 eksplorasi filter diferensial, permintaan Mas Budi -- BELUM
+# diterapkan, cuma temuan backtest tersimpan): dicek "akselerasi selisih EMA9-EMA26" --
+# (ema9-ema26)/close, lalu diff() antar candle 4h -- di 16/16 closed deal brkX2_crossema (semua
+# ketemu OPEN log-nya). Baseline TANPA filter: strategi ini RUGI bersih (winrate 75%, avg -0.34%,
+# total -5.4%). Sweep threshold (tolak kandidat kalau akselerasi <= threshold):
+#   <= -0.45pp (SWEET SPOT): keep n=14/16, winrate 85.7%, avg +1.07%, total +15.0% -- BALIK dari
+#     rugi jadi untung, dan HANYA membuang AVA (-10.13%) & AXL (-10.32%), yaitu 2 dari 3 hard-stop
+#     volatilitas historis strategi ini -- TIDAK ADA trade profitable yg ikut terbuang (beda dari
+#     Tahap 1/trend_confirm_4h yg masih mengorbankan beberapa winner).
+#   <= -0.10pp (lebih agresif): winrate 90%/avg+1.13% tapi mulai buang WBTC/WLFI/ASTR/ASTER yg
+#     sebagian profitable -- tidak lebih baik dari -0.45pp secara net.
+# SCR (-8.97%, 1 dari 3 hard-stop historis) TIDAK tertangkap (akselerasi +0.223pp, positif saat
+# entry) -- sama seperti WIF/STG di Tahap 1, tidak semua kegagalan punya sinyal pendahulu di sini.
+# CATATAN RISIKO: sampel kecil (n=16), threshold dicari dari data yg sama yg diuji (in-sample) --
+# validasi ulang out-of-sample begitu ada trade baru sebelum benar2 dipertimbangkan utk diterapkan.
+# Belum ditulis ke kode -- tunggu keputusan eksplisit Mas Budi, idealnya dibandingkan bareng
+# Tahap 1 & Tahap 3 (Reversal, half-life OU, belum dikerjakan).
+
 def thread_crossema_scan():
     """Scan CrossEMA intrabar: ST=-1, close<EMA20, lalu price_now>EMA20 (cross-up)."""
     global _crossema_last_candle_ts, _crossema_near_miss
