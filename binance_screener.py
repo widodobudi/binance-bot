@@ -20592,6 +20592,20 @@ def run_web_dashboard():
                     _before = len(rows)
                     rows = [r for r in rows if not _is_hardstop_row(r)]
                     hidden_hardstop = _before - len(rows)
+                # 25/09/2026 (permintaan Mas Budi): "manual reconcile" -- koin yg terjual/tersinkron di
+                # luar jalur normal bot, bukan hasil keputusan strategi -- DISEMBUNYIKAN dari tampilan
+                # Closed Deals secara default, sama persis pola hard-stop di atas. Baris TETAP di CSV
+                # (counter fase/batas rugi harian tidak berubah). Muncul lagi lewat filter Alasan
+                # "Manual Reconcile" atau ?show_manual_reconcile=1.
+                def _is_manual_reconcile_row(r):
+                    return (r.get('exit_reason') or '').strip().lower().startswith('manual reconcile')
+                show_manual_reconcile = (request.args.get("show_manual_reconcile", "") in ("1", "true", "True")
+                                          or reason_filter == "Manual Reconcile")
+                hidden_manual_reconcile = 0
+                if not show_manual_reconcile:
+                    _before = len(rows)
+                    rows = [r for r in rows if not _is_manual_reconcile_row(r)]
+                    hidden_manual_reconcile = _before - len(rows)
                 # 21/09/2026 (permintaan Mas Budi): 3 close trailing rugi yg penyebabnya sudah di-patch
                 # (add-fund peak lama: AR & GENIUS, commit 789eab3; peak ticker vs fill: MARSCOIN, 968373b)
                 # disembunyikan dari tampilan Closed Deals. Baris TETAP di CSV (counter fase / batas rugi
@@ -20716,6 +20730,7 @@ def run_web_dashboard():
                     "trades": trades,
                     "all_pairs": all_pairs,
                     "hidden_hardstop": hidden_hardstop,
+                    "hidden_manual_reconcile": hidden_manual_reconcile,
                     "hidden_patched": hidden_patched,
                     "show_hidden": show_hidden,
                     "stats": {
