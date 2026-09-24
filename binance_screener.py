@@ -208,6 +208,16 @@ HARD_STOP_MULT_BY_STRATEGY = {
 # +1.52% -> +1.53%). Stop per tier ATR: <1% 6.0%, <2% 8.25%, <4% 10.5%, >=4% 10.8% (cap). REMARK nilai lama (rollback):
 # K=1.1 tanpa cap (4.4/6.05/7.7/9.9/12.1%). Cap lebih rapat (<=9%) TIDAK menurunkan frekuensi hard-stop & memotong untung.
 HARD_STOP_CAP_PCT_BY_STRATEGY = {'trend_confirm_4h': 10.8}
+# 24/09/2026 -- REVIEW SELESAI, KEPUTUSAN: TETAP K1.5/cap10.8%, TIDAK rollback ke K1.1 (permintaan
+# Mas Budi, lihat REMARK "REVIEW SIAP" di tc_hardstop_track_close/TC_HS_REVIEW_TARGET). Data real
+# 22 deal sejak 20/09 19:23 WIB (bukan cuma 15 target): hard-stop 9% (2/22) -- LEBIH JARANG dari
+# ekspektasi backtest ~16%; worst-case -11.18% -- PAS di ekspektasi ~-11.0% (cap bekerja sesuai
+# desain); avg keseluruhan +0.73%/deal kelihatan di bawah ekspektasi +1.5%, TAPI itu didominasi 2
+# hard-stop WIF/MET yg SUDAH terbukti (sesi ini) tidak bisa diprediksi filter apapun -- 20 deal
+# SISANYA (di luar WIF/MET) rata-rata +1.92%/deal, DI ATAS ekspektasi backtest. Kesimpulan: K1.5/
+# cap10.8% bekerja sesuai rencana, bukan penyebab performa di bawah harapan. TC_HS_REVIEW_TARGET
+# (below) TIDAK diubah -- counter sudah "notified", tidak akan nge-prompt ulang keputusan yg sama.
+TC_HS_DECISION = "KEEP (24/09/2026): K1.5/cap10.8% dipertahankan, review konklusif berdasarkan 22 deal riil."
 HOLD_NO_SELL_WARN_RATIO = 0.85    # checkbox "hold, jangan jual" muncul di 85% dari ambang hard-stop
                                    # tier deal itu (bukan pas 100%) -- kasih ruang waktu react sebelum
                                    # hard-stop beneran kesulut (disepakati 27/08/2026)
@@ -2627,7 +2637,11 @@ def _bump_mcap_watch_count() -> int:
 # TrenKonfirmasi yg CLOSE sejak itu dan mengirim Telegram SEKALI di TC_HS_REVIEW_TARGET deal.
 # >>> REMARK REVIEW: harapan backtest (data 2025+): hard-stop ~16% dari trade, rata-rata ~+1.5%/trade, rugi terburuk
 # >>> ~-11.0%. Kalau hard-stop nyata jauh di atas ~16% ATAU ada rugi lebih dalam dari ~-11% (slippage/hold_no_sell),
-# >>> pertimbangkan rollback ke K1.1 (lihat HARD_STOP_MULT_BY_STRATEGY). Minta Claude: "review hard-stop TrenKonfirmasi".
+# >>> pertimbangkan rollback ke K1.1 (lihat HARD_STOP_MULT_BY_STRATEGY).
+# >>> REVIEW SUDAH DILAKUKAN 24/09/2026 (22 deal riil, target 15 terlampaui) -- KEPUTUSAN: KEEP,
+# >>> TIDAK rollback (lihat TC_HS_DECISION & REMARK lengkap di HARD_STOP_CAP_PCT_BY_STRATEGY di
+# >>> atas). Counter di bawah ini TETAP JALAN buat visibilitas berkelanjutan (heartbeat), TAPI
+# >>> tidak akan nge-prompt ulang keputusan yg sama (notified=True, one-shot per definisi).
 TC_HS_REVIEW_TARGET = 15
 TC_HS_REVIEW_FILE = os.path.join(DATA_DIR, "tc_hardstop_review.json")
 TC_HS_EXPECT = {"hs_pct": 16.0, "avg_pct": 1.5, "worst_pct": -11.0}
@@ -2694,7 +2708,8 @@ def tc_hardstop_progress_line() -> str:
         if n == 0:
             return f"0/{TC_HS_REVIEW_TARGET} deal (review hard-stop K1.5/cap10.8 dimulai 20/09 19:23 WIB)"
         return (f"{n}/{TC_HS_REVIEW_TARGET} deal, hard-stop {st['hs']} ({st['hs'] / n * 100:.0f}%), "
-                f"avg {st['sum_pct'] / n:+.2f}%, terburuk {st['worst']:+.2f}%" + (" -- REVIEW SIAP" if st["notified"] else ""))
+                f"avg {st['sum_pct'] / n:+.2f}%, terburuk {st['worst']:+.2f}%"
+                + (f" -- {TC_HS_DECISION}" if st["notified"] else ""))
     except Exception:
         return "n/a"
 
