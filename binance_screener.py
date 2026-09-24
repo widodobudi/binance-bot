@@ -1984,62 +1984,65 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
 
 
 def diagnose_futures_funding_wif_met_once():
-    """24/09/2026 (permintaan Mas Budi): DIAGNOSTIK SEKALI JALAN, BUKAN fitur permanen -- cek apakah
-    funding rate/open interest Binance Futures WIF & MET menunjukkan anomali (posisi leverage
-    berlebihan) sebelum hard-stop -11.18%/-11.17% masing-masing (trend_confirm_4h, 22-23/09/2026).
-    Kategori baru yg belum pernah diuji sesi ini -- semua uji sebelumnya (teknikal, diferensial/
-    integral lintas timeframe, fundamental/delisting) berbasis harga/volume SPOT atau data on-chain,
-    BUKAN posisi derivatif. Sandbox dev tempat kode ini ditulis diblokir jaringan ke semua API
-    exchange (Binance Futures, Bybit, Coinalyze) -- makanya diagnostik ini dijalankan LEWAT bot live
-    di Railway (jaringannya beda, sudah terbukti bisa akses Binance utk order asli). Cek log
-    Railway tag [DIAG-FUTURES] utk hasilnya. HAPUS fungsi ini setelah hasilnya dianalisis -- ini
-    bukan bagian dari trading logic, murni riset satu kali."""
+    """24/09/2026 (permintaan Mas Budi): DIAGNOSTIK SEKALI JALAN, BUKAN fitur permanen -- babak 2,
+    validasi apakah pola funding rate/OI/long-short ratio yg terlihat di WIF & MET (hard-stop
+    -11.18%/-11.17%) juga muncul di trade trend_confirm_4h yg MENANG, atau cuma kebetulan di 2
+    kasus itu (n=2 terlalu kecil utk dipercaya tanpa pembanding -- sama spt semua uji lain sesi
+    ini). Format ringkas (bukan dump per-jam) supaya bisa dibandingkan langsung: funding rate di
+    settlement terdekat entry, perubahan OI di jam entry vs jam sebelumnya, tren long/short ratio
+    5 jam sebelum entry. Cek log Railway tag [DIAG-FUTURES]. HAPUS fungsi ini setelah dianalisis."""
     import datetime as _dt
     targets = [
-        ("WIFUSDT", _dt.datetime(2026, 9, 22, 13, 28, 40, tzinfo=_dt.timezone.utc)),
-        ("METUSDT", _dt.datetime(2026, 9, 23, 14, 15, 31, tzinfo=_dt.timezone.utc)),
+        ("WIFUSDT", _dt.datetime(2026, 9, 22, 13, 28, 40, tzinfo=_dt.timezone.utc), "LOSER -11.18%"),
+        ("METUSDT", _dt.datetime(2026, 9, 23, 14, 15, 31, tzinfo=_dt.timezone.utc), "LOSER -11.17%"),
+        ("FTTUSDT", _dt.datetime(2026, 9, 20, 22, 42, 47, tzinfo=_dt.timezone.utc), "winner +4.12%"),
+        ("PENGUUSDT", _dt.datetime(2026, 9, 21, 9, 58, 22, tzinfo=_dt.timezone.utc), "winner +5.46%"),
+        ("KMNOUSDT", _dt.datetime(2026, 9, 21, 13, 29, 55, tzinfo=_dt.timezone.utc), "winner +3.88%"),
+        ("NXPCUSDT", _dt.datetime(2026, 9, 22, 0, 32, 59, tzinfo=_dt.timezone.utc), "winner +2.18%"),
+        ("KERNELUSDT", _dt.datetime(2026, 9, 22, 23, 36, 22, tzinfo=_dt.timezone.utc), "winner +2.38%"),
+        ("GRTUSDT", _dt.datetime(2026, 9, 21, 11, 33, 49, tzinfo=_dt.timezone.utc), "winner +2.06%"),
     ]
-    for sym, entry_dt in targets:
+    for sym, entry_dt, label in targets:
         try:
-            start_ms = int((entry_dt - _dt.timedelta(days=3)).timestamp() * 1000)
-            end_ms = int((entry_dt + _dt.timedelta(hours=12)).timestamp() * 1000)
+            start_ms = int((entry_dt - _dt.timedelta(hours=8)).timestamp() * 1000)
+            end_ms = int((entry_dt + _dt.timedelta(hours=2)).timestamp() * 1000)
             entry_ms = int(entry_dt.timestamp() * 1000)
+            summary = [f"[DIAG-FUTURES] {sym} ({label}) entry={entry_dt.strftime('%Y-%m-%d %H:%M')} UTC"]
 
             fr = requests.get("https://fapi.binance.com/fapi/v1/fundingRate",
-                               params={"symbol": sym, "startTime": start_ms, "endTime": end_ms, "limit": 50},
+                               params={"symbol": sym, "startTime": start_ms, "endTime": end_ms, "limit": 10},
                                timeout=15).json()
-            log(f"[DIAG-FUTURES] {sym} funding rate history ({len(fr) if isinstance(fr, list) else 0} entri):")
-            if isinstance(fr, list):
-                for row in fr:
-                    ts = _dt.datetime.fromtimestamp(row["fundingTime"] / 1000, tz=_dt.timezone.utc)
-                    marker = " <== dekat ENTRY" if abs(row["fundingTime"] - entry_ms) < 8 * 3600 * 1000 else ""
-                    log(f"[DIAG-FUTURES]   {ts} rate={float(row['fundingRate']) * 100:+.4f}%{marker}")
+            if isinstance(fr, list) and fr:
+                nearest = min(fr, key=lambda r: abs(r["fundingTime"] - entry_ms))
+                summary.append(f"funding_terdekat={float(nearest['fundingRate']) * 100:+.4f}%")
             else:
-                log(f"[DIAG-FUTURES] {sym} funding rate response tidak sesuai ekspektasi: {fr}")
+                summary.append(f"funding=? ({fr})")
 
             oi = requests.get("https://fapi.binance.com/futures/data/openInterestHist",
-                               params={"symbol": sym, "period": "1h", "startTime": start_ms, "endTime": end_ms, "limit": 100},
+                               params={"symbol": sym, "period": "1h", "startTime": start_ms, "endTime": end_ms, "limit": 20},
                                timeout=15).json()
-            log(f"[DIAG-FUTURES] {sym} open interest history ({len(oi) if isinstance(oi, list) else 0} entri, 1h):")
-            if isinstance(oi, list):
-                for row in oi[-24:]:
-                    ts = _dt.datetime.fromtimestamp(row["timestamp"] / 1000, tz=_dt.timezone.utc)
-                    marker = " <== dekat ENTRY" if abs(row["timestamp"] - entry_ms) < 3600 * 1000 else ""
-                    log(f"[DIAG-FUTURES]   {ts} OI={row.get('sumOpenInterest')} val=${row.get('sumOpenInterestValue')}{marker}")
+            if isinstance(oi, list) and len(oi) >= 2:
+                oi_sorted = sorted(oi, key=lambda r: abs(r["timestamp"] - entry_ms))
+                near, prev = oi_sorted[0], oi_sorted[1]
+                v_near, v_prev = float(near["sumOpenInterestValue"]), float(prev["sumOpenInterestValue"])
+                pct = (v_near / v_prev - 1) * 100 if v_prev else float('nan')
+                summary.append(f"OI_jam_entry_vs_sblmnya={pct:+.1f}%")
             else:
-                log(f"[DIAG-FUTURES] {sym} OI response tidak sesuai ekspektasi: {oi}")
+                summary.append(f"OI=? ({oi})")
 
             lsr = requests.get("https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
-                                params={"symbol": sym, "period": "1h", "startTime": start_ms, "endTime": end_ms, "limit": 100},
+                                params={"symbol": sym, "period": "1h", "startTime": start_ms, "endTime": end_ms, "limit": 20},
                                 timeout=15).json()
-            log(f"[DIAG-FUTURES] {sym} long/short account ratio ({len(lsr) if isinstance(lsr, list) else 0} entri, 1h):")
-            if isinstance(lsr, list):
-                for row in lsr[-24:]:
-                    ts = _dt.datetime.fromtimestamp(row["timestamp"] / 1000, tz=_dt.timezone.utc)
-                    marker = " <== dekat ENTRY" if abs(row["timestamp"] - entry_ms) < 3600 * 1000 else ""
-                    log(f"[DIAG-FUTURES]   {ts} longAcct={row.get('longAccount')} shortAcct={row.get('shortAccount')} ratio={row.get('longShortRatio')}{marker}")
+            if isinstance(lsr, list) and len(lsr) >= 2:
+                lsr_sorted = sorted(lsr, key=lambda r: r["timestamp"])
+                first5h = lsr_sorted[0]["longShortRatio"]
+                nearest_ls = min(lsr_sorted, key=lambda r: abs(r["timestamp"] - entry_ms))["longShortRatio"]
+                trend = float(nearest_ls) - float(first5h)
+                summary.append(f"LS_ratio: {float(first5h):.2f} -> {float(nearest_ls):.2f} (delta {trend:+.2f})")
             else:
-                log(f"[DIAG-FUTURES] {sym} long/short ratio response tidak sesuai ekspektasi: {lsr}")
+                summary.append(f"LS_ratio=? ({lsr})")
+
+            log(" | ".join(summary))
         except Exception as e:
             log(f"WARN [DIAG-FUTURES] gagal ambil data {sym}: {e}")
     log("[DIAG-FUTURES] selesai -- HAPUS diagnose_futures_funding_wif_met_once() setelah dianalisis.")
