@@ -11402,7 +11402,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <!-- ═══════════════ STRATEGY CONTROL ═══════════════ -->
 <div class="container dash-section-start" data-tab="control" style="margin-bottom:16px">
     <div class="card">
-        <div class="card-header" onclick="toggleCard(this)"><h2>AI DECISION PROVIDER <span class="card-toggle">&#9660;</span></h2></div>
+        <div class="card-header" onclick="toggleCard(this)"><h2>AI DECISION PROVIDERS <span class="card-toggle">&#9660;</span></h2></div>
         <div class="card-body" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:11px">
             <label style="display:flex;align-items:center;gap:6px;color:var(--muted)">
                 <span>Mode:</span>
@@ -11518,32 +11518,32 @@ refreshPerfChart();
     <div class="card-body">
     {% if active_deals %}
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-        <table style="min-width:1280px">
-            <thead><tr><th>Pair</th><th>Strategi</th><th>Opened</th><th>Chart</th><th>Entry / Average</th><th>Harga Skrg<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">estd qty koin</span></th><th>U/PnL ($)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">modal terpakai</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">net -0.2% fee</span></th><th>Cancel<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">stop track, koin tetap</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">close jika target tercapai ($/%/harga)</span></th><th>TP Target</th><th>Tahan (menit)<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">konfirmasi sblm eksekusi TP</span></th><th>isArmed</th><th>Arm Trailing</th><th>Auto Avg Down</th><th>Auto Close</th><th>AI Call</th><th>Report</th></tr></thead>
+        <table style="min-width:820px">
+            <thead><tr><th>Pair</th><th>Strategi<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">dibuka</span></th><th>Chart</th><th>Harga<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">entry/average, skrg</span></th><th>Profit<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">$ modal, % net fee</span></th><th>Cancel<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">stop track / close / hold / +fund / resend</span></th><th>Auto TP<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">target tercapai ($/%/harga), tahan menit</span></th><th>Trailing<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">isArmed, toggle arm</span></th><th>Auto Flags<br><span style="font-size:9px;font-weight:normal;color:var(--muted)">avg down / close / AI call</span></th></tr></thead>
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr>
         <td class="sym">{{ sym.replace("USDT","/USDT") }}</td>
-        <td>{% set _sm = {"brkX2":"brkX2-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h"} %}{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</td>
-        <td style="font-size:10px;color:var(--muted);white-space:nowrap">{{ d.get("opened_at","")[:16] if d.get("opened_at") else "-" }}</td>
-        <td><button type="button" onclick="openTradingViewChart('{{ sym }}','{{ _sm.get(d.get('strategy',''),d.get('strategy','-')) }}')" style="background:#2962ff;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Open Chart</button></td>
-        <td>
-          <div style="font-size:9px;color:var(--muted);margin-bottom:2px">{{ "Average" if d.get("add_fund_sent") else "Entry" }}</div>
-          <span id="ep-{{ sym }}" style="cursor:pointer;text-decoration:underline dotted" title="Klik untuk edit" onclick="editEntry('{{ sym }}','{{ fmt_price(d.get(\"entry_price\",0)) }}')">{{ fmt_price(d.get("entry_price",0)) }}</span>
-        </td>
         <td style="white-space:nowrap">
-          <div>{{ fmt_price(d.get("last_price",0)) if d.get("last_price") else "-" }}</div>
+          {% set _sm = {"brkX2":"brkX2-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h"} %}
+          <div>{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</div>
+          <div style="font-size:9px;color:var(--muted)">{{ d.get("opened_at","")[:16] if d.get("opened_at") else "-" }}</div>
+        </td>
+        <td><button type="button" onclick="openTradingViewChart('{{ sym }}','{{ _sm.get(d.get('strategy',''),d.get('strategy','-')) }}')" style="background:#2962ff;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Open Chart</button></td>
+        <td style="white-space:nowrap">
+          <div style="font-size:9px;color:var(--muted);margin-bottom:2px">{{ "Average" if d.get("add_fund_sent") else "Entry" }}</div>
+          <div><span id="ep-{{ sym }}" style="cursor:pointer;text-decoration:underline dotted" title="Klik untuk edit" onclick="editEntry('{{ sym }}','{{ fmt_price(d.get(\"entry_price\",0)) }}')">{{ fmt_price(d.get("entry_price",0)) }}</span></div>
+          <div style="font-size:9px;color:var(--muted);margin-top:3px">Skrg: {{ fmt_price(d.get("last_price",0)) if d.get("last_price") else "-" }}</div>
           {% if d.get("entry_price",0) > 0 and d.get("total_usd_display",0) > 0 %}
           <div style="font-size:9px;color:var(--muted)">
             estd {{ "%.2f"|format(d.get("total_usd_display",0) / d.get("entry_price",1)) }} {{ sym.replace("USDT","") }}
           </div>
           {% endif %}
         </td>
-        <td class="{{ "profit-pos" if d.get("upnl_usd",0) > 0 else "profit-neg" }}" style="white-space:nowrap">
-          <div>{{ "%+.2f"|format(d.get("upnl_usd",0)) }}</div>
-          <div style="font-size:9px;color:var(--muted)">${{ "%.0f"|format(d.get("total_usd_display",0)) }}</div>
+        <td style="white-space:nowrap">
+          <div class="{{ "profit-pos" if d.get("upnl_usd",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_usd",0)) }} <span style="font-size:9px;color:var(--muted)">(${{ "%.0f"|format(d.get("total_usd_display",0)) }})</span></div>
+          <div class="{{ "profit-pos" if d.get("upnl_pct",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_pct",0)) }}%</div>
         </td>
-        <td class="{{ "profit-pos" if d.get("upnl_pct",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_pct",0)) }}%</td>
         <td>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;align-items:start;min-width:130px">
             <form method="POST" action="/cancel_deal" onsubmit="return confirmCancelDeal(this, '{{ sym }}');">
@@ -11572,17 +11572,20 @@ refreshPerfChart();
             <button type="submit" style="width:100%;background:#78716c;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Reconcile</button>
           </form>
           {% endif %}
+          <button type="button" onclick="resendOpenNotification('{{ sym }}')" style="width:100%;margin-top:4px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 7px;font-size:10px;cursor:pointer;font-family:var(--font)">Resend OPEN</button>
         </td>
-        <td>
-          <form method="POST" action="/toggle" style="display:inline">
-            <input type="hidden" name="sym" value="{{ sym }}">
-            <input type="hidden" name="key" value="tp1usd">
-            <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("tp1usd",False) else "" }}>
-          </form>
-        </td>
-        <td>
+        <td style="min-width:150px">
+          <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px">
+            <form method="POST" action="/toggle" style="display:inline">
+              <input type="hidden" name="sym" value="{{ sym }}">
+              <input type="hidden" name="key" value="tp1usd">
+              <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("tp1usd",False) else "" }}>
+            </form>
+            <span style="font-size:9px;color:var(--muted)">Auto TP aktif</span>
+          </div>
           {% set _tpmode = overrides.get(sym,{}).get("tp1_target_mode","usd") %}
-          <form method="POST" action="/set_tp_target" style="display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap">
+          <div style="font-size:9px;color:var(--muted);margin-bottom:2px">Target tercapai:</div>
+          <form method="POST" action="/set_tp_target" style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:4px">
             <input type="hidden" name="sym" value="{{ sym }}">
             <select name="mode" onchange="var i=this.closest('form').querySelector('input[name=value]'); i.value = this.value==='pct' ? i.dataset.pct : (this.value==='price' ? i.dataset.price : i.dataset.usd);" style="background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 3px;font-size:10px;font-family:var(--font)">
               <option value="usd" {{ "selected" if _tpmode=="usd" else "" }}>$</option>
@@ -11592,9 +11595,8 @@ refreshPerfChart();
             <input type="text" inputmode="decimal" name="value" data-usd="{{ overrides.get(sym,{}).get("tp1_target_usd",1.0) }}" data-pct="{{ overrides.get(sym,{}).get("tp1_target_pct",1.0) }}" data-price="{{ overrides.get(sym,{}).get("tp1_target_price", d.get("entry_price",0)) }}" oninput="this.value = this.value.replace(/,/g,'.').replace(/[^0-9.]/g,'').replace(/(\\.[^.]*)\\./g, '$1');" style="width:74px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)" value="{{ overrides.get(sym,{}).get('tp1_target_price', d.get('entry_price',0)) if _tpmode=='price' else (overrides.get(sym,{}).get('tp1_target_pct',1.0) if _tpmode=='pct' else overrides.get(sym,{}).get('tp1_target_usd',1.0)) }}">
             <button type="submit" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Save</button>
           </form>
-        </td>
-        <td>
-          <form method="POST" action="/set_tp_hold" style="display:inline-flex;gap:4px;align-items:center" title="Begitu syarat TP Target terpenuhi, tunggu dulu sekian menit SELAMA syaratnya tetap terpenuhi sebelum benar-benar close. 0 = close instan begitu tercapai, seperti sebelumnya. Kalau syaratnya sempat tidak terpenuhi lagi di tengah jalan, batal total (harus tercapai lagi dari nol). Cuma berlaku utk Auto TP/TP Target -- hard-stop, trailing, timeout tetap seperti biasa.">
+          <div style="font-size:9px;color:var(--muted);margin-bottom:2px">Tahan (menit):</div>
+          <form method="POST" action="/set_tp_hold" style="display:flex;gap:4px;align-items:center" title="Begitu syarat TP Target terpenuhi, tunggu dulu sekian menit SELAMA syaratnya tetap terpenuhi sebelum benar-benar close. 0 = close instan begitu tercapai, seperti sebelumnya. Kalau syaratnya sempat tidak terpenuhi lagi di tengah jalan, batal total (harus tercapai lagi dari nol). Cuma berlaku utk Auto TP/TP Target -- hard-stop, trailing, timeout tetap seperti biasa.">
             <input type="hidden" name="sym" value="{{ sym }}">
             <input type="number" name="minutes" min="0" step="1" value="{{ overrides.get(sym,{}).get('tp1_hold_minutes', 0) }}" style="width:50px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)">
             <button type="submit" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Save</button>
@@ -11603,40 +11605,46 @@ refreshPerfChart();
           <div style="font-size:9px;color:var(--accent);margin-top:2px">{{ d.get("tp_hold_status") }}</div>
           {% endif %}
         </td>
-        <td>{% if d.get("strategy","") in ("akum_entry_a","akum_entry_b") %}<span class="badge" style="background:#444;color:#888">N/A</span>{% elif d.get("trailing_armed") %}<span class="badge badge-armed">Yes</span>{% else %}<span class="badge badge-wait">Wait</span>{% endif %}{% if d.get("arm_status_detail") %}<div style="font-size:9px;color:var(--muted);margin-top:2px;white-space:nowrap">{{ d.get("arm_status_detail") }}</div>{% endif %}</td>
         <td>
-          {% if d.get("strategy","") in ("akum_entry_a","akum_entry_b") %}
-          <span class="badge" style="background:#444;color:#888">N/A</span>
-          {% else %}
-          <form method="POST" action="/toggle" style="display:inline" title="Uncheck = trailing TIDAK akan pernah di-arm buat deal ini, walau profit sudah lewat ambang arm. Deal tetap dipantau normal (hard-stop/manual close tetap jalan), cuma nggak ada auto-lock profit via trailing.">
+          <div>{% if d.get("strategy","") in ("akum_entry_a","akum_entry_b") %}<span class="badge" style="background:#444;color:#888">N/A</span>{% elif d.get("trailing_armed") %}<span class="badge badge-armed">Yes</span>{% else %}<span class="badge badge-wait">Wait</span>{% endif %}</div>
+          {% if d.get("arm_status_detail") %}<div style="font-size:9px;color:var(--muted);margin-top:2px;white-space:nowrap">{{ d.get("arm_status_detail") }}</div>{% endif %}
+          {% if d.get("strategy","") not in ("akum_entry_a","akum_entry_b") %}
+          <form method="POST" action="/toggle" style="display:block;margin-top:3px" title="Uncheck = trailing TIDAK akan pernah di-arm buat deal ini, walau profit sudah lewat ambang arm. Deal tetap dipantau normal (hard-stop/manual close tetap jalan), cuma nggak ada auto-lock profit via trailing.">
             <input type="hidden" name="sym" value="{{ sym }}">
             <input type="hidden" name="key" value="arm_trailing_enabled">
-            <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("arm_trailing_enabled",True) else "" }} style="width:16px;height:16px;cursor:pointer">
+            <label style="display:flex;align-items:center;gap:3px;cursor:pointer">
+              <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("arm_trailing_enabled",True) else "" }} style="width:14px;height:14px;cursor:pointer">
+              <span style="font-size:8px;color:var(--muted);white-space:nowrap">Arm trailing</span>
+            </label>
           </form>
           {% endif %}
         </td>
         <td>
-          <form method="POST" action="/toggle" style="display:inline">
+          <form method="POST" action="/toggle" style="display:block;margin-bottom:2px">
             <input type="hidden" name="sym" value="{{ sym }}">
             <input type="hidden" name="key" value="auto_add_fund">
-            <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("auto_add_fund",True) else "" }}>
+            <label style="display:flex;align-items:center;gap:3px;cursor:pointer">
+              <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("auto_add_fund",True) else "" }} style="width:14px;height:14px;cursor:pointer">
+              <span style="font-size:8px;color:var(--muted);white-space:nowrap">Auto Avg Down</span>
+            </label>
           </form>
-        </td>
-        <td>
-          <form method="POST" action="/toggle" style="display:inline">
+          <form method="POST" action="/toggle" style="display:block;margin-bottom:2px">
             <input type="hidden" name="sym" value="{{ sym }}">
             <input type="hidden" name="key" value="auto_close">
-            <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("auto_close",True) else "" }}>
+            <label style="display:flex;align-items:center;gap:3px;cursor:pointer">
+              <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("auto_close",True) else "" }} style="width:14px;height:14px;cursor:pointer">
+              <span style="font-size:8px;color:var(--muted);white-space:nowrap">Auto Close</span>
+            </label>
           </form>
-        </td>
-        <td>
-          <form method="POST" action="/toggle" style="display:inline">
+          <form method="POST" action="/toggle" style="display:block">
             <input type="hidden" name="sym" value="{{ sym }}">
             <input type="hidden" name="key" value="ai_call">
-            <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("ai_call",True) else "" }}>
+            <label style="display:flex;align-items:center;gap:3px;cursor:pointer">
+              <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("ai_call",True) else "" }} style="width:14px;height:14px;cursor:pointer">
+              <span style="font-size:8px;color:var(--muted);white-space:nowrap">AI Call</span>
+            </label>
           </form>
         </td>
-                <td><button type="button" onclick="resendOpenNotification('{{ sym }}')" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 7px;font-size:10px;cursor:pointer">Resend OPEN</button></td>
       </tr>
       {% endfor %}
       </tbody>
@@ -20029,6 +20037,20 @@ def run_web_dashboard():
                     return jsonify({"ok": False, "error": str(error)}), 400
             return jsonify({"ok": True, **load_ai_provider_config()})
 
+        @app.route("/api/test_gemini")
+        def api_test_gemini():
+            """25/09/2026 (permintaan Mas Budi): tes manual Gemini setelah top-up billing --
+            panggil langsung tanpa lewat jalur AI decision trading, supaya status
+            ai_provider_health ke-refresh tanpa perlu nunggu Anthropic down dulu."""
+            try:
+                reply = _gemini_ai_call("Balas cuma dengan kata: OK")
+                _mark_ai_provider_ok("gemini")
+                return jsonify({"ok": True, "reply": reply})
+            except Exception as error:
+                error_text = str(error)
+                _mark_ai_provider_down("gemini", error_text)
+                return jsonify({"ok": False, "error": _classify_ai_error(error_text), "raw_error": error_text[:300]}), 502
+
         @app.route("/api/simulate_balance_conversion", methods=["POST"])
         def api_simulate_balance_conversion():
             try:
@@ -21161,7 +21183,7 @@ def _ai_call(prompt: str, model: str = None) -> str:
     AI_LAST_PROVIDER = "rule-based Python"
     if not _ai_quota_notif_sent:
         _ai_quota_notif_sent = True
-        _lines = ["AI Decision provider tidak tersedia."]
+        _lines = ["AI Decision providers tidak tersedia."]
         for provider, error_text in provider_errors.items():
             _lines.append(f"{provider.capitalize()}: {_classify_ai_error(error_text)}")
         _lines.append("Bot memakai rule-based Python sebagai fallback terakhir.")
