@@ -20406,7 +20406,11 @@ def run_web_dashboard():
                 ("brkX2_4h", "brkX2-4h"),
                 ("brkX2_crossema", "CrossEMA-4h"),
                 ("hunting_4h", "Hunting-4h"),
-                ("akumulasi", "Akumulasi-4h"),
+                # 24/09/2026 (permintaan Mas Budi): dipecah dari 1 baris gabungan "akumulasi"
+                # (csv_progress('akumulasi') dulu menjumlahkan akum_entry_a+b jadi satu) -- sekarang
+                # tiap entry baca key aslinya sendiri2, konsisten dgn split Strategy Control.
+                ("akum_entry_a", "Akumulasi-4h Entry A"),
+                ("akum_entry_b", "Akumulasi-4h Entry B"),
                 ("trend_confirm_4h", "TrenKonfirmasi-4h"),
                 ("qscalp_3m", "QScalp-3m"),
             ]
