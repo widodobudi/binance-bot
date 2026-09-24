@@ -9601,6 +9601,24 @@ _crossema_near_miss: list = []        # [(sym, fails)] — kandidat lolos Lapis 
 # TETAP DITOLAK (fail-closed, keputusan eksplisit Mas Budi berlaku sama utk Tahap 2).
 CROSSEMA_ACCEL_REJECT_THRESHOLD = -0.45
 
+# 24/09/2026 (Tahap 2b, permintaan Mas Budi -- investigasi SCR/USDT -8.97% yg lolos dari filter
+# akselerasi di atas): dicari lintas banyak timeframe & fitur diferensial/integral apa saja yg bisa
+# jadi sinyal peringatan tambahan. Backtest populasi CrossEMA-4h (n=7.115 kandidat, ~104 pair, ~14
+# bulan data) nemu 1 fitur INTEGRAL yg tervalidasi kuat & konsisten di 3 horizon (12j/24j/60j):
+# cum_pos_ret10 = jumlah SEMUA return positif candle 4h dalam 10 candle terakhir (~1.5 hari) --
+# "seberapa banyak kenaikan yg sudah terjadi sebelum entry", beda dari akselerasi di atas yg cuma
+# lihat 1 candle terakhir. Di cutoff persentil-85 (7.3351, exclude 15% populasi teratas):
+#   grup exclude: avg -2.75% (60j), WR 38.5%, rugi parah (<-8%) 32.3%
+#   grup retain : avg +0.25% (60j), WR 47.2%, rugi parah (<-8%) 9.8% (~3.3x lebih jarang)
+# SCR sendiri nilainya 8.79 (di ATAS cutoff 7.3351) -- gerbang ini AKAN menangkapnya kalau live
+# saat itu. Threshold persentil-90 (8.97) SENGAJA TIDAK dipakai krn tidak menangkap SCR sama
+# sekali -- persentil-85 dipilih krn tervalidasi DAN mencakup satu-satunya kasus nyata yg memicu
+# pencarian ini. CATATAN RISIKO: exact cutoff cuma dikalibrasi dari 1 kasus nyata (SCR), pola
+# populasinya sendiri real tapi presisi angka masih lemah -- monitor & revisit kalau ada kasus baru.
+# Indikator lain yg DICOBA tapi TIDAK tervalidasi (jangan diimplementasikan): akselerasi RSI 4h/1D,
+# percepatan volume, rasio tren volume -- semua null atau salah arah setelah divalidasi.
+CROSSEMA_CUM_POS_RET10_REJECT_THRESHOLD = 7.35
+
 def thread_crossema_scan():
     """Scan CrossEMA intrabar: ST=-1, close<EMA20, lalu price_now>EMA20 (cross-up)."""
     global _crossema_last_candle_ts, _crossema_near_miss
@@ -9731,14 +9749,28 @@ def thread_crossema_scan():
                 _gap9_26_prev = (_ema9_cx.iloc[-2] - _ema26_cx.iloc[-2]) / float(df['close'].iloc[-2]) * 100
                 _accel_cx = _gap9_26_now - _gap9_26_prev
 
+            # 24/09/2026 Tahap 2b (lihat REMARK CROSSEMA_CUM_POS_RET10_REJECT_THRESHOLD di atas):
+            # integral -- jumlah SEMUA return positif candle 4h dalam 10 candle terakhir.
+            _cum_pos_ret10_cx = None
+            if len(df) >= 11:
+                _close10_cx = df['close'].iloc[-11:]
+                _ret10_cx = _close10_cx.pct_change().dropna() * 100
+                _cum_pos_ret10_cx = float(_ret10_cx[_ret10_cx > 0].sum())
+
             if is_ai_call_open_enabled('brkX2_crossema'):
                 _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'signal_price': _fmt_price(signal_price)}
                 if _rsi_val_cx is not None: _ai_ind['rsi'] = f"{_rsi_val_cx:.1f}"
                 if _accel_cx is not None: _ai_ind['ema9_26_accel'] = f"{_accel_cx:+.2f}pp"
-                _fail_closed_cx = _accel_cx is not None and _accel_cx <= CROSSEMA_ACCEL_REJECT_THRESHOLD
+                if _cum_pos_ret10_cx is not None: _ai_ind['cum_pos_ret10'] = f"{_cum_pos_ret10_cx:.2f}%"
+                _accel_flag_cx = _accel_cx is not None and _accel_cx <= CROSSEMA_ACCEL_REJECT_THRESHOLD
+                _run_flag_cx = _cum_pos_ret10_cx is not None and _cum_pos_ret10_cx > CROSSEMA_CUM_POS_RET10_REJECT_THRESHOLD
+                _fail_closed_cx = _accel_flag_cx or _run_flag_cx
                 if not ai_decision_open(sym, 'CrossEMA-4h', _ai_ind, active_deal_count(), notify=False, fail_closed=_fail_closed_cx):
+                    _why_cx = []
+                    if _accel_flag_cx: _why_cx.append('akselerasi EMA9-26 melambat')
+                    if _run_flag_cx: _why_cx.append('sudah naik banyak 10 candle terakhir')
                     log(f"[T_CROSSEMA] {sym} babak-1 di-skip oleh AI individual"
-                        f"{' (fail-closed, akselerasi EMA9-26 melambat)' if _fail_closed_cx else ''}")
+                        f"{' (fail-closed, ' + ' + '.join(_why_cx) + ')' if _fail_closed_cx else ''}")
                     continue
 
             _vm_cx = r.get('vol_ma')
