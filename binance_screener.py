@@ -2713,6 +2713,68 @@ def tc_hardstop_progress_line() -> str:
     except Exception:
         return "n/a"
 
+# ── REMINDER review base order Akumulasi-4h Entry A/B (24/09/2026, permintaan Mas Budi) ────────
+# Base_usd akum_entry_a/b resmi dikunci $8 (sebelumnya cuma fallback tersembunyi, bukan setting
+# eksplisit -- lihat REMARK STRATEGY_CONFIG_DEFAULTS['akum_entry_b']). Data historis SAAT diminta
+# review ini cuma n=2 per entry, & base_usd lama-nya sendiri kacau ($7.55-$155.28, bukan angka
+# stabil) -- terlalu tipis utk dipercaya. Keputusan: TETAP $8, kumpulkan data dulu. Counter di
+# bawah TERPISAH per entry (A beda pola dgn B -- Spring vs Breakout Retest, kinerja bisa beda),
+# ingatkan sekali per entry begitu AKUM_AB_REVIEW_TARGET deal BARU (sejak keputusan ini) tutup.
+AKUM_AB_REVIEW_TARGET = 10
+AKUM_AB_REVIEW_FILE = os.path.join(DATA_DIR, "akum_ab_review.json")
+_akum_ab_lock = threading.Lock()
+
+def _akum_ab_state():
+    st = _tc_json_load(AKUM_AB_REVIEW_FILE, {})
+    for k in ('akum_entry_a', 'akum_entry_b'):
+        st.setdefault(k, {"n": 0, "win": 0, "sum_pct": 0.0, "worst": 0.0, "notified": False, "deals": []})
+    return st
+
+def akum_ab_track_close(symbol: str, strategy: str, indicators: dict):
+    """Dipanggil dari log_oac('CLOSE'): hitung deal Akum Entry A/B sejak base_usd $8 resmi dikunci
+    (24/09/2026), ingatkan sekali per entry begitu AKUM_AB_REVIEW_TARGET deal baru tutup."""
+    if strategy not in ('akum_entry_a', 'akum_entry_b'):
+        return
+    try:
+        pct = float(str(indicators.get('profit_pct', '')).replace('%', '').replace('+', ''))
+    except Exception:
+        return
+    remind = None
+    with _akum_ab_lock:
+        allst = _akum_ab_state()
+        st = allst[strategy]
+        st["n"] += 1; st["win"] += int(pct > 0); st["sum_pct"] += pct
+        st["worst"] = pct if st["n"] == 1 else min(st["worst"], pct)
+        st["deals"].append([now_wib().strftime('%d/%m %H:%M'), to_display_pair(symbol), round(pct, 2)])
+        if st["n"] >= AKUM_AB_REVIEW_TARGET and not st["notified"]:
+            st["notified"] = True
+            remind = (strategy, dict(st))
+        _tc_json_save(AKUM_AB_REVIEW_FILE, allst)
+    if remind:
+        strat, r = remind
+        label = "Entry A (Spring)" if strat == 'akum_entry_a' else "Entry B (Breakout Retest)"
+        n = r["n"]
+        lines = "\n".join(f"  {d[0]} {d[1]} {d[2]:+.2f}%" for d in r["deals"][-AKUM_AB_REVIEW_TARGET:])
+        send_telegram(
+            f"🔔 REVIEW base order Akumulasi-4h {label}\n"
+            f"{n} deal tutup sejak base $8 resmi dikunci 24/09/2026.\n"
+            f"WR {r['win']/n*100:.0f}% | avg {r['sum_pct']/n:+.2f}%/deal | rugi terburuk {r['worst']:+.2f}%\n{lines}\n\n"
+            f"Bilang ke Claude: 'review base order Akum {label}' utk evaluasi apa base $8 dinaikkan.")
+
+def akum_ab_progress_line(strategy: str) -> str:
+    """Satu baris progres counter review base order utk 'akum_entry_a' atau 'akum_entry_b'."""
+    try:
+        with _akum_ab_lock:
+            st = _akum_ab_state()[strategy]
+        n = st["n"]
+        if n == 0:
+            return f"0/{AKUM_AB_REVIEW_TARGET} deal (review base $8 dimulai 24/09/2026)"
+        return (f"{n}/{AKUM_AB_REVIEW_TARGET} deal, WR {st['win']/n*100:.0f}%, "
+                f"avg {st['sum_pct']/n:+.2f}%, terburuk {st['worst']:+.2f}%"
+                + (" -- REVIEW SIAP" if st["notified"] else ""))
+    except Exception:
+        return "n/a"
+
 def _bump_ema200_watch_count(strategy: str) -> int:
     """Naikkan counter sampel EMA200(1D) utk `strategy`, simpan ke /data, return count baru.
     Gagal baca/tulis -> return 0 (counter cuma buat visibilitas, bukan data kritikal)."""
@@ -2743,6 +2805,10 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
             tc_hardstop_track_close(symbol, strategy, indicators)   # counter review hard-stop K1.5/cap10.8
         except Exception as error:
             log(f"WARN log_oac tc_hardstop_track {symbol}: {error}")
+        try:
+            akum_ab_track_close(symbol, strategy, indicators)   # counter review base order Akum Entry A/B
+        except Exception as error:
+            log(f"WARN log_oac akum_ab_track {symbol}: {error}")
     if event.upper() == "OPEN":
         try:
             strat_key = strategy.lower()
@@ -6559,6 +6625,8 @@ def heartbeat_general_tick():
                      f"{prog_akum_stop['n']}/{AKUM_ENTRY_FWDTEST_TARGET} "
                      f"({prog_akum_stop['win']}W/{prog_akum_stop['loss']}L,{prog_akum_stop['total_pct']:+.1f}%)\n"
                      f"    akumulasi-4h: 2nd {_fmt_strat(prog_akum2, AKUM_ENTRY_PHASE2_TARGET)}\n"
+                     f"    akum entry A review base $8: {akum_ab_progress_line('akum_entry_a')}\n"
+                     f"    akum entry B review base $8: {akum_ab_progress_line('akum_entry_b')}\n"
                      f"  - trend_confirm_4h: {_fmt_hunting_live(prog_trend)}\n"
                      f"    trend_confirm_4h review hard-stop K1.5/cap10.8: {tc_hardstop_progress_line()}\n"
                      f"    jual-sebagian->Earn (brkX2-12h 75%): {earn_partial_progress_line()}\n"
