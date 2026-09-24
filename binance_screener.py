@@ -286,6 +286,18 @@ GLOBAL_MAX_EXPOSURE_USD = 150.0    # total $ eksposur riil semua deal aktif (dar
 # notif ini). Pola sama persis dgn cooldown armed/close/add-fund yg sudah ada (per simbol).
 GLOBAL_EXPOSURE_NOTIF_COOLDOWN_SEC = 20 * 60
 _global_exposure_notif_until = {}   # {(symbol, strategy): until_timestamp}
+# 24/09/2026 (permintaan Mas Budi -- kejadian riil: portofolio nempel di batas $150 berjam-jam,
+# AI terus menyetujui kandidat BARU beda-beda tiap siklus scan (CETUS/CVC/LTC/STEEM/PLUME dst),
+# jadi notif "disetujui AI tapi TIDAK dibuka" kelihatan spam walau cooldown PER SIMBOL di atas
+# sudah jalan benar -- karena tiap simbol baru dapat jatah notifnya sendiri-sendiri, sementara
+# akar masalahnya (portofolio penuh) itu SATU kondisi yg sama, bukan N kejadian beda-beda.
+# Cooldown GLOBAL ini nambah lapisan DI ATAS cooldown per-simbol (harus lolos DUA-duanya baru
+# notif terkirim) -- begitu 1 notif jenis ini terkirim utk SIMBOL APAPUN, tahan dulu simbol lain
+# juga sampai cooldown global ini habis. Sengaja lebih PANJANG dari yg per-simbol (60 menit vs 20
+# menit) krn tujuannya beda: per-simbol cegah 1 simbol spam ke dirinya sendiri, global cegah
+# banjir notif simbol BERBEDA-beda selama kondisi akarnya (portofolio penuh) belum berubah.
+GLOBAL_EXPOSURE_NOTIF_GLOBAL_COOLDOWN_SEC = 60 * 60
+_global_exposure_notif_global_until = 0.0
 
 # ---- STRATEGI 3: brkX2-4h (intrabar 4h, menit ke 5-60) ----
 # Hasil backtest: MACD+SUPERTREND+ATR_MIN+VOLUME + HTF 3D PRICE_EMA50+MACD+RSI50
@@ -4854,15 +4866,21 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
         # _global_exposure_notif_until) supaya tidak senyap, dan urutan notif di Telegram
         # otomatis benar (tepat setelah notif OPEN LONG kandidat lain di batch yg sama) krn
         # loop yg buka deal sinkron/berurutan.
+        # 24/09/2026: DITAMBAH cooldown GLOBAL (lihat _global_exposure_notif_global_until) --
+        # harus lolos DUA-duanya (per-simbol DAN global) baru notif terkirim, supaya tidak
+        # banjir notif simbol beda-beda selama portofolio nempel di batas eksposur berjam-jam.
+        global _global_exposure_notif_global_until
         _exp_key = (symbol, strategy)
         _exp_until = _global_exposure_notif_until.get(_exp_key, 0)
-        if time.time() >= _exp_until:
+        if time.time() >= _exp_until and time.time() >= _global_exposure_notif_global_until:
             _global_exposure_notif_until[_exp_key] = time.time() + GLOBAL_EXPOSURE_NOTIF_COOLDOWN_SEC
+            _global_exposure_notif_global_until = time.time() + GLOBAL_EXPOSURE_NOTIF_GLOBAL_COOLDOWN_SEC
             send_telegram(
                 f"⚠️ {to_display_pair(symbol)} ({strategy}) disetujui AI tapi TIDAK dibuka\n"
                 f"Alasan: {_glob_reason}\n"
-                f"(notif {to_display_pair(symbol)} ini dibatasi 1x per "
-                f"{GLOBAL_EXPOSURE_NOTIF_COOLDOWN_SEC // 60} menit)",
+                f"(notif jenis ini dibatasi maks 1x per "
+                f"{GLOBAL_EXPOSURE_NOTIF_GLOBAL_COOLDOWN_SEC // 60} menit lintas semua simbol; "
+                f"kandidat lain yg kena batas sama sementara ini cuma dicatat log)",
                 parse_mode=None
             )
         return False, _cfg_base, 0
