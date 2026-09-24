@@ -1412,6 +1412,100 @@ def unblock_pair(symbol: str) -> bool:
     save_blocked_pairs()
     return True
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 24/09/2026 (permintaan Mas Budi, kasus STG/USDT -8.97%... -- eh -10.11%, hard stop 19/09/2026):
+# indikator harga apapun (teknikal, diferensial, integral, lintas timeframe) sudah dicoba dan TIDAK
+# ada yg bisa jelaskan kerugian STG -- ternyata sebabnya NON-TEKNIKAL: LayerZero Foundation
+# mengakuisisi Stargate (disetujui DAO Agustus 2025, $110jt), STG dikonversi paksa ke token ZRO,
+# dan Binance akan HENTIKAN trading spot STG 6/10/2026. Token yg tahu-dirinya mau di-delist lazim
+# mengalami tekanan jual terus-menerus krn holder keluar drpd ikut proses konversi paksa -- red flag
+# struktural yg tidak akan pernah muncul di indikator harga apapun secepat & sejelas ini.
+# Fitur baru: cek berkala pengumuman resmi kategori "Delisting" Binance, auto block_pair() kalau ada
+# symbol yg disebut. CATATAN JUJUR: endpoint CMS ini undocumented/reverse-engineered (bukan REST API
+# trading resmi Binance), TIDAK bisa saya tes langsung dari sandbox dev (binance.com diblokir di
+# jaringan sandbox ini) -- WAJIB cek log Railway tag [DELISTING] setelah deploy utk pastikan ini
+# benar-benar jalan (bukan diam-diam gagal terus tanpa ketahuan).
+# ══════════════════════════════════════════════════════════════════════════════
+BINANCE_DELISTING_CATALOG_ID = 161   # kategori "Delisting" di CMS pengumuman Binance
+DELISTING_CHECK_INTERVAL_SEC = 6 * 3600   # 6 jam -- pengumuman delisting jarang & tidak time-critical
+DELISTING_SEEN_FILE = os.path.join(DATA_DIR, "delisting_announcements_seen.json")
+_delisting_last_check = 0.0
+_delisting_seen_ids: set = set()
+
+def load_delisting_seen():
+    global _delisting_seen_ids
+    if not os.path.exists(DELISTING_SEEN_FILE):
+        log("   delisting_announcements_seen.json tidak ada, mulai kosong (cek delisting).")
+        return
+    try:
+        with open(DELISTING_SEEN_FILE) as f:
+            _delisting_seen_ids = set(json.load(f))
+        log(f"   Loaded delisting_announcements_seen: {len(_delisting_seen_ids)} artikel.")
+    except Exception as e:
+        log(f"WARN gagal baca delisting_announcements_seen.json: {e}")
+
+def save_delisting_seen():
+    try:
+        with open(DELISTING_SEEN_FILE, 'w') as f:
+            json.dump(sorted(_delisting_seen_ids), f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan delisting_announcements_seen.json: {e}")
+
+def check_delisting_announcements_tick():
+    """Cek berkala (self-gated DELISTING_CHECK_INTERVAL_SEC, aman dipanggil tiap loop scan spt
+    heartbeat_*_tick) pengumuman "Delisting" resmi Binance -- auto block_pair() symbol yg disebut
+    supaya tidak entry ke coin yg sudah dijadwalkan berhenti diperdagangkan (lihat REMARK di atas)."""
+    global _delisting_last_check
+    now = time.time()
+    if now - _delisting_last_check < DELISTING_CHECK_INTERVAL_SEC:
+        return
+    _delisting_last_check = now
+    try:
+        url = ("https://www.binance.com/bapi/composite/v1/public/cms/article/list/query"
+               f"?type=1&catalogId={BINANCE_DELISTING_CATALOG_ID}&pageNo=1&pageSize=20")
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        payload = data.get("data") or {}
+        articles = payload.get("articles")
+        if articles is None:
+            catalogs = payload.get("catalogs") or []
+            articles = catalogs[0].get("articles", []) if catalogs else []
+    except Exception as e:
+        log(f"WARN [DELISTING] gagal ambil pengumuman Binance: {e}")
+        return
+
+    if not articles:
+        log("[DELISTING] cek pengumuman: 0 artikel diterima (format response mungkin beda -- cek manual)")
+        return
+
+    try:
+        ticker = get_ticker_24h() or []
+        known_bases = {t["symbol"][:-4] for t in ticker if t.get("symbol", "").endswith("USDT")}
+    except Exception:
+        known_bases = set()
+
+    new_blocks = []
+    for art in articles:
+        art_id = str(art.get("id") or art.get("code") or art.get("title", ""))
+        if not art_id or art_id in _delisting_seen_ids:
+            continue
+        _delisting_seen_ids.add(art_id)
+        title = art.get("title", "")
+        for tok in re.findall(r'\b[A-Z0-9]{2,10}\b', title):
+            sym = tok + "USDT"
+            if tok in known_bases and sym not in SYMBOL_BLACKLIST:
+                block_pair(sym)
+                new_blocks.append((tok, title))
+    save_delisting_seen()
+
+    if new_blocks:
+        lines = ["🚫 Auto-blacklist: pengumuman delisting Binance terdeteksi"]
+        for tok, title in new_blocks:
+            lines.append(f"{tok}/USDT -- {title[:120]}")
+        send_telegram("\n".join(lines), parse_mode=None)
+        log(f"[DELISTING] auto-block: {[t for t, _ in new_blocks]}")
+
 def get_closed_trades_distinct_pairs() -> list:
     """Daftar pair unik (symbol raw, mis. 'TRUMPUSDT') dari trades_forwardtest.csv yang
     statusnya CLOSED -- dipakai sbg sumber dropdown menu Block Pair (bukan full symbol
@@ -9566,6 +9660,7 @@ def run_thread1d_4h():
                 heartbeat_4h_tick(status_4h, near_4h)
                 heartbeat_crossema_tick()
                 heartbeat_general_tick()
+                check_delisting_announcements_tick()
             except Exception as e:
                 log(f"WARN T1d heartbeat periodik: {e}")
         except Exception as e:
@@ -21809,6 +21904,14 @@ if __name__ == '__main__':
     load_hold_no_sell_closed()
     load_hold_no_sell_price()
     load_blocked_pairs()
+    load_delisting_seen()
+    # 24/09/2026 (permintaan Mas Budi): STG/USDT diblok manual -- LayerZero mengakuisisi Stargate,
+    # Binance hentikan trading spot STG 6/10/2026 (konversi paksa ke ZRO). Bukan soal indikator
+    # harga, tapi delisting terjadwal -- lihat check_delisting_announcements_tick() utk deteksi
+    # kasus serupa otomatis ke depannya.
+    if 'STGUSDT' not in SYMBOL_BLACKLIST:
+        block_pair('STGUSDT')
+        log("[MIGRASI] STG/USDT ditambahkan ke blacklist manual (delisting Binance 6/10/2026)")
     apply_one_time_config_migrations()
     migrate_csv_hold_remark_once()
     threading.Thread(target=backfill_qscalp_rsi_once, daemon=True).start()   # 21/09/2026: isi RSI@Open QScalp lama
