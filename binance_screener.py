@@ -18543,11 +18543,15 @@ def run_web_dashboard():
                     if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof)
                     if strat == 'akum_entry_a' and d.get('akum2'): record_akum2_close(sym, prof)
                     log(f"[MANUAL-CLOSE] {sym} @ {price_now:.6g} profit={prof:.2f}%")
+                    # 24/09/2026 (permintaan Mas Budi): profit $ ditambahkan, sebelumnya notif ini
+                    # cuma tulis persen -- total_usd (modal riil deal ini) sudah dihitung di atas,
+                    # tinggal dikalikan langsung, tidak perlu panggilan baru.
+                    _profit_usd = total_usd * prof / 100
                     send_telegram(
                         f"CLOSE MANUAL (dashboard)\n"
                         f"{ts} WIB\n"
                         f"Pair  : {to_display_pair(sym)}\n"
-                        f"Exit  : {_fmt_price(price_now)} | Profit: {prof:+.2f}%\n"
+                        f"Exit  : {_fmt_price(price_now)} | Profit: {prof:+.2f}% (${_profit_usd:+.2f})\n"
                         f"Strategi: {strat}"
                     )
                     return jsonify({"ok": True, "sym": sym, "price": price_now, "profit_pct": round(prof, 2)})
