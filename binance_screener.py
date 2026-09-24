@@ -1983,6 +1983,67 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
         log(f"   [CSV] gagal tulis CLOSE: {e}")
 
 
+def diagnose_futures_funding_wif_met_once():
+    """24/09/2026 (permintaan Mas Budi): DIAGNOSTIK SEKALI JALAN, BUKAN fitur permanen -- cek apakah
+    funding rate/open interest Binance Futures WIF & MET menunjukkan anomali (posisi leverage
+    berlebihan) sebelum hard-stop -11.18%/-11.17% masing-masing (trend_confirm_4h, 22-23/09/2026).
+    Kategori baru yg belum pernah diuji sesi ini -- semua uji sebelumnya (teknikal, diferensial/
+    integral lintas timeframe, fundamental/delisting) berbasis harga/volume SPOT atau data on-chain,
+    BUKAN posisi derivatif. Sandbox dev tempat kode ini ditulis diblokir jaringan ke semua API
+    exchange (Binance Futures, Bybit, Coinalyze) -- makanya diagnostik ini dijalankan LEWAT bot live
+    di Railway (jaringannya beda, sudah terbukti bisa akses Binance utk order asli). Cek log
+    Railway tag [DIAG-FUTURES] utk hasilnya. HAPUS fungsi ini setelah hasilnya dianalisis -- ini
+    bukan bagian dari trading logic, murni riset satu kali."""
+    import datetime as _dt
+    targets = [
+        ("WIFUSDT", _dt.datetime(2026, 9, 22, 13, 28, 40, tzinfo=_dt.timezone.utc)),
+        ("METUSDT", _dt.datetime(2026, 9, 23, 14, 15, 31, tzinfo=_dt.timezone.utc)),
+    ]
+    for sym, entry_dt in targets:
+        try:
+            start_ms = int((entry_dt - _dt.timedelta(days=3)).timestamp() * 1000)
+            end_ms = int((entry_dt + _dt.timedelta(hours=12)).timestamp() * 1000)
+            entry_ms = int(entry_dt.timestamp() * 1000)
+
+            fr = requests.get("https://fapi.binance.com/fapi/v1/fundingRate",
+                               params={"symbol": sym, "startTime": start_ms, "endTime": end_ms, "limit": 50},
+                               timeout=15).json()
+            log(f"[DIAG-FUTURES] {sym} funding rate history ({len(fr) if isinstance(fr, list) else 0} entri):")
+            if isinstance(fr, list):
+                for row in fr:
+                    ts = _dt.datetime.fromtimestamp(row["fundingTime"] / 1000, tz=_dt.timezone.utc)
+                    marker = " <== dekat ENTRY" if abs(row["fundingTime"] - entry_ms) < 8 * 3600 * 1000 else ""
+                    log(f"[DIAG-FUTURES]   {ts} rate={float(row['fundingRate']) * 100:+.4f}%{marker}")
+            else:
+                log(f"[DIAG-FUTURES] {sym} funding rate response tidak sesuai ekspektasi: {fr}")
+
+            oi = requests.get("https://fapi.binance.com/futures/data/openInterestHist",
+                               params={"symbol": sym, "period": "1h", "startTime": start_ms, "endTime": end_ms, "limit": 100},
+                               timeout=15).json()
+            log(f"[DIAG-FUTURES] {sym} open interest history ({len(oi) if isinstance(oi, list) else 0} entri, 1h):")
+            if isinstance(oi, list):
+                for row in oi[-24:]:
+                    ts = _dt.datetime.fromtimestamp(row["timestamp"] / 1000, tz=_dt.timezone.utc)
+                    marker = " <== dekat ENTRY" if abs(row["timestamp"] - entry_ms) < 3600 * 1000 else ""
+                    log(f"[DIAG-FUTURES]   {ts} OI={row.get('sumOpenInterest')} val=${row.get('sumOpenInterestValue')}{marker}")
+            else:
+                log(f"[DIAG-FUTURES] {sym} OI response tidak sesuai ekspektasi: {oi}")
+
+            lsr = requests.get("https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
+                                params={"symbol": sym, "period": "1h", "startTime": start_ms, "endTime": end_ms, "limit": 100},
+                                timeout=15).json()
+            log(f"[DIAG-FUTURES] {sym} long/short account ratio ({len(lsr) if isinstance(lsr, list) else 0} entri, 1h):")
+            if isinstance(lsr, list):
+                for row in lsr[-24:]:
+                    ts = _dt.datetime.fromtimestamp(row["timestamp"] / 1000, tz=_dt.timezone.utc)
+                    marker = " <== dekat ENTRY" if abs(row["timestamp"] - entry_ms) < 3600 * 1000 else ""
+                    log(f"[DIAG-FUTURES]   {ts} longAcct={row.get('longAccount')} shortAcct={row.get('shortAccount')} ratio={row.get('longShortRatio')}{marker}")
+            else:
+                log(f"[DIAG-FUTURES] {sym} long/short ratio response tidak sesuai ekspektasi: {lsr}")
+        except Exception as e:
+            log(f"WARN [DIAG-FUTURES] gagal ambil data {sym}: {e}")
+    log("[DIAG-FUTURES] selesai -- HAPUS diagnose_futures_funding_wif_met_once() setelah dianalisis.")
+
 def backfill_qscalp_rsi_once():
     """Sekali jalan (marker di config_migrations_done.json): isi kolom rsi_open baris QScalp-3m LAMA yg kosong
     (21/09/2026, permintaan Mas Budi -- RSI@Open QScalp dulu tidak pernah dicatat). RSI(14) dihitung ulang dari
@@ -21915,6 +21976,7 @@ if __name__ == '__main__':
     apply_one_time_config_migrations()
     migrate_csv_hold_remark_once()
     threading.Thread(target=backfill_qscalp_rsi_once, daemon=True).start()   # 21/09/2026: isi RSI@Open QScalp lama
+    threading.Thread(target=diagnose_futures_funding_wif_met_once, daemon=True).start()   # 24/09/2026: diagnostik sekali jalan, lihat REMARK di definisinya -- HAPUS setelah dianalisis
     threading.Thread(target=recompute_shadow_levels_once, daemon=True).start()   # 21/09/2026: hitung ulang paper test ber-level tetap
     mcap_refresh_async(force=True)   # 20/09/2026: siapkan cache peringkat CoinGecko sebelum OPEN pertama
     threading.Thread(target=earn_selfcheck, daemon=True).start()   # 20/09/2026: cek read-only akses Simple Earn
