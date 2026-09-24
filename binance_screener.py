@@ -20582,6 +20582,13 @@ AI_FALLBACK_PROVIDER = os.environ.get("AI_FALLBACK_PROVIDER", "gemini").lower()
 AI_LAST_PROVIDER = "Belum ada keputusan AI"
 
 _ai_quota_notif_sent = False  # flag agar notif quota habis tidak berulang
+# 24/09/2026 (permintaan Mas Budi, insiden salah paham notif "AI Decision kembali ON"): flag
+# TERPISAH dari _ai_quota_notif_sent di atas -- itu soal "AI mati total (rule-based) vs jalan lagi",
+# ini soal "akun UTAMA spesifik lagi kehabisan kredit vs sudah terisi lagi", dua kondisi beda yg
+# sebelumnya sama-sama numpang di 1 pesan generik "kembali ON" sehingga membingungkan (pesan itu
+# kepicu begitu ADA panggilan Anthropic sukses, TANPA bilang lewat akun mana -- jadi tetap muncul
+# padahal akun utama masih 0 kredit dan yg menjawab akun cadangan terus-menerus).
+_anthropic_primary_down = False  # True selama akun utama (ANTHROPIC_API_KEY) kehabisan kredit
 
 # 23/09/2026 (permintaan Mas Budi, insiden "tolol" -- pertanyaan lama soal bug belum dipatch):
 # sebelumnya /api/ai_provider_config cuma expose anthropic_configured/gemini_configured =
@@ -20750,9 +20757,10 @@ def _anthropic_ai_call(prompt: str, model: str = None) -> str:
     'coba akun lain'), dan ANTHROPIC_API_KEY_2 (opsional) di-set, coba SEKALI lagi pakai akun
     cadangan sebelum benar2 dianggap gagal & lanjut ke Gemini/rule-based. Kalau
     ANTHROPIC_API_KEY_2 kosong, perilaku PERSIS SAMA seperti sebelum ini ada."""
-    global _ai_quota_notif_sent
+    global _ai_quota_notif_sent, _anthropic_primary_down
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY belum di-set")
+    used_backup = False
     try:
         text = _anthropic_http_call(prompt, model, ANTHROPIC_API_KEY)
     except RuntimeError as e:
@@ -20760,14 +20768,34 @@ def _anthropic_ai_call(prompt: str, model: str = None) -> str:
         _is_credit_error = "credit" in _msg or "billing" in _msg or "insufficient" in _msg
         if _is_credit_error and ANTHROPIC_API_KEY_2:
             log("WARN [AI] Anthropic akun utama kehabisan kredit -- coba akun cadangan (ANTHROPIC_API_KEY_2)")
+            # 24/09/2026: notif REAL-TIME sekali per insiden begitu akun utama mulai gagal --
+            # sebelumnya ini cuma ada di log, tidak ada Telegram sama sekali, jadi Mas Budi baru
+            # tahu akun utama masih down lewat pesan "kembali ON" yang generik (membingungkan).
+            if not _anthropic_primary_down:
+                _anthropic_primary_down = True
+                send_telegram(
+                    "⚠️ Anthropic akun UTAMA (widodobudi@) kehabisan kredit.\n"
+                    "Sementara AI Decision jalan pakai akun CADANGAN (vassistbywbudi@).",
+                    parse_mode=None
+                )
             text = _anthropic_http_call(prompt, model, ANTHROPIC_API_KEY_2)
+            used_backup = True
         else:
             raise
+    # Akun utama berhasil TANPA lempar exception, padahal sebelumnya berstatus down -> ini yang
+    # beneran berarti "akun utama sudah terisi/normal lagi" (bukan sekadar akun cadangan menjawab).
+    if not used_backup and _anthropic_primary_down:
+        _anthropic_primary_down = False
+        send_telegram(
+            "✅ Anthropic akun UTAMA (widodobudi@) sudah normal kembali (kredit terisi).",
+            parse_mode=None
+        )
     # Reset flag kalau API kembali normal -- taruh SETELAH berhasil ambil teks,
     # supaya nggak kirim "kembali ON" untuk call yang ternyata masih gagal.
     if _ai_quota_notif_sent:
         _ai_quota_notif_sent = False
-        _msg_ok = "✅ AI Decision kembali ON\nAnthropic API sudah normal kembali."
+        _which = "akun CADANGAN (vassistbywbudi@)" if used_backup else "akun UTAMA (widodobudi@)"
+        _msg_ok = f"✅ AI Decision kembali ON\nAnthropic API sudah normal kembali (lewat {_which})."
         send_telegram(_msg_ok, parse_mode=None)
         threading.Thread(
             target=send_email_open_long,
