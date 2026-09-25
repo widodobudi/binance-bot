@@ -3281,17 +3281,19 @@ def _binance_trading_request(method: str, path: str, params: dict, api_key: str 
 BINANCE_FUTURES_BASE = "https://fapi.binance.com"
 
 def _binance_futures_request(method: str, path: str, params: dict) -> dict:
-    """25/09/2026: read-only diagnostic HMAC-signed request ke Binance FUTURES API,
-    pakai BINANCE_TRADING_KEY/SECRET yang SAMA dipakai trading Spot -- TUJUANNYA CUMA
-    memverifikasi apakah key itu (siapa pun pemilik akunnya) punya izin Futures dan
-    posisi apa yang kelihatan lewat key itu, SEBELUM kode order-close Futures ditulis.
-    Bot ini sebelumnya NOL baris menyentuh Futures API -- ini murni pengecekan, tidak
-    ada order/transaksi yang dikirim lewat fungsi ini."""
+    """25/09/2026: HMAC-signed request ke Binance FUTURES API, pakai BINANCE_FUTURES_KEY/SECRET
+    -- key BARU khusus dibuat 25/09/2026 di akun Master (widodobudi@) dengan izin Futures,
+    TERPISAH dari BINANCE_TRADING_KEY (Sub Account, Spot-only, dipakai trading strategi
+    hidup) supaya kalau ada apa-apa dengan key Futures baru ini, trading Spot yang sudah
+    live tidak ikut kena dampak. Awalnya dicoba pakai BINANCE_TRADING_KEY tapi ditolak
+    Binance (-2015) walau checkbox Futures di key itu sudah dicentang -- root cause tidak
+    pernah benar-benar dipastikan (dicoba re-toggle + tunggu propagasi, tetap gagal),
+    jadi Mas Budi buat key baru dari nol sebagai gantinya."""
     import hmac, hashlib, urllib.parse as _up
-    api_key    = os.environ.get("BINANCE_TRADING_KEY", "")
-    api_secret = os.environ.get("BINANCE_TRADING_SECRET", "")
+    api_key    = os.environ.get("BINANCE_FUTURES_KEY", "")
+    api_secret = os.environ.get("BINANCE_FUTURES_SECRET", "")
     if not api_key or not api_secret:
-        raise ValueError("BINANCE_TRADING_KEY/SECRET tidak di-set di env")
+        raise ValueError("BINANCE_FUTURES_KEY/SECRET tidak di-set di env")
     ts = int(time.time() * 1000)
     params["timestamp"] = ts
     query = _up.urlencode(params)
@@ -20067,8 +20069,8 @@ def run_web_dashboard():
 
         @app.route("/api/test_futures_position")
         def api_test_futures_position():
-            """25/09/2026 (permintaan Mas Budi): cek READ-ONLY apakah BINANCE_TRADING_KEY
-            (key yg sama dipakai bot trading Spot) punya izin Futures dan posisi ETHUSDT
+            """25/09/2026 (permintaan Mas Budi): cek READ-ONLY apakah BINANCE_FUTURES_KEY
+            (key baru khusus Futures, akun Master) punya izin Futures dan posisi ETHUSDT
             apa yang kelihatan lewat key itu -- supaya jelas dulu key mana yang sebenarnya
             "melihat" posisi itu, sebelum kode close-position (order sungguhan) ditulis.
             TIDAK mengirim order apa pun."""
@@ -20076,7 +20078,7 @@ def run_web_dashboard():
             # Cuma 8 karakter pertama (sama seperti cara Binance sendiri menampilkan
             # public key di halaman API Management) -- cukup buat dicocokkan visual
             # dengan screenshot, TIDAK cukup buat menebak/mempakai key-nya.
-            key_prefix = os.environ.get("BINANCE_TRADING_KEY", "")[:8]
+            key_prefix = os.environ.get("BINANCE_FUTURES_KEY", "")[:8]
             try:
                 account = _binance_futures_request("GET", "/fapi/v2/account", {})
                 positions = [
@@ -20086,7 +20088,7 @@ def run_web_dashboard():
                 return jsonify({
                     "ok": True,
                     "futures_permission": True,
-                    "binance_trading_key_prefix": key_prefix,
+                    "binance_futures_key_prefix": key_prefix,
                     "totalWalletBalance": account.get("totalWalletBalance"),
                     "availableBalance": account.get("availableBalance"),
                     "matching_positions": positions,
@@ -20094,7 +20096,7 @@ def run_web_dashboard():
             except Exception as error:
                 return jsonify({
                     "ok": False, "futures_permission": False,
-                    "binance_trading_key_prefix": key_prefix,
+                    "binance_futures_key_prefix": key_prefix,
                     "error": str(error),
                 }), 502
 
