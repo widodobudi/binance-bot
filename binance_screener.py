@@ -3278,6 +3278,34 @@ def _binance_trading_request(method: str, path: str, params: dict, api_key: str 
     return data
 
 
+BINANCE_FUTURES_BASE = "https://fapi.binance.com"
+
+def _binance_futures_request(method: str, path: str, params: dict) -> dict:
+    """25/09/2026: read-only diagnostic HMAC-signed request ke Binance FUTURES API,
+    pakai BINANCE_TRADING_KEY/SECRET yang SAMA dipakai trading Spot -- TUJUANNYA CUMA
+    memverifikasi apakah key itu (siapa pun pemilik akunnya) punya izin Futures dan
+    posisi apa yang kelihatan lewat key itu, SEBELUM kode order-close Futures ditulis.
+    Bot ini sebelumnya NOL baris menyentuh Futures API -- ini murni pengecekan, tidak
+    ada order/transaksi yang dikirim lewat fungsi ini."""
+    import hmac, hashlib, urllib.parse as _up
+    api_key    = os.environ.get("BINANCE_TRADING_KEY", "")
+    api_secret = os.environ.get("BINANCE_TRADING_SECRET", "")
+    if not api_key or not api_secret:
+        raise ValueError("BINANCE_TRADING_KEY/SECRET tidak di-set di env")
+    ts = int(time.time() * 1000)
+    params["timestamp"] = ts
+    query = _up.urlencode(params)
+    sig   = hmac.new(api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+    query += f"&signature={sig}"
+    url     = f"{BINANCE_FUTURES_BASE}{path}?{query}"
+    headers = {"X-MBX-APIKEY": api_key}
+    resp    = session.request(method, url, headers=headers, timeout=10)
+    data    = resp.json()
+    if resp.status_code != 200:
+        raise RuntimeError(f"Binance Futures API {resp.status_code}: {data}")
+    return data
+
+
 _earn_master_key_warned = False  # flag agar warning "belum ada BINANCE_EARN_KEY" cuma sekali
 
 def _binance_earn_request(method: str, path: str, params: dict) -> dict:
@@ -20036,6 +20064,30 @@ def run_web_dashboard():
                 except ValueError as error:
                     return jsonify({"ok": False, "error": str(error)}), 400
             return jsonify({"ok": True, **load_ai_provider_config()})
+
+        @app.route("/api/test_futures_position")
+        def api_test_futures_position():
+            """25/09/2026 (permintaan Mas Budi): cek READ-ONLY apakah BINANCE_TRADING_KEY
+            (key yg sama dipakai bot trading Spot) punya izin Futures dan posisi ETHUSDT
+            apa yang kelihatan lewat key itu -- supaya jelas dulu key mana yang sebenarnya
+            "melihat" posisi itu, sebelum kode close-position (order sungguhan) ditulis.
+            TIDAK mengirim order apa pun."""
+            symbol = str(request.args.get("symbol", "ETHUSDT")).upper().strip()
+            try:
+                account = _binance_futures_request("GET", "/fapi/v2/account", {})
+                positions = [
+                    p for p in account.get("positions", [])
+                    if p.get("symbol") == symbol and float(p.get("positionAmt", 0)) != 0
+                ]
+                return jsonify({
+                    "ok": True,
+                    "futures_permission": True,
+                    "totalWalletBalance": account.get("totalWalletBalance"),
+                    "availableBalance": account.get("availableBalance"),
+                    "matching_positions": positions,
+                })
+            except Exception as error:
+                return jsonify({"ok": False, "futures_permission": False, "error": str(error)}), 502
 
         @app.route("/api/test_gemini")
         def api_test_gemini():
