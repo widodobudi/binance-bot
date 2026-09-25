@@ -294,7 +294,15 @@ GLOBAL_MAX_ACTIVE_DEALS = 4        # jumlah deal aktif gabungan semua strategi
 # tidak bisa hentikan deal yg sedang jalan kena hard-stop). Di $100 (56% modal), worst-case serentak
 # turun ke ~$11 (di bawah batas harian) dan reserve naik jadi ~$79. Bukan trade-level backtest --
 # ini portofolio brake, bukan sinyal entry/exit, jadi dasarnya analisis risiko bukan sweep hasil.
-GLOBAL_MAX_EXPOSURE_USD = 100.0    # total $ eksposur riil semua deal aktif (dari modal ~$178.79)
+GLOBAL_MAX_EXPOSURE_USD = 110.0    # total $ eksposur riil semua deal aktif (dari modal ~$178.79)
+# 25/09/2026 (permintaan Mas Budi): 100 -> 110, mengikuti Batas Rugi Harian 15 -> 18 (lihat
+# migrasi daily_loss_limit_usd_18_20260925 di apply_one_time_config_migrations()). Rumus & rasio
+# reserve SAMA seperti sebelumnya (worst-case serentak ~73% dari batas harian): 110 x worst-case
+# hard-stop 12.1% (tier Ekstrem ATR, non-TrenKonfirmasi) = ~$13.3, masih di bawah $18. Modal riil
+# sekarang ~$242 (naik dari ~$178.79 saat $100 ditetapkan 20/09), tapi kenaikan cap ini TIDAK
+# proporsional ke modal -- tetap diturunkan dari batas rugi harian $18, bukan dari %modal (lihat
+# backtest exposure timeline: modal historis pernah tembus $202.86 tanpa cap, worst-case ~$24.5,
+# jauh lewat $15 lama -- itulah kenapa cap ada; menaikkan cap harus lewat batas rugi harian dulu).
 # 23/09/2026 (permintaan Mas Budi, insiden GRT/USDT -- AI approve OPEN tapi ditolak diam2 oleh
 # batas eksposur gabungan, tidak ada notif sama sekali sebelum ini): cooldown notif Telegram
 # PER (symbol, strategy) -- bukan global -- supaya 1 simbol yg baru kena notif tidak menahan
@@ -1199,6 +1207,19 @@ def apply_one_time_config_migrations():
                               "old": old_dll, "new": 15.0}
             changed = True
             log(f"[MIGRASI] daily_loss_limit_usd: {old_dll} -> 15.0 (sekali jalan, {dll_key})")
+        # 25/09/2026 (permintaan Mas Budi, review batas eksposur/rugi harian setelah modal naik
+        # ~35% dari ~$178.79 ke ~$242): $15 -> $18. GLOBAL_MAX_EXPOSURE_USD ikut naik 100 -> 110
+        # (rasio reserve sama, lihat REMARK di konstanta itu) -- perubahan konstanta langsung,
+        # tidak butuh migrasi karena bukan nilai persisten di file JSON.
+        dll_key2 = "daily_loss_limit_usd_18_20260925"
+        if dll_key2 not in done:
+            load_daily_loss_limit()
+            old_dll2 = daily_loss_limit_usd
+            save_daily_loss_limit(18.0)
+            done[dll_key2] = {"applied_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                               "old": old_dll2, "new": 18.0}
+            changed = True
+            log(f"[MIGRASI] daily_loss_limit_usd: {old_dll2} -> 18.0 (sekali jalan, {dll_key2})")
         if changed:
             with open(CONFIG_MIGRATIONS_FILE, "w") as f:
                 json.dump(done, f, indent=2)
@@ -1572,7 +1593,7 @@ daily_loss_limit_lock = threading.Lock()
 # order beberapa strategi ikut dinaikkan (lihat STRATEGY_CONFIG_DEFAULTS) -- hard-stop tunggal
 # di posisi $90-100 bisa sampai -$9 s/d -$12, hampir/lebih besar dari limit lama $6 (satu trade
 # wajar saja sudah bisa mengunci SEMUA strategi). REMARK nilai lama: $6.0.
-daily_loss_limit_usd: float = 15.0   # default direvisi 19/09/2026 (dulu $6.0, sebelumnya 3% dari modal)
+daily_loss_limit_usd: float = 18.0   # default direvisi 25/09/2026 (dulu $15.0 sejak 19/09, $6.0 sebelumnya)
 
 def load_daily_loss_limit():
     global daily_loss_limit_usd
