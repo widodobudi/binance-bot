@@ -20073,6 +20073,10 @@ def run_web_dashboard():
             "melihat" posisi itu, sebelum kode close-position (order sungguhan) ditulis.
             TIDAK mengirim order apa pun."""
             symbol = str(request.args.get("symbol", "ETHUSDT")).upper().strip()
+            # Cuma 8 karakter pertama (sama seperti cara Binance sendiri menampilkan
+            # public key di halaman API Management) -- cukup buat dicocokkan visual
+            # dengan screenshot, TIDAK cukup buat menebak/mempakai key-nya.
+            key_prefix = os.environ.get("BINANCE_TRADING_KEY", "")[:8]
             try:
                 account = _binance_futures_request("GET", "/fapi/v2/account", {})
                 positions = [
@@ -20082,12 +20086,17 @@ def run_web_dashboard():
                 return jsonify({
                     "ok": True,
                     "futures_permission": True,
+                    "binance_trading_key_prefix": key_prefix,
                     "totalWalletBalance": account.get("totalWalletBalance"),
                     "availableBalance": account.get("availableBalance"),
                     "matching_positions": positions,
                 })
             except Exception as error:
-                return jsonify({"ok": False, "futures_permission": False, "error": str(error)}), 502
+                return jsonify({
+                    "ok": False, "futures_permission": False,
+                    "binance_trading_key_prefix": key_prefix,
+                    "error": str(error),
+                }), 502
 
         @app.route("/api/test_gemini")
         def api_test_gemini():
