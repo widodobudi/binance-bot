@@ -20494,6 +20494,71 @@ def run_web_dashboard():
                 _mark_ai_provider_down("gemini", error_text)
                 return jsonify({"ok": False, "error": _classify_ai_error(error_text), "raw_error": error_text[:300]}), 502
 
+        @app.route("/api/dust_preview")
+        def api_dust_preview():
+            """27/09/2026 (permintaan Mas Budi): PRATINJAU debris -- MURNI BACA, tidak menjual/membeli/mengonversi
+            apa pun. Per koin debris (<= DUST_SWEEP_MAX_VALUE_USDT, bukan Active Deal): jumlah, nilai, modal
+            (catatan hold_no_sell, kalau tidak ada dari riwayat trade Binance), profit bersih setelah fee 0.2%
+            (FEE_ROUND_TRIP_PCT), plus daftar 'Small Amount Exchange' Binance (/sapi/v1/asset/dust-btc, hanya
+            melihat daftar) berikut ringkasan mentahnya supaya fee konversi asli kelihatan."""
+            try:
+                candidates = get_idle_wallet_assets(min_value_usdt=0.0001)
+                price_map = {t.get("symbol"): float(t.get("lastPrice", 0) or 0) for t in (get_ticker_24h() or [])}
+            except Exception as error:
+                return jsonify({"ok": False, "error": f"gagal ambil daftar aset: {error}"}), 502
+            dust_summary, dust_error, convertible = None, None, {}
+            try:
+                dust = _binance_trading_request("POST", "/sapi/v1/asset/dust-btc", {})
+                dust_summary = {k: v for k, v in dust.items() if k != "details"}
+                convertible = {str(r.get("asset", "")).upper(): r for r in dust.get("details", [])}
+            except Exception as error:
+                dust_error = str(error)[:300]
+            dust_fee_pct = None
+            try:
+                if dust_summary and dust_summary.get("dribbletPercentage") is not None:
+                    dust_fee_pct = float(dust_summary["dribbletPercentage"]) * 100
+            except (TypeError, ValueError):
+                pass
+            rows = []
+            for c in candidates:
+                asset = c["asset"]
+                if asset == "BNB":
+                    continue
+                price = price_map.get(asset + "USDT", 0.0)
+                value = c["free"] * price
+                if value > DUST_SWEEP_MAX_VALUE_USDT:
+                    continue
+                cost, cost_src = 0.0, None
+                origin = get_hold_no_sell_price(asset)
+                if origin and float(origin.get("entry_price", 0) or 0) > 0:
+                    cost, cost_src = float(origin["entry_price"]), "hold_no_sell"
+                else:
+                    try:
+                        cost = get_binance_avg_cost(asset)
+                    except Exception:
+                        cost = 0.0
+                    if cost > 0:
+                        cost_src = "myTrades"
+                row = {"asset": asset, "free": c["free"], "value_usdt": round(value, 4), "price": price,
+                       "cost": cost if cost > 0 else None, "cost_source": cost_src,
+                       "binance_convertible": asset in convertible,
+                       "binance_to_bnb": (convertible.get(asset) or {}).get("toBNB")}
+                if cost > 0 and price > 0:
+                    gross = (price / cost - 1) * 100
+                    row["gross_pct"] = round(gross, 3)
+                    row["net_pct_fee_0_2"] = round(gross - FEE_ROUND_TRIP_PCT, 3)
+                    row["lolos_fee_0_2"] = gross - FEE_ROUND_TRIP_PCT > 0
+                    if dust_fee_pct is not None:
+                        row["net_pct_dust_fee"] = round(gross - dust_fee_pct, 3)
+                        row["lolos_dust_fee"] = gross - dust_fee_pct > 0
+                else:
+                    row["lolos_fee_0_2"] = False
+                rows.append(row)
+            rows.sort(key=lambda r: -r["value_usdt"])
+            return jsonify({"ok": True, "read_only": True, "count": len(rows),
+                            "binance_dust_summary": dust_summary, "binance_dust_error": dust_error,
+                            "binance_dust_fee_pct": dust_fee_pct, "assets": rows})
+
         @app.route("/api/simulate_balance_conversion", methods=["POST"])
         def api_simulate_balance_conversion():
             try:
