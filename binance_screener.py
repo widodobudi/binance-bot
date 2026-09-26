@@ -3843,6 +3843,7 @@ def get_binance_avg_cost(asset: str, ttl_seconds: int = 300) -> float:
         return cached[1]
     symbol = asset + "USDT"
     avg = 0.0
+    pos_qty = 0.0
     try:
         trades = _binance_trading_request("GET", "/api/v3/myTrades", {"symbol": symbol, "limit": 1000})
         trades = sorted(trades, key=lambda t: t.get("time", 0))
@@ -3871,7 +3872,44 @@ def get_binance_avg_cost(asset: str, ttl_seconds: int = 300) -> float:
     except Exception as error:
         log(f"WARN [AUTO-SELL] gagal tarik myTrades {symbol}: {error}")
     _binance_avg_cost_cache[asset] = (time.time(), avg)
+    _binance_avg_pos_qty[asset] = pos_qty
     return avg
+
+
+# 27/09/2026 (permintaan Mas Budi, temuan pratinjau debris): sisa posisi menurut riwayat trade (pos_qty di atas) sering
+# JAUH lebih besar dari saldo wallet (NEAR 3.8 vs 0.098, FET 161.8 vs 0.069) krn sisanya tidak lewat pair USDT
+# ini -- rata-rata modalnya jadi campuran lot lama. Disimpan supaya pemanggil bisa cek apakah rata-rata itu layak dipercaya.
+_binance_avg_pos_qty: dict = {}
+
+def _last_closed_entry_prices() -> dict:
+    """{'NEARUSDT': (entry_price, close_time_wib)} dari deal CLOSED TERAKHIR tiap simbol di CSV trade bot.
+    Debris coin = sisa pembulatan lot dari closing terakhir, jadi modalnya = harga entry deal itu (bukan rata-rata
+    lintas semua lot lama). CATATAN: entry_price di CSV = entry awal (belum ter-average kalau ada add-fund)."""
+    result = {}
+    try:
+        if not os.path.exists(TRADES_CSV):
+            return result
+        with trades_csv_lock:
+            with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                rows = list(csv.DictReader(f))
+    except Exception as e:
+        log(f"WARN _last_closed_entry_prices: {e}")
+        return result
+    for r in rows:
+        if r.get('status') != 'CLOSED':
+            continue
+        sym = str(r.get('symbol', '')).replace('/', '').upper()
+        try:
+            ep = float(r.get('entry_price', '') or 0)
+        except (ValueError, TypeError):
+            continue
+        ct = (r.get('close_time_wib') or '').strip()
+        if not sym or ep <= 0:
+            continue
+        prev = result.get(sym)
+        if prev is None or ct >= prev[1]:
+            result[sym] = (ep, ct)
+    return result
 
 
 def get_active_deal_avg_price(asset: str) -> float:
@@ -20519,6 +20557,7 @@ def run_web_dashboard():
                     dust_fee_pct = float(dust_summary["dribbletPercentage"]) * 100
             except (TypeError, ValueError):
                 pass
+            last_closed = _last_closed_entry_prices()
             rows = []
             for c in candidates:
                 asset = c["asset"]
@@ -20528,19 +20567,28 @@ def run_web_dashboard():
                 value = c["free"] * price
                 if value > DUST_SWEEP_MAX_VALUE_USDT:
                     continue
-                cost, cost_src = 0.0, None
+                # Urutan modal: (1) catatan hold_no_sell, (2) entry deal TERTUTUP terakhir di CSV bot, (3) rata-rata
+                # riwayat trade HANYA kalau sisa versi trade cocok dgn saldo wallet (selisih <= 20%), else tidak diketahui.
+                try:
+                    avg_trades = get_binance_avg_cost(asset)
+                except Exception:
+                    avg_trades = 0.0
+                pos_qty_trades = _binance_avg_pos_qty.get(asset, 0.0)
+                qty_match = pos_qty_trades > 0 and c["free"] > 0 and abs(pos_qty_trades - c["free"]) / c["free"] <= 0.20
+                last_ep, last_ct = last_closed.get(asset + "USDT", (0.0, None))
                 origin = get_hold_no_sell_price(asset)
+                cost, cost_src = 0.0, None
                 if origin and float(origin.get("entry_price", 0) or 0) > 0:
                     cost, cost_src = float(origin["entry_price"]), "hold_no_sell"
-                else:
-                    try:
-                        cost = get_binance_avg_cost(asset)
-                    except Exception:
-                        cost = 0.0
-                    if cost > 0:
-                        cost_src = "myTrades"
+                elif last_ep > 0:
+                    cost, cost_src = last_ep, "deal_terakhir"
+                elif avg_trades > 0 and qty_match:
+                    cost, cost_src = avg_trades, "myTrades"
                 row = {"asset": asset, "free": c["free"], "value_usdt": round(value, 4), "price": price,
                        "cost": cost if cost > 0 else None, "cost_source": cost_src,
+                       "cost_deal_terakhir": last_ep if last_ep > 0 else None, "deal_terakhir_close_wib": last_ct,
+                       "cost_myTrades": avg_trades if avg_trades > 0 else None,
+                       "sisa_versi_trade": pos_qty_trades, "sisa_cocok_wallet": qty_match,
                        "binance_convertible": asset in convertible,
                        "binance_to_bnb": (convertible.get(asset) or {}).get("toBNB")}
                 if cost > 0 and price > 0:
