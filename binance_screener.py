@@ -4488,6 +4488,55 @@ def get_dust_report() -> dict:
     return {"ok": True, "rows": rows, "summary": dust_summary, "error": dust_error, "fee_pct": dust_fee_pct}
 
 
+_dust_sweep_run_lock = threading.Lock()
+
+def run_dust_sweep() -> dict:
+    """Eksekusi sapu debris SUNGGUHAN (dipakai dust_sweep_weekly_tick dan /api/dust_sweep_run?confirm=yes).
+    Hanya koin 'eligible' (lihat get_dust_report) yang dikonversi lewat Small Amount Exchange Binance; sisanya
+    dilewati dan disebut di laporan Telegram. Aman dari eksekusi ganda bersamaan (lock)."""
+    if not _dust_sweep_run_lock.acquire(blocking=False):
+        return {"ok": False, "error": "sapuan lain sedang berjalan"}
+    try:
+        report = get_dust_report()
+        if not report["ok"]:
+            log(f"WARN [DUST-SWEEP] {report['error']}")
+            return {"ok": False, "error": report["error"]}
+        if report["error"]:
+            log(f"WARN [DUST-SWEEP] daftar Small Amount Exchange Binance gagal dibaca: {report['error']}")
+            send_telegram("🧹 Dust Sweep dilewati -- daftar Small Amount Exchange Binance gagal dibaca:\n"
+                          + report["error"][:200], parse_mode=None)
+            return {"ok": False, "error": "daftar Small Amount Exchange Binance gagal dibaca: " + report["error"]}
+        rows = report["rows"]
+        eligible = [r for r in rows if r["eligible"]]
+        skipped = [r for r in rows if not r["eligible"]]
+        skipped_out = [{"asset": r["asset"], "alasan": r["skip_reason"]} for r in skipped]
+        fee = report["fee_pct"]
+        if not eligible:
+            log(f"[DUST-SWEEP] tidak ada debris yang layak (untung kotor > fee {fee}%): {len(skipped)} koin dilewati")
+            return {"ok": True, "converted": [], "skipped": skipped_out, "message": "tidak ada debris yang layak dikonversi"}
+        try:
+            resp = _binance_trading_request("POST", "/sapi/v1/asset/dust", {"asset": [r["asset"] for r in eligible]})
+        except Exception as e:
+            log(f"WARN [DUST-SWEEP] konversi gagal: {e}")
+            send_telegram(f"🧹 Dust Sweep GAGAL: {str(e)[:250]}", parse_mode=None)
+            return {"ok": False, "error": str(e)[:300], "skipped": skipped_out}
+        lines = ["🧹 Dust Sweep -> BNB (Small Amount Exchange, fee %.1f%%)" % fee]
+        by_asset = {r["asset"]: r for r in eligible}
+        for t in (resp.get("transferResult") or []):
+            a = str(t.get("fromAsset", "")).upper()
+            g = (by_asset.get(a) or {}).get("gross_pct")
+            lines.append(f"{a}: {t.get('amount')} -> {t.get('transferedAmount')} BNB" + (f" (untung kotor {g:+.2f}%)" if g is not None else ""))
+        lines.append(f"Total: {resp.get('totalTransfered')} BNB (biaya {resp.get('totalServiceCharge')} BNB)")
+        if skipped:
+            names = ", ".join(r["asset"] for r in skipped[:12]) + (f" (+{len(skipped) - 12} lagi)" if len(skipped) > 12 else "")
+            lines.append(f"Dilewati {len(skipped)} koin (minus/untung < fee/modal tidak diketahui): {names}")
+        send_telegram("\n".join(lines), parse_mode=None)
+        log(f"[DUST-SWEEP] {len(eligible)} koin dikonversi ke BNB via Small Amount Exchange, {len(skipped)} dilewati; respons: {str(resp)[:300]}")
+        return {"ok": True, "converted": [r["asset"] for r in eligible], "skipped": skipped_out, "response": resp}
+    finally:
+        _dust_sweep_run_lock.release()
+
+
 def dust_sweep_weekly_tick():
     """Self-gated (aman dipanggil tiap loop scan spt heartbeat_*_tick) -- jalan SEKALI di jam
     00:xx WIB tiap hari Minggu. 27/09/2026 (permintaan Mas Budi): jalur DIGANTI ke 'Small Amount Exchange'
@@ -4505,40 +4554,7 @@ def dust_sweep_weekly_tick():
     if _dust_sweep_last_run_date == today_str:
         return
     _dust_sweep_last_run_date = today_str
-    report = get_dust_report()
-    if not report["ok"]:
-        log(f"WARN [DUST-SWEEP] {report['error']}")
-        return
-    if report["error"]:
-        log(f"WARN [DUST-SWEEP] daftar Small Amount Exchange Binance gagal dibaca: {report['error']}")
-        send_telegram("🧹 Dust Sweep Mingguan dilewati -- daftar Small Amount Exchange Binance gagal dibaca:\n"
-                      + report["error"][:200], parse_mode=None)
-        return
-    rows = report["rows"]
-    eligible = [r for r in rows if r["eligible"]]
-    skipped = [r for r in rows if not r["eligible"]]
-    fee = report["fee_pct"]
-    if not eligible:
-        log(f"[DUST-SWEEP] tidak ada debris yang layak (untung kotor > fee {fee}%): {len(skipped)} koin dilewati")
-        return
-    try:
-        resp = _binance_trading_request("POST", "/sapi/v1/asset/dust", {"asset": [r["asset"] for r in eligible]})
-    except Exception as e:
-        log(f"WARN [DUST-SWEEP] konversi gagal: {e}")
-        send_telegram(f"🧹 Dust Sweep Mingguan GAGAL: {str(e)[:250]}", parse_mode=None)
-        return
-    lines = ["🧹 Dust Sweep Mingguan -> BNB (Small Amount Exchange, fee %.1f%%)" % fee]
-    by_asset = {r["asset"]: r for r in eligible}
-    for t in (resp.get("transferResult") or []):
-        a = str(t.get("fromAsset", "")).upper()
-        g = (by_asset.get(a) or {}).get("gross_pct")
-        lines.append(f"{a}: {t.get('amount')} -> {t.get('transferedAmount')} BNB" + (f" (untung kotor {g:+.2f}%)" if g is not None else ""))
-    lines.append(f"Total: {resp.get('totalTransfered')} BNB (biaya {resp.get('totalServiceCharge')} BNB)")
-    if skipped:
-        names = ", ".join(r["asset"] for r in skipped[:12]) + (f" (+{len(skipped) - 12} lagi)" if len(skipped) > 12 else "")
-        lines.append(f"Dilewati {len(skipped)} koin (minus/untung < fee/modal tidak diketahui): {names}")
-    send_telegram("\n".join(lines), parse_mode=None)
-    log(f"[DUST-SWEEP] {len(eligible)} koin dikonversi ke BNB via Small Amount Exchange, {len(skipped)} dilewati; respons: {str(resp)[:300]}")
+    run_dust_sweep()
 
 
 def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: bool = False,
@@ -20630,6 +20646,24 @@ def run_web_dashboard():
                             "eligible_count": sum(1 for r in rows if r["eligible"]),
                             "binance_dust_summary": report["summary"], "binance_dust_error": report["error"],
                             "binance_dust_fee_pct": report["fee_pct"], "assets": rows})
+
+        @app.route("/api/dust_sweep_run")
+        def api_dust_sweep_run():
+            """27/09/2026 (permintaan Mas Budi): jalankan sapu debris SEKARANG (tanpa nunggu Minggu). Tanpa
+            ?confirm=yes hanya menampilkan rencana (koin yg akan/tidak dikonversi) -- TIDAK mengonversi apa pun.
+            Dengan ?confirm=yes: konversi sungguhan lewat run_dust_sweep() (aturan kelayakan sama persis dgn mingguan)."""
+            if request.args.get("confirm") != "yes":
+                report = get_dust_report()
+                if not report["ok"]:
+                    return jsonify(report), 502
+                rows = report["rows"]
+                return jsonify({"ok": True, "executed": False,
+                                "message": "Belum ada yang dikonversi. Tambahkan ?confirm=yes di URL untuk menjalankan.",
+                                "fee_pct": report["fee_pct"], "dust_error": report["error"],
+                                "akan_dikonversi": [r["asset"] for r in rows if r["eligible"]],
+                                "dilewati": [{"asset": r["asset"], "alasan": r["skip_reason"]} for r in rows if not r["eligible"]]})
+            result = run_dust_sweep()
+            return jsonify(dict(result, executed=True)), (200 if result.get("ok") else 502)
 
         @app.route("/api/simulate_balance_conversion", methods=["POST"])
         def api_simulate_balance_conversion():
