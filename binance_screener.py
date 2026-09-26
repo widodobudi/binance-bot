@@ -1075,11 +1075,11 @@ STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # lihat close_deal_maybe_partial()). Tahap 1: HANYA brkX2 (brkX2-12h) = 75; strategi lain 100 (= jual semua, nonaktif);
 # QScalp-3m selalu 100 (dikunci di kode + dimmed di dashboard).
 STRATEGY_CONFIG_DEFAULTS = {
-    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2, "close_sell_pct": 75},
-    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2, "close_sell_pct": 100},
-    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True, "max_deals": 5, "close_sell_pct": 100},
-    "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 2, "close_sell_pct": 100},
-    "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3, "close_sell_pct": 100},
+    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 75},
+    "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 5, "close_sell_pct": 100},
+    "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    "akum_entry_a":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
     # 24/09/2026 (permintaan Mas Budi, ketahuan dashboard "Akumulasi-4h" cuma 1 baris tapi Entry A
     # & Entry B ternyata beda base_usd riil): sebelum ini, 'akum_entry_b' TIDAK PERNAH punya entry
     # sendiri di config -- get_strategy_base_usd('akum_entry_b') selalu jatuh ke fallback global
@@ -1090,11 +1090,18 @@ STRATEGY_CONFIG_DEFAULTS = {
     # independen -- thread_akum_entry_scan() masih baca semua itu dari key 'akum_entry_a' saja utk
     # KEDUA entry (AKUM_ENTRY_MAX_DEALS satu pool bersama). Base order SUDAH independen (send_open_long
     # -> get_strategy_base_usd(strategy) pakai key asli tiap entry).
-    "akum_entry_b":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3, "close_sell_pct": 100},
-    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3, "close_sell_pct": 100},
-    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "max_deals": 3, "close_sell_pct": 100},
-    "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "max_deals": 2, "close_sell_pct": 100},
+    "akum_entry_b":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
+    "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
+    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
+    "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 2, "close_sell_pct": 100},
 }
+# 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
+# default TRUE di semua strategi (kecuali qscalp_3m, sama seperti ai_call_open -- desain rule-based
+# permanen). Ini jadi DEFAULT untuk toggle per-deal "AI Call" di Monitor (key 'ai_call', dibaca lewat
+# get_deal_override -- toggle per-deal itu TETAP bisa dipakai override manual utk 1 deal spesifik,
+# cuma sekarang defaultnya ikut setting strategi ini, bukan True hardcoded). Satu toggle 'ai_call'
+# ini menggerbangi 3 keputusan sekaligus (armed/near-timeout/close, lihat is_ai_call_close_enabled())
+# -- sama seperti sebelumnya, cuma sekarang defaultnya per-strategi bukan selalu True.
 # REMARK 23/09/2026 (bahan review -- opsi ini DITOLAK, dicatat supaya tidak diusulkan ulang tanpa
 # cek data dulu): insiden SYRUP/PENDLE 23/09/2026 (Anthropic + Gemini dua-duanya kehabisan kredit)
 # memicu audit profit trading vs biaya AI bulanan. Sempat diusulkan: MATIKAN ai_call_open utk
@@ -1294,6 +1301,15 @@ def is_ai_call_open_enabled(strategy: str) -> bool:
     matikan per-strategi lewat Strategy Control kalau mau."""
     cfg = load_strategy_config()
     return cfg.get(strategy, {}).get("ai_call_open", True)
+
+def is_ai_call_close_enabled(strategy: str) -> bool:
+    """Default TRUE di semua strategi kecuali qscalp_3m (26/09/2026, insiden JTO/USDT --
+    lihat REMARK di STRATEGY_CONFIG_DEFAULTS). Ini jadi DEFAULT untuk toggle per-deal
+    'ai_call' (get_deal_override(sym, 'ai_call', ...)) yang menggerbangi 3 keputusan AI
+    sekaligus: ai_decision_armed, ai_decision_near_timeout, ai_decision_close -- toggle
+    per-deal di Monitor TETAP bisa override manual utk 1 deal spesifik."""
+    cfg = load_strategy_config()
+    return cfg.get(strategy, {}).get("ai_call_close", True)
 
 def get_strategy_base_usd(strategy: str) -> float:
     cfg = load_strategy_config()
@@ -7796,7 +7812,7 @@ def thread2_monitor():
             # keputusan yg pada dasarnya sama berulang-ulang (celah ini luput saat close/add_fund
             # dikasih cooldown serupa sebelumnya).
             _arm_denied = False
-            if get_deal_override(sym, 'ai_call', True):
+            if get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
                 _arm_ai_hold_until = float(d.get('arm_ai_hold_until', 0) or 0)
                 if time.time() < _arm_ai_hold_until:
                     _arm_denied = True
@@ -8076,7 +8092,7 @@ def thread2_monitor():
             hold_label = f"batas {MAX_HOLD_DAYS} candle"
         if opened_ts>0 and (time.time()-opened_ts) >= hold_limit_sec:
             do_close=True; reason=hold_label+" tercapai"; timeout_triggered=True
-        elif opened_ts>0 and get_deal_override(sym, 'ai_call', True):
+        elif opened_ts>0 and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
             # Tanya AI saat tersisa 2 candle menuju timeout
             elapsed_sec = time.time() - opened_ts
             candle_sec  = hold_limit_sec / (
@@ -8145,7 +8161,7 @@ def thread2_monitor():
             # notifikasi Telegram + boros API call AI utk keputusan yg pada dasarnya sama
             # berulang-ulang. Generik lintas SEMUA strategi (bukan cuma trend_confirm_4h),
             # krn ini bug pemborosan, bukan pilihan desain per-strategi.
-            if not _ai_override_bypassed and get_deal_override(sym, 'ai_call', True):
+            if not _ai_override_bypassed and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
                 _close_ai_hold_until = float(d.get('close_ai_hold_until', 0) or 0)
                 if time.time() < _close_ai_hold_until:
                     log(f"[T2] {sym} CLOSE di-hold (cooldown AI {(_close_ai_hold_until - time.time())/60:.1f} menit lagi, reason: {reason})")
@@ -11474,7 +11490,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <th style="text-align:left;padding:5px 8px">Strategi</th>
           <th style="text-align:center;padding:5px 8px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini">Max Deals</th>
           <th style="text-align:center;padding:5px 8px">Izinkan Open Long</th>
-          <th style="text-align:center;padding:5px 8px">AI Call on Open</th>
+          <th style="text-align:center;padding:5px 8px">AI Call<br><span style="font-size:9px;font-weight:normal">open / close</span></th>
           <th style="text-align:center;padding:5px 8px">Gunakan Setting Modal</th>
           <th style="text-align:center;padding:5px 8px">Base Order (USDT)</th>
           <th style="text-align:center;padding:5px 8px">Add Fund (USDT)</th>
@@ -12392,7 +12408,10 @@ function loadStrategyConfig() {
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-run-' + k + '" ' + (strategyEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + (SC_NO_AI[k]
                         ? '<td style="text-align:center;padding:5px 8px"><span style="color:var(--muted);font-size:10px;font-style:italic" title="Strategi full rule-based, tidak pernah memanggil AI sama sekali (desain permanen)">N/A</span></td>'
-                        : '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-aicall-' + k + '" ' + (aiCallOpenEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer" title="Kandidat OPEN yang lolos semua filter rule-based masih dikonsultasikan ke AI dulu sebelum dibuka. Default OFF -- ini nggak bisa di-backtest kayak parameter lain."></td>')
+                        : '<td style="text-align:center;padding:3px 8px">'
+                          + '<label style="display:flex;align-items:center;gap:4px;justify-content:center;cursor:pointer" title="Kandidat OPEN yang lolos semua filter rule-based masih dikonsultasikan ke AI dulu sebelum dibuka."><input type="checkbox" id="sc-aicall-open-' + k + '" ' + (aiCallOpenEnabled ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer"><span style="font-size:9px;color:var(--muted)">Open</span></label>'
+                          + '<label style="display:flex;align-items:center;gap:4px;justify-content:center;cursor:pointer;margin-top:2px" title="Armed/near-timeout/close (trailing dkk) masih dikonsultasikan ke AI dulu sebelum benar-benar closing. Default ON sejak 26/09/2026 (insiden JTO/USDT)."><input type="checkbox" id="sc-aicall-close-' + k + '" ' + (aiCallCloseEnabled ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer"><span style="font-size:9px;color:var(--muted)">Close</span></label>'
+                          + '</td>')
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-size-' + k + '" ' + (sizingEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '">' + (SC_BASE_NOTE[k] ? '<span style="' + dim + ';color:var(--muted);font-style:italic;font-size:10px;margin-left:4px" title="Beli langsung $100 sekali kalau ATR%>=5 DAN Volume>=2x MA20 di candle sinyal (tidak lewat Add Fund)">' + SC_BASE_NOTE[k] + '</span>' : '') + '</td>'
                     + addFundCell
@@ -12438,12 +12457,14 @@ function saveStrategyConfig(button) {
     var strategyEnabledEl = document.getElementById('sc-run-' + key);
     var sizingEnabledEl = document.getElementById('sc-size-' + key);
     var cooldownEnabledEl = document.getElementById('sc-cooldown-' + key);
-    var aiCallOpenEl = document.getElementById('sc-aicall-' + key);
+    var aiCallOpenEl = document.getElementById('sc-aicall-open-' + key);
+    var aiCallCloseEl = document.getElementById('sc-aicall-close-' + key);
     data[key] = {
         strategy_enabled: strategyEnabledEl ? strategyEnabledEl.checked : true,
         sizing_enabled: sizingEnabledEl ? sizingEnabledEl.checked : true,
         cooldown_enabled: cooldownEnabledEl ? cooldownEnabledEl.checked : true,
         ai_call_open: aiCallOpenEl ? aiCallOpenEl.checked : false,
+        ai_call_close: aiCallCloseEl ? aiCallCloseEl.checked : true,
         base_usd: parseFloat(baseEl ? baseEl.value : 8) || 8,
         max_deals: parseInt(maxDealsEl ? maxDealsEl.value : 2) || 2,
     };
