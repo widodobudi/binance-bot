@@ -3501,7 +3501,7 @@ def _binance_trading_request(method: str, path: str, params: dict, api_key: str 
         raise ValueError("BINANCE_TRADING_KEY/SECRET tidak di-set di env")
     ts = int(time.time() * 1000)
     params["timestamp"] = ts
-    query = _up.urlencode(params)
+    query = _up.urlencode(params, doseq=True)
     sig   = hmac.new(api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
     query += f"&signature={sig}"
     url     = f"{BINANCE_TRADING_BASE}{path}?{query}"
@@ -4402,10 +4402,99 @@ DUST_SWEEP_MAX_VALUE_USDT = 3.0   # ceiling "dianggap dust" -- di ATAS ini TIDAK
                                    # yg dipakai fitur addfund-dari-aset-lain, ambang situ mulai $5)
 _dust_sweep_last_run_date = None  # 'YYYY-MM-DD' WIB terakhir sukses jalan -- guard sekali/hari
 
+def get_dust_report() -> dict:
+    """27/09/2026 (permintaan Mas Budi): daftar debris + modal + profit bersih + kelayakan konversi -- dipakai
+    dust_sweep_weekly_tick() DAN /api/dust_preview supaya pratinjau selalu sama persis dgn yg dieksekusi.
+    MURNI BACA (POST /sapi/v1/asset/dust-btc cuma melihat daftar). Per koin debris (<= DUST_SWEEP_MAX_VALUE_USDT,
+    bukan Active Deal): modal dgn urutan (1) catatan hold_no_sell, (2) entry deal TERTUTUP terakhir di CSV bot,
+    (3) rata-rata riwayat trade HANYA kalau sisa versi trade cocok dgn saldo wallet (selisih <= 20%), else tidak
+    diketahui. 'eligible' = modal diketahui + ada di daftar Small Amount Exchange + untung kotor > fee konversi
+    Binance (dribbletPercentage, terkonfirmasi 2.0% dari hasil pratinjau 27/09/2026)."""
+    try:
+        candidates = get_idle_wallet_assets(min_value_usdt=0.0001)
+        price_map = {t.get("symbol"): float(t.get("lastPrice", 0) or 0) for t in (get_ticker_24h() or [])}
+    except Exception as error:
+        return {"ok": False, "error": f"gagal ambil daftar aset: {error}", "rows": []}
+    dust_summary, dust_error, convertible = None, None, {}
+    try:
+        dust = _binance_trading_request("POST", "/sapi/v1/asset/dust-btc", {})
+        dust_summary = {k: v for k, v in dust.items() if k != "details"}
+        convertible = {str(r.get("asset", "")).upper(): r for r in dust.get("details", [])}
+    except Exception as error:
+        dust_error = str(error)[:300]
+    dust_fee_pct = None
+    try:
+        if dust_summary and dust_summary.get("dribbletPercentage") is not None:
+            dust_fee_pct = float(dust_summary["dribbletPercentage"]) * 100
+    except (TypeError, ValueError):
+        pass
+    last_closed = _last_closed_entry_prices()
+    rows = []
+    for c in candidates:
+        asset = c["asset"]
+        if asset == "BNB":
+            continue
+        price = price_map.get(asset + "USDT", 0.0)
+        value = c["free"] * price
+        if value > DUST_SWEEP_MAX_VALUE_USDT:
+            continue
+        try:
+            avg_trades = get_binance_avg_cost(asset)
+        except Exception:
+            avg_trades = 0.0
+        pos_qty_trades = _binance_avg_pos_qty.get(asset, 0.0)
+        qty_match = pos_qty_trades > 0 and c["free"] > 0 and abs(pos_qty_trades - c["free"]) / c["free"] <= 0.20
+        last_ep, last_ct = last_closed.get(asset + "USDT", (0.0, None))
+        origin = get_hold_no_sell_price(asset)
+        cost, cost_src = 0.0, None
+        if origin and float(origin.get("entry_price", 0) or 0) > 0:
+            cost, cost_src = float(origin["entry_price"]), "hold_no_sell"
+        elif last_ep > 0:
+            cost, cost_src = last_ep, "deal_terakhir"
+        elif avg_trades > 0 and qty_match:
+            cost, cost_src = avg_trades, "myTrades"
+        row = {"asset": asset, "free": c["free"], "value_usdt": round(value, 4), "price": price,
+               "cost": cost if cost > 0 else None, "cost_source": cost_src,
+               "cost_deal_terakhir": last_ep if last_ep > 0 else None, "deal_terakhir_close_wib": last_ct,
+               "cost_myTrades": avg_trades if avg_trades > 0 else None,
+               "sisa_versi_trade": pos_qty_trades, "sisa_cocok_wallet": qty_match,
+               "binance_convertible": asset in convertible,
+               "binance_to_bnb": (convertible.get(asset) or {}).get("toBNB")}
+        gross = None
+        if cost > 0 and price > 0:
+            gross = (price / cost - 1) * 100
+            row["gross_pct"] = round(gross, 3)
+            row["net_pct_fee_0_2"] = round(gross - FEE_ROUND_TRIP_PCT, 3)
+            row["lolos_fee_0_2"] = gross - FEE_ROUND_TRIP_PCT > 0
+            if dust_fee_pct is not None:
+                row["net_pct_dust_fee"] = round(gross - dust_fee_pct, 3)
+                row["lolos_dust_fee"] = gross - dust_fee_pct > 0
+        else:
+            row["lolos_fee_0_2"] = False
+        if gross is None:
+            skip = "modal tidak diketahui"
+        elif asset not in convertible:
+            skip = "tidak ada di daftar Small Amount Exchange Binance"
+        elif dust_fee_pct is None:
+            skip = "fee konversi Binance tidak diketahui"
+        elif gross - dust_fee_pct <= 0:
+            skip = f"untung {gross:+.2f}% tidak menutup fee {dust_fee_pct:.1f}%"
+        else:
+            skip = None
+        row["eligible"] = skip is None
+        row["skip_reason"] = skip
+        rows.append(row)
+    rows.sort(key=lambda r: -r["value_usdt"])
+    return {"ok": True, "rows": rows, "summary": dust_summary, "error": dust_error, "fee_pct": dust_fee_pct}
+
+
 def dust_sweep_weekly_tick():
     """Self-gated (aman dipanggil tiap loop scan spt heartbeat_*_tick) -- jalan SEKALI di jam
-    00:xx WIB tiap hari Minggu. Sapu SEMUA leftover kecil (<= DUST_SWEEP_MAX_VALUE_USDT) lintas
-    wallet, convert ke BNB lewat _convert_leftover_to_bnb() yg sudah ada & teruji."""
+    00:xx WIB tiap hari Minggu. 27/09/2026 (permintaan Mas Budi): jalur DIGANTI ke 'Small Amount Exchange'
+    Binance (POST /sapi/v1/asset/dust) -- jalur lama (jual market lewat _convert_leftover_to_bnb) TIDAK PERNAH
+    bisa menjual debris krn sisanya < 1 lot (log 27/09 00:04 & 00:10 WIB: semua koin 'sisa saldo 0.0').
+    Hanya koin 'eligible' (lihat get_dust_report: modal diketahui, ada di daftar Binance, untung kotor > fee
+    konversi Binance 2%) yang dikonversi; sisanya dilewati dan disebut di laporan Telegram."""
     global _dust_sweep_last_run_date
     if not USE_BINANCE_DIRECT:
         return
@@ -4416,46 +4505,40 @@ def dust_sweep_weekly_tick():
     if _dust_sweep_last_run_date == today_str:
         return
     _dust_sweep_last_run_date = today_str
-    try:
-        candidates = get_idle_wallet_assets(min_value_usdt=0.01)
-    except Exception as e:
-        log(f"WARN [DUST-SWEEP] gagal ambil daftar idle asset: {e}")
+    report = get_dust_report()
+    if not report["ok"]:
+        log(f"WARN [DUST-SWEEP] {report['error']}")
         return
-    swept = []
-    for c in candidates:
-        asset = c['asset']
-        if asset == 'BNB' or c['value_usdt'] > DUST_SWEEP_MAX_VALUE_USDT:
-            continue
-        symbol = asset + 'USDT'
-        try:
-            info = _auto_sell_filter_cache.get(symbol)
-            if info is None:
-                response = session.get(f"{BINANCE_TRADING_BASE}/api/v3/exchangeInfo?symbol={symbol}", timeout=10)
-                response.raise_for_status()
-                symbols = response.json().get("symbols", [])
-                if not symbols or symbols[0].get("status") != "TRADING":
-                    continue
-                filters = {item.get("filterType"): item for item in symbols[0].get("filters", [])}
-                lot = filters.get("LOT_SIZE", {})
-                min_notional = filters.get("NOTIONAL", filters.get("MIN_NOTIONAL", {}))
-                info = {"step_size": float(lot.get("stepSize", 1)), "min_qty": float(lot.get("minQty", 0)),
-                        "min_notional": float(min_notional.get("minNotional", 0))}
-                _auto_sell_filter_cache[symbol] = info
-            result = _convert_leftover_to_bnb(asset, symbol, info)
-            if result:
-                swept.append({"asset": asset, **result})
-        except Exception as e:
-            log(f"WARN [DUST-SWEEP] {asset} gagal convert: {e}")
-    if swept:
-        total_usdt = sum(s['usdt_from_leftover'] for s in swept)
-        lines = ["🧹 Dust Sweep Mingguan -> BNB"]
-        for s in swept:
-            lines.append(f"{s['asset']}: {s['leftover_qty']:.8g} -> ${s['usdt_from_leftover']:.2f} -> {s['bnb_bought']:.6f} BNB")
-        lines.append(f"Total dikonversi: ${total_usdt:.2f}")
-        send_telegram("\n".join(lines), parse_mode=None)
-        log(f"[DUST-SWEEP] {len(swept)} asset dikonversi ke BNB, total ${total_usdt:.2f}")
-    else:
-        log("[DUST-SWEEP] tidak ada dust (<= $" + str(DUST_SWEEP_MAX_VALUE_USDT) + ") yang perlu di-convert minggu ini")
+    if report["error"]:
+        log(f"WARN [DUST-SWEEP] daftar Small Amount Exchange Binance gagal dibaca: {report['error']}")
+        send_telegram("🧹 Dust Sweep Mingguan dilewati -- daftar Small Amount Exchange Binance gagal dibaca:\n"
+                      + report["error"][:200], parse_mode=None)
+        return
+    rows = report["rows"]
+    eligible = [r for r in rows if r["eligible"]]
+    skipped = [r for r in rows if not r["eligible"]]
+    fee = report["fee_pct"]
+    if not eligible:
+        log(f"[DUST-SWEEP] tidak ada debris yang layak (untung kotor > fee {fee}%): {len(skipped)} koin dilewati")
+        return
+    try:
+        resp = _binance_trading_request("POST", "/sapi/v1/asset/dust", {"asset": [r["asset"] for r in eligible]})
+    except Exception as e:
+        log(f"WARN [DUST-SWEEP] konversi gagal: {e}")
+        send_telegram(f"🧹 Dust Sweep Mingguan GAGAL: {str(e)[:250]}", parse_mode=None)
+        return
+    lines = ["🧹 Dust Sweep Mingguan -> BNB (Small Amount Exchange, fee %.1f%%)" % fee]
+    by_asset = {r["asset"]: r for r in eligible}
+    for t in (resp.get("transferResult") or []):
+        a = str(t.get("fromAsset", "")).upper()
+        g = (by_asset.get(a) or {}).get("gross_pct")
+        lines.append(f"{a}: {t.get('amount')} -> {t.get('transferedAmount')} BNB" + (f" (untung kotor {g:+.2f}%)" if g is not None else ""))
+    lines.append(f"Total: {resp.get('totalTransfered')} BNB (biaya {resp.get('totalServiceCharge')} BNB)")
+    if skipped:
+        names = ", ".join(r["asset"] for r in skipped[:12]) + (f" (+{len(skipped) - 12} lagi)" if len(skipped) > 12 else "")
+        lines.append(f"Dilewati {len(skipped)} koin (minus/untung < fee/modal tidak diketahui): {names}")
+    send_telegram("\n".join(lines), parse_mode=None)
+    log(f"[DUST-SWEEP] {len(eligible)} koin dikonversi ke BNB via Small Amount Exchange, {len(skipped)} dilewati; respons: {str(resp)[:300]}")
 
 
 def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: bool = False,
@@ -20539,73 +20622,14 @@ def run_web_dashboard():
             (catatan hold_no_sell, kalau tidak ada dari riwayat trade Binance), profit bersih setelah fee 0.2%
             (FEE_ROUND_TRIP_PCT), plus daftar 'Small Amount Exchange' Binance (/sapi/v1/asset/dust-btc, hanya
             melihat daftar) berikut ringkasan mentahnya supaya fee konversi asli kelihatan."""
-            try:
-                candidates = get_idle_wallet_assets(min_value_usdt=0.0001)
-                price_map = {t.get("symbol"): float(t.get("lastPrice", 0) or 0) for t in (get_ticker_24h() or [])}
-            except Exception as error:
-                return jsonify({"ok": False, "error": f"gagal ambil daftar aset: {error}"}), 502
-            dust_summary, dust_error, convertible = None, None, {}
-            try:
-                dust = _binance_trading_request("POST", "/sapi/v1/asset/dust-btc", {})
-                dust_summary = {k: v for k, v in dust.items() if k != "details"}
-                convertible = {str(r.get("asset", "")).upper(): r for r in dust.get("details", [])}
-            except Exception as error:
-                dust_error = str(error)[:300]
-            dust_fee_pct = None
-            try:
-                if dust_summary and dust_summary.get("dribbletPercentage") is not None:
-                    dust_fee_pct = float(dust_summary["dribbletPercentage"]) * 100
-            except (TypeError, ValueError):
-                pass
-            last_closed = _last_closed_entry_prices()
-            rows = []
-            for c in candidates:
-                asset = c["asset"]
-                if asset == "BNB":
-                    continue
-                price = price_map.get(asset + "USDT", 0.0)
-                value = c["free"] * price
-                if value > DUST_SWEEP_MAX_VALUE_USDT:
-                    continue
-                # Urutan modal: (1) catatan hold_no_sell, (2) entry deal TERTUTUP terakhir di CSV bot, (3) rata-rata
-                # riwayat trade HANYA kalau sisa versi trade cocok dgn saldo wallet (selisih <= 20%), else tidak diketahui.
-                try:
-                    avg_trades = get_binance_avg_cost(asset)
-                except Exception:
-                    avg_trades = 0.0
-                pos_qty_trades = _binance_avg_pos_qty.get(asset, 0.0)
-                qty_match = pos_qty_trades > 0 and c["free"] > 0 and abs(pos_qty_trades - c["free"]) / c["free"] <= 0.20
-                last_ep, last_ct = last_closed.get(asset + "USDT", (0.0, None))
-                origin = get_hold_no_sell_price(asset)
-                cost, cost_src = 0.0, None
-                if origin and float(origin.get("entry_price", 0) or 0) > 0:
-                    cost, cost_src = float(origin["entry_price"]), "hold_no_sell"
-                elif last_ep > 0:
-                    cost, cost_src = last_ep, "deal_terakhir"
-                elif avg_trades > 0 and qty_match:
-                    cost, cost_src = avg_trades, "myTrades"
-                row = {"asset": asset, "free": c["free"], "value_usdt": round(value, 4), "price": price,
-                       "cost": cost if cost > 0 else None, "cost_source": cost_src,
-                       "cost_deal_terakhir": last_ep if last_ep > 0 else None, "deal_terakhir_close_wib": last_ct,
-                       "cost_myTrades": avg_trades if avg_trades > 0 else None,
-                       "sisa_versi_trade": pos_qty_trades, "sisa_cocok_wallet": qty_match,
-                       "binance_convertible": asset in convertible,
-                       "binance_to_bnb": (convertible.get(asset) or {}).get("toBNB")}
-                if cost > 0 and price > 0:
-                    gross = (price / cost - 1) * 100
-                    row["gross_pct"] = round(gross, 3)
-                    row["net_pct_fee_0_2"] = round(gross - FEE_ROUND_TRIP_PCT, 3)
-                    row["lolos_fee_0_2"] = gross - FEE_ROUND_TRIP_PCT > 0
-                    if dust_fee_pct is not None:
-                        row["net_pct_dust_fee"] = round(gross - dust_fee_pct, 3)
-                        row["lolos_dust_fee"] = gross - dust_fee_pct > 0
-                else:
-                    row["lolos_fee_0_2"] = False
-                rows.append(row)
-            rows.sort(key=lambda r: -r["value_usdt"])
+            report = get_dust_report()
+            if not report["ok"]:
+                return jsonify(report), 502
+            rows = report["rows"]
             return jsonify({"ok": True, "read_only": True, "count": len(rows),
-                            "binance_dust_summary": dust_summary, "binance_dust_error": dust_error,
-                            "binance_dust_fee_pct": dust_fee_pct, "assets": rows})
+                            "eligible_count": sum(1 for r in rows if r["eligible"]),
+                            "binance_dust_summary": report["summary"], "binance_dust_error": report["error"],
+                            "binance_dust_fee_pct": report["fee_pct"], "assets": rows})
 
         @app.route("/api/simulate_balance_conversion", methods=["POST"])
         def api_simulate_balance_conversion():
