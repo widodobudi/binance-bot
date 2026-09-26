@@ -183,6 +183,17 @@ FEE_ROUND_TRIP_PCT     = 0.2   # biaya Binance: 0.1% buy + 0.1% sell
 TRAIL_FACTOR_FOMO      = 1.3   # Uptrend + Stoch%K > 80 (momentum kuat)
 TRAIL_FACTOR_TIGHTENED = 0.5   # Stoch%K baru turun dari >80 (lock profit)
 TRAIL_HTF_GRACE_SECONDS = 300  # maksimal menahan trailing close sambil cek HTF
+# 26/09/2026 (permintaan Mas Budi, insiden PHA/USDT): grace HTF sebelumnya cuma syarat
+# prof_from_entry > 0 (breakeven persis) buat lanjut menahan -- kejadian nyata PHA/USDT
+# 25/09: armed di peak profit +3.81%, trailing stop kesulut <1 menit kemudian, grace HTF
+# "sehat" terus menahan close SELAMA PENUH 300 detik (bukan karena profit masih positif
+# besar, tapi karena kondisi grace ikut lolos di setiap cek 15-20 detik walau profit terus
+# tergerus turun) -- begitu 300 detik habis, profit sudah nyaris 0% (-0.36% saat trigger),
+# ditambah SLIPPAGE order market di pair tipis (fill 0.062700 vs trigger 0.062900) jadi
+# realized -0.68%. Grace sekarang WAJIB profit masih di atas cushion ini (bukan cuma >0%)
+# supaya berhenti nunggu begitu profit mulai tergerus mendekati breakeven -- lebih baik
+# closing untung tipis drpd nunggu penuh 300 detik lalu closing rugi karena slippage.
+TRAIL_GRACE_MIN_PROFIT_PCT = 0.5  # grace HTF berhenti kalau profit turun ke <= ini (bukan cuma <=0%)
 TRAIL_HTF_CACHE_SECONDS = 60   # jangan request HTF pada setiap siklus monitor 15 detik
 TRAIL_HTF_HEALTH_MIN_VOTES = 3 # minimal indikator sehat per timeframe
 # Un-arm histeresis (26/08/2026): trailing di-un-arm kalau ATR% live naik cukup jauh
@@ -7936,7 +7947,7 @@ def thread2_monitor():
                 trail_grace_started = float(d.get('trail_htf_grace_started_at', 0) or 0)
                 trail_grace_age = time.time() - trail_grace_started if trail_grace_started > 0 else 0
                 grace_strategy = strat in ('brkX2', 'brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'reversal', 'trend_confirm_4h')
-                if (grace_strategy and prof_from_entry > 0
+                if (grace_strategy and prof_from_entry > TRAIL_GRACE_MIN_PROFIT_PCT
                         and trail_grace_age < TRAIL_HTF_GRACE_SECONDS
                         and trailing_htf_is_healthy(sym)):
                     if trail_grace_started <= 0:
