@@ -21323,6 +21323,9 @@ GEMINI_AI_MODEL    = os.environ.get("GEMINI_AI_MODEL", "gemini-flash-latest")
 ALIBABA_API_KEY    = os.environ.get("ALIBABA_API_KEY", "")
 ALIBABA_AI_MODEL   = os.environ.get("ALIBABA_AI_MODEL", "qwen3.7-plus")
 ALIBABA_BASE_URL   = os.environ.get("ALIBABA_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+# Total pemakaian token sejak proses start (reset tiap restart/redeploy) -- utk mengukur laju habisnya kuota 1M.
+_alibaba_usage_total = {"calls": 0, "prompt": 0, "completion": 0}
+_alibaba_usage_lock = threading.Lock()
 AI_DECISION_TIMEOUT = 25  # detik -- dinaikkan dari 10 (30/08/2026), seiringan sama max_tokens 200->1024:
 # model butuh waktu proses lebih lama buat budget token yg lebih besar (apalagi kalau isi block "thinking"
 # dulu), 10 detik kekecilan -> sering "Gagal: The read operation timed out" padahal API-nya sehat, cuma
@@ -21626,7 +21629,15 @@ def _alibaba_http_call(prompt: str) -> tuple:
     text = ((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
     if not text:
         raise RuntimeError("Response Alibaba tidak berisi teks jawaban")
-    return text, body.get("usage") or {}
+    usage = body.get("usage") or {}
+    _p, _c = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
+    with _alibaba_usage_lock:
+        _alibaba_usage_total["calls"] += 1
+        _alibaba_usage_total["prompt"] += _p
+        _alibaba_usage_total["completion"] += _c
+        _calls, _sum = _alibaba_usage_total["calls"], _alibaba_usage_total["prompt"] + _alibaba_usage_total["completion"]
+    log(f"[AI] Alibaba token: prompt={_p} completion={_c} total={_p + _c} | kumulatif sejak restart: {_calls} panggilan, {_sum} token")
+    return text, usage
 
 
 def _alibaba_ai_call(prompt: str) -> str:
