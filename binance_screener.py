@@ -11985,7 +11985,7 @@ function refreshPerfChart() {
             + '</div>';
         }
         var chevHtml = hasPhases
-          ? '<span id="perf-chev-' + r.key + '" data-key="' + r.key + '" onclick="togglePhaseRow(this.dataset.key)" style="cursor:pointer;margin-right:3px;color:var(--accent)">&#9656;</span>'
+          ? '<span id="perf-chev-' + r.key + '" onclick="togglePhaseRow(\'' + r.key + '\')" style="cursor:pointer;margin-right:3px;color:var(--accent)">&#9656;</span>'
           : '<span style="margin-right:3px;color:transparent">&#9656;</span>';
         return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px">'
           + '<div style="width:118px;flex-shrink:0;text-align:right;color:var(--text)">' + chevHtml + r.label + '</div>'
