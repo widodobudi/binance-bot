@@ -2407,17 +2407,23 @@ def csv_progress_active() -> dict:
     }
 
 
-STRATEGY_RECENT_CLOSE_WINDOW_DAYS = 7   # 26/09/2026 (permintaan Mas Budi): jendela "kecepatan
-                                          # closing" -- 7 hari terakhir, bukan all-time (all-time
-                                          # bisa menyesatkan utk strategi lama yg performanya baru
-                                          # membaik/memburuk belakangan).
+STRATEGY_CLOSE_FREQ_TIERS = [(7, 'hari', 1), (30, 'minggu', 7), (90, 'bulan', 30)]
+# 26/09/2026 (permintaan Mas Budi): 3 tingkat jendela "kecepatan closing" -- coba yg paling
+# HALUS dulu (7 hari -> /hari), kalau KOSONG (strategi jarang closing profit) baru "turun
+# tingkat" ke jendela lebih lebar (30 hari -> /minggu, 90 hari -> /bulan). Sebelumnya cuma 1
+# tingkat (7 hari flat) -- bikin strategi low-frequency (mis. Reversal-8h/brkX2-4h) kebulat
+# jadi "0.00/hari" yg menyesatkan (dikira TIDAK PERNAH profit, padahal cuma jarang).
 
-def strategy_recent_close_stats(days: int = STRATEGY_RECENT_CLOSE_WINDOW_DAYS) -> dict:
-    """26/09/2026 (permintaan Mas Budi): baca CSV SEKALI (bukan per-strategi berulang), hitung
-    per strategi: (1) jumlah closing PROFIT POSITIF dalam `days` hari terakhir + rata-rata/hari,
-    dan (2) waktu closing profit-positif PALING BARU -- TANPA batas hari (supaya tetap kelihatan
-    "terakhir kapan" meski sudah lebih dari `days` hari tidak ada yg profit, bukan kosong).
-    Return {strategy_key: {'closes_recent': int, 'per_day': float, 'last_win_close_wib': str|None}}."""
+def strategy_recent_close_stats() -> dict:
+    """Baca CSV SEKALI (bukan per-strategi berulang), hitung per strategi: (1) rate closing
+    PROFIT POSITIF di tier PALING HALUS yg datanya ada (lihat STRATEGY_CLOSE_FREQ_TIERS),
+    (2) interval rata-rata dlm hari (kebalikan matematis dari rate: jendela_hari/jumlah --
+    dipakai utk tampilan sekunder "1x per ~Y hari/jam", info tambahan yg selalu bermakna
+    apa pun frekuensinya, beda dari rate yg bisa kebulat ke 0 kalau jarang), dan (3) waktu
+    closing profit-positif PALING BARU -- TANPA batas hari (tetap kelihatan "terakhir kapan"
+    meski sudah lebih dari 90 hari tidak ada yg profit, bukan kosong).
+    Return {strategy_key: {'rate': float, 'rate_unit': str|None, 'interval_days': float|None,
+    'last_win_close_wib': str|None}}."""
     result = {}
     try:
         if not os.path.exists(TRADES_CSV):
@@ -2428,7 +2434,8 @@ def strategy_recent_close_stats(days: int = STRATEGY_RECENT_CLOSE_WINDOW_DAYS) -
     except Exception as e:
         log(f"   [CSV] gagal baca strategy_recent_close_stats: {e}")
         return result
-    cutoff = now_wib() - timedelta(days=days)
+    now = now_wib()
+    cutoffs = {w: now - timedelta(days=w) for w, _, _ in STRATEGY_CLOSE_FREQ_TIERS}
     for r in rows:
         if r.get('status') != 'CLOSED':
             continue
@@ -2446,16 +2453,110 @@ def strategy_recent_close_stats(days: int = STRATEGY_RECENT_CLOSE_WINDOW_DAYS) -
             ct = datetime.strptime(ct_str, '%Y-%m-%d %H:%M:%S')
         except ValueError:
             continue
-        st = result.setdefault(strat, {'closes_recent': 0, '_last': None})
-        if ct >= cutoff:
-            st['closes_recent'] += 1
+        st = result.setdefault(strat, {'_counts': {w: 0 for w, _, _ in STRATEGY_CLOSE_FREQ_TIERS}, '_last': None})
+        for w, _, _ in STRATEGY_CLOSE_FREQ_TIERS:
+            if ct >= cutoffs[w]:
+                st['_counts'][w] += 1
         if st['_last'] is None or ct > st['_last']:
             st['_last'] = ct
     for st in result.values():
-        st['per_day'] = round(st['closes_recent'] / days, 2)
+        chosen = None
+        for w, unit, days_per_unit in STRATEGY_CLOSE_FREQ_TIERS:
+            n = st['_counts'][w]
+            if n > 0:
+                chosen = (w, unit, days_per_unit, n)
+                break
+        if chosen:
+            w, unit, days_per_unit, n = chosen
+            st['rate'] = round(n / (w / days_per_unit), 2)
+            st['rate_unit'] = unit
+            st['interval_days'] = round(w / n, 3)
+        else:
+            st['rate'] = 0.0
+            st['rate_unit'] = None
+            st['interval_days'] = None
         st['last_win_close_wib'] = st['_last'].strftime('%Y-%m-%d %H:%M:%S') if st['_last'] else None
+        del st['_counts']
         del st['_last']
     return result
+
+
+def _phase_entry(label, p, target=None):
+    """Helper internal utk strategy_phase_breakdown() -- 1 baris fase jadi dict seragam."""
+    if p is None:
+        p = {'n': 0, 'win': 0, 'loss': 0, 'total_pct': 0.0}
+    return {'label': label, 'n': p['n'], 'win': p['win'], 'loss': p['loss'],
+            'total_pct': round(p['total_pct'], 2), 'target': target}
+
+def strategy_phase_breakdown() -> dict:
+    """26/09/2026 (permintaan Mas Budi): breakdown per-FASE per strategi (LIVE/2nd/3rd/
+    sub-tracker khusus) utk expand-toggle di dashboard Performance per Strategi -- data yg
+    SEBELUMNYA cuma ada di teks heartbeat Telegram (heartbeat_general_tick()), di sini
+    disusun ulang jadi JSON terstruktur. REUSE persis pemanggilan csv_progress()/fungsi
+    progress lain yg sama dgn heartbeat -- BUKAN tracking baru, cuma direpresentasikan ulang.
+    Return {strategy_key: [ {label,n,win,loss,total_pct,target}, ... ]}."""
+    out = {}
+    try:
+        out['brkX2'] = [
+            _phase_entry('LIVE', csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)),
+            _phase_entry('2nd', csv_progress('brkX2',
+                         offset=FWDTEST_BRKX2_PHASE_OFFSET + FWDTEST_BRKX2_LIVE_BASELINE,
+                         until=FWDTEST_BRKX2_PHASE_OFFSET + FWDTEST_BRKX2_LIVE_BASELINE + FWDTEST_BRKX2_PHASE2_TARGET),
+                         FWDTEST_BRKX2_PHASE2_TARGET),
+            _phase_entry('3rd (ukuran baru $60/$90, sejak 19/09)',
+                         csv_progress('brkX2', since_open_wib=FWDTEST_BRKX2_PHASE3_SINCE_WIB),
+                         FWDTEST_BRKX2_PHASE3_TARGET),
+        ]
+    except Exception as e:
+        log(f"   [PHASE] gagal hitung brkX2: {e}")
+    try:
+        out['reversal'] = [
+            _phase_entry('LIVE', csv_progress('reversal')),
+            _phase_entry('2nd (STOP@Stoch<50)',
+                         csv_progress('reversal', offset=REVERSAL_LIVE_BASELINE, until=REVERSAL_STOCH_PATCH_BASELINE),
+                         REVERSAL_PHASE2_TARGET),
+            _phase_entry('3rd', csv_progress('reversal', offset=REVERSAL_STOCH_PATCH_BASELINE), REVERSAL_PHASE3_TARGET),
+        ]
+    except Exception as e:
+        log(f"   [PHASE] gagal hitung reversal: {e}")
+    try:
+        out['brkX2_4h'] = [
+            _phase_entry('LIVE', csv_progress('brkX2_4h')),
+            _phase_entry('2nd', csv_progress('brkX2_4h', offset=STRAT4H_LIVE_BASELINE), STRAT4H_PHASE2_TARGET),
+            _phase_entry('Akumulasi-4h all_three (slot 2)', akum2_progress(), AKUM2_TARGET),
+            _phase_entry('Quick-Reentry', quick_reentry_progress(), QUICK_REENTRY_TARGET),
+        ]
+    except Exception as e:
+        log(f"   [PHASE] gagal hitung brkX2_4h: {e}")
+    try:
+        out['brkX2_crossema'] = [
+            _phase_entry('LIVE', csv_progress('brkX2_crossema')),
+            _phase_entry('2nd (STOP@Stoch<25)',
+                         csv_progress('brkX2_crossema', offset=STRAT_CROSSEMA_LIVE_BASELINE, until=STRAT_CROSSEMA_STOCH_PATCH_BASELINE),
+                         STRAT_CROSSEMA_PHASE2_TARGET),
+            _phase_entry('3rd', csv_progress('brkX2_crossema', offset=STRAT_CROSSEMA_STOCH_PATCH_BASELINE), STRAT_CROSSEMA_PHASE3_TARGET),
+        ]
+    except Exception as e:
+        log(f"   [PHASE] gagal hitung brkX2_crossema: {e}")
+    try:
+        out['hunting_4h'] = [
+            _phase_entry('LIVE', csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)),
+            _phase_entry('2nd', csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET + HUNTING_LIVE_BASELINE), HUNTING_PHASE2_TARGET),
+        ]
+    except Exception as e:
+        log(f"   [PHASE] gagal hitung hunting_4h: {e}")
+    try:
+        _akum_phases = [
+            _phase_entry('1st (STOP@Stoch<25, gabungan Entry A+B)',
+                         csv_progress('akumulasi', until=AKUM_ENTRY_STOCH_PATCH_BASELINE), AKUM_ENTRY_FWDTEST_TARGET),
+            _phase_entry('2nd (gabungan Entry A+B)',
+                         csv_progress('akumulasi', offset=AKUM_ENTRY_STOCH_PATCH_BASELINE), AKUM_ENTRY_PHASE2_TARGET),
+        ]
+        out['akum_entry_a'] = _akum_phases
+        out['akum_entry_b'] = _akum_phases
+    except Exception as e:
+        log(f"   [PHASE] gagal hitung akumulasi: {e}")
+    return out
 
 
 def hunting_live_progress() -> tuple:
@@ -11800,6 +11901,17 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
   </div>
 </div>
+
+<div class="container dash-section-start" data-tab="monitor">
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header" onclick="toggleCard(this)">
+        <h2>Shadow / Paper Test <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Forward-test paper-only, BELUM pakai uang real</span></h2>
+    </div>
+    <div class="card-body">
+      <div id="shadow-chart"><em style="color:var(--muted);font-size:11px">Memuat...</em></div>
+    </div>
+  </div>
+</div>
 <script>
 function refreshPerfChart() {
   fetch("/api/strategy_performance")
@@ -11809,10 +11921,11 @@ function refreshPerfChart() {
       var rows = (data && data.strategies) || [];
       if (!rows.length) { el.innerHTML = "<em style='color:var(--muted);font-size:11px'>Belum ada data.</em>"; return; }
       var header = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">'
-        + '<div style="width:110px;flex-shrink:0;text-align:right">Strategi</div>'
+        + '<div style="width:118px;flex-shrink:0;text-align:right">Strategi</div>'
         + '<div style="flex:1">Menang/Kalah</div>'
-        + '<div style="width:100px;flex-shrink:0">WR%</div>'
-        + '<div style="width:95px;flex-shrink:0" title="Closing PROFIT POSITIF per hari, rata-rata 7 hari terakhir">Closing/hari</div>'
+        + '<div style="width:95px;flex-shrink:0">WR%</div>'
+        + '<div style="width:65px;flex-shrink:0" title="Total profit% kumulatif (jumlah semua profit_pct closing)">Total%</div>'
+        + '<div style="width:105px;flex-shrink:0" title="Closing PROFIT POSITIF -- tier adaptif: coba /hari (7 hari terakhir) dulu, kalau kosong turun ke /minggu (30 hari), lalu /bulan (90 hari), supaya strategi jarang-closing tidak kebulat ke 0.00">Closing</div>'
         + '<div style="width:110px;flex-shrink:0" title="Kapan terakhir ada closing PROFIT POSITIF (bukan closing apa pun)">Terakhir profit</div>'
         + '</div>';
       // 26/09/2026: format "X lalu" sederhana dari string WIB "YYYY-MM-DD HH:MM:SS"
@@ -11828,6 +11941,23 @@ function refreshPerfChart() {
         if (hours < 24) return hours + 'j lalu';
         return Math.floor(hours / 24) + 'h lalu';
       }
+      // 26/09/2026: format sekunder "1x per ~Y hari/jam" -- kebalikan matematis dari rate
+      // (jendela_hari/jumlah), selalu bermakna apa pun frekuensinya (beda dari rate yg bisa
+      // kebulat ke 0 kalau strategi jarang closing).
+      function formatInterval(days) {
+        if (days === null || days === undefined) return '';
+        if (days < 1) return '~' + (days * 24).toFixed(1) + 'j';
+        return '~' + days.toFixed(1) + 'h';
+      }
+      function togglePhaseRow(key) {
+        var det = document.getElementById('perf-phase-' + key);
+        var chev = document.getElementById('perf-chev-' + key);
+        if (!det) return;
+        var showing = det.style.display !== 'none';
+        det.style.display = showing ? 'none' : 'block';
+        if (chev) chev.innerHTML = showing ? '&#9656;' : '&#9662;';
+      }
+      window.togglePhaseRow = togglePhaseRow;
       var body = rows.map(function(r){
         var hasDeals = r.n > 0;
         var winPct = hasDeals ? (r.win / r.n * 100) : 0;
@@ -11838,13 +11968,34 @@ function refreshPerfChart() {
              + '<div style="width:' + lossPct.toFixed(1) + '%;height:100%;background:#f85149" title="' + r.loss + ' kalah"></div>'
              + '</div>')
           : '';
+        var closeCell = r.close_rate_unit
+          ? ((r.close_rate || 0).toFixed(2) + '/' + r.close_rate_unit
+             + '<div style="font-size:9px;color:var(--muted)">' + (r.close_interval_days != null ? '1x per ' + formatInterval(r.close_interval_days) : '') + '</div>')
+          : '<span style="color:var(--muted)">-</span>';
+        var hasPhases = r.phases && r.phases.length > 0;
+        var phaseDetail = '';
+        if (hasPhases) {
+          phaseDetail = '<div id="perf-phase-' + r.key + '" style="display:none;margin:2px 0 8px 118px;padding:6px 10px;background:rgba(255,255,255,0.03);border-radius:4px;font-size:10px;color:var(--muted)">'
+            + r.phases.map(function(ph){
+                var tgt = ph.target ? ('/' + ph.target) : '';
+                var tag = (ph.target && ph.n >= ph.target) ? ' <span style="color:var(--green)">TERCAPAI!</span>' : '';
+                return '<div style="margin-bottom:3px"><b style="color:var(--text)">' + ph.label + '</b>: '
+                  + ph.n + tgt + ' (' + ph.win + 'W/' + ph.loss + 'L, ' + (ph.total_pct >= 0 ? '+' : '') + ph.total_pct + '%)' + tag + '</div>';
+              }).join('')
+            + '</div>';
+        }
+        var chevHtml = hasPhases
+          ? '<span id="perf-chev-' + r.key + '" onclick="togglePhaseRow(\'' + r.key + '\')" style="cursor:pointer;margin-right:3px;color:var(--accent)">&#9656;</span>'
+          : '<span style="margin-right:3px;color:transparent">&#9656;</span>';
         return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px">'
-          + '<div style="width:110px;flex-shrink:0;text-align:right;color:var(--text)">' + r.label + '</div>'
+          + '<div style="width:118px;flex-shrink:0;text-align:right;color:var(--text)">' + chevHtml + r.label + '</div>'
           + '<div style="flex:1;background:rgba(255,255,255,0.05);border-radius:3px;height:16px">' + wlBar + '</div>'
-          + '<div style="width:100px;flex-shrink:0;color:var(--muted)">' + (hasDeals ? (winPct.toFixed(0) + '% (' + r.win + 'W/' + r.loss + 'L)') : '-') + '</div>'
-          + '<div style="width:95px;flex-shrink:0;color:var(--muted)">' + (r.closes_per_day || 0).toFixed(2) + '/hari</div>'
+          + '<div style="width:95px;flex-shrink:0;color:var(--muted)">' + (hasDeals ? (winPct.toFixed(0) + '% (' + r.win + 'W/' + r.loss + 'L)') : '-') + '</div>'
+          + '<div style="width:65px;flex-shrink:0" class="' + (r.total_pct > 0 ? 'profit-pos' : (r.total_pct < 0 ? 'profit-neg' : '')) + '">' + (r.total_pct >= 0 ? '+' : '') + r.total_pct + '%</div>'
+          + '<div style="width:105px;flex-shrink:0;color:var(--muted)">' + closeCell + '</div>'
           + '<div style="width:110px;flex-shrink:0;color:var(--muted)" title="' + (r.last_win_close_wib || '-') + ' WIB">' + timeAgoWib(r.last_win_close_wib) + '</div>'
-          + '</div>';
+          + '</div>'
+          + phaseDetail;
       }).join("");
       el.innerHTML = header + body;
     })
@@ -11852,6 +12003,37 @@ function refreshPerfChart() {
 }
 setInterval(refreshPerfChart, 60000);
 refreshPerfChart();
+
+// 26/09/2026: Shadow/Paper Test -- reuse endpoint /api/shadow_fwdtest_status yg SUDAH ADA
+// (sebelumnya cuma dicek manual/log), sekarang ditampilkan di dashboard.
+var SHADOW_LABELS = {
+  'conf3_stochrsibb': 'Conf3 StochRSI+BB',
+  'dipbuy_universe': 'Dip-Buy Universe',
+  'dipbuy_bluechip': 'Dip-Buy Bluechip'
+};
+function refreshShadowChart() {
+  fetch('/api/shadow_fwdtest_status')
+    .then(function(r){ return r.json(); })
+    .then(function(data) {
+      var el = document.getElementById('shadow-chart');
+      if (!el || !data || !data.ok) { if (el) el.innerHTML = "<em style='color:var(--muted);font-size:11px'>Gagal memuat.</em>"; return; }
+      var keys = Object.keys(SHADOW_LABELS).filter(function(k){ return data[k]; });
+      if (!keys.length) { el.innerHTML = "<em style='color:var(--muted);font-size:11px'>Belum ada data shadow.</em>"; return; }
+      el.innerHTML = keys.map(function(k){
+        var s = data[k];
+        var tag = (s.n_closed >= s.target) ? ' <span style="color:var(--green);font-weight:600">TERCAPAI!</span>' : '';
+        var pfTxt = (s.pf === null || s.pf === undefined) ? '-' : s.pf;
+        var openTxt = s.n_open ? (' | ' + s.n_open + ' open') : '';
+        return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px">'
+          + '<div style="width:150px;flex-shrink:0;text-align:right;color:var(--text)">' + SHADOW_LABELS[k] + '</div>'
+          + '<div style="flex:1;color:var(--muted)">#' + s.n_closed + '/' + s.target + ' (WR ' + s.wr + '%, PF ' + pfTxt + ')' + openTxt + tag + '</div>'
+          + '</div>';
+      }).join('');
+    })
+    .catch(function(){});
+}
+setInterval(refreshShadowChart, 60000);
+refreshShadowChart();
 </script>
 <div class="container dash-section-start" data-tab="monitor">
   <div class="card">
@@ -20740,19 +20922,23 @@ def run_web_dashboard():
                 ("trend_confirm_4h", "TrenKonfirmasi-4h"),
                 ("qscalp_3m", "QScalp-3m"),
             ]
-            # 26/09/2026 (permintaan Mas Budi): "kecepatan closing" (closing PROFIT POSITIF/hari,
-            # window 7 hari) + kapan closing profit-positif terakhir, per strategi -- lihat
-            # strategy_recent_close_stats().
+            # 26/09/2026 (permintaan Mas Budi): "kecepatan closing" PROFIT POSITIF -- tier
+            # adaptif hari/minggu/bulan (lihat strategy_recent_close_stats()) + interval rata2
+            # + breakdown fase per strategi (strategy_phase_breakdown(), utk toggle expand di JS).
             recent = strategy_recent_close_stats()
+            phases = strategy_phase_breakdown()
             rows = []
             for key, label in defs:
                 p = csv_progress(key)
                 if p is None:
                     p = {"n": 0, "win": 0, "loss": 0, "total_pct": 0.0}
-                r = recent.get(key, {"closes_recent": 0, "per_day": 0.0, "last_win_close_wib": None})
+                r = recent.get(key, {"rate": 0.0, "rate_unit": None, "interval_days": None, "last_win_close_wib": None})
                 rows.append({"key": key, "label": label, "n": p["n"], "win": p["win"],
                              "loss": p["loss"], "total_pct": round(p["total_pct"], 2),
-                             "closes_per_day": r["per_day"], "last_win_close_wib": r["last_win_close_wib"]})
+                             "close_rate": r["rate"], "close_rate_unit": r["rate_unit"],
+                             "close_interval_days": r["interval_days"],
+                             "last_win_close_wib": r["last_win_close_wib"],
+                             "phases": phases.get(key, [])})
             rows.sort(key=lambda r: (r["win"] / r["n"]) if r["n"] > 0 else -1, reverse=True)
             return jsonify({"strategies": rows})
 
