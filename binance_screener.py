@@ -11926,8 +11926,8 @@ function refreshPerfChart() {
         + '<div style="flex:1">Menang/Kalah</div>'
         + '<div style="width:95px;flex-shrink:0">WR%</div>'
         + '<div style="width:65px;flex-shrink:0" title="Total profit% kumulatif (jumlah semua profit_pct closing)">Total%</div>'
-        + '<div style="width:105px;flex-shrink:0" title="Closing PROFIT POSITIF -- tier adaptif: coba /hari (7 hari terakhir) dulu, kalau kosong turun ke /minggu (30 hari), lalu /bulan (90 hari), supaya strategi jarang-closing tidak kebulat ke 0.00">Closing</div>'
-        + '<div style="width:110px;flex-shrink:0" title="Kapan terakhir ada closing PROFIT POSITIF (bukan closing apa pun)">Terakhir profit</div>'
+        + '<div style="width:105px;flex-shrink:0" title="Closing PROFIT POSITIF -- tier adaptif: coba /D (7 hari terakhir) dulu, kalau kosong turun ke /W (30 hari), lalu /M (90 hari), supaya strategi jarang-closing tidak kebulat ke 0.00. Singkatan: m=menit, h=jam, D=hari, W=minggu, M=bulan">Closing</div>'
+        + '<div style="width:110px;flex-shrink:0" title="Kapan terakhir ada closing PROFIT POSITIF (bukan closing apa pun). Singkatan: m=menit, h=jam, D=hari, W=minggu, M=bulan">Terakhir profit</div>'
         + '</div>';
       // 26/09/2026: format "X lalu" sederhana dari string WIB "YYYY-MM-DD HH:MM:SS"
       function timeAgoWib(wibStr) {
@@ -11937,19 +11937,25 @@ function refreshPerfChart() {
         var diffMs = Date.now() - then.getTime();
         if (isNaN(diffMs)) return '-';
         var mins = Math.floor(diffMs / 60000);
-        if (mins < 60) return mins + 'm lalu';
+        if (mins < 60) return mins + 'm ago';
         var hours = Math.floor(mins / 60);
-        if (hours < 24) return hours + 'j lalu';
-        return Math.floor(hours / 24) + 'h lalu';
+        if (hours < 24) return hours + 'h ago';
+        var days = Math.floor(hours / 24);
+        if (days < 7) return days + 'D ago';
+        if (days < 30) return Math.floor(days / 7) + 'W ago';
+        return Math.floor(days / 30) + 'M ago';
       }
       // 26/09/2026: format sekunder "1x per ~Y hari/jam" -- kebalikan matematis dari rate
       // (jendela_hari/jumlah), selalu bermakna apa pun frekuensinya (beda dari rate yg bisa
       // kebulat ke 0 kalau strategi jarang closing).
       function formatInterval(days) {
         if (days === null || days === undefined) return '';
-        if (days < 1) return '~' + (days * 24).toFixed(1) + 'j';
-        return '~' + days.toFixed(1) + 'h';
+        if (days < 1) return '~' + (days * 24).toFixed(1) + 'h';
+        if (days < 7) return '~' + days.toFixed(1) + 'D';
+        if (days < 30) return '~' + (days / 7).toFixed(1) + 'W';
+        return '~' + (days / 30).toFixed(1) + 'M';
       }
+      var RATE_UNIT_SHORT = {hari: 'D', minggu: 'W', bulan: 'M'};
       function togglePhaseRow(key) {
         var det = document.getElementById('perf-phase-' + key);
         var chev = document.getElementById('perf-chev-' + key);
@@ -11970,7 +11976,7 @@ function refreshPerfChart() {
              + '</div>')
           : '';
         var closeCell = r.close_rate_unit
-          ? ((r.close_rate || 0).toFixed(2) + '/' + r.close_rate_unit
+          ? ((r.close_rate || 0).toFixed(2) + '/' + (RATE_UNIT_SHORT[r.close_rate_unit] || r.close_rate_unit)
              + '<div style="font-size:9px;color:var(--muted)">' + (r.close_interval_days != null ? '1x per ' + formatInterval(r.close_interval_days) : '') + '</div>')
           : '<span style="color:var(--muted)">-</span>';
         var hasPhases = r.phases && r.phases.length > 0;
