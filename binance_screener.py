@@ -12390,6 +12390,7 @@ function loadStrategyConfig() {
                 var sizingEnabled = cfg.sizing_enabled !== false;
                 var cooldownEnabled = cfg.cooldown_enabled !== false;
                 var aiCallOpenEnabled = cfg.ai_call_open === true;
+                var aiCallCloseEnabled = cfg.ai_call_close !== false;
                 var dim = sizingEnabled ? '' : 'opacity:0.35;pointer-events:none';
                 var saveButton = '<button type="button" onclick="saveStrategyConfig(this)" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>';
                 var addFundCell = '';
