@@ -296,6 +296,19 @@ MAX_DEALS_REVERSAL      = 2      # slot reversal (bot 16921019) — set Max acti
 # total risiko riil (jumlah deal DAN dollar) tidak lepas kendali walau tiap strategi masih
 # punya sisa slot sendiri-sendiri. Base order yang lebih besar ($50-100 utk 4 strategi
 # terbukti) berarti beberapa deal saja sudah bisa menghabiskan modal (~$192 saat ini).
+# 26/09/2026 (permintaan Mas Budi): JANGAN naikkan GLOBAL_MAX_ACTIVE_DEALS (skrg 4) atau
+# TRENDCONFIRM_MAX_DEALS (skrg 3) tanpa data riil dulu. Alasan: TrenKonfirmasi-4h baru saja
+# dapat fitur add-fund-on-breakout (lihat TRENDCONFIRM_BREAKOUT_ADDFUND_DIP_PCT di bawah) yang
+# bikin 1 deal strategi ini bisa jadi 2x modal ($30 -> $60) kapan pun pola dip->breakout kena --
+# TAPI frekuensi riil kejadian ini di live BELUM DIKETAHUI (backtest cuma bilang ~35% dari deal
+# yang SEMPAT reach breakout, beda dari "35% dari SEMUA deal"). Kalau GLOBAL_MAX_ACTIVE_DEALS
+# dan/atau TRENDCONFIRM_MAX_DEALS dinaikkan BERSAMAAN dengan fitur ini sebelum ada data live,
+# worst-case simultan hard-stop (dasar rumus GLOBAL_MAX_EXPOSURE_USD di bawah) jadi tidak bisa
+# dihitung akurat -- cuma asumsi, bukan data -- dan kalau ada masalah nanti tidak bisa dipisahkan
+# penyebabnya dari 2 perubahan sekaligus. URUTAN YANG DISEPAKATI: biarkan add-fund-on-breakout
+# jalan dulu beberapa hari/minggu, kumpulkan data riil frekuensi+ukuran rata-rata, BARU hitung
+# ulang worst-case exposure dan revisit angka ini. Lihat juga project_addfund_breakout_capacity_review
+# di memori Claude.
 GLOBAL_MAX_ACTIVE_DEALS = 4        # jumlah deal aktif gabungan semua strategi
 # 24/09/2026 (review base order #3, permintaan Mas Budi): diturunkan 150 -> 100. Modal saat itu
 # $178.79, jadi $150 = 84% modal boleh nyangkut bersamaan, reserve cuma ~$29. Hard-stop historis
@@ -483,7 +496,29 @@ TRENDCONFIRM_ENABLED         = True
 TRENDCONFIRM_TIMEFRAME       = "4h"
 TRENDCONFIRM_MAX_DEALS       = 3        # mulai konservatif -- frekuensi sinyal mentah jauh
                                           # lebih tinggi dari strategi lain (lihat memory)
+                                          # 26/09/2026: JANGAN naikkan (dashboard "Max Deals" override
+                                          # jg TIDAK boleh dinaikkan) tanpa data riil add-fund-on-breakout
+                                          # dulu -- lihat REMARK lengkap di GLOBAL_MAX_ACTIVE_DEALS (~baris 299).
 TRENDCONFIRM_MAX_HOLD_CANDLES= 15        # timeout 15 candle 4h = 2.5 hari, sama spt brkX2-4h/hunting
+# 26/09/2026 (permintaan Mas Budi, kasus nyata XPL/PIXEL/PROM): add-fund reaktif KHUSUS
+# TrenKonfirmasi-4h -- deal yang SEMPAT profit, retrace (dip), lalu profit balik lagi ke
+# puncak sebelum-dip ("breakout") ditambah modal SEKALI (dobel posisi), murni rule-based
+# TANPA AI-gate (beda dari add-fund lain strategi ini). Backtest 2 lapis:
+#  1. 155 deal riil (kline 15m Binance, Juli-Sep 2026): n=21 event, +$5.25 total,
+#     +$0.25/event, p=0.027.
+#  2. VALIDASI sampel besar: 38.515 trade sintetis 2022-2026 (176 pair, replikasi persis
+#     check_trendconfirm_entry() + exit rules) -- p=1.19e-11 di angka yang SAMA, dan TIDAK
+#     fragile ke outlier (buang top-100 event untung terbesar dari 2.152 yg menang, total
+#     TETAP positif +$593.92 dari +$959.24). Win-rate cuma ~33% tapi avg menang 4x avg kalah
+#     (pola cut-loss-short/let-winner-run, konsisten dgn trailing/hard-stop yg sudah ada).
+# DIP_PCT & BREAKOUT_PCT dari sweep granular thd data 15m (lebih dekat ke granularitas live
+# monitoring drpd data 4h dataset besar, yg optimal-nya sedikit beda krn resolusi waktu beda).
+# INSTANT, TANPA delay/konfirmasi -- delay TERBUKTI membalik hasil jadi rugi (1 candle 15m/0
+# menit: +$5.25 p=0.027; 2 candle/15 menit: -$2.76; makin lama delay makin buruk, 105 menit:
+# -$4.49 win-rate 0%). Ukuran add-fund = SAMA BESAR dgn modal awal deal (lihat pemanggilan di
+# thread2_monitor -- BUKAN ukuran custom, itu asumsi yang dibacktest).
+TRENDCONFIRM_BREAKOUT_ADDFUND_DIP_PCT      = 2.0   # retrace minimum dari peak sblm dianggap "dip"
+TRENDCONFIRM_BREAKOUT_ADDFUND_BREAKOUT_PCT = 0.0   # margin ekstra di atas peak-sebelum-dip (0 = cukup balik pas)
 TRENDCONFIRM_SCAN_INTERVAL   = 600       # 23/09/2026 (audit biaya AI 22/09 + sweep window 23/09,
                                           # permintaan Mas Budi): naik dari 180 -- sebelumnya scan 24 jam
                                           # nonstop, terbukti jadi penyumbang panggilan AI TERBESAR
@@ -7831,6 +7866,65 @@ def thread2_monitor():
         atrp = d.get('atr_pct',3.0)
         strat = d.get('strategy', 'brkX2')
         live_atrp = get_live_atr_pct(sym, strat, atrp)
+
+        # 26/09/2026 (permintaan Mas Budi): add-fund reaktif "dip lalu breakout" khusus
+        # TrenKonfirmasi-4h -- lihat REMARK lengkap di TRENDCONFIRM_BREAKOUT_ADDFUND_DIP_PCT
+        # (~baris 502). Murni rule-based, INSTANT (bukan tunda/konfirmasi -- itu terbukti
+        # membalik hasil jadi rugi di backtest), sekali per deal (fire-once via bo_addfund_used).
+        # prof_peak/prof_now dihitung TANPA potong fee -- konsisten dgn backtest (raw close-price
+        # profit%, bukan prof_from_entry yg sudah dipotong FEE_ROUND_TRIP_PCT).
+        if strat == 'trend_confirm_4h' and not d.get('bo_addfund_used', False):
+            _bo_prof_now = (price/entry - 1) * 100
+            _bo_dip_from = d.get('bo_addfund_dip_from')
+            if _bo_dip_from is None:
+                if prof_peak - _bo_prof_now >= TRENDCONFIRM_BREAKOUT_ADDFUND_DIP_PCT:
+                    with active_deals_lock:
+                        if sym in active_deals:
+                            active_deals[sym]['bo_addfund_dip_from'] = prof_peak
+                    d['bo_addfund_dip_from'] = prof_peak
+                    log(f"[T2] {sym} breakout-addfund: dip tervalidasi (peak {prof_peak:+.2f}% -> skrg {_bo_prof_now:+.2f}%)")
+            elif _bo_prof_now >= _bo_dip_from + TRENDCONFIRM_BREAKOUT_ADDFUND_BREAKOUT_PCT:
+                if not get_deal_override(sym, 'auto_add_fund', True):
+                    log(f"[T2] {sym} breakout-addfund: TERPICU tapi auto_add_fund=OFF (toggle 'Auto Avg Down') -- di-skip, tidak dicoba ulang")
+                    with active_deals_lock:
+                        if sym in active_deals:
+                            active_deals[sym]['bo_addfund_used'] = True
+                else:
+                    _bo_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('trend_confirm_4h'))
+                    _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=_bo_modal)
+                    if not _glob_ok:
+                        log(f"[T2] {sym} breakout-addfund: TERPICU tapi kapasitas gabungan penuh ({_glob_reason}) -- di-skip, tidak dicoba ulang")
+                        with active_deals_lock:
+                            if sym in active_deals:
+                                active_deals[sym]['bo_addfund_used'] = True
+                    else:
+                        log(f"[T2] {sym} breakout-addfund TERPICU: dip dari {_bo_dip_from:+.2f}%, "
+                            f"skrg {_bo_prof_now:+.2f}% -- tambah modal ${_bo_modal:.0f}")
+                        _bo_result = execute_add_fund(sym, _bo_modal)
+                        with active_deals_lock:
+                            if sym in active_deals:
+                                active_deals[sym]['bo_addfund_used'] = True
+                                active_deals[sym]['bo_addfund_dip_from'] = None
+                        if _bo_result.get('ok'):
+                            send_telegram(
+                                f"📈 Breakout Add-Fund (TrenKonfirmasi-4h)\n"
+                                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                                f"Pair    : {to_display_pair(sym)}\n"
+                                f"Dip dari: {_bo_dip_from:+.2f}% -> breakout {_bo_prof_now:+.2f}%\n"
+                                f"Modal ditambah: ${_bo_modal:.0f} @ {_fmt_price(_bo_result.get('price',0))}",
+                                parse_mode=None
+                            )
+                        else:
+                            log(f"WARN [T2] {sym} breakout-addfund gagal: {_bo_result.get('error')}")
+                        continue   # entry/peak lokal sudah basi setelah add-fund -- lanjut siklus berikutnya
+            elif _bo_prof_now > _bo_dip_from:
+                # BREAKOUT_PCT=0.0 bikin cabang ini nyaris tidak pernah kepicu praktis (breakout
+                # sudah tertangkap di cabang atas begitu >= dip_from) -- dijaga utk jaga-jaga kalau
+                # BREAKOUT_PCT diubah >0 di masa depan (lihat REMARK: 0.0 sengaja dipilih dari backtest).
+                with active_deals_lock:
+                    if sym in active_deals:
+                        active_deals[sym]['bo_addfund_dip_from'] = None
+                d['bo_addfund_dip_from'] = None
 
         # Trailing factor variatif untuk hunting_4h
         if strat == 'hunting_4h':
