@@ -11937,13 +11937,10 @@ function refreshPerfChart() {
         var diffMs = Date.now() - then.getTime();
         if (isNaN(diffMs)) return '-';
         var mins = Math.floor(diffMs / 60000);
-        if (mins < 60) return mins + 'm ago';
+        if (mins < 60) return mins + 'm lalu';
         var hours = Math.floor(mins / 60);
-        if (hours < 24) return hours + 'h ago';
-        var days = Math.floor(hours / 24);
-        if (days < 7) return days + 'D ago';
-        if (days < 30) return Math.floor(days / 7) + 'W ago';
-        return Math.floor(days / 30) + 'M ago';
+        if (hours < 24) return hours + 'h lalu';
+        return Math.floor(hours / 24) + 'D lalu';
       }
       // 26/09/2026: format sekunder "1x per ~Y hari/jam" -- kebalikan matematis dari rate
       // (jendela_hari/jumlah), selalu bermakna apa pun frekuensinya (beda dari rate yg bisa
@@ -11951,9 +11948,7 @@ function refreshPerfChart() {
       function formatInterval(days) {
         if (days === null || days === undefined) return '';
         if (days < 1) return '~' + (days * 24).toFixed(1) + 'h';
-        if (days < 7) return '~' + days.toFixed(1) + 'D';
-        if (days < 30) return '~' + (days / 7).toFixed(1) + 'W';
-        return '~' + (days / 30).toFixed(1) + 'M';
+        return '~' + days.toFixed(1) + 'D';
       }
       var RATE_UNIT_SHORT = {hari: 'D', minggu: 'W', bulan: 'M'};
       function togglePhaseRow(key) {
