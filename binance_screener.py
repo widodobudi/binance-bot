@@ -4694,6 +4694,65 @@ def close_deal_maybe_partial(symbol: str, strategy: str, profit_pct: float, info
         info.pop("partial", None)
         return send_close_long(symbol, strategy)
 
+def execute_close_now(sym: str, reason: str, telegram_header: str = "CLOSE MANUAL (dashboard)",
+                       log_tag: str = "MANUAL-CLOSE", thread_label: str = "MANUAL") -> dict:
+    """Core sinkron: jual SEKARANG (full, bukan partial-ke-Earn) & catat deal aktif sbg closed.
+    26/09/2026: di-extract dari body /manual_close supaya bisa dipakai juga oleh
+    ai_decision_capacity_swap() (AI menutup deal aktif utk kasih ruang kandidat baru saat
+    kapasitas gabungan penuh) -- perilaku /manual_close TIDAK berubah, cuma reason/telegram_header/
+    log_tag jadi parameter. Return {"ok": True, "sym", "price", "profit_pct"} atau {"ok": False, "error"}."""
+    with active_deals_lock:
+        if sym not in active_deals:
+            return {"ok": False, "error": f"{sym} tidak ada di active_deals"}
+        d = dict(active_deals[sym])
+    strat = d.get('strategy', 'brkX2')
+    try:
+        price_now = get_price_now(sym)
+        if price_now <= 0:
+            return {"ok": False, "error": "Gagal ambil harga live"}
+        entry = d.get('entry_price', price_now)
+        prof = (price_now / entry - 1) * 100 if entry > 0 else 0
+        if send_close_long(sym, strat):
+            ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+            total_usd = estimate_deal_total_usd(d)
+            csv_log_close(to_display_pair(sym), ts, price_now, prof, reason, strategy=strat, base_usd=total_usd)
+            _opened_ts = (d.get('opened_candle_ts', 0) or 0) / 1000.0
+            _hold_c = round((time.time() - _opened_ts) / _candle_seconds_for_strategy(strat)) if _opened_ts > 0 else ''
+            deal_log_write({
+                'timestamp_wib': ts,
+                'event_type':    'CLOSE',
+                'strategy':      strat,
+                'symbol':        to_display_pair(sym),
+                'thread':        thread_label,
+                'entry_price':   _fmt_price(entry) if entry else '',
+                'exit_price':    _fmt_price(price_now),
+                'profit_pct':    f"{prof:.2f}",
+                'exit_reason':   reason,
+                'trailing_armed':str(d.get('trailing_armed', False)),
+                'hold_candles':  str(_hold_c),
+                'atr_pct':       f"{d.get('atr_pct', ''):.2f}" if d.get('atr_pct') else '',
+                'score':         d.get('score', ''),
+                'total_usd':     d.get('target_usd', ''),
+            })
+            remove_from_active_deals(sym)
+            if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
+            if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof)
+            if strat == 'akum_entry_a' and d.get('akum2'): record_akum2_close(sym, prof)
+            log(f"[{log_tag}] {sym} @ {price_now:.6g} profit={prof:.2f}%")
+            _profit_usd = total_usd * prof / 100
+            send_telegram(
+                f"{telegram_header}\n"
+                f"{ts} WIB\n"
+                f"Pair  : {to_display_pair(sym)}\n"
+                f"Exit  : {_fmt_price(price_now)} | Profit: {prof:+.2f}% (${_profit_usd:+.2f})\n"
+                f"Strategi: {strat}"
+            )
+            return {"ok": True, "sym": sym, "price": price_now, "profit_pct": round(prof, 2)}
+        else:
+            return {"ok": False, "error": "Binance order close gagal (cek log server untuk detail)" if USE_BINANCE_DIRECT else "3Commas menolak close"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 def earn_partial_progress_line() -> str:
     """Satu baris utk heartbeat: progres jual-sebagian + sisa di Earn."""
     try:
@@ -18532,61 +18591,10 @@ def run_web_dashboard():
                 return jsonify({"ok": False, "error": "sym kosong"})
             if not sym.endswith("USDT"):
                 sym = sym + "USDT"
-            with active_deals_lock:
-                if sym not in active_deals:
-                    return jsonify({"ok": False, "error": f"{sym} tidak ada di active_deals"})
-                d = dict(active_deals[sym])
-            strat = d.get('strategy', 'brkX2')
-            try:
-                price_now = get_price_now(sym)
-                if price_now <= 0:
-                    return jsonify({"ok": False, "error": "Gagal ambil harga live"})
-                entry = d.get('entry_price', price_now)
-                prof = (price_now / entry - 1) * 100 if entry > 0 else 0
-                reason = "manual_close (dashboard)"
-                if send_close_long(sym, strat):
-                    ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
-                    total_usd = estimate_deal_total_usd(d)
-                    csv_log_close(to_display_pair(sym), ts, price_now, prof, reason, strategy=strat, base_usd=total_usd)
-                    _opened_ts = (d.get('opened_candle_ts', 0) or 0) / 1000.0
-                    _hold_c = round((time.time() - _opened_ts) / _candle_seconds_for_strategy(strat)) if _opened_ts > 0 else ''
-                    deal_log_write({
-                        'timestamp_wib': ts,
-                        'event_type':    'CLOSE',
-                        'strategy':      strat,
-                        'symbol':        to_display_pair(sym),
-                        'thread':        'MANUAL',
-                        'entry_price':   _fmt_price(entry) if entry else '',
-                        'exit_price':    _fmt_price(price_now),
-                        'profit_pct':    f"{prof:.2f}",
-                        'exit_reason':   reason,
-                        'trailing_armed':str(d.get('trailing_armed', False)),
-                        'hold_candles':  str(_hold_c),
-                        'atr_pct':       f"{d.get('atr_pct', ''):.2f}" if d.get('atr_pct') else '',
-                        'score':         d.get('score', ''),
-                        'total_usd':     d.get('target_usd', ''),
-                    })
-                    remove_from_active_deals(sym)
-                    if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
-                    if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof)
-                    if strat == 'akum_entry_a' and d.get('akum2'): record_akum2_close(sym, prof)
-                    log(f"[MANUAL-CLOSE] {sym} @ {price_now:.6g} profit={prof:.2f}%")
-                    # 24/09/2026 (permintaan Mas Budi): profit $ ditambahkan, sebelumnya notif ini
-                    # cuma tulis persen -- total_usd (modal riil deal ini) sudah dihitung di atas,
-                    # tinggal dikalikan langsung, tidak perlu panggilan baru.
-                    _profit_usd = total_usd * prof / 100
-                    send_telegram(
-                        f"CLOSE MANUAL (dashboard)\n"
-                        f"{ts} WIB\n"
-                        f"Pair  : {to_display_pair(sym)}\n"
-                        f"Exit  : {_fmt_price(price_now)} | Profit: {prof:+.2f}% (${_profit_usd:+.2f})\n"
-                        f"Strategi: {strat}"
-                    )
-                    return jsonify({"ok": True, "sym": sym, "price": price_now, "profit_pct": round(prof, 2)})
-                else:
-                    return jsonify({"ok": False, "error": "Binance order close gagal (cek log server untuk detail)" if USE_BINANCE_DIRECT else "3Commas menolak close"})
-            except Exception as e:
-                return jsonify({"ok": False, "error": str(e)})
+            # 26/09/2026: logic asli dipindah ke execute_close_now() (dipakai juga oleh
+            # ai_decision_capacity_swap()) -- perilaku endpoint ini TIDAK berubah (tetap HTTP 200
+            # apa pun hasilnya, seperti sebelumnya -- caller baca field "ok" di body).
+            return jsonify(execute_close_now(sym, "manual_close (dashboard)"))
 
         @app.route("/cancel_deal", methods=["POST"])
         def cancel_deal():
@@ -20922,6 +20930,34 @@ AI_OPEN_APPROVE_COOLDOWN_SEC = 10 * 60
 AI_UNAVAILABLE_COOLDOWN_SEC = 5 * 60
 _ai_open_skip_cooldown = {}   # {(symbol, strategy): until_timestamp}
 
+# 26/09/2026 (permintaan Mas Budi, insiden macet di GLOBAL_MAX_ACTIVE_DEALS/GLOBAL_MAX_EXPOSURE_USD
+# -- lihat baris ~299-320): saat kandidat OPEN lolos semua filter rule-based tapi kapasitas gabungan
+# PENUH, daripada langsung SKIP, tawarkan ke AI: ada deal aktif yang profitnya sudah lumayan --
+# AI boleh pilih tutup salah satu drpd itu utk kasih ruang, atau biarkan semua apa adanya. Tiga
+# parameter ini SEMUA hasil backtest 155 deal historis (rekonstruksi kline 15m Binance, bukan
+# tebakan):
+#  - MIN_PROFIT_PCT = 1.6%: floor kelayakan-ditawarkan. Di bawah 1.3%, simulasi "tutup begitu
+#    nyentuh floor" TERBUKTI SIGNIFIKAN lebih buruk drpd menunggu (mis. 1.0% -> selisih $-11.63,
+#    p=0.017). Titik $ murni terbaik ada di 2.8% (selisih +$19.16, p<0.001), TAPI cuma 49% deal
+#    historis yang PERNAH sampai situ -- floor setinggi itu bikin fitur nyaris tidak pernah punya
+#    kandidat utk ditawarkan (data 25-26/09: capacity block terjadi 386x/7.5 jam, jadi frekuensi
+#    kesempatan JAUH lebih penting drpd $ optimal di kasus langka). 1.6% adalah floor TERBAIK
+#    di antara yang masih mempertahankan cakupan ~85% (selisih +$13.44, p=0.054, strictly lebih
+#    baik dari 1.5% di semua metrik pada cakupan yang sama).
+#  - Lingkup GLOBAL/lintas-strategi (bukan cuma sesama strategi kandidat): log Railway 25-26/09
+#    (386 kejadian capacity-block, 7.5 jam) nunjukkin 100% kandidat yang diblokir berasal dari
+#    strategi LAIN drpd strategi yang sedang pegang eksposur -- swap sesama-strategi-saja nyaris
+#    tidak akan pernah punya kesempatan aktif.
+#  - COOLDOWN_SEC = 15 menit (samakan besarannya dgn AI_OPEN_SKIP_COOLDOWN_SEC): dari log yang
+#    sama, symbol yang sama ditanya ulang sampai 34x/7.5 jam (~tiap 13 menit) tanpa cooldown --
+#    pola pemborosan sama persis yg sudah diperbaiki di jalur OPEN biasa 25/09/2026.
+# Deal dgn toggle "Auto Close" OFF (get_deal_override(sym,'auto_close',True) False) TIDAK PERNAH
+# ditawarkan sbg kandidat dikorbankan -- itu master switch "jangan sentuh deal ini otomatis" yg
+# sudah ada, non-negotiable (permintaan eksplisit Mas Budi).
+AI_CAPACITY_SWAP_MIN_PROFIT_PCT = 1.6
+AI_CAPACITY_SWAP_COOLDOWN_SEC = 15 * 60
+_ai_capacity_swap_cooldown = {}   # {(symbol, strategy) kandidat: until_timestamp}
+
 # 04/09/2026: model yg mendukung "adaptive thinking" (makanya "output_config":{"effort":...}
 # valid dikirim ke situ) -- dokumentasi resmi Anthropic: Claude Sonnet 4.5, Opus 4.5, Haiku 4.5
 # dan model Claude 4 ke bawah TIDAK dukung adaptive thinking sama sekali ("extended-thinking-only"),
@@ -21354,6 +21390,93 @@ def get_full_4h_indicator_context(symbol: str) -> str:
         return ""
 
 
+def ai_decision_capacity_swap(candidate_symbol: str, candidate_strategy: str, candidate_indicators: dict,
+                               glob_reason: str):
+    """26/09/2026 (permintaan Mas Budi, backtest 155 deal historis -- lihat REMARK di
+    AI_CAPACITY_SWAP_MIN_PROFIT_PCT): dipanggil dari ai_decision_open() saat kandidat lolos
+    semua filter rule-based tapi kapasitas gabungan PENUH. Cari deal aktif dgn profit >=
+    AI_CAPACITY_SWAP_MIN_PROFIT_PCT (dan auto_close TIDAK di-OFF-kan manual), tawarkan ke AI:
+    SWAP (tutup salah satu drpd itu) atau SKIP (biarkan semua apa adanya). Return symbol yg
+    harus ditutup (str), atau None kalau SKIP/tidak ada kandidat/AI tidak tersedia.
+    FAIL-CLOSED kalau AI tidak tersedia (beda dari ai_decision_open/close yg fail-open) --
+    ini soal mengorbankan posisi yg SUDAH SEHAT, bukan cuma menolak kandidat baru, jadi kalau
+    AI tidak bisa dimintai pendapat, defaultnya JANGAN korbankan apa pun."""
+    _cd_key = (candidate_symbol, candidate_strategy)
+    _cd_until = _ai_capacity_swap_cooldown.get(_cd_key, 0)
+    if time.time() < _cd_until:
+        return None
+    with active_deals_lock:
+        deals_snapshot = list(active_deals.items())
+    eligible = []
+    for sym, d in deals_snapshot:
+        if sym == candidate_symbol:
+            continue
+        if not get_deal_override(sym, 'auto_close', True):
+            continue
+        entry = float(d.get('entry_price', 0) or 0)
+        if entry <= 0:
+            continue
+        price_now = float(d.get('last_price', 0) or 0) or entry
+        profit_now = (price_now / entry - 1) * 100
+        if profit_now < AI_CAPACITY_SWAP_MIN_PROFIT_PCT:
+            continue
+        eligible.append({'sym': sym, 'strategy': d.get('strategy', 'brkX2'), 'profit_now': profit_now,
+                          'atr_pct': float(d.get('atr_pct', 0) or 0), 'armed': d.get('trailing_armed', False)})
+    if not eligible:
+        # gratis (tidak ada AI call) -- TIDAK pasang cooldown, supaya begitu ADA deal yg nyentuh
+        # floor beberapa menit lagi, kandidat ini langsung bisa dicek ulang tanpa nunggu 15 menit.
+        return None
+    cand_ind_str = "\n".join(f"- {k}: {v}" for k, v in candidate_indicators.items())
+    cand_4h = get_full_4h_indicator_context(candidate_symbol)
+    cand_4h_section = f"\n{cand_4h}\n" if cand_4h else ""
+    deals_str = ""
+    for e in eligible:
+        d4h = get_full_4h_indicator_context(e['sym'])
+        d4h_section = f"\n  {d4h}" if d4h else ""
+        deals_str += (
+            f"\n- {e['sym']} ({to_display_pair(e['sym'])}, {e['strategy']}): profit {e['profit_now']:+.2f}%, "
+            f"ATR% {e['atr_pct']:.2f}%, trailing armed: {e['armed']}{d4h_section}"
+        )
+    prompt = (
+        f"Kamu adalah AI analyst trading crypto. Kapasitas gabungan portofolio SEDANG PENUH "
+        f"({glob_reason}), jadi kandidat OPEN baru berikut TIDAK BISA dibuka kecuali salah satu "
+        f"deal aktif yang sudah profit ditutup lebih dulu untuk kasih ruang.\n\n"
+        f"KANDIDAT BARU: {to_display_pair(candidate_symbol)} ({candidate_strategy})\n"
+        f"Indikator kandidat:\n{cand_ind_str}\n{cand_4h_section}\n"
+        f"DEAL AKTIF YANG PROFIT >= {AI_CAPACITY_SWAP_MIN_PROFIT_PCT}% (boleh dikorbankan kalau perlu):"
+        f"{deals_str}\n\n"
+        f"Bandingkan potensi kandidat baru vs melanjutkan salah satu deal aktif di atas. Kalau "
+        f"kandidat baru jelas lebih menjanjikan DAN salah satu deal aktif terlihat momentumnya "
+        f"sudah melemah/mulai topping, pilih SWAP dan tutup deal itu. Kalau semua deal aktif masih "
+        f"sehat dan berpotensi naik lagi, pilih SKIP -- JANGAN korbankan deal yang masih jelas "
+        f"punya ruang naik cuma demi kandidat baru yang belum terbukti.\n\n"
+        f"Format jawaban (ikuti persis):\n"
+        f"SWAP <symbol PERSIS seperti tertulis di atas, mis. XPLUSDT> atau SKIP\n"
+        f"Alasan: alasan singkat\n\n"
+        f"Baris pertama HARUS diawali kata SWAP diikuti symbol persis, atau cuma kata SKIP."
+    )
+    result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
+    _ai_capacity_swap_cooldown[_cd_key] = time.time() + AI_CAPACITY_SWAP_COOLDOWN_SEC
+    if not result:
+        log(f"[AI] CAPACITY-SWAP {candidate_symbol} ({candidate_strategy}): AI tidak tersedia -- fail-CLOSED (SKIP, tidak swap)")
+        return None
+    first_line = result.strip().split("\n")[0].strip().upper()
+    log_ai_decision(
+        f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] CAPACITY-SWAP | {candidate_strategy} | "
+        f"{to_display_pair(candidate_symbol)} | kandidat dikorbankan: {', '.join(e['sym'] for e in eligible)} | "
+        f"{result.strip()}\n{'─'*36}\n"
+    )
+    if not first_line.startswith("SWAP"):
+        log(f"[AI] CAPACITY-SWAP {candidate_symbol}: SKIP (AI tidak mau korbankan deal aktif manapun)")
+        return None
+    for e in eligible:
+        if e['sym'].upper() in first_line.replace('/', ''):
+            log(f"[AI] CAPACITY-SWAP {candidate_symbol}: AI pilih SWAP -> tutup {e['sym']}")
+            return e['sym']
+    log(f"WARN [AI] CAPACITY-SWAP {candidate_symbol}: AI jawab SWAP tapi symbol tidak match kandidat manapun ({first_line}) -- SKIP")
+    return None
+
+
 def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int, notify: bool = True,
                       fail_closed: bool = False) -> bool:
     """
@@ -21392,13 +21515,31 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     # ulang pertanyaan yang jawabannya sudah pasti tidak bisa dieksekusi selama kapasitas penuh.
     _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=0.0)
     if not _glob_ok:
-        log(f"[AI] OPEN decision {symbol} ({strategy}): SKIP (kapasitas gabungan penuh -- {_glob_reason} -- tidak tanya AI)")
-        log_ai_decision(
-            f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] OPEN-DECISION | {strategy} | "
-            f"{to_display_pair(symbol)} | SKIP (kapasitas gabungan penuh, AI tidak dipanggil -- {_glob_reason}) "
-            f"| notify={notify}\n{'─'*36}\n"
-        )
-        return False
+        # 26/09/2026 (permintaan Mas Budi, backtest 155 deal): sebelum langsung SKIP, tawarkan
+        # ke AI opsi menutup salah satu deal aktif yang sudah profit >= AI_CAPACITY_SWAP_MIN_PROFIT_PCT
+        # supaya kasih ruang -- lihat ai_decision_capacity_swap() dan REMARK di deklarasi konstanta
+        # AI_CAPACITY_SWAP_MIN_PROFIT_PCT (~baris 20932).
+        _swap_sym = ai_decision_capacity_swap(symbol, strategy, indicators, _glob_reason)
+        if _swap_sym:
+            _swap_result = execute_close_now(
+                _swap_sym, f"AI capacity swap (kasih ruang utk {strategy} {to_display_pair(symbol)})",
+                telegram_header="🔁 CLOSE (AI capacity swap)", log_tag="CAPACITY-SWAP-CLOSE",
+                thread_label="AI-CAPACITY-SWAP"
+            )
+            if _swap_result.get("ok"):
+                log(f"[AI] CAPACITY-SWAP: {_swap_sym} ditutup (profit {_swap_result['profit_pct']:+.2f}%) "
+                    f"utk kasih ruang {symbol} ({strategy})")
+                _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=0.0)
+            else:
+                log(f"WARN [AI] CAPACITY-SWAP: gagal close {_swap_sym} ({_swap_result.get('error')}) -- {symbol} tetap SKIP")
+        if not _glob_ok:
+            log(f"[AI] OPEN decision {symbol} ({strategy}): SKIP (kapasitas gabungan penuh -- {_glob_reason} -- tidak tanya AI)")
+            log_ai_decision(
+                f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] OPEN-DECISION | {strategy} | "
+                f"{to_display_pair(symbol)} | SKIP (kapasitas gabungan penuh, AI tidak dipanggil -- {_glob_reason}) "
+                f"| notify={notify}\n{'─'*36}\n"
+            )
+            return False
     ind_str  = "\n".join(f"- {k}: {v}" for k, v in indicators.items())
     htf_str  = fetch_htf_context_for_ai(symbol)
     ltf_str  = fetch_ltf_context_for_ai(symbol)
