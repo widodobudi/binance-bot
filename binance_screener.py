@@ -15242,7 +15242,10 @@ SHADOW_CONF3_MIN_VOL_USD  = 1_000_000  # sama ambang liquiditas AKUM_MIN_VOL_USD
 # >>> kalau deal 21-40 WR < 80% atau avg <= +0.61% => edge tipis, jangan live. Kandidat live yg lebih masuk akal: dipbuy_bluechip
 # >>> (butuh data forward-nya dulu, #0/20 saat catatan ini ditulis) lewat pilot kecil yg dirancang bersama contoh kasus.
 # >>> ROLLBACK: kembalikan ke 20 => pemindai berhenti buka deal baru lagi (data tidak hilang).
-SHADOW_DIPBUY_UNIVERSE_TARGET       = 40     # target forward-test (paper) sebelum keputusan lanjut
+# >>> REMARK 27/09/2026 (permintaan Mas Budi): TARGET 40 -> 50 (paper TETAP). Di #40/40 log Railway menunjukkan 40 deal itu berasal dari
+# >>> 10 kejadian sinyal berbeda -- bug pembukaan ulang di candle sinyal yg sama, sudah diperbaiki (kunci simbol+candle sinyal, lihat
+# >>> _shadow_signal_already_traded). Hitungan closed (#40) tetap dipertahankan; deal baru hanya dibuka utk kejadian sinyal baru.
+SHADOW_DIPBUY_UNIVERSE_TARGET       = 50     # target forward-test (paper) sebelum keputusan lanjut
 SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN    = -15.0  # syarat sinyal: chg_4h (1 candle 4h) <= -15%
 SHADOW_DIPBUY_UNIVERSE_TP_PCT       = 4.0
 SHADOW_DIPBUY_UNIVERSE_SL_PCT       = 15.0
@@ -15321,6 +15324,21 @@ def _shadow_wl_tag(closed_list: list) -> str:
 # menentukan exit di harga LEVEL (SL diisi di open candle kalau gap ke bawah SL; satu candle menyentuh keduanya -> SL
 # dulu, konservatif). Timeout tetap pakai harga live saat batas hold lewat.
 SHADOW_LEVEL_TF_MS = 4 * 3600 * 1000
+
+# 27/09/2026 (permintaan Mas Budi -- temuan dari log Railway): pemindai shadow hanya cek "simbol ini sedang open?",
+# bukan "candle sinyal ini sudah pernah dibuka?". Deal yang menang (TP kena dlm hitungan menit) langsung ditutup, simbol
+# tidak lagi open, lalu di siklus scan berikutnya (~30 mnt) sinyal candle 4h TERTUTUP yg SAMA masih terbaca -> dibuka lagi
+# di harga entry yg sama -> menang lagi. 40 deal dipbuy_universe ternyata cuma 10 kejadian sinyal berbeda (SAGA 9x, LSK 8x,
+# ONE 7x, TKO 5x ...) sehingga WR 92.5% terinflasi. Kunci dedup = (simbol, waktu BUKA candle sinyal 4h).
+def _shadow_sig_ts_of(pos: dict) -> int:
+    """Waktu buka candle sinyal utk posisi shadow. Posisi baru menyimpan 'sig_ts'; posisi lama diturunkan dari opened_ts
+    (entry dibuka <=30 mnt sesudah candle sinyal tutup, jadi candle sinyal = bucket 4h SEBELUM bucket opened_ts)."""
+    if pos.get('sig_ts'):
+        return int(pos['sig_ts'])
+    return (int(pos.get('opened_ts', 0)) * 1000 // SHADOW_LEVEL_TF_MS) * SHADOW_LEVEL_TF_MS - SHADOW_LEVEL_TF_MS
+
+def _shadow_signal_already_traded(combo: dict, sym: str, sig_ts: int) -> bool:
+    return any(p['sym'] == sym and _shadow_sig_ts_of(p) == sig_ts for p in combo['open'] + combo['closed'])
 
 def _shadow_entry_candle_start_ms(pos: dict) -> int:
     """Entry shadow = close candle 4h sinyal (backtest: entry di close, exit dilihat dari candle BERIKUTNYA); posisi
@@ -15475,10 +15493,14 @@ def _shadow_conf3_try_open(data: dict) -> None:
             atr_now = a['atr'][i]
             if pd.isna(atr_now) or atr_now <= 0:
                 continue
+            sig_ts = int(df['ts'].iloc[-1])
+            if _shadow_signal_already_traded(data['conf3_stochrsibb'], sym, sig_ts):
+                continue
             entry_price = float(a['close'][i]) if 'close' in a else float(df['close'].iloc[i])
             sl_price = entry_price - SHADOW_CONF3_SL_K * float(atr_now)
             tp_price = entry_price + SHADOW_CONF3_TP_K * float(atr_now)
             pos = {"sym": sym, "entry_price": entry_price, "sl_price": sl_price, "tp_price": tp_price,
+                   "sig_ts": sig_ts,
                    "opened_ts": int(time.time()), "opened_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S')}
             data['conf3_stochrsibb']['open'].append(pos)
             open_syms.add(sym)
@@ -15567,11 +15589,14 @@ def _shadow_dipbuy_universe_try_open(data: dict) -> None:
             chg_4h = (close_now / close_prev - 1) * 100
             if chg_4h > SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN:
                 continue
+            sig_ts = int(df['ts'].iloc[-1])
+            if _shadow_signal_already_traded(data['dipbuy_universe'], sym, sig_ts):
+                continue
             entry_price = close_now
             sl_price = entry_price * (1 - SHADOW_DIPBUY_UNIVERSE_SL_PCT / 100)
             tp_price = entry_price * (1 + SHADOW_DIPBUY_UNIVERSE_TP_PCT / 100)
             pos = {"sym": sym, "entry_price": entry_price, "sl_price": sl_price, "tp_price": tp_price,
-                   "chg_4h": round(chg_4h, 2),
+                   "chg_4h": round(chg_4h, 2), "sig_ts": sig_ts,
                    "opened_ts": int(time.time()), "opened_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S')}
             data['dipbuy_universe']['open'].append(pos)
             open_syms.add(sym)
@@ -15648,11 +15673,14 @@ def _shadow_dipbuy_bc_try_open(data: dict) -> None:
             chg_4h = (close_now / close_prev - 1) * 100
             if chg_4h > SHADOW_DIPBUY_BC_CHG4H_MIN:
                 continue
+            sig_ts = int(df['ts'].iloc[-1])
+            if _shadow_signal_already_traded(data['dipbuy_bluechip'], sym, sig_ts):
+                continue
             entry_price = close_now
             sl_price = entry_price * (1 - SHADOW_DIPBUY_BC_SL_PCT / 100)
             tp_price = entry_price * (1 + SHADOW_DIPBUY_BC_TP_PCT / 100)
             pos = {"sym": sym, "entry_price": entry_price, "sl_price": sl_price, "tp_price": tp_price,
-                   "chg_4h": round(chg_4h, 2),
+                   "chg_4h": round(chg_4h, 2), "sig_ts": sig_ts,
                    "opened_ts": int(time.time()), "opened_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S')}
             data['dipbuy_bluechip']['open'].append(pos)
             open_syms.add(sym)
