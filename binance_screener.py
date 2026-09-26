@@ -11839,8 +11839,9 @@ document.addEventListener('DOMContentLoaded', function() {
             <label style="display:flex;align-items:center;gap:6px;color:var(--muted)">
                 <span>Mode:</span>
                 <select id="ai-provider-mode" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px">
-                    <option value="anthropic_gemini">Anthropic → Gemini otomatis</option>
+                    <option value="anthropic_alibaba_gemini">Anthropic → Alibaba → Gemini otomatis</option>
                     <option value="anthropic_only">Anthropic saja</option>
+                    <option value="alibaba_only">Alibaba Qwen saja</option>
                     <option value="gemini_only">Gemini AI Studio saja</option>
                     <option value="rule_based">Rule-based Python saja</option>
                 </select>
@@ -12799,7 +12800,7 @@ var SC_LABELS = {
     akum_entry_a: 'Akum-4h Entry A',
     akum_entry_b: 'Akum-4h Entry B',
     hunting_4h: 'Hunting-4h',
-    trend_confirm_4h: 'TrenKonfirmasi-4h',
+    trend_confirm_4h: 'TrendConfirm-4h',
     qscalp_3m: 'QScalp-3m'
 };
 // 24/09/2026 (permintaan Mas Budi): Entry A & Entry B sekarang baris terpisah supaya base_usd
@@ -13004,9 +13005,10 @@ function loadAIProviderConfig() {
     fetch('/api/ai_provider_config').then(function(r){ return r.json(); }).then(function(d) {
         var mode = document.getElementById('ai-provider-mode');
         var status = document.getElementById('ai-provider-status');
-        if (mode) mode.value = d.mode || 'anthropic_gemini';
-        if (status) status.innerHTML = 'Mode aktif: ' + (mode && mode.options[mode.selectedIndex] ? mode.options[mode.selectedIndex].text : 'Anthropic → Gemini otomatis')
+        if (mode) mode.value = d.mode || 'anthropic_alibaba_gemini';
+        if (status) status.innerHTML = 'Mode aktif: ' + (mode && mode.options[mode.selectedIndex] ? mode.options[mode.selectedIndex].text : 'Anthropic → Alibaba → Gemini otomatis')
             + ' | ' + _aiHealthHtml('Anthropic', d.anthropic_configured, d.anthropic_health)
+            + ' | ' + _aiHealthHtml('Alibaba', d.alibaba_configured, d.alibaba_health)
             + ' | ' + _aiHealthHtml('Gemini', d.gemini_configured, d.gemini_health)
             + ' | Terakhir: ' + (d.last_provider || 'Belum ada keputusan AI');
     });
@@ -20431,10 +20433,23 @@ def run_web_dashboard():
         def api_ai_provider_config():
             if request.method == "POST":
                 try:
-                    save_ai_provider_config((request.get_json(force=True, silent=True) or {}).get("mode", "anthropic_gemini"))
+                    save_ai_provider_config((request.get_json(force=True, silent=True) or {}).get("mode", "anthropic_alibaba_gemini"))
                 except ValueError as error:
                     return jsonify({"ok": False, "error": str(error)}), 400
             return jsonify({"ok": True, **load_ai_provider_config()})
+
+        @app.route("/api/test_alibaba")
+        def api_test_alibaba():
+            """26/09/2026 (permintaan Mas Budi): tes manual Alibaba (Qwen) -- sama pola /api/test_gemini,
+            sekalian nampilin pemakaian token supaya kelihatan berapa 1 panggilan makan kuota gratis."""
+            try:
+                reply, usage = _alibaba_http_call("Balas cuma dengan kata: OK")
+                _mark_ai_provider_ok("alibaba")
+                return jsonify({"ok": True, "reply": reply, "model": ALIBABA_AI_MODEL, "usage": usage})
+            except Exception as error:
+                error_text = str(error)
+                _mark_ai_provider_down("alibaba", error_text)
+                return jsonify({"ok": False, "error": _classify_ai_error(error_text), "raw_error": error_text[:300]}), 502
 
         @app.route("/api/test_gemini")
         def api_test_gemini():
@@ -21264,7 +21279,7 @@ def run_web_dashboard():
 # ============================================================
 # AI DECISION ENGINE
 # Dipanggil saat ai_call=True di deal_overrides untuk suatu pair.
-# Menggunakan Anthropic API terlebih dahulu, lalu Gemini sebagai fallback:
+# Menggunakan Anthropic API terlebih dahulu, lalu Alibaba (Qwen), lalu Gemini sebagai fallback:
 #   - OPEN: buka deal atau skip (T1/T1b/T1d)
 #   - ARMED: arm trailing sekarang atau tahan (T2)
 #   - CLOSE: close deal sekarang atau hold (T2)
@@ -21301,11 +21316,19 @@ AI_DECISION_MODEL  = "claude-sonnet-5"   # naik dari Haiku 4.5 (29/08/2026, maks
 AI_DECISION_MODEL_BABAK1 = "claude-haiku-4-5-20251001"
 GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_AI_MODEL    = os.environ.get("GEMINI_AI_MODEL", "gemini-flash-latest")
+# 26/09/2026 (permintaan Mas Budi): provider ke-3, Alibaba Model Studio (Qwen) lewat endpoint
+# OpenAI-compatible region Singapore. Urutan auto: Anthropic -> Alibaba -> Gemini. Kuota gratis
+# qwen3.7-plus 1M token s/d 2026/12/25 dgn Stop-on-Exhaust AKTIF (habis -> 403 AllocationQuota.FreeTierOnly,
+# bukan tagihan), jadi 403 itu dianggap "kuota habis" & bot lanjut ke Gemini. Ganti model cukup lewat env.
+ALIBABA_API_KEY    = os.environ.get("ALIBABA_API_KEY", "")
+ALIBABA_AI_MODEL   = os.environ.get("ALIBABA_AI_MODEL", "qwen3.7-plus")
+ALIBABA_BASE_URL   = os.environ.get("ALIBABA_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
 AI_DECISION_TIMEOUT = 25  # detik -- dinaikkan dari 10 (30/08/2026), seiringan sama max_tokens 200->1024:
 # model butuh waktu proses lebih lama buat budget token yg lebih besar (apalagi kalau isi block "thinking"
 # dulu), 10 detik kekecilan -> sering "Gagal: The read operation timed out" padahal API-nya sehat, cuma
 # belum sempat selesai jawab dalam 10 detik.
 AI_PROVIDER_CONFIG_FILE = os.path.join(DATA_DIR, "ai_provider_config.json")
+AI_PROVIDER_MODES = {"anthropic_alibaba_gemini", "anthropic_only", "alibaba_only", "gemini_only", "rule_based"}
 AI_PRIMARY_PROVIDER = os.environ.get("AI_PRIMARY_PROVIDER", "anthropic").lower()
 AI_FALLBACK_PROVIDER = os.environ.get("AI_FALLBACK_PROVIDER", "gemini").lower()
 AI_LAST_PROVIDER = "Belum ada keputusan AI"
@@ -21328,6 +21351,7 @@ _anthropic_primary_down = False  # True selama akun utama (ANTHROPIC_API_KEY) ke
 # (supaya "sejak kapan down" tidak ke-reset tiap restart/redeploy Railway).
 AI_PROVIDER_HEALTH_FILE = os.path.join(DATA_DIR, "ai_provider_health.json")
 _ai_provider_health = {"anthropic": {"ok": True, "error": None, "since_wib": None},
+                        "alibaba":   {"ok": True, "error": None, "since_wib": None},
                         "gemini":    {"ok": True, "error": None, "since_wib": None}}
 _ai_provider_health_lock = threading.Lock()
 
@@ -21339,7 +21363,7 @@ def load_ai_provider_health():
         with open(AI_PROVIDER_HEALTH_FILE, encoding="utf-8") as f:
             data = json.load(f)
         with _ai_provider_health_lock:
-            for k in ("anthropic", "gemini"):
+            for k in ("anthropic", "alibaba", "gemini"):
                 if k in data: _ai_provider_health[k] = data[k]
         log(f"   Loaded ai_provider_health: {data}")
     except Exception as e:
@@ -21562,6 +21586,54 @@ def _anthropic_ai_call(prompt: str, model: str = None) -> str:
     return text
 
 
+def _alibaba_http_call(prompt: str) -> tuple:
+    """Satu panggilan ke Alibaba Model Studio (Qwen), endpoint OpenAI-compatible.
+    Return (teks_jawaban, usage_dict). enable_thinking=False supaya model tidak menghabiskan
+    token/waktu utk 'mikir' (timeout 25 dtk, kuota gratis terbatas)."""
+    if not ALIBABA_API_KEY:
+        raise RuntimeError("ALIBABA_API_KEY belum di-set")
+    import json as _json
+    payload = _json.dumps({
+        "model": ALIBABA_AI_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 1024,
+        "enable_thinking": False,
+    }).encode()
+    req = _urllib_req.Request(
+        ALIBABA_BASE_URL.rstrip("/") + "/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json", "Authorization": "Bearer " + ALIBABA_API_KEY},
+        method="POST",
+    )
+    try:
+        with _urllib_req.urlopen(req, timeout=AI_DECISION_TIMEOUT) as resp:
+            body = _json.loads(resp.read())
+    except _urllib_err.HTTPError as e:
+        # baca body error-nya juga: kode 'AllocationQuota.FreeTierOnly' (kuota gratis habis) ada di situ,
+        # bukan di status HTTP-nya saja.
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            err_body = ""
+        detail = ""
+        try:
+            err_obj = _json.loads(err_body).get("error", {})
+            detail = f"{err_obj.get('code', '')} {err_obj.get('message', '')}".strip()
+        except Exception:
+            pass
+        raise RuntimeError(f"HTTP {e.code}: {detail or err_body[:300] or e.reason}")
+    choices = body.get("choices") or []
+    text = ((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
+    if not text:
+        raise RuntimeError("Response Alibaba tidak berisi teks jawaban")
+    return text, body.get("usage") or {}
+
+
+def _alibaba_ai_call(prompt: str) -> str:
+    """Panggil Alibaba (Qwen) sebagai provider ke-2 (setelah Anthropic, sebelum Gemini)."""
+    return _alibaba_http_call(prompt)[0]
+
+
 def _gemini_ai_call(prompt: str) -> str:
     """Panggil Gemini sebagai fallback provider."""
     if not GEMINI_API_KEY:
@@ -21592,12 +21664,14 @@ def _ai_call(prompt: str, model: str = None) -> str:
     pakai Haiku 4.5) -- tidak berlaku ke provider Gemini (model Gemini diatur
     terpisah lewat env var GEMINI_AI_MODEL, di luar cakupan optimasi ini)."""
     global _ai_quota_notif_sent, AI_LAST_PROVIDER
-    mode = load_ai_provider_config().get("mode", "anthropic_gemini")
+    mode = load_ai_provider_config().get("mode", "anthropic_alibaba_gemini")
     if mode == "rule_based":
         AI_LAST_PROVIDER = "rule-based Python"
         return ""
     if mode == "anthropic_only":
         providers = ["anthropic"]
+    elif mode == "alibaba_only":
+        providers = ["alibaba"]
     elif mode == "gemini_only":
         providers = ["gemini"]
     else:
@@ -21606,13 +21680,23 @@ def _ai_call(prompt: str, model: str = None) -> str:
         if not providers:
             providers = ["anthropic", "gemini"]
         providers = list(dict.fromkeys(providers))
+        # Alibaba selalu persis SEBELUM Gemini (atau di akhir kalau Gemini tidak ada di daftar);
+        # dilewati diam2 kalau ALIBABA_API_KEY belum di-set, supaya tidak jadi error DOWN palsu.
+        if ALIBABA_API_KEY:
+            providers.insert(providers.index("gemini") if "gemini" in providers else len(providers), "alibaba")
     provider_errors = {}
     for provider in providers:
         try:
-            result = _anthropic_ai_call(prompt, model=model) if provider == "anthropic" else _gemini_ai_call(prompt)
+            if provider == "anthropic":
+                result = _anthropic_ai_call(prompt, model=model)
+            elif provider == "alibaba":
+                result = _alibaba_ai_call(prompt)
+            else:
+                result = _gemini_ai_call(prompt)
             if result:
-                AI_LAST_PROVIDER = "Anthropic" if provider == "anthropic" else "Gemini AI Studio"
+                AI_LAST_PROVIDER = {"anthropic": "Anthropic", "alibaba": "Alibaba Qwen"}.get(provider, "Gemini AI Studio")
                 _mark_ai_provider_ok(provider)
+                if provider == "alibaba": log("[AI] Keputusan memakai Alibaba (Qwen) fallback")
                 if provider == "gemini": log("[AI] Keputusan memakai Gemini fallback")
                 return result
         except Exception as error:
@@ -21636,6 +21720,8 @@ def _ai_call(prompt: str, model: str = None) -> str:
 def _classify_ai_error(error_text: str) -> str:
     """Terjemahkan error HTTP mentah jadi penyebab yang jelas (bukan asumsi 'billing habis')."""
     t = error_text.lower()
+    if "freetieronly" in t or "allocationquota" in t:
+        return f"Kuota gratis Alibaba habis (403 AllocationQuota.FreeTierOnly, Stop-on-Exhaust aktif). [{error_text[:100]}]"
     if "401" in t or "unauthorized" in t:
         return f"API key tidak valid/revoked (401 Unauthorized) — cek env var API key. [{error_text[:100]}]"
     if "403" in t or "forbidden" in t:
@@ -21651,12 +21737,15 @@ def _classify_ai_error(error_text: str) -> str:
 
 def load_ai_provider_config() -> dict:
     """Muat mode provider dari file; environment variables menjadi default."""
-    default = {"mode": "anthropic_gemini"}
+    default = {"mode": "anthropic_alibaba_gemini"}
     try:
         if os.path.exists(AI_PROVIDER_CONFIG_FILE):
             with open(AI_PROVIDER_CONFIG_FILE, encoding="utf-8") as file:
                 mode = json.load(file).get("mode", default["mode"])
-                if mode in {"anthropic_gemini", "anthropic_only", "gemini_only", "rule_based"}:
+                # 26/09/2026: mode auto lama "anthropic_gemini" = rantai otomatis yg sekarang menyertakan Alibaba.
+                if mode == "anthropic_gemini":
+                    mode = "anthropic_alibaba_gemini"
+                if mode in AI_PROVIDER_MODES:
                     default["mode"] = mode
     except Exception as error:
         log(f"WARN load_ai_provider_config: {error}")
@@ -21665,15 +21754,19 @@ def load_ai_provider_config() -> dict:
     return {**default, "primary": AI_PRIMARY_PROVIDER, "fallback": AI_FALLBACK_PROVIDER,
             "last_provider": AI_LAST_PROVIDER,
             "anthropic_configured": bool(ANTHROPIC_API_KEY),
+            "alibaba_configured": bool(ALIBABA_API_KEY),
             "gemini_configured": bool(GEMINI_API_KEY),
             # 23/09/2026: status KESEHATAN real-time (beda dari *_configured di atas yg cuma
             # cek env var ada/tidak) -- ok=False berarti panggilan TERAKHIR ke provider itu
             # gagal, error = alasannya (credit habis/rate limit/dll), since_wib = sejak kapan.
-            "anthropic_health": _health["anthropic"], "gemini_health": _health["gemini"]}
+            "anthropic_health": _health["anthropic"], "alibaba_health": _health["alibaba"],
+            "gemini_health": _health["gemini"]}
 
 
 def save_ai_provider_config(mode: str) -> None:
-    if mode not in {"anthropic_gemini", "anthropic_only", "gemini_only", "rule_based"}:
+    if mode == "anthropic_gemini":
+        mode = "anthropic_alibaba_gemini"
+    if mode not in AI_PROVIDER_MODES:
         raise ValueError("mode provider tidak valid")
     with open(AI_PROVIDER_CONFIG_FILE, "w", encoding="utf-8") as file:
         json.dump({"mode": mode}, file, indent=2)
