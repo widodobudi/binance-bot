@@ -551,6 +551,14 @@ TRENDCONFIRM_RSI_MAX          = 75.0     # syarat wajib BARU (03/09/2026, koreks
                                           # 5 dari 6 strategi lain SEMUA punya RSI_MAX, ini yg
                                           # ketinggalan waktu strategi baru ini dibangun.
 TRENDCONFIRM_BB_PCT_SECONDARY= 0.65      # syarat SEKUNDER (skor/ranking, bukan gerbang wajib)
+# 27/09/2026 (KEPUTUSAN Mas Budi, setelah backtest simulasi portofolio 2022-2026: 175 pair, 38.262 sinyal, batas 3 slot,
+# antrean sinyal 4 jam, modal $30/deal): GERBANG WAJIB ATR% > 2.4 (ATR% = ATR14/close*100 candle 4h sinyal, definisi sama
+# dgn compute_indicators_4h). Hasil: total $1.929 -> $2.204 (+14%), menang di SEMUA tahun 2022-2026 (+$60/+$74/+$26/+$70/+$45),
+# data uji 2025-2026 +15%, hasil searah dgn 2 slot. CATATAN JUJUR: ini PENINGKAT HASIL RATA2, BUKAN penahan rugi -- laju
+# hard-stop tidak turun (13.7% -> 13.9%) dan sinyal spt ORDI (ATR% 3.10) tetap lolos. Ini menggantikan keputusan 03/09/2026
+# di atas (ATR mutlak jadi panduan AI, bukan gerbang) HANYA utk ambang 2.4 (bukan 3.0). Dipasang di thread_trendconfirm_scan.
+# ROLLBACK: set 0.0 => gerbang mati.
+TRENDCONFIRM_ATR_MIN_PCT     = 2.4
 # 24/09/2026 (Tahap 1 filter diferensial, permintaan Mas Budi -- backtest turunan pertama gap
 # harga-EMA20 antar-candle, "akselerasi momentum"). Sweet spot dari sweep threshold: kandidat dgn
 # gap_ema20_accel <= -1.0pp (momentum melambat/berbalik tajam sejak candle sebelumnya) secara
@@ -10836,6 +10844,11 @@ def thread_trendconfirm_scan():
             ok, score, detail = check_trendconfirm_entry(df)
             if not ok:
                 count_blocker(scan_blockers_tc, "Syarat wajib belum lolos", True)
+                continue
+            # 27/09/2026 (keputusan Mas Budi, lihat TRENDCONFIRM_ATR_MIN_PCT): gerbang ATR% > 2.4, dicek SEBELUM
+            # panggilan EMA200(1D) & AI supaya tidak buang API call utk kandidat yg pasti ditolak.
+            if float(detail.get('atr_pct', 0.0)) <= TRENDCONFIRM_ATR_MIN_PCT:
+                count_blocker(scan_blockers_tc, f"ATR% <= {TRENDCONFIRM_ATR_MIN_PCT:g} (filter 27/09)", True)
                 continue
             # 15/09/2026 (permintaan Mas Budi, insiden IOTA/USDT -8.06%, DIPERCEPAT dari
             # rencana awal "tunggu 13 sampel" -- lihat TRENDCONFIRM_EMA200_1D_MIN_PCT):
