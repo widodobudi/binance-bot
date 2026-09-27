@@ -12051,20 +12051,99 @@ document.addEventListener('DOMContentLoaded', function() {
   </div>
 </div>
 <script>
+var PERF_SORT_LABELS = {label: 'Strategi', wl: 'Menang/Kalah', wr: 'WR% (jumlah menang)', total: 'Total%', closing: 'Closing', lastwin: 'Terakhir profit'};
+var perfSort = {key: 'wl', dir: 'desc'};
+var perfLastData = null;
+function perfGetCookie(name) {
+  var parts = document.cookie.split('; ');
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i].indexOf(name + '=') === 0) return decodeURIComponent(parts[i].substring(name.length + 1));
+  }
+  return '';
+}
+function perfSetCookie(name, val) {
+  document.cookie = name + '=' + encodeURIComponent(val) + '; path=/; max-age=31536000';
+}
+(function perfLoadSort() {
+  try {
+    var k = perfGetCookie('perf_sort_key'), d = perfGetCookie('perf_sort_dir');
+    if (PERF_SORT_LABELS[k] && (d === 'asc' || d === 'desc')) perfSort = {key: k, dir: d};
+  } catch (e) {}
+})();
+function perfSaveSort() {
+  try { perfSetCookie('perf_sort_key', perfSort.key); perfSetCookie('perf_sort_dir', perfSort.dir); } catch (e) {}
+}
+function perfClickSort(key) {
+  if (perfSort.key === key) perfSort = {key: key, dir: perfSort.dir === 'desc' ? 'asc' : 'desc'};
+  else perfSort = {key: key, dir: key === 'label' ? 'asc' : 'desc'};
+  perfSaveSort();
+  if (perfLastData) renderPerfChart(perfLastData);
+}
+function perfResetSort() {
+  perfSort = {key: 'wl', dir: 'desc'};
+  perfSaveSort();
+  if (perfLastData) renderPerfChart(perfLastData);
+}
+function perfSortValue(r, key) {
+  if (key === 'label') return String(r.label || '').toLowerCase();
+  if (key === 'wl') return r.n > 0 ? r.win / r.n : null;
+  if (key === 'wr') return r.n > 0 ? r.win : null;
+  if (key === 'total') return r.n > 0 ? r.total_pct : null;
+  if (key === 'closing') return (r.close_interval_days !== null && r.close_interval_days !== undefined && r.close_interval_days > 0) ? 1 / r.close_interval_days : null;
+  if (key === 'lastwin') {
+    if (!r.last_win_close_wib) return null;
+    var t = new Date(r.last_win_close_wib.replace(' ', 'T') + '+07:00').getTime();
+    return isNaN(t) ? null : t;
+  }
+  return null;
+}
+function perfSortedRows(rows) {
+  var key = perfSort.key, sign = perfSort.dir === 'asc' ? 1 : -1;
+  var items = rows.map(function(r, i) { return {r: r, i: i, v: perfSortValue(r, key)}; });
+  items.sort(function(a, b) {
+    if (a.v === null && b.v === null) return a.i - b.i;
+    if (a.v === null) return 1;
+    if (b.v === null) return -1;
+    var c = (typeof a.v === 'string') ? a.v.localeCompare(b.v) : (a.v - b.v);
+    if (c !== 0) return c * sign;
+    return a.i - b.i;
+  });
+  return items.map(function(x) { return x.r; });
+}
 function refreshPerfChart() {
   fetch("/api/strategy_performance")
     .then(function(r){ return r.json(); })
     .then(function(data) {
+      perfLastData = data;
+      renderPerfChart(data);
+    })
+    .catch(function() {
+      var el = document.getElementById("perf-chart");
+      if (el && !perfLastData) el.innerHTML = "<em style='color:var(--muted);font-size:11px'>Gagal memuat.</em>";
+    });
+}
+function renderPerfChart(data) {
       var el = document.getElementById("perf-chart");
       var rows = (data && data.strategies) || [];
       if (!rows.length) { el.innerHTML = "<em style='color:var(--muted);font-size:11px'>Belum ada data.</em>"; return; }
+      rows = perfSortedRows(rows);
+      function sh(key, label, style, title) {
+        var arrow = perfSort.key === key ? (perfSort.dir === 'asc' ? ' &#9650;' : ' &#9660;') : '';
+        return '<div data-sort="' + key + '" onclick="perfClickSort(this.dataset.sort)" style="cursor:pointer;user-select:none;' + style + '"'
+          + (title ? ' title="' + title + '"' : '') + '>' + label + arrow + '</div>';
+      }
+      var isDefaultSort = perfSort.key === 'wl' && perfSort.dir === 'desc';
+      var sortBar = '<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:6px;font-size:10px;color:var(--muted)">Urut: <b style="color:var(--text)">'
+        + PERF_SORT_LABELS[perfSort.key] + (perfSort.dir === 'asc' ? ' &#9650;' : ' &#9660;') + '</b>'
+        + '<button type="button" onclick="perfResetSort()" title="Kembali ke urutan default: Menang/Kalah (proporsi menang, terbesar di atas)" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:var(--font);'
+        + (isDefaultSort ? 'opacity:.5;' : '') + '">Reset</button></div>';
       var header = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">'
-        + '<div style="width:118px;flex-shrink:0;text-align:right">Strategi</div>'
-        + '<div style="flex:1">Menang/Kalah</div>'
-        + '<div style="width:95px;flex-shrink:0">WR%</div>'
-        + '<div style="width:65px;flex-shrink:0" title="Total profit% kumulatif (jumlah semua profit_pct closing)">Total%</div>'
-        + '<div style="width:105px;flex-shrink:0" title="Closing PROFIT POSITIF -- tier adaptif: coba /D (7 hari terakhir) dulu, kalau kosong turun ke /W (30 hari), lalu /M (90 hari), supaya strategi jarang-closing tidak kebulat ke 0.00. Singkatan: m=menit, h=jam, D=hari, W=minggu, M=bulan">Closing</div>'
-        + '<div style="width:110px;flex-shrink:0" title="Kapan terakhir ada closing PROFIT POSITIF (bukan closing apa pun). Singkatan: m=menit, h=jam, D=hari, W=minggu, M=bulan">Terakhir profit</div>'
+        + sh('label', 'Strategi', 'width:118px;flex-shrink:0;text-align:right', 'Klik untuk urut A-Z / Z-A')
+        + sh('wl', 'Menang/Kalah', 'flex:1', 'Urut menurut proporsi menang (default)')
+        + sh('wr', 'WR%', 'width:95px;flex-shrink:0', 'Urut menurut JUMLAH deal yang menang')
+        + sh('total', 'Total%', 'width:65px;flex-shrink:0', 'Total profit% kumulatif (jumlah semua profit_pct closing)')
+        + sh('closing', 'Closing', 'width:105px;flex-shrink:0', 'Closing PROFIT POSITIF -- tier adaptif: coba /D (7 hari terakhir) dulu, kalau kosong turun ke /W (30 hari), lalu /M (90 hari), supaya strategi jarang-closing tidak kebulat ke 0.00. Singkatan: m=menit, h=jam, D=hari, W=minggu, M=bulan. Urut: paling sering closing profit di atas')
+        + sh('lastwin', 'Terakhir profit', 'width:110px;flex-shrink:0', 'Kapan terakhir ada closing PROFIT POSITIF (bukan closing apa pun). Singkatan: m=menit, h=jam, D=hari, W=minggu, M=bulan. Urut: paling baru di atas')
         + '</div>';
       // 26/09/2026: format "X lalu" sederhana dari string WIB "YYYY-MM-DD HH:MM:SS"
       function timeAgoWib(wibStr) {
@@ -12136,9 +12215,7 @@ function refreshPerfChart() {
           + '</div>'
           + phaseDetail;
       }).join("");
-      el.innerHTML = header + body;
-    })
-    .catch(function(){});
+      el.innerHTML = sortBar + header + body;
 }
 setInterval(refreshPerfChart, 60000);
 refreshPerfChart();
