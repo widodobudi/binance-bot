@@ -22308,10 +22308,15 @@ ALIBABA_LAST_MODEL_USED = ""   # 27/09/2026: nama model Alibaba yg BERHASIL menj
 
 def _alibaba_ai_call(prompt: str) -> str:
     """Panggil Alibaba (Qwen) sebagai provider ke-2 (setelah Anthropic, sebelum Gemini). Coba tiap
-    model di _alibaba_model_list() berurutan -- kalau model kena kuota habis (403
-    AllocationQuota.FreeTierOnly), coba model cadangan berikutnya SEBELUM menyerah ke Gemini.
-    Error LAIN (mis. key salah/network) langsung dilempar, tidak coba model lain (kuncinya sama
-    utk semua model, jadi error itu pasti berulang)."""
+    model di _alibaba_model_list() berurutan, lanjut ke model cadangan berikutnya SEBELUM menyerah
+    ke Gemini kalau model itu GAGAL TAPI ALIBABA SEMPAT MENJAWAB (pesan error diawali 'HTTP <kode>:'
+    -- lihat _alibaba_http_call) -- kuota habis (403), parameter tidak didukung model itu (400, mis.
+    kasus qwen3.8-2.4t-a95b 27/09/2026: model itu WAJIB enable_thinking=True, ditolak dgn 400 karena
+    kode kita selalu kirim False), model tidak ada (404), dll -- semua ini SPESIFIK ke model/request
+    itu, model lain masih layak dicoba. KECUALI 401 (key tidak valid utk SELURUH akun, pasti berulang
+    persis di semua model) dan error yg TIDAK dapat respons sama sekali (key belum di-set, timeout,
+    koneksi putus) -- itu langsung dilempar, coba ulang ke model lain cuma buang waktu (timeout 25dtk
+    x tiap model) tanpa harapan beda hasil."""
     global ALIBABA_LAST_MODEL_USED
     models = _alibaba_model_list()
     last_error = None
@@ -22320,16 +22325,16 @@ def _alibaba_ai_call(prompt: str) -> str:
             text, _usage = _alibaba_http_call(prompt, model=model)
             ALIBABA_LAST_MODEL_USED = model
             if i > 0:
-                log(f"[AI] Alibaba model cadangan #{i+1} ({model}) berhasil setelah model sebelumnya kuota habis")
+                log(f"[AI] Alibaba model cadangan #{i+1} ({model}) berhasil setelah model sebelumnya gagal")
             return text
         except Exception as e:
             last_error = e
-            msg = str(e).lower()
-            is_quota = "freetieronly" in msg or "allocationquota" in msg
-            if not is_quota:
-                raise   # bukan soal kuota (key salah/network/dll) -- pasti berulang di model lain, jangan buang waktu
-            log(f"WARN [AI] Alibaba model {model} kuota habis, coba cadangan berikutnya" if i + 1 < len(models)
-                else f"WARN [AI] Alibaba model {model} kuota habis, tidak ada cadangan lagi")
+            msg = str(e)
+            got_response = msg.startswith("HTTP ") and not msg.startswith("HTTP 401")
+            if not got_response:
+                raise   # 401/key belum di-set/timeout/network -- pasti berulang di semua model, jangan buang waktu
+            log(f"WARN [AI] Alibaba model {model} gagal ({msg[:100]}), coba cadangan berikutnya" if i + 1 < len(models)
+                else f"WARN [AI] Alibaba model {model} gagal ({msg[:100]}), tidak ada cadangan lagi")
     raise last_error if last_error else RuntimeError("ALIBABA_AI_MODEL belum di-set")
 
 
