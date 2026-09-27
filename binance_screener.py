@@ -12456,7 +12456,7 @@ refreshShadowChart();
       <tbody id="active-deals-body">
       {% for sym, d in active_deals.items() %}
       <tr data-performance="{{ d.get('performance_score', 0) }}" data-urgency="{{ d.get('urgency_sort', 3999) }}">
-        <td class="sym">{{ sym.replace("USDT","/USDT") }}</td>
+        <td class="sym {{ 'profit-pos' if d.get('upnl_usd',0) > 0 else 'profit-neg' }}">{{ sym.replace("USDT","/USDT") }}</td>
         <td style="white-space:nowrap">
           {% set _sm = {"brkX2":"brkX2-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h"} %}
           <div>{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</div>
@@ -13919,7 +13919,7 @@ function renderClosedTradesRows() {
             var usd = parseFloat(r.profit_usd||0);
             var clr = pct>=0?'var(--green)':'var(--red)';
             return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">' +
-                '<td style="padding:5px 8px;font-weight:600">' + (r.symbol ? ('<a href="javascript:void(0)" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="color:#2962ff;text-decoration:none;cursor:pointer" title="Buka chart TradingView">' + r.symbol + '</a>') : '-') + '</td>' +
+                '<td style="padding:5px 8px;font-weight:600">' + (r.symbol ? ('<a href="javascript:void(0)" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="color:' + clr + ';text-decoration:none;cursor:pointer" title="Buka chart TradingView">' + r.symbol + '</a>') : '-') + '</td>' +
                 '<td style="padding:5px 8px;color:var(--muted)">' + (strat_map[r.strategy]||r.strategy||'-') + '</td>' +
                 '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.open_time ? r.open_time.substring(0,16) : '-') + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.entry_price||'-') + '</td>' +
