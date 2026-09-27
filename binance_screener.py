@@ -318,7 +318,7 @@ GLOBAL_MAX_ACTIVE_DEALS = 4        # jumlah deal aktif gabungan semua strategi
 # tidak bisa hentikan deal yg sedang jalan kena hard-stop). Di $100 (56% modal), worst-case serentak
 # turun ke ~$11 (di bawah batas harian) dan reserve naik jadi ~$79. Bukan trade-level backtest --
 # ini portofolio brake, bukan sinyal entry/exit, jadi dasarnya analisis risiko bukan sweep hasil.
-GLOBAL_MAX_EXPOSURE_USD = 110.0    # total $ eksposur riil semua deal aktif (dari modal ~$178.79)
+GLOBAL_MAX_EXPOSURE_USD = 145.0    # total $ eksposur riil semua deal aktif (dari modal ~$259.01)
 # 25/09/2026 (permintaan Mas Budi): 100 -> 110, mengikuti Batas Rugi Harian 15 -> 18 (lihat
 # migrasi daily_loss_limit_usd_18_20260925 di apply_one_time_config_migrations()). Rumus & rasio
 # reserve SAMA seperti sebelumnya (worst-case serentak ~73% dari batas harian): 110 x worst-case
@@ -327,6 +327,16 @@ GLOBAL_MAX_EXPOSURE_USD = 110.0    # total $ eksposur riil semua deal aktif (dar
 # proporsional ke modal -- tetap diturunkan dari batas rugi harian $18, bukan dari %modal (lihat
 # backtest exposure timeline: modal historis pernah tembus $202.86 tanpa cap, worst-case ~$24.5,
 # jauh lewat $15 lama -- itulah kenapa cap ada; menaikkan cap harus lewat batas rugi harian dulu).
+# 27/09/2026 (permintaan Mas Budi): 110 -> 145, dipicu keluhan ~$150 USDT nganggur tidak
+# terputar krn cap keburu penuh cuma dari 2 deal aktif (BO per-strategi sudah jauh lebih besar
+# drpd saat $110 ditetapkan -- brkX2-4h conviction sampai $100, TrenKonfirmasi ~$50+addfund).
+# Data nyata sebelum naikkan (bukan cuma tebakan, sesuai REMARK project_addfund_breakout_
+# capacity_review): 32 jam sejak breakout-addfund TrenKonfirmasi shipped (26/09), 6x TERPICU,
+# 5 di antaranya DIBLOK cap ini ("kapasitas gabungan penuh") -- cap sudah kebukti terlalu
+# ketat, bukan cuma perasaan. $145 x worst-case hard-stop 12.1% = ~$17.55, MASIH di bawah
+# Batas Rugi Harian $18 (buffer ~$0.45, sengaja mepet -- Mas Budi pilih opsi "agresif" dari
+# 3 opsi yg ditawarkan, bukan opsi konservatif $120/rekomendasi $130). Batas atas matematis
+# tanpa buffer sama sekali = $18/12.1% = ~$148.8, jadi $145 masih sedikit di bawah itu.
 # 23/09/2026 (permintaan Mas Budi, insiden GRT/USDT -- AI approve OPEN tapi ditolak diam2 oleh
 # batas eksposur gabungan, tidak ada notif sama sekali sebelum ini): cooldown notif Telegram
 # PER (symbol, strategy) -- bukan global -- supaya 1 simbol yg baru kena notif tidak menahan
