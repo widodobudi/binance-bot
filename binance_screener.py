@@ -22485,7 +22485,7 @@ def _classify_ai_error(error_text: str) -> str:
     if "404" in t:
         return "Endpoint/model tidak ditemukan (404) — cek nama model atau API key."
     if "credit" in t or "billing" in t or "insufficient" in t:
-        return "Out of service (kredit/billing habis)."
+        return "Out of service."
     return "Gagal (detail di Railway log)."
 
 
