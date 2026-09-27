@@ -2956,6 +2956,159 @@ def tc_hardstop_progress_line() -> str:
     except Exception:
         return "n/a"
 
+# ── LTF BEARISH: info tambahan utk AI decision + REMINDER review di 30 deal (27/09/2026, permintaan Mas Budi) ──────────
+# Latar: ORDI/USDT (TrenKonfirmasi-4h) dibeli 27/09 00:31 WIB saat 10m sudah 6 candle merah berurutan (15m: 4, 30m: 2) --
+# AI tidak diberi info candle di bawah 1h. Sekarang tiap keputusan OPEN (ai_decision_open) & batch-rank (ai_decision_batch_rank)
+# diberi ringkasan jumlah candle bearish di 30m/15m/10m/5m, HANYA sbg informasi (BUKAN gate) -- AI yg menimbang.
+# >>> REMARK REVIEW (KEPUTUSAN Mas Budi 27/09/2026: angkat lagi setelah 30 deal): ekspektasi JUJUR dari backtest 46.048 sampel
+# >>> 2022-2026 = jumlah candle merah TIDAK berkorelasi jelas dgn hasil deal (rata2 +0.54%..+0.73% utk 0-5 merah dari 6 candle;
+# >>> hanya 6-dari-6 merah sedikit lebih rendah +0.29%(10m)/+0.36%(15m), n~420), aturan gate "N merah berurutan" pun netral
+# >>> (-6%..+3% total $) & hanya MENUNDA ORDI 20 menit. Jadi manfaat info ini belum terbukti; AI bisa saja over-react & menolak
+# >>> deal bagus. Perilaku AI TIDAK bisa di-backtest -> satu2nya cara menilai = data live yg dicatat di sini.
+# >>> CARA REVIEW: counter menghitung deal (semua strategi) yg dibuka DENGAN info LTF lalu sudah TUTUP; di LTF_BEARISH_REVIEW_TARGET (30)
+# >>> deal bot kirim Telegram SEKALI berisi ringkasan; bilang ke Claude "review LTF bearish". Bandingkan hasil deal utk kelompok
+# >>> {10m>=3 merah berurutan saat open} vs sisanya, dan cek ai_decisions_log.txt (baris "LTF bearish") utk keputusan AI-nya.
+# >>> Data mentah: ltf_bearish_review.json (opened/closed) + kolom ltf_bearish di open-arm-close.txt.
+# >>> ROLLBACK: hapus pemanggilan get_ltf_bearish() di ai_decision_open & ai_decision_batch_rank (info hilang dari prompt).
+LTF_BEARISH_REVIEW_TARGET = 30
+LTF_BEARISH_REVIEW_FILE = os.path.join(DATA_DIR, "ltf_bearish_review.json")
+LTF_BEARISH_TFS = (30, 15, 10, 5)          # menit; 15/10/5/30 diturunkan dari SATU panggilan kline 5m
+LTF_BEARISH_SNAPSHOT_MAX_AGE_SEC = 2 * 3600  # snapshot dianggap milik deal kalau deal dibuka <= 2 jam setelah AI ditanya
+_ltf_bearish_lock = threading.Lock()
+_ltf_bearish_snapshot = {}                 # SYMBOL -> (epoch, {tf: {'streak','red6','chg6'}})
+
+def get_ltf_bearish(symbol: str):
+    """Jumlah candle bearish (close<open) di 30m/15m/10m/5m dari candle yg SUDAH TUTUP tepat sebelum sekarang.
+    Return {tf: {'streak': merah berurutan di akhir, 'red6': merah dari 6 candle terakhir, 'chg6': % perubahan 6 candle}}
+    atau None kalau gagal. Candle TF disejajarkan ke kelipatan TF (sama dgn backtest) & hanya yg LENGKAP dipakai."""
+    sym = str(symbol).replace('/', '').upper()
+    try:
+        resp = _binance_get("/api/v3/klines", params={"symbol": sym, "interval": "5m", "limit": 100}, timeout=10)
+        if resp is None:
+            return None
+        raw = resp.json()
+        if not isinstance(raw, list) or len(raw) < 40:
+            return None
+        now_ms = int(time.time() * 1000)
+        bars = [(int(k[0]), float(k[1]), float(k[4])) for k in raw if int(k[6]) < now_ms]   # buang candle 5m yg masih berjalan
+        out = {}
+        for tf in LTF_BEARISH_TFS:
+            per = tf // 5
+            tf_ms = tf * 60000
+            groups = {}
+            for ts, o, c in bars:
+                groups.setdefault(ts // tf_ms, []).append((o, c))
+            comp = [g for _, g in sorted(groups.items()) if len(g) == per]
+            if len(comp) < 6:
+                continue
+            opens = [g[0][0] for g in comp]
+            closes = [g[-1][1] for g in comp]
+            streak = 0
+            for o, c in zip(reversed(opens), reversed(closes)):
+                if c < o:
+                    streak += 1
+                else:
+                    break
+            red6 = sum(1 for o, c in zip(opens[-6:], closes[-6:]) if c < o)
+            chg6 = (closes[-1] / opens[-6] - 1) * 100 if opens[-6] > 0 else 0.0
+            out[tf] = {"streak": streak, "red6": red6, "chg6": round(chg6, 2)}
+        if not out:
+            return None
+        with _ltf_bearish_lock:
+            _ltf_bearish_snapshot[sym] = (time.time(), out)
+        return out
+    except Exception as e:
+        log(f"WARN [LTF-BEARISH] {sym}: {e}")
+        return None
+
+def format_ltf_bearish(summary) -> str:
+    """Blok teks utk prompt AI (kosong kalau tidak ada data)."""
+    if not summary:
+        return ""
+    lines = ["Candle bearish (merah) di LTF -- candle yg sudah tutup tepat sebelum sekarang "
+             "(informasi tambahan, BUKAN aturan; pertimbangkan bersama data lain):"]
+    for tf in LTF_BEARISH_TFS:
+        d = summary.get(tf)
+        if d:
+            lines.append(f"- {tf}m: {d['streak']} berurutan merah di akhir | {d['red6']} dari 6 candle terakhir merah | "
+                         f"perubahan harga 6 candle: {d['chg6']:+.1f}%")
+    return "\n".join(lines)
+
+def ltf_bearish_compact(summary) -> str:
+    """Ringkas 1 baris utk log: '30m:2/2/+4.1% 15m:4/4/+0.3% ...' (berurutan/dari-6-merah/perubahan-6-candle)."""
+    if not summary:
+        return "-"
+    return " ".join(f"{tf}m:{summary[tf]['streak']}/{summary[tf]['red6']}/{summary[tf]['chg6']:+.1f}%" for tf in LTF_BEARISH_TFS if tf in summary)
+
+def _ltf_state():
+    st = _tc_json_load(LTF_BEARISH_REVIEW_FILE, {})
+    st.setdefault("opened", []); st.setdefault("closed", []); st.setdefault("notified", False)
+    return st
+
+def ltf_bearish_track_open(symbol: str, strategy: str):
+    """Dipanggil dari log_oac('OPEN'): catat deal yg dibuka DENGAN snapshot LTF (dari keputusan AI barusan) utk review."""
+    sym = str(symbol).replace('/', '').upper()
+    with _ltf_bearish_lock:
+        snap = _ltf_bearish_snapshot.get(sym)
+    if not snap or (time.time() - snap[0]) > LTF_BEARISH_SNAPSHOT_MAX_AGE_SEC:
+        return None
+    summary = snap[1]
+    with _tc_hs_lock:
+        st = _ltf_state()
+        st["opened"].append({"sym": sym, "strat": strategy, "t": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                             "ltf": {str(k): v for k, v in summary.items()}})
+        st["opened"] = st["opened"][-200:]
+        _tc_json_save(LTF_BEARISH_REVIEW_FILE, st)
+    return summary
+
+def ltf_bearish_track_close(symbol: str, strategy: str, indicators: dict):
+    """Dipanggil dari log_oac('CLOSE'): cocokkan dgn deal yg dibuka dgn snapshot LTF; di LTF_BEARISH_REVIEW_TARGET deal tutup
+    kirim Telegram review SEKALI."""
+    sym = str(symbol).replace('/', '').upper()
+    try:
+        pct = float(str(indicators.get('profit_pct', '')).replace('%', '').replace('+', ''))
+    except Exception:
+        return
+    hs = str(indicators.get('exit_reason', '')).lower().startswith('hard stop')
+    remind = None
+    with _tc_hs_lock:
+        st = _ltf_state()
+        idx = next((i for i in range(len(st["opened"]) - 1, -1, -1) if st["opened"][i]["sym"] == sym), None)
+        if idx is None:
+            return
+        rec = st["opened"].pop(idx)
+        rec.update({"pct": round(pct, 2), "hs": bool(hs), "t_close": now_wib().strftime('%Y-%m-%d %H:%M:%S')})
+        st["closed"].append(rec)
+        if len(st["closed"]) >= LTF_BEARISH_REVIEW_TARGET and not st["notified"]:
+            st["notified"] = True
+            remind = list(st["closed"])
+        _tc_json_save(LTF_BEARISH_REVIEW_FILE, st)
+    if remind:
+        def grp(pred):
+            g = [r for r in remind if pred(r)]
+            return (len(g), (sum(r["pct"] for r in g) / len(g)) if g else 0.0, sum(1 for r in g if r["hs"]))
+        def s10(r): return (r.get("ltf", {}).get("10") or {}).get("streak", 0)
+        def s15(r): return (r.get("ltf", {}).get("15") or {}).get("streak", 0)
+        n = len(remind)
+        a = grp(lambda r: s10(r) >= 3); b = grp(lambda r: s10(r) < 3)
+        c = grp(lambda r: s15(r) >= 3); d = grp(lambda r: s15(r) < 3)
+        send_telegram(
+            f"🔔 REVIEW info candle bearish LTF (diberikan ke AI decisions sejak 27/09/2026)\n"
+            f"{n} deal sudah tutup dgn info LTF tercatat: rata-rata {sum(r['pct'] for r in remind) / n:+.2f}%, "
+            f"hard-stop {sum(1 for r in remind if r['hs'])} ({sum(1 for r in remind if r['hs']) / n * 100:.0f}%)\n"
+            f"10m >=3 merah berurutan saat open: n={a[0]} avg {a[1]:+.2f}% hard-stop {a[2]} | lainnya: n={b[0]} avg {b[1]:+.2f}% hard-stop {b[2]}\n"
+            f"15m >=3 merah berurutan saat open: n={c[0]} avg {c[1]:+.2f}% hard-stop {c[2]} | lainnya: n={d[0]} avg {d[1]:+.2f}% hard-stop {d[2]}\n"
+            f"(backtest historis: kelompok merah-berurutan tidak beda dari sisanya ~+0.5%)\n\n"
+            f"Bilang ke Claude: 'review LTF bearish' -- utk cek apakah info ini berguna atau malah bikin AI menolak deal bagus.")
+
+def ltf_bearish_progress_line() -> str:
+    try:
+        with _tc_hs_lock:
+            st = _ltf_state()
+        return f"{len(st['closed'])}/{LTF_BEARISH_REVIEW_TARGET} deal tutup dgn info LTF" + (" (review sudah dikirim)" if st["notified"] else "")
+    except Exception:
+        return "n/a"
+
 # ── REMINDER review base order Akumulasi-4h Entry A/B (24/09/2026, permintaan Mas Budi) ────────
 # Base_usd akum_entry_a/b resmi dikunci $8 (sebelumnya cuma fallback tersembunyi, bukan setting
 # eksplisit -- lihat REMARK STRATEGY_CONFIG_DEFAULTS['akum_entry_b']). Data historis SAAT diminta
@@ -3052,6 +3205,10 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
             akum_ab_track_close(symbol, strategy, indicators)   # counter review base order Akum Entry A/B
         except Exception as error:
             log(f"WARN log_oac akum_ab_track {symbol}: {error}")
+        try:
+            ltf_bearish_track_close(symbol, strategy, indicators)   # counter review info candle bearish LTF (30 deal)
+        except Exception as error:
+            log(f"WARN log_oac ltf_bearish_track_close {symbol}: {error}")
     if event.upper() == "OPEN":
         try:
             strat_key = strategy.lower()
@@ -3104,11 +3261,19 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
             merged.setdefault("mcap_sample", f"{_bump_mcap_watch_count()} (log saja, tanpa gate)")
         except Exception as error:
             log(f"WARN log_oac mcap enrichment {symbol}: {error}")
+        # 27/09/2026: snapshot candle bearish LTF yg diberikan ke AI utk deal ini (lihat REMARK "LTF BEARISH") -- dicatat
+        # di sini + ke counter review 30 deal.
+        try:
+            _ltf_summary = ltf_bearish_track_open(symbol, strategy)
+            if _ltf_summary:
+                merged.setdefault("ltf_bearish", ltf_bearish_compact(_ltf_summary))
+        except Exception as error:
+            log(f"WARN log_oac ltf_bearish_track_open {symbol}: {error}")
     standard_fields = (
         "entry_price", "peak_price", "peak_profit", "arm_pct", "atr_pct", "rvol", "trail_dist",
         "rsi", "stoch_k", "stoch_d", "macd_hist", "bb_pct", "williams_r", "cci", "obv",
         "ema20", "st_dir", "ema200_1d", "pct_vs_ema200_1d", "ema200_sample", "mcap_rank_cg", "mcap_sample", "add_usd",
-        "total_usd", "profit_pct", "exit_reason",
+        "total_usd", "profit_pct", "exit_reason", "ltf_bearish",
     )
     for field in standard_fields:
         merged.setdefault(field, "—")
@@ -22404,6 +22569,11 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     ind4h_str = get_full_4h_indicator_context(symbol)
     htf_section  = f"\nKonteks HTF (1D/3D/1W):\n{htf_str}\n" if htf_str else ""
     ltf_section  = f"\nKonteks LTF (1h):\n{ltf_str}\n" if ltf_str else ""
+    # 27/09/2026 (permintaan Mas Budi, kasus ORDI): jumlah candle bearish di 30m/15m/10m/5m -- info tambahan, BUKAN gate.
+    _ltf_bear = get_ltf_bearish(symbol)
+    _ltf_bear_str = format_ltf_bearish(_ltf_bear)
+    if _ltf_bear_str:
+        ltf_section += f"\n{_ltf_bear_str}\n"
     ind4h_section = f"\n{ind4h_str}\n" if ind4h_str else ""
     _second_look_note = (
         "\nPERHATIAN: kandidat ini AWALNYA DITOLAK oleh filter momentum otomatis (akselerasi "
@@ -22476,6 +22646,7 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
         f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] OPEN-DECISION | {strategy} | "
         f"{to_display_pair(symbol)} | {'OPEN' if decision else 'SKIP'} | notify={notify}\n"
         f"{ind_str}\n"
+        f"LTF bearish (berurutan/dari-6-merah/perubahan-6-candle): {ltf_bearish_compact(_ltf_bear)}\n"
         f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
         f"{'─'*36}\n"
     )
@@ -22531,15 +22702,26 @@ def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: i
     fallback = [c['symbol'] for c in candidates[:max_approve]]
 
     lines_desc = []
+    ltf_log_lines = []
     for i, c in enumerate(candidates, 1):
         det = c.get('detail', {})
+        # 27/09/2026 (permintaan Mas Budi, kasus ORDI): candle bearish LTF per kandidat -- info tambahan, BUKAN gate.
+        _lb = get_ltf_bearish(c['symbol'])
+        _lb_txt = ltf_bearish_compact(_lb)
+        ltf_log_lines.append(f"{to_display_pair(c['symbol'])}: {_lb_txt}")
         lines_desc.append(
             f"{i}. {to_display_pair(c['symbol'])} | skor={c.get('score','?')} | "
             f"ATR%={det.get('atr_pct',0):.2f} | RVOL={det.get('rvol',0):.2f}x | "
             f"BB%b={det.get('bb_pct',0):.2f} | vs EMA20={det.get('gap_ema20_pct',0):+.2f}% | "
             f"RSI={det.get('rsi',0):.1f}"
+            + (f" | LTF merah (berurutan/dari-6/perubahan-6-candle) {_lb_txt}" if _lb else "")
         )
     daftar_str = "\n".join(lines_desc)
+    if any("LTF merah" in ln for ln in lines_desc):
+        daftar_str += ("\n(Kolom 'LTF merah' = jumlah candle bearish di 30m/15m/10m/5m tepat sebelum sekarang: "
+                       "merah berurutan di akhir / dari 6 candle terakhir / perubahan harga 6 candle -- informasi tambahan, "
+                       "BUKAN aturan.)")
+    ltf_log_block = "LTF bearish per kandidat: " + " | ".join(ltf_log_lines) + "\n"
     guidance_section = f"{extra_guidance}\n\n" if extra_guidance else ""
 
     prompt = (
@@ -22590,6 +22772,7 @@ def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: i
             f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] AI-BATCH-ANALYSIS | {strategy_label}\n"
             f"Dievaluasi: {len(candidates)} kandidat | Diloloskan: 0\n"
             f"{criteria_line}"
+            f"{ltf_log_block}"
             f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
             f"{'─'*36}\n"
         )
@@ -22621,6 +22804,7 @@ def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: i
         f"Dievaluasi: {len(candidates)} kandidat | Diloloskan: {len(picked_syms)}\n"
         f"Terpilih: {', '.join(to_display_pair(s) for s in picked_syms)}\n"
         f"{criteria_line}"
+        f"{ltf_log_block}"
         f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
         f"{'─'*36}\n"
     )
