@@ -12213,7 +12213,9 @@ document.addEventListener('DOMContentLoaded', function() {
         <h2>Performance per Strategi <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Proporsi menang/kalah forward-test kumulatif</span></h2>
     </div>
     <div class="card-body">
-      <div id="perf-chart"><em style="color:var(--muted);font-size:11px">Memuat...</em></div>
+      <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <div id="perf-chart" style="min-width:680px"><em style="color:var(--muted);font-size:11px">Memuat...</em></div>
+      </div>
     </div>
   </div>
 </div>
