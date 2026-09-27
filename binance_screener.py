@@ -21038,15 +21038,25 @@ def run_web_dashboard():
         @app.route("/api/test_alibaba")
         def api_test_alibaba():
             """26/09/2026 (permintaan Mas Budi): tes manual Alibaba (Qwen) -- sama pola /api/test_gemini,
-            sekalian nampilin pemakaian token supaya kelihatan berapa 1 panggilan makan kuota gratis."""
-            try:
-                reply, usage = _alibaba_http_call("Balas cuma dengan kata: OK")
+            sekalian nampilin pemakaian token supaya kelihatan berapa 1 panggilan makan kuota gratis.
+            27/09/2026: sekarang tes SELURUH rantai model (utama + cadangan _2.._5) satu per satu,
+            biar kelihatan jelas mana yg kuotanya benar2 aktif dan mana yg langsung ditolak."""
+            models = _alibaba_model_list()
+            if not models:
+                return jsonify({"ok": False, "error": "ALIBABA_AI_MODEL belum di-set"}), 400
+            results = []
+            for model in models:
+                try:
+                    reply, usage = _alibaba_http_call("Balas cuma dengan kata: OK", model=model)
+                    results.append({"model": model, "ok": True, "reply": reply, "usage": usage})
+                except Exception as error:
+                    results.append({"model": model, "ok": False, "error": _classify_ai_error(str(error)), "raw_error": str(error)[:300]})
+            any_ok = any(r["ok"] for r in results)
+            if any_ok:
                 _mark_ai_provider_ok("alibaba")
-                return jsonify({"ok": True, "reply": reply, "model": ALIBABA_AI_MODEL, "usage": usage})
-            except Exception as error:
-                error_text = str(error)
-                _mark_ai_provider_down("alibaba", error_text)
-                return jsonify({"ok": False, "error": _classify_ai_error(error_text), "raw_error": error_text[:300]}), 502
+            else:
+                _mark_ai_provider_down("alibaba", results[-1]["raw_error"])
+            return jsonify({"ok": any_ok, "models_tested": len(models), "results": results})
 
         @app.route("/api/test_gemini")
         def api_test_gemini():
@@ -21955,6 +21965,14 @@ GEMINI_AI_MODEL    = os.environ.get("GEMINI_AI_MODEL", "gemini-flash-latest")
 ALIBABA_API_KEY    = os.environ.get("ALIBABA_API_KEY", "")
 ALIBABA_AI_MODEL   = os.environ.get("ALIBABA_AI_MODEL", "qwen3.7-plus")
 ALIBABA_BASE_URL   = os.environ.get("ALIBABA_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+# 27/09/2026 (permintaan Mas Budi, insiden qwen3.7-plus bare-alias tidak punya kuota gratis nyata --
+# lihat REMARK di _alibaba_ai_call): sampai 4 model CADANGAN, dicoba berurutan SEBELUM pindah ke Gemini
+# kalau model sebelumnya kena kuota habis (403 AllocationQuota.FreeTierOnly). Kosongkan var yg tidak
+# dipakai (default "") -- model kosong dilewati diam-diam, bukan error.
+ALIBABA_AI_MODEL_2 = os.environ.get("ALIBABA_AI_MODEL_2", "")
+ALIBABA_AI_MODEL_3 = os.environ.get("ALIBABA_AI_MODEL_3", "")
+ALIBABA_AI_MODEL_4 = os.environ.get("ALIBABA_AI_MODEL_4", "")
+ALIBABA_AI_MODEL_5 = os.environ.get("ALIBABA_AI_MODEL_5", "")
 # Total pemakaian token sejak proses start (reset tiap restart/redeploy) -- utk mengukur laju habisnya kuota 1M.
 _alibaba_usage_total = {"calls": 0, "prompt": 0, "completion": 0}
 _alibaba_usage_lock = threading.Lock()
@@ -22221,15 +22239,29 @@ def _anthropic_ai_call(prompt: str, model: str = None) -> str:
     return text
 
 
-def _alibaba_http_call(prompt: str) -> tuple:
+def _alibaba_model_list() -> list:
+    """Daftar model Alibaba yg dicoba berurutan: ALIBABA_AI_MODEL (utama) lalu _2.._5 (cadangan,
+    kosong dilewati). 27/09/2026: qwen3.7-plus (bare, tanpa tanggal) ternyata TIDAK punya kuota
+    gratis nyata (baris Free Quota-nya kosong/tidak terlacak) walau baru ~208rb dari 1M token
+    terpakai -- langsung 403 AllocationQuota.FreeTierOnly. Model BERTANGGAL/bernama pasti (mis.
+    qwen3.7-plus-2026-05-26) terbukti kuotanya terlacak jelas (1M/1M). Cadangan dipakai kalau model
+    di depannya kena kuota habis -- lihat _alibaba_ai_call."""
+    return [m for m in (ALIBABA_AI_MODEL, ALIBABA_AI_MODEL_2, ALIBABA_AI_MODEL_3,
+                        ALIBABA_AI_MODEL_4, ALIBABA_AI_MODEL_5) if m]
+
+
+def _alibaba_http_call(prompt: str, model: str = None) -> tuple:
     """Satu panggilan ke Alibaba Model Studio (Qwen), endpoint OpenAI-compatible.
+    model: override nama model per-panggilan (dipakai _alibaba_ai_call utk coba model cadangan);
+    default None = ALIBABA_AI_MODEL (model utama).
     Return (teks_jawaban, usage_dict). enable_thinking=False supaya model tidak menghabiskan
     token/waktu utk 'mikir' (timeout 25 dtk, kuota gratis terbatas)."""
     if not ALIBABA_API_KEY:
         raise RuntimeError("ALIBABA_API_KEY belum di-set")
+    model = model or ALIBABA_AI_MODEL
     import json as _json
     payload = _json.dumps({
-        "model": ALIBABA_AI_MODEL,
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 1024,
         "enable_thinking": False,
@@ -22272,9 +22304,33 @@ def _alibaba_http_call(prompt: str) -> tuple:
     return text, usage
 
 
+ALIBABA_LAST_MODEL_USED = ""   # 27/09/2026: nama model Alibaba yg BERHASIL menjawab panggilan terakhir (utk /api/test_alibaba & log)
+
 def _alibaba_ai_call(prompt: str) -> str:
-    """Panggil Alibaba (Qwen) sebagai provider ke-2 (setelah Anthropic, sebelum Gemini)."""
-    return _alibaba_http_call(prompt)[0]
+    """Panggil Alibaba (Qwen) sebagai provider ke-2 (setelah Anthropic, sebelum Gemini). Coba tiap
+    model di _alibaba_model_list() berurutan -- kalau model kena kuota habis (403
+    AllocationQuota.FreeTierOnly), coba model cadangan berikutnya SEBELUM menyerah ke Gemini.
+    Error LAIN (mis. key salah/network) langsung dilempar, tidak coba model lain (kuncinya sama
+    utk semua model, jadi error itu pasti berulang)."""
+    global ALIBABA_LAST_MODEL_USED
+    models = _alibaba_model_list()
+    last_error = None
+    for i, model in enumerate(models):
+        try:
+            text, _usage = _alibaba_http_call(prompt, model=model)
+            ALIBABA_LAST_MODEL_USED = model
+            if i > 0:
+                log(f"[AI] Alibaba model cadangan #{i+1} ({model}) berhasil setelah model sebelumnya kuota habis")
+            return text
+        except Exception as e:
+            last_error = e
+            msg = str(e).lower()
+            is_quota = "freetieronly" in msg or "allocationquota" in msg
+            if not is_quota:
+                raise   # bukan soal kuota (key salah/network/dll) -- pasti berulang di model lain, jangan buang waktu
+            log(f"WARN [AI] Alibaba model {model} kuota habis, coba cadangan berikutnya" if i + 1 < len(models)
+                else f"WARN [AI] Alibaba model {model} kuota habis, tidak ada cadangan lagi")
+    raise last_error if last_error else RuntimeError("ALIBABA_AI_MODEL belum di-set")
 
 
 def _gemini_ai_call(prompt: str) -> str:
@@ -22337,9 +22393,10 @@ def _ai_call(prompt: str, model: str = None) -> str:
             else:
                 result = _gemini_ai_call(prompt)
             if result:
-                AI_LAST_PROVIDER = {"anthropic": "Anthropic", "alibaba": "Alibaba Qwen"}.get(provider, "Gemini AI Studio")
+                AI_LAST_PROVIDER = (f"Alibaba Qwen ({ALIBABA_LAST_MODEL_USED})" if provider == "alibaba"
+                                    else {"anthropic": "Anthropic"}.get(provider, "Gemini AI Studio"))
                 _mark_ai_provider_ok(provider)
-                if provider == "alibaba": log("[AI] Keputusan memakai Alibaba (Qwen) fallback")
+                if provider == "alibaba": log(f"[AI] Keputusan memakai Alibaba (Qwen, model {ALIBABA_LAST_MODEL_USED}) fallback")
                 if provider == "gemini": log("[AI] Keputusan memakai Gemini fallback")
                 return result
         except Exception as error:
