@@ -36,6 +36,25 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pandas_ta")
 import requests, pandas as pd, pandas_ta as ta, numpy as np
 import time, sys, json, threading, os, csv, pickle, re
+
+def _cci_fixed(high, low, close, length=14):
+    """CCI (Commodity Channel Index) dihitung manual, BUKAN pandas_ta.cci().
+    27/09/2026 (ditemukan Mas Budi -- angka CCI di dashboard/log jelas absurd, -1000an):
+    pandas_ta 0.4.71b0 (pandas_ta/momentum/cci.py) salah kurung di rumusnya --
+    `tp - mean_tp / (c*mad_tp)` (operator precedence: pembagian duluan) padahal
+    seharusnya `(tp - mean_tp) / (c*mad_tp)`. mean_tp itu harga absolut (besar),
+    dibagi (0.015 x deviasi kecil) jadi angka ratusan/ribuan, lalu tp yang kecil
+    dikurangi angka itu -> selalu jatuh sangat negatif, TIDAK PERNAH representasi
+    overbought/oversold yang benar. Dikonfirmasi dgn hitung manual vs TradingView
+    pada data real PENGUUSDT/PIXELUSDT (nilai pandas_ta -1354/-1459 vs rumus benar
+    ~61/~69). Titik pakai (semua strategi KECUALI QScalp-3m, yg tidak pakai CCI):
+    compute_indicators (brkX2-12h), compute_indicators_reversal (Reversal-8h),
+    compute_indicators_4h (brkX2-4h/CrossEMA-4h/Hunting-4h/Akumulasi-4h/TrenKonfirmasi-4h),
+    _multi_ind_precompute (mesin riset), _tf_indicator_line_for_ai (konteks AI)."""
+    typical_price = (high + low + close) / 3.0
+    mean_typical_price = typical_price.rolling(length).mean()
+    mean_dev = (typical_price - mean_typical_price).abs().rolling(length).mean()
+    return (typical_price - mean_typical_price) / (0.015 * mean_dev)
 sys.stdout.reconfigure(line_buffering=True)   # tiap baris langsung flush ke Railway log
 from datetime import datetime, timedelta, timezone
 import requests as _requests_mod
@@ -5941,7 +5960,7 @@ def compute_indicators(df):
     except Exception: df['bb_pct']=float('nan')
     try: df['williams_r']=ta.willr(high,low,close,length=14)
     except Exception: df['williams_r']=float('nan')
-    try: df['cci']=ta.cci(high,low,close,length=14)
+    try: df['cci']=_cci_fixed(high,low,close,length=14)
     except Exception: df['cci']=float('nan')
     try: df['obv']=ta.obv(close,df['vol'])
     except Exception: df['obv']=float('nan')
@@ -6270,7 +6289,7 @@ def compute_indicators_reversal(df):
     except Exception: df['bb_pct'] = float('nan')
     try: df['williams_r'] = ta.willr(high, low, close, length=14)
     except Exception: df['williams_r'] = float('nan')
-    try: df['cci'] = ta.cci(high, low, close, length=14)
+    try: df['cci'] = _cci_fixed(high, low, close, length=14)
     except Exception: df['cci'] = float('nan')
     try: df['obv'] = ta.obv(close, df['vol'])
     except Exception: df['obv'] = float('nan')
@@ -6816,7 +6835,7 @@ def compute_indicators_4h(df):
     except Exception:
         df["williams_r"] = float("nan")
     try:
-        df["cci"] = _pta.cci(h, l, c, length=14)
+        df["cci"] = _cci_fixed(h, l, c, length=14)
     except Exception:
         df["cci"] = float("nan")
     try:
@@ -18321,7 +18340,7 @@ def _multi_ind_precompute(df: pd.DataFrame) -> dict:
     stoch_d = (stoch[dcol[0]] if dcol else pd.Series(np.nan, index=df.index)).values
     rsi = ta.rsi(close, length=14)
     rsi_ma = rsi.rolling(14).mean()
-    cci = ta.cci(high, low, close, length=14)
+    cci = _cci_fixed(high, low, close, length=14)
     cci_ma = cci.rolling(14).mean()
     bb = ta.bbands(close, length=20, std=2)
     bbp_col = [c for c in bb.columns if 'BBP' in c] if bb is not None else []
@@ -22575,7 +22594,7 @@ def _tf_indicator_line_for_ai(symbol: str, tf_label: str, tf_binance: str, limit
         bb_col = [col for col in bb.columns if "BBP" in col]
         bb_pct = bb[bb_col[0]].iloc[-1] if bb_col else None
         willr = _pta.willr(h, l, c, length=14).iloc[-1]
-        cci = _pta.cci(h, l, c, length=20).iloc[-1]
+        cci = _cci_fixed(h, l, c, length=20).iloc[-1]
         obv = _pta.obv(c, df_htf["vol"]).iloc[-1]
         vol_ma = df_htf["vol"].rolling(20).mean().iloc[-1]
         vol_ratio = df_htf["vol"].iloc[-1] / vol_ma if vol_ma > 0 else None
