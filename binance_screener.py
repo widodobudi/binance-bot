@@ -21993,7 +21993,11 @@ _ai_quota_notif_sent = False  # flag agar notif quota habis tidak berulang
 # sebelumnya sama-sama numpang di 1 pesan generik "kembali ON" sehingga membingungkan (pesan itu
 # kepicu begitu ADA panggilan Anthropic sukses, TANPA bilang lewat akun mana -- jadi tetap muncul
 # padahal akun utama masih 0 kredit dan yg menjawab akun cadangan terus-menerus).
-_anthropic_primary_down = False  # True selama akun utama (ANTHROPIC_API_KEY) kehabisan kredit
+# 27/09/2026 (bug ditemukan Mas Budi): dulu status "akun utama down" dipegang variabel Python
+# biasa (_anthropic_primary_down), HILANG tiap restart/redeploy Railway -- jadi notif "pakai akun
+# CADANGAN" terkirim ULANG tiap deploy walau insidennya sama sekali belum berubah. Diganti jadi
+# field persisten "anthropic_notif" di dalam _ai_provider_health (lihat load/save di bawah),
+# dikunci ke since_wib yang memang sudah persisten sejak sebelumnya.
 
 # 23/09/2026 (permintaan Mas Budi, insiden "tolol" -- pertanyaan lama soal bug belum dipatch):
 # sebelumnya /api/ai_provider_config cuma expose anthropic_configured/gemini_configured =
@@ -22005,7 +22009,14 @@ _anthropic_primary_down = False  # True selama akun utama (ANTHROPIC_API_KEY) ke
 AI_PROVIDER_HEALTH_FILE = os.path.join(DATA_DIR, "ai_provider_health.json")
 _ai_provider_health = {"anthropic": {"ok": True, "error": None, "since_wib": None},
                         "alibaba":   {"ok": True, "error": None, "since_wib": None},
-                        "gemini":    {"ok": True, "error": None, "since_wib": None}}
+                        "gemini":    {"ok": True, "error": None, "since_wib": None},
+                        # 27/09/2026: primary_down_since = sejak kapan AKUN UTAMA gagal (persisten,
+                        # TERPISAH dari 'anthropic'.since_wib yg reset tiap cadangan sukses menjawab).
+                        # last_notified_key = "<primary_down_since>|<backup atau both_down>" dari
+                        # notif Telegram terakhir yg terkirim -- supaya deploy/restart TIDAK
+                        # dianggap insiden baru (beda dgn _anthropic_primary_down lama yg cuma di
+                        # memori), TAPI transisi nyata (cadangan pulih/gagal lagi) tetap dinotif.
+                        "anthropic_notif": {"last_notified_key": None, "primary_down_since": None}}
 _ai_provider_health_lock = threading.Lock()
 
 def load_ai_provider_health():
@@ -22016,7 +22027,7 @@ def load_ai_provider_health():
         with open(AI_PROVIDER_HEALTH_FILE, encoding="utf-8") as f:
             data = json.load(f)
         with _ai_provider_health_lock:
-            for k in ("anthropic", "alibaba", "gemini"):
+            for k in ("anthropic", "alibaba", "gemini", "anthropic_notif"):
                 if k in data: _ai_provider_health[k] = data[k]
         log(f"   Loaded ai_provider_health: {data}")
     except Exception as e:
@@ -22190,8 +22201,14 @@ def _anthropic_ai_call(prompt: str, model: str = None) -> str:
     model salah/dll -- itu tetap langsung dilempar ke atas spt biasa, jangan disamarkan jadi
     'coba akun lain'), dan ANTHROPIC_API_KEY_2 (opsional) di-set, coba SEKALI lagi pakai akun
     cadangan sebelum benar2 dianggap gagal & lanjut ke Gemini/rule-based. Kalau
-    ANTHROPIC_API_KEY_2 kosong, perilaku PERSIS SAMA seperti sebelum ini ada."""
-    global _ai_quota_notif_sent, _anthropic_primary_down
+    ANTHROPIC_API_KEY_2 kosong, perilaku PERSIS SAMA seperti sebelum ini ada.
+    27/09/2026 (bug ditemukan Mas Budi): notif Telegram dulu dikirim SEBELUM akun cadangan
+    benar2 dicoba -- kalau cadangan ternyata JUGA kehabisan kredit, pesannya tetap ngaku
+    'pakai akun CADANGAN' padahal yg beneran menjawab itu provider fallback berikutnya
+    (Alibaba/Gemini). Sekarang notif dikirim SETELAH tahu hasil cadangan, isinya jujur sesuai
+    hasil. Dedup notif juga dipindah dari variabel memori (_anthropic_primary_down, hilang tiap
+    restart) ke state persisten (_ai_provider_health['anthropic_notif'])."""
+    global _ai_quota_notif_sent
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY belum di-set")
     used_backup = False
@@ -22202,24 +22219,52 @@ def _anthropic_ai_call(prompt: str, model: str = None) -> str:
         _is_credit_error = "credit" in _msg or "billing" in _msg or "insufficient" in _msg
         if _is_credit_error and ANTHROPIC_API_KEY_2:
             log("WARN [AI] Anthropic akun utama kehabisan kredit -- coba akun cadangan (ANTHROPIC_API_KEY_2)")
-            # 24/09/2026: notif REAL-TIME sekali per insiden begitu akun utama mulai gagal --
-            # sebelumnya ini cuma ada di log, tidak ada Telegram sama sekali, jadi Mas Budi baru
-            # tahu akun utama masih down lewat pesan "kembali ON" yang generik (membingungkan).
-            if not _anthropic_primary_down:
-                _anthropic_primary_down = True
-                send_telegram(
-                    "⚠️ Anthropic akun UTAMA (widodobudi@) kehabisan kredit.\n"
-                    "Sementara AI Decision jalan pakai akun CADANGAN (vassistbywbudi@).",
-                    parse_mode=None
-                )
-            text = _anthropic_http_call(prompt, model, ANTHROPIC_API_KEY_2)
-            used_backup = True
+            backup_error = None
+            try:
+                text = _anthropic_http_call(prompt, model, ANTHROPIC_API_KEY_2)
+                used_backup = True
+            except RuntimeError as e2:
+                backup_error = str(e2)
+            # "primary_down_since" dilacak TERPISAH dari _ai_provider_health['anthropic']['since_wib']
+            # -- yang terakhir itu status KESEHATAN GABUNGAN (reset ke None tiap kali cadangan
+            # berhasil menjawab), jadi kalau dipakai sebagai kunci dedup malah salah: setiap
+            # panggilan yg cadangan-nya sukses akan mengira "insiden baru" krn since_wib abis
+            # di-reset provider sebelumnya, lalu kirim notif ULANG terus-menerus. primary_down_since
+            # HANYA berubah saat primary akun utama gagal pertama kali / berhasil lagi (di bawah).
+            with _ai_provider_health_lock:
+                primary_down_since = _ai_provider_health["anthropic_notif"].get("primary_down_since")
+                if not primary_down_since:
+                    primary_down_since = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+                    _ai_provider_health["anthropic_notif"]["primary_down_since"] = primary_down_since
+                notif_key = f"{primary_down_since}|{'backup' if used_backup else 'both_down'}"
+                already_notified = _ai_provider_health["anthropic_notif"]["last_notified_key"] == notif_key
+                if not already_notified:
+                    _ai_provider_health["anthropic_notif"]["last_notified_key"] = notif_key
+            if not already_notified:
+                _save_ai_provider_health()
+                if used_backup:
+                    send_telegram(
+                        "⚠️ Anthropic akun UTAMA (widodobudi@) kehabisan kredit.\n"
+                        "Sementara AI Decision jalan pakai akun CADANGAN (vassistbywbudi@).",
+                        parse_mode=None
+                    )
+                else:
+                    send_telegram(
+                        "⚠️ Anthropic akun UTAMA (widodobudi@) DAN akun CADANGAN (vassistbywbudi@) "
+                        "sama-sama kehabisan kredit.\nSementara AI Decision jalan pakai Alibaba/Gemini fallback.",
+                        parse_mode=None
+                    )
+            if backup_error is not None:
+                raise RuntimeError(backup_error)
         else:
             raise
-    # Akun utama berhasil TANPA lempar exception, padahal sebelumnya berstatus down -> ini yang
-    # beneran berarti "akun utama sudah terisi/normal lagi" (bukan sekadar akun cadangan menjawab).
-    if not used_backup and _anthropic_primary_down:
-        _anthropic_primary_down = False
+    # Akun utama berhasil TANPA lempar exception, padahal sebelumnya ada insiden tercatat -> ini
+    # yang beneran berarti "akun utama sudah terisi/normal lagi" (bukan sekadar cadangan menjawab).
+    if not used_backup and _ai_provider_health["anthropic_notif"].get("primary_down_since"):
+        with _ai_provider_health_lock:
+            _ai_provider_health["anthropic_notif"]["primary_down_since"] = None
+            _ai_provider_health["anthropic_notif"]["last_notified_key"] = None
+        _save_ai_provider_health()
         send_telegram(
             "✅ Anthropic akun UTAMA (widodobudi@) sudah normal kembali (kredit terisi).",
             parse_mode=None
@@ -22423,21 +22468,25 @@ def _ai_call(prompt: str, model: str = None) -> str:
 
 
 def _classify_ai_error(error_text: str) -> str:
-    """Terjemahkan error HTTP mentah jadi penyebab yang jelas (bukan asumsi 'billing habis')."""
+    """Terjemahkan error HTTP mentah jadi penyebab yang jelas (bukan asumsi 'billing habis').
+    27/09/2026: TIDAK lagi menempelkan potongan teks error mentah (mis. pesan billing provider
+    yang eksplisit isinya "please upgrade/purchase credits") -- itu tampil apa adanya di
+    dashboard/Telegram dan memalukan kalau kelihatan orang lain. Cukup label penyebab singkat;
+    detail mentah tetap ada di Railway log lewat log()/WARN di caller, bukan di sini."""
     t = error_text.lower()
     if "freetieronly" in t or "allocationquota" in t:
-        return f"Kuota gratis Alibaba habis (403 AllocationQuota.FreeTierOnly, Stop-on-Exhaust aktif). [{error_text[:100]}]"
+        return "Kuota gratis habis (403 AllocationQuota.FreeTierOnly, Stop-on-Exhaust aktif)."
     if "401" in t or "unauthorized" in t:
-        return f"API key tidak valid/revoked (401 Unauthorized) — cek env var API key. [{error_text[:100]}]"
+        return "API key tidak valid/revoked (401 Unauthorized) — cek env var API key."
     if "403" in t or "forbidden" in t:
-        return f"Akses ditolak (403 Forbidden) — cek permission/region key. [{error_text[:100]}]"
+        return "Akses ditolak (403 Forbidden) — cek permission/region key."
     if "429" in t or "rate limit" in t or "quota" in t:
-        return f"Rate limit/quota terlampaui (429). [{error_text[:100]}]"
+        return "Rate limit/quota terlampaui (429)."
     if "404" in t:
-        return f"Endpoint/model tidak ditemukan (404) — cek nama model atau API key. [{error_text[:100]}]"
+        return "Endpoint/model tidak ditemukan (404) — cek nama model atau API key."
     if "credit" in t or "billing" in t or "insufficient" in t:
-        return f"Credit/billing habis. [{error_text[:100]}]"
-    return f"Gagal: {error_text[:120]}"
+        return "Out of service (kredit/billing habis)."
+    return "Gagal (detail di Railway log)."
 
 
 def load_ai_provider_config() -> dict:
