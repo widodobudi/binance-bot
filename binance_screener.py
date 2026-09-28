@@ -1363,6 +1363,11 @@ def total_max_deals_all_strategies() -> int:
             + STRAT_CROSSEMA_MAX_DEALS + HUNTING_MAX_DEALS + AKUM_ENTRY_MAX_DEALS
             + QSCALP_MAX_DEALS)
 
+# 28-29/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE dan SEMUA deal-nya disembunyikan dari tampilan dashboard default
+# (Closed Trades + kartu Performance per Strategi). Data tetap ada di CSV / counter fase / batas rugi harian; tampil lagi kalau
+# strategi dipilih eksplisit di filter Closed Trades atau ?show_paused=1. Satu sumber kebenaran utk kedua endpoint.
+PAUSED_HIDDEN_STRATEGIES = ('qscalp_3m', 'brkX2_crossema', 'reversal')
+
 def is_strategy_enabled(strategy: str) -> bool:
     cfg = load_strategy_config()
     item = cfg.get(strategy, {})
@@ -12437,7 +12442,12 @@ function renderPerfChart(data) {
           + '</div>'
           + phaseDetail;
       }).join("");
-      el.innerHTML = sortBar + header + body;
+      // 29/09/2026: catatan kecil nama strategi yang di-pause & disembunyikan dari kartu ini
+      var hp = (data && data.hidden_paused) || [];
+      var hpNote = hp.length
+        ? '<div style="margin-top:8px;font-size:10px;color:var(--muted)">Disembunyikan (dipause): ' + hp.join(', ') + '</div>'
+        : '';
+      el.innerHTML = sortBar + header + body + hpNote;
 }
 setInterval(refreshPerfChart, 60000);
 refreshPerfChart();
@@ -21653,7 +21663,14 @@ def run_web_dashboard():
             recent = strategy_recent_close_stats()
             phases = strategy_phase_breakdown()
             rows = []
+            # 29/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE (PAUSED_HIDDEN_STRATEGIES) tidak tampil di kartu ini;
+            # muncul lagi dgn ?show_paused=1. Nama-namanya dikirim di "hidden_paused" utk catatan kecil di bawah kartu.
+            show_paused = request.args.get("show_paused", "") in ("1", "true", "True")
+            hidden_paused_labels = []
             for key, label in defs:
+                if key in PAUSED_HIDDEN_STRATEGIES and not show_paused:
+                    hidden_paused_labels.append(label)
+                    continue
                 p = csv_progress(key)
                 if p is None:
                     p = {"n": 0, "win": 0, "loss": 0, "total_pct": 0.0}
@@ -21665,7 +21682,7 @@ def run_web_dashboard():
                              "last_win_close_wib": r["last_win_close_wib"],
                              "phases": phases.get(key, [])})
             rows.sort(key=lambda r: (r["win"] / r["n"]) if r["n"] > 0 else -1, reverse=True)
-            return jsonify({"strategies": rows})
+            return jsonify({"strategies": rows, "hidden_paused": hidden_paused_labels})
 
         @app.route("/api/qscalp_signals")
         def api_qscalp_signals():
@@ -21742,7 +21759,7 @@ def run_web_dashboard():
                 # -- SEMUA deal-nya disembunyikan dari tampilan Closed Trades default. Baris TETAP di CSV (counter fase /
                 # batas rugi harian tidak berubah) dan tetap ikut ringkasan stats_all "termasuk yang disembunyikan".
                 # Tampil lagi kalau strategi itu dipilih eksplisit di filter Strategi, atau ?show_paused=1.
-                paused_hidden_strategies = ('qscalp_3m', 'brkX2_crossema', 'reversal')
+                paused_hidden_strategies = PAUSED_HIDDEN_STRATEGIES
                 show_paused = request.args.get("show_paused", "") in ("1", "true", "True")
                 hidden_paused = 0
                 if not show_paused and strategy_filter not in paused_hidden_strategies:
