@@ -13873,7 +13873,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
     <input type="text" id="ct-filter-search" oninput="renderClosedTradesRows()" placeholder="cari pair..." style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;width:110px">
     <button onclick="exportCtCsv()" style="background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Export CSV</button>
   </div>
-  <div id="ct-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px"></div>  <div id="ct-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:10px"></div>
+  <div id="ct-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px"></div>  <div id="ct-stats-all" style="display:none;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px;color:var(--muted)"></div>  <div id="ct-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:10px"></div>
   <div id="ct-equity" style="margin-bottom:14px"></div>
   <div style="overflow-x:auto">
     <table id="ct-table" style="width:100%;border-collapse:collapse;font-size:11px">
@@ -14144,6 +14144,31 @@ function loadClosedTrades() {
       'PnL%: <b style="color:' + (pnl_pct>=0?'var(--green)':'var(--red)') + '">' + (pnl_pct>=0?'+':'') + pnl_pct.toFixed(1) + '%</b>',
       'PnL$: <b style="color:' + (pnl_usd>=0?'var(--green)':'var(--red)') + '">' + (pnl_usd>=0?'+':'') + pnl_usd.toFixed(2) + ' USD</b>',
     ].join('<span style="color:var(--border);margin:0 4px">|</span>');
+    // 28/09/2026: ringkasan "termasuk yang disembunyikan" (hard-stop / manual reconcile / di-patch) -- hanya
+    // tampil kalau memang ada baris yang disembunyikan; kalau tidak, baris ini disembunyikan.
+    var aEl = document.getElementById('ct-stats-all');
+    if (aEl) {
+      var sa = d.stats_all || {};
+      var nHid = (sa.total || 0) - (stats.total || 0);
+      if (nHid > 0) {
+        var a_pct = parseFloat(sa.total_pnl_pct || 0);
+        var a_usd = parseFloat(sa.total_pnl_usd || 0);
+        aEl.style.display = 'flex';
+        aEl.innerHTML = [
+          '<span style="color:#e0b050">Termasuk ' + nHid + ' trade yang disembunyikan (hard-stop, manual reconcile, di-patch):</span>',
+          '<span style="font-size:10px">data CSV -- belum termasuk close 05-19/09 yang hanya ada di log OAC (hard-stop saat itu tidak dicatat ke CSV)</span>',
+          'Total: <b>' + (sa.total || 0) + '</b>',
+          '<span style="color:var(--green)">W: ' + (sa.wins || 0) + '</span>',
+          '<span style="color:var(--red)">L: ' + (sa.losses || 0) + '</span>',
+          'WR: <b>' + (sa.wr || '0') + '%</b>',
+          'PnL%: <b style="color:' + (a_pct >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (a_pct >= 0 ? '+' : '') + a_pct.toFixed(1) + '%</b>',
+          'PnL$: <b style="color:' + (a_usd >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (a_usd >= 0 ? '+' : '') + a_usd.toFixed(2) + ' USD</b>',
+        ].join('<span style="color:var(--border);margin:0 4px">|</span>');
+      } else {
+        aEl.style.display = 'none';
+        aEl.innerHTML = '';
+      }
+    }
         closedTradesRows = d.trades || [];
         renderClosedTradesRows();
   }).catch(function(e){ document.getElementById('ct-body').innerHTML = '<tr><td colspan="12" style="color:var(--red);padding:8px">Error: ' + e + '</td></tr>'; });
@@ -21696,6 +21721,10 @@ def run_web_dashboard():
                     for key, strategy_rows in rows_by_strategy.items():
                         offset = phase_offsets.get(key, 0)
                         rows.extend(strategy_rows[offset:] if offset else strategy_rows)
+                # 28/09/2026 (permintaan Mas Budi): salinan baris SEBELUM disembunyikan (hard-stop / manual reconcile /
+                # di-patch), hanya dipakai utk ringkasan stats_all "termasuk yang disembunyikan" -- tampilan baris & stats
+                # utama TIDAK berubah. Fase lama (phase_offsets) tetap tidak ikut, sama dgn tampilan normal.
+                rows_pre_hide = list(rows)
                 # 20/09/2026 (permintaan Mas Budi, batalkan permintaan 19/09 yg menampilkan hard-stop):
                 # baris hard-stop volatilitas / hold_no_sell TETAP ada di CSV (dan tetap dihitung batas
                 # rugi harian & counter fase), tapi DISEMBUNYIKAN dari tampilan Closed Deals secara default.
@@ -21797,6 +21826,26 @@ def run_web_dashboard():
                     "why": _patched_hidden[_patched_key(r)],
                 } for r in sorted(hidden_patched_rows, key=lambda r: r.get('close_time_wib', ''), reverse=True)
                     if _hidden_passes(r)]
+                # 28/09/2026 (permintaan Mas Budi): ringkasan "termasuk yang disembunyikan". Panel default menyembunyikan
+                # baris hard-stop/[HOLD], manual reconcile & baris yg di-patch, sehingga WR/PnL di panel tampak jauh lebih
+                # bagus dari kenyataan (mis. 28/09: panel WR 91.5% / +434%, dgn semua baris ~72% / ~+175%). Rumus sama persis
+                # dgn loop stats di bawah (pct > 0 = menang, profit$ = pct/100 * base_usd, default 8); filter pair/tanggal/
+                # hasil/alasan yg dipilih user tetap berlaku lewat _hidden_passes().
+                def _stats_of(_rows):
+                    _w = _l = 0
+                    _pct = _usd = 0.0
+                    for _r in _rows:
+                        _p = float(_r.get('profit_pct') or 0)
+                        _b = float(_r.get('base_usd') or 8)
+                        _usd += round(_p / 100 * _b, 2)
+                        _pct += _p
+                        if _p > 0: _w += 1
+                        else: _l += 1
+                    _t = _w + _l
+                    return {"total": _t, "wins": _w, "losses": _l,
+                            "wr": round(_w / _t * 100, 1) if _t else 0,
+                            "total_pnl_pct": round(_pct, 2), "total_pnl_usd": round(_usd, 2)}
+                stats_all = _stats_of([r for r in rows_pre_hide if _hidden_passes(r)])
                 # Sort terbaru dulu
                 rows.sort(key=lambda r: r.get('close_time_wib',''), reverse=True)
                 # Hitung stats dan profit$
@@ -21858,7 +21907,8 @@ def run_web_dashboard():
                         "wr":            wr,
                         "total_pnl_pct": round(total_pnl_pct, 2),
                         "total_pnl_usd": round(total_pnl_usd, 2),
-                    }
+                    },
+                    "stats_all": stats_all,
                 })
             except Exception as e:
                 return jsonify({"trades": [], "stats": {}, "error": str(e)})
