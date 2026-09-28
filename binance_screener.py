@@ -1278,6 +1278,11 @@ def apply_one_time_config_migrations():
         # thread2_monitor (T2 tidak membaca flag ini). REMARK nilai lama (rollback): strategy_enabled=True.
         "qscalp_3m_paused_20260928":            ("qscalp_3m",        "strategy_enabled", False),
         "brkX2_crossema_paused_20260928":       ("brkX2_crossema",   "strategy_enabled", False),
+        # 29/09/2026 (permintaan Mas Budi, setelah ringkasan data): PAUSE reversal (Reversal-8h) juga. Data gabungan CSV+OAC:
+        # 13 trade (2/07-3/09), 10 menang / 3 kalah (semua hard-stop koin volatil: TLM -8.36, TLM -10.12, BICO -12.53),
+        # hasil bersih +9.90% PF 1.32 t=0.41; 6 trade terakhir (sejak 26/08) -22.68%; tidak ada trade sejak 3/09.
+        # Sama seperti di atas: sekali jalan, nyalakan lagi kapan saja lewat Strategy Control. REMARK rollback: True.
+        "reversal_paused_20260929":             ("reversal",         "strategy_enabled", False),
     }
     try:
         done = {}
@@ -14163,7 +14168,7 @@ function loadClosedTrades() {
         var a_usd = parseFloat(sa.total_pnl_usd || 0);
         aEl.style.display = 'flex';
         aEl.innerHTML = [
-          '<span style="color:#e0b050">Termasuk ' + nHid + ' trade yang disembunyikan (hard-stop, manual reconcile, di-patch, strategi dipause QScalp-3m &amp; CrossEMA-4h -- tampil kalau dipilih di filter Strategi):</span>',
+          '<span style="color:#e0b050">Termasuk ' + nHid + ' trade yang disembunyikan (hard-stop, manual reconcile, di-patch, strategi dipause QScalp-3m, CrossEMA-4h &amp; Reversal-8h -- tampil kalau dipilih di filter Strategi):</span>',
           '<span style="font-size:10px">data CSV -- belum termasuk close 05-19/09 yang hanya ada di log OAC (hard-stop saat itu tidak dicatat ke CSV)</span>',
           'Total: <b>' + (sa.total || 0) + '</b>',
           '<span style="color:var(--green)">W: ' + (sa.wins || 0) + '</span>',
@@ -21733,11 +21738,11 @@ def run_web_dashboard():
                 # di-patch), hanya dipakai utk ringkasan stats_all "termasuk yang disembunyikan" -- tampilan baris & stats
                 # utama TIDAK berubah. Fase lama (phase_offsets) tetap tidak ikut, sama dgn tampilan normal.
                 rows_pre_hide = list(rows)
-                # 28/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE (qscalp_3m, brkX2_crossema) -- SEMUA deal-nya
-                # disembunyikan dari tampilan Closed Trades default. Baris TETAP di CSV (counter fase / batas rugi harian
-                # tidak berubah) dan tetap ikut ringkasan stats_all "termasuk yang disembunyikan". Tampil lagi kalau
-                # strategi itu dipilih eksplisit di filter Strategi, atau ?show_paused=1.
-                paused_hidden_strategies = ('qscalp_3m', 'brkX2_crossema')
+                # 28/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE (qscalp_3m, brkX2_crossema; 29/09/2026 +reversal)
+                # -- SEMUA deal-nya disembunyikan dari tampilan Closed Trades default. Baris TETAP di CSV (counter fase /
+                # batas rugi harian tidak berubah) dan tetap ikut ringkasan stats_all "termasuk yang disembunyikan".
+                # Tampil lagi kalau strategi itu dipilih eksplisit di filter Strategi, atau ?show_paused=1.
+                paused_hidden_strategies = ('qscalp_3m', 'brkX2_crossema', 'reversal')
                 show_paused = request.args.get("show_paused", "") in ("1", "true", "True")
                 hidden_paused = 0
                 if not show_paused and strategy_filter not in paused_hidden_strategies:
