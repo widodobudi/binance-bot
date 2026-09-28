@@ -22596,8 +22596,14 @@ def _tf_indicator_line_for_ai(symbol: str, tf_label: str, tf_binance: str, limit
         willr = _pta.willr(h, l, c, length=14).iloc[-1]
         cci = _cci_fixed(h, l, c, length=20).iloc[-1]
         obv = _pta.obv(c, df_htf["vol"]).iloc[-1]
-        vol_ma = df_htf["vol"].rolling(20).mean().iloc[-1]
-        vol_ratio = df_htf["vol"].iloc[-1] / vol_ma if vol_ma > 0 else None
+        # 28/09/2026 (temuan review XVG): candle terakhir dari klines Binance biasanya MASIH BERJALAN --
+        # volumenya baru beberapa menit/jam, jadi "Vol=0.01xMA" & arah candle menyesatkan AI (tampak
+        # sepi/bearish padahal cuma baru dibuka). Volume & arah candle dihitung dari candle TERTUTUP
+        # terakhir; indikator lain (RSI/Stoch/MACD/BB%b/...) tetap nilai live seperti sebelumnya.
+        _forming = "ct" in df_htf.columns and int(df_htf["ct"].iloc[-1]) >= int(time.time() * 1000)
+        _ci = -2 if (_forming and len(df_htf) >= 22) else -1
+        vol_ma = df_htf["vol"].rolling(20).mean().iloc[_ci]
+        vol_ratio = df_htf["vol"].iloc[_ci] / vol_ma if vol_ma > 0 else None
         p20 = (c.iloc[-1] / ema20 - 1) * 100 if ema20 > 0 else None
         p50 = (c.iloc[-1] / ema50 - 1) * 100 if ema50 > 0 else None
         p200 = (c.iloc[-1] / ema200 - 1) * 100 if ema200 > 0 else None
@@ -22608,8 +22614,8 @@ def _tf_indicator_line_for_ai(symbol: str, tf_label: str, tf_binance: str, limit
                  fmt("vs EMA50", p50, "+.2f"), fmt("vs EMA200", p200, "+.2f"), fmt("Stoch%K", stoch_k, ".1f"),
                  fmt("Stoch%D", stoch_d, ".1f"), fmt("MACD hist", macd_hist, "+.6f"), fmt("BB%b", bb_pct, ".2f"),
                  fmt("Williams%R", willr, ".1f"), fmt("CCI", cci, ".1f"), fmt("ADX", adx, ".1f"),
-                 fmt("Vol", vol_ratio, ".2f"), fmt("OBV", obv, ".0f"),
-                 f"Candle={'bullish' if c.iloc[-1] > df_htf['open'].iloc[-1] else 'bearish'}"]
+                 fmt("Vol(candle tertutup)" if _ci == -2 else "Vol", vol_ratio, ".2f"), fmt("OBV", obv, ".0f"),
+                 f"Candle{'(tertutup)' if _ci == -2 else ''}={'bullish' if c.iloc[_ci] > df_htf['open'].iloc[_ci] else 'bearish'}"]
         return " | ".join(parts)
     except Exception:
         return None
@@ -22672,11 +22678,19 @@ def get_full_4h_indicator_context(symbol: str) -> str:
         macd_h  = _safe("macd_hist"); bb_pct = _safe("bb_pct")
         wr      = _safe("williams_r"); cci = _safe("cci"); obv_now = _safe("obv")
         obv_prv = float(r4p.get("obv",float("nan"))) if "obv" in r4p.index and not pd.isna(r4p.get("obv")) else None
-        vol     = float(r4.get("vol",0)) if "vol" in r4.index else 0
-        vol_ma  = float(r4.get("vol_ma",0)) if "vol_ma" in r4.index else 0
+        # 28/09/2026 (temuan review XVG): candle 4h terakhir dari klines biasanya MASIH BERJALAN
+        # (baru beberapa menit) -> Vol/RVOL/pola candle dari situ menyesatkan AI ("Vol=0.01xMA",
+        # "Bearish Engulfing" padahal candle baru dibuka). Vol/RVOL/pola sekarang dari candle
+        # TERTUTUP terakhir (r4c/r4cp); RSI/Stoch/MACD/BB%b/dst tetap nilai live (r4).
+        _forming = "ct" in df4.columns and int(df4["ct"].iloc[-1]) >= int(time.time() * 1000)
+        _ci = -2 if (_forming and len(df4) >= 25) else -1
+        r4c  = df4.iloc[_ci]; r4cp = df4.iloc[_ci - 1]
+        _tag = "(candle tertutup)" if _ci == -2 else ""
+        vol     = float(r4c.get("vol",0)) if "vol" in r4c.index else 0
+        vol_ma  = float(r4c.get("vol_ma",0)) if "vol_ma" in r4c.index and not pd.isna(r4c.get("vol_ma")) else 0
         vol_rat = vol/vol_ma if vol_ma>0 else None
         try:
-            rvol_ma = df4["vol"].rolling(20).mean().iloc[-1]
+            rvol_ma = df4["vol"].rolling(20).mean().iloc[_ci]
             rvol    = vol/rvol_ma if rvol_ma>0 else None
         except Exception:
             rvol = None
@@ -22700,8 +22714,8 @@ def get_full_4h_indicator_context(symbol: str) -> str:
         if bb_pct    is not None: parts.append(f"BB%b={bb_pct:.2f}")
         if wr        is not None: parts.append(f"Williams%R={wr:.1f}")
         if cci       is not None: parts.append(f"CCI={cci:.1f}")
-        if vol_rat   is not None: parts.append(f"Vol={vol_rat:.2f}xMA")
-        if rvol      is not None: parts.append(f"RVOL={rvol:.2f}x")
+        if vol_rat   is not None: parts.append(f"Vol{_tag}={vol_rat:.2f}xMA")
+        if rvol      is not None: parts.append(f"RVOL{_tag}={rvol:.2f}x")
         if adx_val   is not None: parts.append(f"ADX={adx_val:.1f}")
         if ema200_d  is not None: parts.append(f"vs EMA200={ema200_d:+.2f}%")
         if obv_now is not None and obv_prv is not None:
@@ -22709,9 +22723,9 @@ def get_full_4h_indicator_context(symbol: str) -> str:
 
         # Candlestick pattern
         try:
-            c_n=float(r4["close"]); o_n=float(r4["open"])
-            h_n=float(r4["high"]);  l_n=float(r4["low"])
-            c_p=float(r4p["close"]); o_p=float(r4p["open"])
+            c_n=float(r4c["close"]); o_n=float(r4c["open"])
+            h_n=float(r4c["high"]);  l_n=float(r4c["low"])
+            c_p=float(r4cp["close"]); o_p=float(r4cp["open"])
             body=abs(c_n-o_n); full_r=h_n-l_n if h_n>l_n else 1e-10; br=body/full_r
             uw=h_n-max(c_n,o_n); lw=min(c_n,o_n)-l_n
             pats=[]
@@ -22722,7 +22736,7 @@ def get_full_4h_indicator_context(symbol: str) -> str:
             if lw>body*2: pats.append("Lower wick panjang")
             if c_n>c_p: pats.append("Candle bullish")
             elif c_n<c_p: pats.append("Candle bearish")
-            if pats: parts.append("Pattern: "+", ".join(pats))
+            if pats: parts.append(f"Pattern{_tag}: "+", ".join(pats))
         except Exception:
             pass
 
