@@ -425,19 +425,19 @@ STRAT4H_STOCH_MAX       = 89
 STRAT4H_ATR_MAX_PCT     = 7.0   # batas atas ATR% brkX2-4h (08/08/2026): hindari entry puncak pump
 STRAT4H_VOL_MAX_MULT    = 5.0   # batas atas volume brkX2-4h (08/08/2026): simetris dengan brkX2-12h
 STRAT4H_CHG_MAX_PCT     = 3.0   # max price change% dari open candle (11/08/2026, backtest_elapsed_sweep_brkx2_4h: WR 72.7% avg +0.659% vs baseline -0.349%)
-STRAT4H_EMA20_BAND_MAX_PCT = 1.0   # harga wajib 0% s/d +1.0% di atas EMA20 (30/08/2026, keputusan Budi setelah
-# backtest sweep lebar pita 0.05%-2.0% pakai fungsi asli bot, 76 pair likuid ~83 hari data 4h: 0.3% adalah
-# titik terbaik (WR 57.5% avg +1.38% worst -13.06% n=87, vs baseline tanpa syarat EMA WR 45.9% avg +0.95%
-# worst -29.69% n=2389). MACD histogram TETAP >0 apa adanya -- backtest ATR-scaled/normalized MACD threshold
-# konsisten menunjukkan pelonggaran MACD selalu menurunkan kualitas, jadi tidak diubah.
-# 24/09/2026: dilebarkan 0.3% -> 1.0% (keputusan Mas Budi) setelah brkX2-4h dormant TOTAL 25 hari
-# (0 open sejak persis hari pita 0.3% di-deploy). Backtest khusus September 2026 (data real, fungsi
-# asli bot, 90 pair likuid): tanpa syarat pita ini SAMA SEKALI, 511 kandidat lolos semua syarat lain
-# bulan ini (market TIDAK sepi) -- dgn pita 0.3% cuma 6. Pita 1.0% ditemukan titik seimbang: n=32
-# (~5x lipat drpd 0.3%), WR60j 77.4% avg+6.21% (vs 0.3%: WR83.3% avg+8.36%, TAPI baseline n=6 itu
-# sendiri terlalu kecil dipercaya) -- kualitas baru mulai jelas turun di atas 1.5%. Catatan: live
-# scan mengevaluasi candle yg BELUM tertutup (2-25% elapsed, volume biasanya masih rendah), jadi
-# angka kandidat riil kemungkinan lebih rendah dari backtest closed-candle ini.
+STRAT4H_EMA20_GAP_MIN_PCT = 5.0   # 30/09/2026 (Pilihan C, keputusan Mas Budi): harga wajib MINIMAL 5% di
+# ATAS EMA20, TANPA batas atas -- arah syaratnya DIBALIK dari versi lama (yg mensyaratkan harga DEKAT
+# EMA20, maks 0.3%/1.0%). Backtest brkx2_4h_sim.py (175 koin 1h 2022-2026 via fungsi asli bot): avg per
+# bucket jarak-ke-EMA20 naik hampir monoton (<0%: +0.26 | 0-1%: -0.21..-0.45 (terburuk) | 3-5%: +0.24 |
+# 5-8%: +0.57 | 8-12%: +0.79 | >12%: +1.07). Jarak>=5% -> n=2854 (41% sinyal), avg +0.65% (vs semua +0.34%),
+# POSITIF di ke-5 tahun 2022-2026 termasuk 2025 (+0.30%) & 2026 (+0.14%) -- satu2nya opsi yg konsisten tiap
+# tahun. Pita lama (0-0.3%/0-1.0%) justru selalu lebih jelek dari baseline di 4 dari 5 tahun, CI95% bucket
+# 0-1.5% seluruhnya di bawah nol. REMARK utk rollback ke pita lama (batas ATAS, bukan bawah): nilai historis
+# 0.3 (01/09/2026-24/09/2026) atau 1.0 (24/09/2026-30/09/2026, lihat git log versi lama konstanta ini utk
+# histori lengkap perdebatan 0.3 vs 1.0). Dipakai di blockers_entry_4h() (gerbang wajib, baris ~6940) DAN
+# konfirmasi real-time thread1d_scan_4h() babak-2 (baris ~10317) -- SEBELUMNYA kedua tempat itu TIDAK
+# sinkron (konstanta 1.0 tapi cek real-time hardcode 0.75, jadi pita efektif sebenarnya 0-0.75% bukan 0-1.0%
+# -- baru ketahuan 28/09/2026); sekarang keduanya baca konstanta yg sama, tidak bisa lagi tidak sinkron.
 STRAT4H_RSI_MIN         = 40    # RSI minimum brkX2-4h (14/08/2026, backtest_brkx2_4h_comprehensive_sweep: RSI>40 sweet spot avg +3.785% WR 87%)
 STRAT4H_RSI_MAX         = 70    # RSI maximum brkX2-4h (diubah dari 60→70, 18/08/2026, keputusan Budi)
 STRAT4H_PERF_MIN        = 0.5    # Perf Grade minimum (sama dengan brkX2-12h)    # Stoch%K < 80 (backtest_4h_rsi_stoch_sweep.py, 31/07/2026): worst -48.39% vs -63.96%, delta avg -0.121%, wf6 OK
@@ -6937,8 +6937,8 @@ def blockers_entry_4h(df) -> list:
         failures.append("EMA20 tidak tersedia")
     else:
         gap_ema20_pct = (float(r["close"]) / float(ema20) - 1) * 100
-        if gap_ema20_pct < 0 or gap_ema20_pct > STRAT4H_EMA20_BAND_MAX_PCT:
-            failures.append("Harga di luar pita EMA20")
+        if gap_ema20_pct < STRAT4H_EMA20_GAP_MIN_PCT:
+            failures.append("Jarak ke EMA20 kurang dari minimum")
     return failures
 
 def check_entry_4h(df) -> bool:
@@ -6951,9 +6951,9 @@ def check_entry_4h(df) -> bool:
       - Vol24h >= $3jt
       - Stoch%K < 80 (backtest_4h_rsi_stoch_sweep.py, 31/07/2026)
       - RSI < 60 (07/08/2026, keputusan Budi): hindari entry saat harga sudah terlalu tinggi
-      - Harga 0% s/d +1.0% di atas EMA20 (30/08/2026, keputusan Budi, dilebarkan dari 0.3% 24/09/2026
-        setelah dormant 25 hari -- lihat STRAT4H_EMA20_BAND_MAX_PCT): entry harus masih dekat EMA20
-        (baru saja cross-up / belum lari jauh), bukan momentum yang sudah lama berjalan jauh dari EMA20
+      - Harga minimal +5.0% di atas EMA20, tanpa batas atas (30/09/2026, Pilihan C, keputusan Budi --
+        lihat STRAT4H_EMA20_GAP_MIN_PCT; DIBALIK dari versi lama yg mensyaratkan harga DEKAT EMA20,
+        backtest menunjukkan justru entry yg SUDAH JAUH dari EMA20 rata-rata lebih baik)
     """
     return not blockers_entry_4h(df)
 
@@ -10314,8 +10314,8 @@ def thread1d_scan_4h():
             _ema20_rt = float(_r4msg.get("ema20", 0)) if not pd.isna(_r4msg.get("ema20", float('nan'))) else 0.0
             if _pnow > 0 and _ema20_rt > 0:
                 _dist_rt = (_pnow - _ema20_rt) / _ema20_rt * 100
-                if not (0.0 <= _dist_rt <= 0.75):
-                    log(f"[T1d] {sym} SKIP: price_now {_fmt_price(_pnow)} vs EMA20 {_fmt_price(_ema20_rt)} dist={_dist_rt:+.2f}% (harus 0-0.75%)")
+                if not (_dist_rt >= STRAT4H_EMA20_GAP_MIN_PCT):
+                    log(f"[T1d] {sym} SKIP: price_now {_fmt_price(_pnow)} vs EMA20 {_fmt_price(_ema20_rt)} dist={_dist_rt:+.2f}% (harus >={STRAT4H_EMA20_GAP_MIN_PCT:g}%)")
                     continue
         except Exception as _e:
             log(f"[T1d] {sym} cross EMA20 check error: {_e} — lanjut")
@@ -20253,13 +20253,13 @@ def run_web_dashboard():
                     if pd.isna(perf): perf = None
                     ema20  = float(row['ema20']) if not pd.isna(row.get('ema20')) and row['ema20']>0 else None
                     gap_ema20 = ((float(row['close'])/ema20-1)*100) if ema20 else None
-                    ema_band_ok = gap_ema20 is not None and 0 <= gap_ema20 <= STRAT4H_EMA20_BAND_MAX_PCT
+                    ema_band_ok = gap_ema20 is not None and gap_ema20 >= STRAT4H_EMA20_GAP_MIN_PCT
                     p = [st_dir==1, macd_h is not None and macd_h>0, atr_pct is not None and atr_pct>=STRAT4H_ATR_MIN_PCT, ema_band_ok]
                     return jsonify(_s({"strat": strat, "sym": sym,
                         "primary": [
                             {"label":"ST=+1","ok":p[0],"actual":f"ST={st_dir}"},
                             {"label":"MACD hist>0","ok":p[1],"actual":f"{macd_h:.4f}" if macd_h else "n/a"},
-                            {"label":f"Harga 0%-{STRAT4H_EMA20_BAND_MAX_PCT}% di atas EMA20 {ema20:.4g}" if ema20 else "Harga vs EMA20","ok":p[3],"actual":f"{gap_ema20:+.2f}%" if gap_ema20 is not None else "n/a"},
+                            {"label":f"Harga >={STRAT4H_EMA20_GAP_MIN_PCT:g}% di atas EMA20 {ema20:.4g}" if ema20 else "Harga vs EMA20","ok":p[3],"actual":f"{gap_ema20:+.2f}%" if gap_ema20 is not None else "n/a"},
                             {"label":f"ATR%>={STRAT4H_ATR_MIN_PCT}%","ok":p[2],"actual":f"{atr_pct:.1f}%" if atr_pct else "n/a"},
                         ],
                         "secondary": [
@@ -23652,7 +23652,7 @@ if __name__ == '__main__':
     if STRAT4H_ENABLED:
         log("  " + "-"*51)
         log(f"  STRATEGI 3 brkX2-4h: ON | TF {STRAT4H_TIMEFRAME}")
-        log(f"  Entry: ST+1 + MACD>0 + ATR>={STRAT4H_ATR_MIN_PCT}% + Vol>={STRAT4H_VOLUME_MULT}xMA + RSI {STRAT4H_RSI_MIN}-{STRAT4H_RSI_MAX} + Stoch<{STRAT4H_STOCH_MAX} + HTF {STRAT4H_HTF_TF} 3x candle bullish + cross EMA20 0-0.75%")
+        log(f"  Entry: ST+1 + MACD>0 + ATR>={STRAT4H_ATR_MIN_PCT}% + Vol>={STRAT4H_VOLUME_MULT}xMA + RSI {STRAT4H_RSI_MIN}-{STRAT4H_RSI_MAX} + Stoch<{STRAT4H_STOCH_MAX} + HTF {STRAT4H_HTF_TF} 3x candle bullish + jarak EMA20>={STRAT4H_EMA20_GAP_MIN_PCT:g}%")
         log(f"  Intrabar: menit ke 5-60 (25% elapsed), scan tiap {STRAT4H_SCAN_INTERVAL}s")
         log(f"  Slot: {STRAT4H_MAX_DEALS} | Target forward-test: {STRAT4H_FWDTEST_TARGET} deal")
         log(f"  Bot : #{COMMAS_BOT_ID_4H}")
