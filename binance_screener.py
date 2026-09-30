@@ -23287,6 +23287,19 @@ def ai_decision_armed(symbol: str, strategy: str, d: dict, price: float, peak: f
     decision = "ARM" in first_line
     reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
     log(f"[AI] ARMED decision {symbol}: {first_line} → {'ARM' if decision else 'TAHAN'}")
+    # 30/09/2026 (permintaan Mas Budi, "OK SEKALIAN" -- sama alasannya dgn OPEN/ADD-FUND): fungsi ini
+    # dulu TIDAK PERNAH menulis ke ai_decisions_log.txt sama sekali (cuma log() server yg hilang &
+    # kadang Telegram) -- ARMED tidak punya jejak permanen. Sekarang dicatat, termasuk ind4h/htf penuh
+    # yang memang sudah dikirim ke prompt di atas.
+    log_ai_decision(
+        f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] ARMED-DECISION | {strategy} | "
+        f"{to_display_pair(symbol)} | {'ARM' if decision else 'TAHAN'} | profit_now={profit_now:+.2f}% "
+        f"profit_peak={profit_peak:+.2f}% atr={atrp:.2f}%\n"
+        f"{ind4h_section.strip() + chr(10) if ind4h_section else ''}"
+        f"{('Konteks HTF:' + chr(10) + htf_str + chr(10)) if htf_str else ''}"
+        f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
+        f"{'─'*36}\n"
+    )
     if not decision:
         send_telegram(
             f"🤖 AI Decision | {to_display_pair(symbol)}\n"
@@ -23481,6 +23494,17 @@ def ai_decision_near_timeout(symbol: str, strategy: str, d: dict, price: float, 
     decision = "CLOSE" in first_line
     reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
     log(f"[AI] NEAR-TIMEOUT decision {symbol}: {first_line} → {'CLOSE' if decision else 'EXTEND'}")
+    # 30/09/2026 (permintaan Mas Budi, "OK SEKALIAN"): dulu TIDAK PERNAH masuk ai_decisions_log.txt.
+    log_ai_decision(
+        f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] NEAR-TIMEOUT-DECISION | {strategy} | "
+        f"{to_display_pair(symbol)} | {'CLOSE' if decision else 'EXTEND'} | profit_after_fee={profit_after_fee:+.2f}% "
+        f"atr={atrp:.2f}% hold={hold_now}/{max_candle}\n"
+        f"{ind_live_str + chr(10) if ind_live_str else ''}"
+        f"{candle_str + chr(10) if candle_str else ''}"
+        f"{('Konteks HTF:' + chr(10) + htf_str + chr(10)) if htf_str else ''}"
+        f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
+        f"{'─'*36}\n"
+    )
     send_telegram(
         f"🤖 AI Decision | {to_display_pair(symbol)}\n"
         f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
@@ -23532,6 +23556,15 @@ def ai_decision_close(symbol: str, strategy: str, d: dict, price: float, peak: f
     decision = "CLOSE" in result
     log(f"[AI] CLOSE decision {symbol}: {result} → {'CLOSE' if decision else 'HOLD'}"
         + ("" if notify else " (notif di-skip, situasi sama)"))
+    # 30/09/2026 (permintaan Mas Budi, "OK SEKALIAN"): dulu TIDAK PERNAH masuk ai_decisions_log.txt.
+    log_ai_decision(
+        f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] CLOSE-DECISION | {strategy} | "
+        f"{to_display_pair(symbol)} | {'CLOSE' if decision else 'HOLD'} | profit_now={profit_now:+.2f}% "
+        f"atr={atrp:.2f}% armed={armed} | alasan_close_trigger={reason[:60]}\n"
+        f"{ind4h_section.strip() + chr(10) if ind4h_section else ''}"
+        f"Alasan AI: {result.strip()}\n"
+        f"{'─'*36}\n"
+    )
     if not decision and notify:
         send_telegram(
             f"🤖 AI Decision | {to_display_pair(symbol)}\n"
