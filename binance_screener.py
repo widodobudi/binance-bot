@@ -22838,6 +22838,100 @@ def get_full_4h_indicator_context(symbol: str) -> str:
         return ""
 
 
+# ── Grade kelayakan open long (30/09/2026, permintaan Mas Budi) ──────────────────────────────
+# DESIL empiris (BUKAN jumlah bobot tebakan) 1-10, 1=paling tidak layak, 10=paling layak. Regresi
+# linear (fitur ternormalisasi -> net% forward-test) di-fit pakai brkx2_4h_sim.py-style simulator
+# (fungsi ASLI bot via AST, 175 koin, data 1h 2022-2026): tc4h_combo_sim.py (TrenKonfirmasi-4h,
+# check_trendconfirm_entry asli, n=43.060) & brkx2_12h_combo_sim.py (brkX2-12h intrabar, n=8.631).
+# Batas desil dari kuantil prediksi TRAIN (<=2024), divalidasi di TEST (>=2025) yg belum pernah
+# dilihat model: korelasi urutan desil vs hasil aktual 0,796 (TrenKonfirmasi) / 0,729 (brkX2-12h);
+# uji permutasi 300x (label net% diacak, fit ulang): p=0,0000 / p=0,0067 -- SATU2NYA temuan sesi
+# 28-30/09/2026 yg lolos uji acak (lihat memory project_grade_decile_kelayakan & project_rsi_cci_bb_
+# combo_backtest/project_btc_eth_wide_scan_audio_pengu_xvg -- RSI/CCI/BB%b/BTC-ETH-MACD semuanya TIDAK
+# signifikan sendirian). Koefisien final di bawah di-fit ULANG pakai SELURUH histori 2022-2026 (bukan
+# cuma train) supaya pakai data sebanyak mungkin -- validasi generalisasi sudah selesai terpisah.
+# CATATAN JUJUR (jangan dihapus): R^2 rendah (0.001-0.008) -- prediksi PER-TRADE tetap sangat
+# berisik, yg terbukti nyata adalah PENGELOMPOKANNYA (desil), bukan presisi angka tunggal. Desil
+# 2-9 (tengah) TIDAK rapi naik terus, cuma desil 1 (10% terjelek) & 10 (10% terbaik) jelas beda dari
+# yg lain. KARENA ITU dipasang sbg SATU BARIS INFO TAMBAHAN ke prompt AI, BUKAN gerbang wajib --
+# konsisten dgn TRENDCONFIRM_ATR_ABS_MIN (dipindah dari gate ke panduan AI, 03/09/2026) & pola
+# berulang sesi ini (gate keras berbasis 1 indikator selalu merugikan net, biarkan AI menimbang).
+_GRADE_TC4H = {
+    'order': ['rsi', 'cci', 'bb', 'rvol', 'atr', 'gap'],
+    'mean':  {'rsi': 60.549601, 'cci': 87.645722, 'bb': 0.81737, 'rvol': 1.992778, 'atr': 3.613872, 'gap': 4.541238},
+    'std':   {'rsi': 7.271025, 'cci': 72.132948, 'bb': 0.204595, 'rvol': 1.494763, 'atr': 1.85104, 'gap': 4.559617},
+    'coef':  [0.430403, 0.011348, 0.054639, -0.019538, 0.173665, 0.267242, 0.192428],  # [intercept, lalu per 'order']
+    'edges': [-0.017828, 0.087691, 0.169832, 0.248731, 0.332716, 0.4266, 0.544049, 0.704076, 0.983922],  # 9 batas -> 10 kelompok
+}
+_GRADE_BRKX2_12H = {
+    'order': ['rsi_sig', 'cci_sig', 'bb_sig', 'rvol_sig', 'atr', 'gap_ema20'],
+    'mean':  {'rsi_sig': 69.06107, 'cci_sig': 147.175813, 'bb_sig': 1.028756, 'rvol_sig': 2.490132, 'atr': 5.404549, 'gap_ema20': 15.469175},
+    'std':   {'rsi_sig': 8.806737, 'cci_sig': 89.33594, 'bb_sig': 0.208797, 'rvol_sig': 2.154234, 'atr': 2.023443, 'gap_ema20': 15.489572},
+    'coef':  [0.999065, -0.171909, -0.081935, 0.291347, 0.071544, 0.168823, 0.442776],
+    'edges': [0.455086, 0.59917, 0.708486, 0.803873, 0.900383, 1.007182, 1.136401, 1.309389, 1.610594],
+}
+
+def _grade_from_feats(feats: dict, model: dict):
+    """feats: dict nama-fitur -> nilai mentah (SAMA nama dgn model['order']). Return int 1-10, atau
+    None kalau ada fitur yg kosong/NaN (fail-open -- baris grade cuma dilewati, tidak menghalangi AI)."""
+    try:
+        xs = []
+        for k in model['order']:
+            v = feats.get(k)
+            if v is None or (isinstance(v, float) and v != v): return None
+            xs.append((float(v) - model['mean'][k]) / (model['std'][k] or 1.0))
+        pred = model['coef'][0] + sum(c * x for c, x in zip(model['coef'][1:], xs))
+        for i, edge in enumerate(model['edges']):
+            if pred <= edge: return i + 1
+        return 10
+    except Exception:
+        return None
+
+def grade_kelayakan_trend_confirm_4h(symbol: str):
+    """Grade 1-10 utk TrenKonfirmasi-4h dari indikator native 4h (SAMA TF dgn strategi ini) --
+    fetch ringan sendiri (independen dari ind4h_str yg formatnya teks, bukan angka mentah)."""
+    try:
+        df4 = get_ohlcv_4h(symbol, limit=40)
+        if df4 is None or len(df4) < 20: return None
+        df4 = compute_indicators_4h(df4); r = df4.iloc[-1]
+        vol_ma = float(r.get('vol_ma', 0) or 0)
+        feats = {'rsi': r.get('rsi'), 'cci': r.get('cci'), 'bb': r.get('bb_pct'),
+                  'rvol': (float(r['vol']) / vol_ma) if vol_ma > 0 else None, 'atr': r.get('atr_pct'),
+                  'gap': ((float(r['close']) / float(r['ema20']) - 1) * 100) if r.get('ema20') else None}
+        return _grade_from_feats(feats, _GRADE_TC4H)
+    except Exception as e:
+        log(f"WARN [GRADE] trend_confirm_4h {symbol}: {e}")
+        return None
+
+def grade_kelayakan_brkx2_12h(symbol: str):
+    """Grade 1-10 utk brkX2-12h dari indikator native 12h (SAMA TF dgn strategi ini)."""
+    try:
+        df12 = get_ohlcv(symbol, interval="12h", limit=60)
+        if df12 is None or len(df12) < 30: return None
+        df12 = compute_indicators(df12); r = df12.iloc[-1]
+        vol_ma = float(r.get('vol_ma', 0) or 0)
+        feats = {'rsi_sig': r.get('rsi'), 'cci_sig': r.get('cci'), 'bb_sig': r.get('bb_pct'),
+                  'rvol_sig': (float(r['vol']) / vol_ma) if vol_ma > 0 else None, 'atr': r.get('atr_pct'),
+                  'gap_ema20': ((float(r['close']) / float(r['ema_fast']) - 1) * 100) if r.get('ema_fast') else None}
+        return _grade_from_feats(feats, _GRADE_BRKX2_12H)
+    except Exception as e:
+        log(f"WARN [GRADE] brkX2-12h {symbol}: {e}")
+        return None
+
+def grade_kelayakan_line(symbol: str, strategy: str):
+    """Satu baris teks utk disisipkan ke prompt/log AI -- kosong (tidak disisipkan apa pun) kalau
+    strategi belum divalidasi (5 strategi lain) atau data gagal diambil -- fail-open, TIDAK
+    menghalangi keputusan AI."""
+    if strategy == 'trend_confirm_4h':
+        g = grade_kelayakan_trend_confirm_4h(symbol)
+    elif strategy == 'brkX2':
+        g = grade_kelayakan_brkx2_12h(symbol)
+    else:
+        return ""
+    if g is None: return ""
+    return f"Grade kelayakan open (empiris, histori 2022-2026, info tambahan BUKAN syarat wajib): {g}/10\n"
+
+
 def ai_decision_capacity_swap(candidate_symbol: str, candidate_strategy: str, candidate_indicators: dict,
                                glob_reason: str):
     """26/09/2026 (permintaan Mas Budi, backtest 155 deal historis -- lihat REMARK di
@@ -22992,6 +23086,7 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     htf_str  = fetch_htf_context_for_ai(symbol)
     ltf_str  = fetch_ltf_context_for_ai(symbol)
     ind4h_str = get_full_4h_indicator_context(symbol)
+    _grade_line = grade_kelayakan_line(symbol, strategy)
     htf_section  = f"\nKonteks HTF (1D/3D/1W):\n{htf_str}\n" if htf_str else ""
     ltf_section  = f"\nKonteks LTF (1h):\n{ltf_str}\n" if ltf_str else ""
     # 27/09/2026 (permintaan Mas Budi, kasus ORDI): jumlah candle bearish di 30m/15m/10m/5m -- info tambahan, BUKAN gate.
@@ -23015,6 +23110,7 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
         f"{ind4h_section}"
         f"{htf_section}"
         f"{ltf_section}\n"
+        f"{_grade_line}"
         f"Semua filter rule sudah lolos.\n\n"
         f"Format jawaban (ikuti persis):\n"
         f"OPEN atau SKIP\n"
@@ -23078,6 +23174,7 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     if ind4h_section.strip(): _full_ctx_log += ind4h_section.strip() + "\n"
     if htf_str: _full_ctx_log += "Konteks HTF (1D/3D/1W):\n" + htf_str + "\n"
     if ltf_str: _full_ctx_log += "Konteks LTF (1h):\n" + ltf_str + "\n"
+    if _grade_line: _full_ctx_log += _grade_line
     log_ai_decision(
         f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] OPEN-DECISION | {strategy} | "
         f"{to_display_pair(symbol)} | {'OPEN' if decision else 'SKIP'} | notify={notify}\n"
