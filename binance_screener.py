@@ -23067,10 +23067,22 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     log(f"[AI] OPEN decision {symbol}: {first_line} → {'BUKA' if decision else 'SKIP'}")
     # Riwayat lengkap semua keputusan (OPEN maupun SKIP) ke ai_decisions_log.txt (04/09/2026,
     # permintaan Mas Budi -- utk investigasi/penyelidikan nanti, terlepas dari notify Telegram).
+    # 30/09/2026 (permintaan Mas Budi): sebelum ini, log_ai_decision() cuma menyimpan ind_str (dict
+    # kecil "Indikator saat sinyal") -- padahal prompt yang BENAR-BENAR dikirim ke AI juga memuat
+    # ind4h_section/htf_section/ltf_section (indikator 4h penuh + HTF 1D/3D/1W + LTF 1h, lihat
+    # di atas). Akibatnya alasan AI sering menyebut hal yang tidak ada jejaknya di log (mis. "ADX
+    # Daily", "OBV harian") -- bukan AI mengarang, itu memang dikirim tapi tidak ikut tersimpan.
+    # Sekarang SEMUA bagian yang dikirim ke prompt ikut ditulis ke ai_decisions_log.txt, supaya
+    # audit lengkap 1:1 dengan apa yang AI benar-benar lihat.
+    _full_ctx_log = ""
+    if ind4h_section.strip(): _full_ctx_log += ind4h_section.strip() + "\n"
+    if htf_str: _full_ctx_log += "Konteks HTF (1D/3D/1W):\n" + htf_str + "\n"
+    if ltf_str: _full_ctx_log += "Konteks LTF (1h):\n" + ltf_str + "\n"
     log_ai_decision(
         f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] OPEN-DECISION | {strategy} | "
         f"{to_display_pair(symbol)} | {'OPEN' if decision else 'SKIP'} | notify={notify}\n"
         f"{ind_str}\n"
+        f"{_full_ctx_log}"
         f"LTF bearish (berurutan/dari-6-merah/perubahan-6-candle): {ltf_bearish_compact(_ltf_bear)}\n"
         f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
         f"{'─'*36}\n"
@@ -23344,10 +23356,13 @@ def ai_decision_add_fund(symbol: str, strategy: str, d: dict, add_usd: float, cu
     # kemarin) -- tetap dicatat ke ai_decisions_log.txt spy riwayatnya ada utk investigasi,
     # sama polanya spt OPEN-DECISION. ADD (decision=True) sudah dari dulu silent jg, tetap
     # begitu -- cuma nambah baris audit di sini utk KEDUANYA (ADD & TUNDA), bukan cuma TUNDA.
+    # 30/09/2026 (permintaan Mas Budi, sama alasannya dgn OPEN-DECISION di atas): ind4h_section
+    # SUDAH dikirim ke prompt tapi dulu tidak ikut ditulis ke log -- sekarang disertakan.
     log_ai_decision(
         f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] ADD-FUND-DECISION | {strategy} | "
         f"{to_display_pair(symbol)} | {'ADD' if decision else 'TUNDA'} | profit={profit_now:+.2f}% "
         f"atr={current_atr:.2f}% add_usd=${add_usd:.0f}\n"
+        f"{ind4h_section.strip() + chr(10) if ind4h_section else ''}"
         f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
         f"{'─'*36}\n"
     )
