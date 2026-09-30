@@ -22870,6 +22870,21 @@ _GRADE_BRKX2_12H = {
     'coef':  [0.999065, -0.171909, -0.081935, 0.291347, 0.071544, 0.168823, 0.442776],
     'edges': [0.455086, 0.59917, 0.708486, 0.803873, 0.900383, 1.007182, 1.136401, 1.309389, 1.610594],
 }
+# brkX2-4h (01/10/2026, permintaan Mas Budi "KERJAKAN DONG" -- dataset SUDAH ADA dari riset
+# Pilihan C/EMA20-band sebelumnya, brkx2_4h_sim.py, 6.897 sinyal via check_entry_4h() ASLI, 175
+# coin 2022-2026). Metodologi identik TC4h/brkX2-12h: OLS standardized -> net%, desil dari
+# kuantil TRAIN(<=2024) tervalidasi di TEST(>=2025): rank-corr 0,902 (PALING kuat dari 3 model),
+# 300x permutation test p=0,0033. Koefisien gap NEGATIF di model ini (beda arah dari temuan
+# univariat Pilihan C "gap>=5% lebih baik") -- bukan kontradiksi, itu efek multikolinearitas
+# begitu ATR/CCI/RSI ikut masuk model (pola sama sudah tercatat di REMARK TC4h), jadi Pilihan C
+# (gerbang gap>=5%) TETAP DIPERTAHANKAN apa adanya -- grade ini cuma info TAMBAHAN di prompt AI.
+_GRADE_BRKX2_4H = {
+    'order': ['rsi', 'cci', 'bb', 'rvol', 'atr', 'gap'],
+    'mean':  {'rsi': 62.456543, 'cci': 93.138853, 'bb': 0.838457, 'rvol': 0.546855, 'atr': 3.516485, 'gap': 4.834266},
+    'std':   {'rsi': 5.076933, 'cci': 50.326269, 'bb': 0.126617, 'rvol': 0.417867, 'atr': 1.082781, 'gap': 2.863618},
+    'coef':  [0.335855, 0.370107, 0.347495, -0.270466, 0.079334, 0.537349, -0.262724],
+    'edges': [-0.245143, -0.075153, 0.052037, 0.168548, 0.289518, 0.414135, 0.559529, 0.730713, 0.987556],
+}
 
 def _grade_from_feats(feats: dict, model: dict):
     """feats: dict nama-fitur -> nilai mentah (SAMA nama dgn model['order']). Return int 1-10, atau
@@ -22903,6 +22918,22 @@ def grade_kelayakan_trend_confirm_4h(symbol: str):
         log(f"WARN [GRADE] trend_confirm_4h {symbol}: {e}")
         return None
 
+def grade_kelayakan_brkx2_4h(symbol: str):
+    """Grade 1-10 utk brkX2-4h, fitur sama persis dgn TrenKonfirmasi-4h (indikator native 4h) --
+    model/koefisien BEDA (_GRADE_BRKX2_4H), dilatih dari sinyal check_entry_4h() brkX2-4h sendiri."""
+    try:
+        df4 = get_ohlcv_4h(symbol, limit=40)
+        if df4 is None or len(df4) < 20: return None
+        df4 = compute_indicators_4h(df4); r = df4.iloc[-1]
+        vol_ma = float(r.get('vol_ma', 0) or 0)
+        feats = {'rsi': r.get('rsi'), 'cci': r.get('cci'), 'bb': r.get('bb_pct'),
+                  'rvol': (float(r['vol']) / vol_ma) if vol_ma > 0 else None, 'atr': r.get('atr_pct'),
+                  'gap': ((float(r['close']) / float(r['ema20']) - 1) * 100) if r.get('ema20') else None}
+        return _grade_from_feats(feats, _GRADE_BRKX2_4H)
+    except Exception as e:
+        log(f"WARN [GRADE] brkX2-4h {symbol}: {e}")
+        return None
+
 def grade_kelayakan_brkx2_12h(symbol: str):
     """Grade 1-10 utk brkX2-12h dari indikator native 12h (SAMA TF dgn strategi ini)."""
     try:
@@ -22918,14 +22949,44 @@ def grade_kelayakan_brkx2_12h(symbol: str):
         log(f"WARN [GRADE] brkX2-12h {symbol}: {e}")
         return None
 
+# REMARK (01/10/2026) -- status 4 strategi yg BELUM dapat grade, dan kapan layak diterapkan:
+#   - qscalp_3m: TIDAK AKAN PERNAH dapat grade lewat jalur ini -- ai_call_open=False PERMANEN
+#     secara desain (baris ~1187), strategi ini tidak pernah memanggil AI utk OPEN sama sekali.
+#     Selain itu SUDAH DIHENTIKAN (strategy_enabled=False sejak migrasi 28/09/2026, baris ~1279
+#     "qscalp_3m_paused_20260928") -- tidak lagi membuka deal baru sama sekali saat ini.
+#   - brkX2_crossema (CrossEMA-4h) & reversal (Reversal-8h): SEDANG DIPAUSE (strategy_enabled
+#     di-set False lewat migrasi 28-29/09/2026, lihat PAUSED_HIDDEN_STRATEGIES baris ~1369) --
+#     tidak membuka deal baru saat ini. INGATKAN LAGI kalau salah satu diaktifkan ulang lewat
+#     dashboard Strategy Control -- baru saat itu membangun dataset+model utk strategi itu
+#     bernilai (sebelum itu tidak ada sinyal baru utk divalidasi out-of-sample).
+#   - akum_entry_a/akum_entry_b (Akumulasi Entry A/B): histori closed deal masih terlalu sedikit
+#     (~belasan) utk dibagi jadi 10 kelompok desil yang berarti (bandingkan TC4h/brkX2-12h/
+#     brkX2-4h yg masing2 >=6.800 sinyal). INGATKAN LAGI setelah jumlah deal closed cukup besar
+#     (idealnya >=500-1000 sinyal historis sebelum filter, konsisten dgn 3 model yg sudah ada) --
+#     cek progress via csv_progress('akum_entry_a'/'akum_entry_b').
+#   - hunting_4h (Hunting-4h): SUDAH DICOBA 01/10/2026 (permintaan Mas Budi), BUKAN belum
+#     dikerjakan -- GAGAL validasi, sengaja TIDAK di-ship. Dataset dibangun dari nol (belum ada
+#     sebelumnya): check_hunting_strategy() ASLI via AST + exit produksi asli, config default,
+#     sama metodologi persis dgn /api/run_hunting_stoch_backtest() bot sendiri (riset 12/09/2026).
+#     Hasil: cuma 188 sinyal (2022-2026, 175 coin) -- jauh lebih sedikit dari 3 model lain (6.800-
+#     43.000) krn HUNTING_EMA20_BAND_PCT=0.3% sangat sempit. Rank-korelasi desil di TEST(>=2025)
+#     JUSTRU NEGATIF (-0,071, harusnya mendekati +1 kalau model berguna), spread desil10-desil1
+#     NEGATIF (-2,55pp, terbalik), uji permutasi p=0,92 (92% pengacakan SAMA BAIK ATAU LEBIH BAIK
+#     dari model asli -- kebalikan dari signifikan). Fitur RSI (49,8-55,2) & gap (0,03-0,30%) juga
+#     hampir tidak ada variasi krn filter entry Hunting sendiri sudah sangat sempit, jadi model
+#     nyaris tidak ada variasi utk dipelajari. INGATKAN LAGI setelah jumlah sinyal historis jauh
+#     lebih besar (skrip: hunting_4h_sim.py di scratchpad sesi 01/10/2026, tinggal re-run kalau
+#     mau ulang) -- TAPI jangan ulangi dgn n sekecil ini, tunggu min. ratusan sinyal per tahun.
 def grade_kelayakan_line(symbol: str, strategy: str):
     """Satu baris teks utk disisipkan ke prompt/log AI -- kosong (tidak disisipkan apa pun) kalau
-    strategi belum divalidasi (5 strategi lain) atau data gagal diambil -- fail-open, TIDAK
-    menghalangi keputusan AI."""
+    strategi belum divalidasi (lihat REMARK di atas: qscalp_3m/brkX2_crossema/reversal/
+    akum_entry_a/akum_entry_b) atau data gagal diambil -- fail-open, TIDAK menghalangi keputusan AI."""
     if strategy == 'trend_confirm_4h':
         g = grade_kelayakan_trend_confirm_4h(symbol)
     elif strategy == 'brkX2':
         g = grade_kelayakan_brkx2_12h(symbol)
+    elif strategy == 'brkX2_4h':
+        g = grade_kelayakan_brkx2_4h(symbol)
     else:
         return ""
     if g is None: return ""
