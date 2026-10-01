@@ -19438,7 +19438,7 @@ def run_web_dashboard():
                 return None
             if session.get("dashboard_authenticated"):
                 return None
-            if request.path in {"/login", "/logout", "/dash.js", "/tradingview_webhook"} or request.method == "OPTIONS":
+            if request.path in {"/login", "/logout", "/dash.js", "/tradingview_webhook", "/api/diag_avg_price"} or request.method == "OPTIONS":
                 return None
             if request.path.startswith("/api/") or request.is_json:
                 return jsonify({"ok": False, "error": "login diperlukan"}), 401
@@ -21229,6 +21229,30 @@ def run_web_dashboard():
                 return jsonify({"ok": True, "assets": get_binance_spot_assets()})
             except Exception as error:
                 return jsonify({"ok": False, "assets": [], "error": str(error)}), 500
+
+        # 01/10/2026 (izin eksplisit Mas Budi, "INI AJA"): endpoint baca-saja, DIKECUALIKAN dari
+        # login dashboard (lihat dashboard_login_required() -- path dicek thd set pengecualian)
+        # tapi DIPROTEKSI token acak terpisah (DIAG_TOKEN env var, di-generate Claude sendiri,
+        # BUKAN password/TOTP dashboard pribadi Mas Budi). Tujuan: Claude bisa verifikasi
+        # avg_price/harga/qty riil langsung via curl tanpa perlu kredensial dashboard tiap kali.
+        # TIDAK ADA aksi jual/beli/ubah config di sini -- murni baca.
+        @app.route("/api/diag_avg_price")
+        def api_diag_avg_price():
+            token = request.args.get("token", "")
+            expected = os.environ.get("DIAG_TOKEN", "")
+            if not expected or token != expected:
+                return jsonify({"ok": False, "error": "token salah/belum di-set"}), 403
+            asset = str(request.args.get("asset", "")).upper().strip()
+            if not asset.isalnum():
+                return jsonify({"ok": False, "error": "asset tidak valid"}), 400
+            try:
+                price = get_price_now(asset + "USDT")
+                avg_price = get_effective_avg_price(asset)
+                qty = binance_get_asset_qty(asset)
+                return jsonify({"ok": True, "asset": asset, "price": price, "avg_price": avg_price,
+                                "qty": qty, "value_usd": (qty * price) if price else None})
+            except Exception as error:
+                return jsonify({"ok": False, "error": str(error)}), 500
 
         @app.route("/api/auto_sell_price")
         def api_auto_sell_price():
