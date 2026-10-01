@@ -13277,6 +13277,9 @@ var SC_ADDFUND_LABEL = {brkX2: 'auto (score-based)', trend_confirm_4h: 'auto (sc
 var SC_BASE_NOTE = {brkX2_4h: '/ $100 conviction'};
 var SC_NO_PARTIAL = {qscalp_3m: true};  // QScalp selalu jual 100% saat close (kolom Jual % dimmed)
 var SC_NO_AI = {qscalp_3m: true};  // strategi full rule-based, checkbox AI-call tidak berlaku
+// 01/10/2026 (permintaan Mas Budi): strategi yg di-PAUSE atas keputusan Mas Budi (sama dgn PAUSED_HIDDEN_STRATEGIES di Python,
+// baris ~1369 -- kalau daftar itu berubah, ubah juga di sini) barisnya di-DIM + DIKUNCI (tidak bisa diklik) selama flag OFF.
+var SC_PAUSED_LOCKED = {qscalp_3m: true, brkX2_crossema: true, reversal: true};
 var _scData = {};
 
 function buildStrategySelect() {
@@ -13364,13 +13367,16 @@ function loadStrategyConfig() {
                     + '</tr>';
             }
             tbody.innerHTML = rows;
-            // 01/10/2026 (permintaan Mas Budi): baris strategi yg "IZINKAN OPEN LONG"-nya OFF (di-pause) di-DIM supaya
-            // kelihatan sedang mati. Kolom centang IZINKAN OPEN LONG (indeks 2) dan tombol SAVE (terakhir) sengaja
-            // TIDAK di-dim, karena itu satu2nya jalan menyalakan kembali.
+            // 01/10/2026 (permintaan Mas Budi): baris strategi yg "IZINKAN OPEN LONG"-nya OFF di-DIM supaya kelihatan sedang mati.
+            // Strategi di SC_PAUSED_LOCKED (di-pause atas keputusan Mas Budi) di-dim SEMUA sel-nya dan DIKUNCI (pointer-events:none,
+            // sama spt arti 'dim' di variabel dim atas) -- termasuk centang IZINKAN OPEN LONG dan SAVE. Baris OFF lain (bukan di
+            // daftar itu) hanya diredupkan, kolom centang (indeks 2) dan SAVE (terakhir) tetap bisa diklik.
             tbody.querySelectorAll('tr[data-off="1"]').forEach(function(tr) {
+                var locked = SC_PAUSED_LOCKED[tr.getAttribute('data-strategy')] === true;
                 for (var ci = 0; ci < tr.children.length; ci++) {
-                    if (ci === 2 || ci === tr.children.length - 1) continue;
+                    if (!locked && (ci === 2 || ci === tr.children.length - 1)) continue;
                     tr.children[ci].style.opacity = '0.4';
+                    if (locked) tr.children[ci].style.pointerEvents = 'none';
                 }
             });
             tbody.querySelectorAll('[id^="sc-run-"], [id^="sc-size-"]').forEach(function(el) {
