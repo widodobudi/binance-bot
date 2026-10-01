@@ -22204,6 +22204,21 @@ AI_OPEN_APPROVE_COOLDOWN_SEC = 10 * 60
 # supaya begitu AI pulih (mis. saldo di-top-up), keputusan riil kembali jalan cepat.
 AI_UNAVAILABLE_COOLDOWN_SEC = 5 * 60
 _ai_open_skip_cooldown = {}   # {(symbol, strategy): until_timestamp}
+# 01/10/2026 (permintaan Mas Budi, audit biaya AI batch-rank): label strategi yg dipakai ai_decision_open()
+# -> key config utk get_strategy_base_usd(), supaya cek kapasitas SEBELUM AI memakai base order RIIL
+# strategi itu (bukan 0 spt di cek 25/09). Root cause (log Railway 28/09, GRT/USDT dipilih 12x tapi tidak
+# pernah kebuka): terpakai $140 + rencana $60 > $145 -- cek lama planned_usd=0 meloloskan ($140 <= $145),
+# AI ditanya babak-1 + babak-2, lalu open_deal_with_sizing() (planned_usd=base riil) menolaknya; diulang
+# tiap cooldown APPROVE habis (~10 menit). Label yg tidak ada di sini (mis. Akumulasi-4h, base-nya
+# bervariasi per entry) dilewati = perilaku persis seperti sebelumnya.
+_AI_OPEN_LABEL_TO_BASE_KEY = {
+    'brkX2-12h': 'brkX2',
+    'Reversal-8h': 'reversal',
+    'brkX2-4h': 'brkX2_4h',
+    'CrossEMA-4h': 'brkX2_crossema',
+    'TrenKonfirmasi-4h': 'trend_confirm_4h',
+    'Hunting-4h': 'hunting_4h',
+}
 
 # 26/09/2026 (permintaan Mas Budi, insiden macet di GLOBAL_MAX_ACTIVE_DEALS/GLOBAL_MAX_EXPOSURE_USD
 # -- lihat baris ~299-320): saat kandidat OPEN lolos semua filter rule-based tapi kapasitas gabungan
@@ -23142,6 +23157,16 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
                 f"{to_display_pair(symbol)} | SKIP (kapasitas gabungan penuh, AI tidak dipanggil -- {_glob_reason}) "
                 f"| notify={notify}\n{'─'*36}\n"
             )
+            return False
+    # 01/10/2026: cek ulang dgn base order RIIL strategi ini -- TANPA tawaran capacity-swap (swap tetap
+    # hanya dipicu cek planned_usd=0 di atas, jadi tidak ada deal aktif yg tiba2 ditutup krn perubahan ini).
+    # Kandidat yg lolos di sini sudah pasti ditolak open_deal_with_sizing() dgn alasan yg sama, jadi
+    # melewatkan AI di sini tidak mengubah deal mana pun yg kebuka -- cuma berhenti membayar panggilan AI.
+    _base_key = _AI_OPEN_LABEL_TO_BASE_KEY.get(strategy)
+    if _base_key:
+        _planned_ok, _planned_reason = global_deal_limits_ok(planned_usd=get_strategy_base_usd(_base_key))
+        if not _planned_ok:
+            log(f"[AI] OPEN decision {symbol} ({strategy}): SKIP (kapasitas utk base order riil tidak cukup -- {_planned_reason} -- tidak tanya AI)")
             return False
     ind_str  = "\n".join(f"- {k}: {v}" for k, v in indicators.items())
     htf_str  = fetch_htf_context_for_ai(symbol)
