@@ -3701,6 +3701,14 @@ _auto_sell_filter_cache = {}
 # hold_minutes terlewati, entry ini dihapus (batal, harus crossing baru dari nol).
 # In-memory saja -- restart Railway = reset (sama seperti cache lain di modul ini).
 _auto_sell_armed_since: dict = {}
+# 01/10/2026 (permintaan Mas Budi, kasus MOVR -- dust 0,001443 sisa setelah sell_pct=100%
+# tereksekusi tetap di bawah LOT_SIZE/MIN_NOTIONAL Binance, jadi retry gagal terus tiap
+# siklus tanpa pernah berhenti sendiri sampai dust-sweep mingguan Minggu dini hari membersihkan
+# saldo-nya). symbol -> jumlah kegagalan "di bawah filter Binance" BERTURUT-TURUT. Di-reset ke 0
+# begitu crossing baru (armed_since baru) atau begitu sell BERHASIL (bukan cuma gagal krn alasan
+# lain spt exchangeInfo error, supaya tidak auto-nonaktif gara-gara masalah jaringan sesaat).
+_auto_sell_dust_fail_count: dict = {}
+AUTO_SELL_DUST_FAIL_LIMIT = 5   # nonaktif otomatis setelah 5x gagal berturut krn dust, bukan retry selamanya
 # 05/09/2026 (permintaan Mas Budi): sama persis konsepnya dgn _auto_sell_armed_since
 # di atas, tapi utk mekanisme Auto TP/TP Target di Active Deals (bukan Auto Sell Asset).
 # symbol -> timestamp saat syarat TP Target PERTAMA KALI terpenuhi. Kalau syaratnya
@@ -4801,6 +4809,7 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
     if price < threshold:
         if _auto_sell_armed_since.pop(symbol, None) is not None:
             log(f"[AUTO-SELL] {symbol} turun ke {price} di bawah threshold {threshold} sebelum konfirmasi selesai -- timer dibatalkan")
+        _auto_sell_dust_fail_count.pop(symbol, None)
         return
     armed_since = _auto_sell_armed_since.get(symbol)
     if armed_since is None:
@@ -4857,7 +4866,28 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
         if step_size > 0:
             sell_quantity = (sell_quantity // step_size) * step_size
         if sell_quantity < info["min_qty"] or sell_quantity * price < info["min_notional"]:
-            log(f"[AUTO-SELL] {symbol} {sell_pct:.0f}% saldo di bawah filter Binance — order dibatalkan")
+            fail_n = _auto_sell_dust_fail_count.get(symbol, 0) + 1
+            _auto_sell_dust_fail_count[symbol] = fail_n
+            if fail_n >= AUTO_SELL_DUST_FAIL_LIMIT:
+                cfg_all = load_auto_sell_config()
+                if asset in cfg_all.get("assets", {}):
+                    cfg_all["assets"][asset]["enabled"] = False
+                    save_auto_sell_config(cfg_all)
+                _auto_sell_dust_fail_count.pop(symbol, None)
+                _auto_sell_armed_since.pop(symbol, None)
+                log(f"[AUTO-SELL] {symbol} {fail_n}x berturut-turut di bawah filter Binance (dust tidak bisa "
+                    f"dijual) -- dinonaktifkan otomatis, tidak retry lagi")
+                send_telegram(
+                    f"AUTO SELL {asset}/USDT -- DINONAKTIFKAN OTOMATIS\n"
+                    f"Sisa saldo ({sell_quantity}) di bawah batas minimum order Binance setelah "
+                    f"{fail_n}x percobaan berturut-turut -- kemungkinan dust sisa penjualan sebelumnya.\n"
+                    f"Nilainya terlalu kecil utk dijual lewat order biasa (dust-sweep mingguan Minggu "
+                    f"dini hari WIB akan membersihkannya kalau eligible). Aktifkan lagi manual dari "
+                    f"panel Auto Sell Asset kalau masih diperlukan."
+                )
+            else:
+                log(f"[AUTO-SELL] {symbol} {sell_pct:.0f}% saldo di bawah filter Binance — order dibatalkan "
+                    f"({fail_n}/{AUTO_SELL_DUST_FAIL_LIMIT}x berturut-turut)")
             return
     except Exception as error:
         log(f"[AUTO-SELL] {symbol} preflight gagal — order dibatalkan: {error}")
@@ -4873,6 +4903,7 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
     # (kalau ada) nunggu crossing baru dari nol, bukan langsung ke-trigger ulang pakai
     # timer lama. Mas Budi hapus manual lewat tombol Hapus kalau tidak mau lanjut.
     _auto_sell_armed_since.pop(symbol, None)
+    _auto_sell_dust_fail_count.pop(symbol, None)
     msg = (
         f"AUTO SELL {asset}/USDT\n"
         f"Harga crossing: {_fmt_price(price)} USDT\n"
