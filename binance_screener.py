@@ -13343,7 +13343,7 @@ function loadStrategyConfig() {
                 } else {
                     addFundCell = '<td style="text-align:center;padding:5px 8px;color:var(--muted);white-space:nowrap">—</td>';
                 }
-                rows += '<tr data-strategy="' + k + '" style="border-bottom:1px solid rgba(255,255,255,0.04)">'
+                rows += '<tr data-strategy="' + k + '"' + (strategyEnabled ? '' : ' data-off="1"') + ' style="border-bottom:1px solid rgba(255,255,255,0.04)">'
                     + '<td style="padding:5px 8px;font-weight:600">' + SC_LABELS[k] + '</td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-maxdeals-' + k + '" value="' + (cfg.max_deals || 2) + '" min="1" step="1" style="width:50px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-run-' + k + '" ' + (strategyEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
@@ -13364,6 +13364,15 @@ function loadStrategyConfig() {
                     + '</tr>';
             }
             tbody.innerHTML = rows;
+            // 01/10/2026 (permintaan Mas Budi): baris strategi yg "IZINKAN OPEN LONG"-nya OFF (di-pause) di-DIM supaya
+            // kelihatan sedang mati. Kolom centang IZINKAN OPEN LONG (indeks 2) dan tombol SAVE (terakhir) sengaja
+            // TIDAK di-dim, karena itu satu2nya jalan menyalakan kembali.
+            tbody.querySelectorAll('tr[data-off="1"]').forEach(function(tr) {
+                for (var ci = 0; ci < tr.children.length; ci++) {
+                    if (ci === 2 || ci === tr.children.length - 1) continue;
+                    tr.children[ci].style.opacity = '0.4';
+                }
+            });
             tbody.querySelectorAll('[id^="sc-run-"], [id^="sc-size-"]').forEach(function(el) {
                 el.addEventListener('change', function() {
                     onScToggle(this.id.slice(7));
