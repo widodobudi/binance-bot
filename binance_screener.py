@@ -7395,7 +7395,11 @@ def heartbeat_general_tick():
                      f"  - Shadow (paper, bukan live):\n"
                      f"    {_fmt_shadow('conf3_stochrsibb', SHADOW_CONF3_TARGET)}\n"
                      f"    {_fmt_shadow('dipbuy_universe', SHADOW_DIPBUY_UNIVERSE_TARGET)}\n"
-                     f"    {_fmt_shadow('dipbuy_bluechip', SHADOW_DIPBUY_BC_TARGET)}")
+                     f"    {_fmt_shadow('dipbuy_bluechip', SHADOW_DIPBUY_BC_TARGET)}\n"
+                     f"    {_fmt_shadow('squized_4h', SHADOW_SQUIZED_TARGET)}\n"
+                     f"    {_fmt_shadow('decouple_4h', SHADOW_DECOUPLE_TARGET)}\n"
+                     f"    {_fmt_shadow('rangebreak_4h', SHADOW_RANGEBREAK_TARGET)}\n"
+                     f"    {_fmt_shadow('trendsurge_4h', SHADOW_TRENDSURGE_TARGET)}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
     slot_line = (f"Slot brkX2-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2} | "
@@ -15816,7 +15820,11 @@ def _load_shadow_fwdtest() -> dict:
     default = {"akuma_all3": {"open": [], "closed": []},
                "conf3_stochrsibb": {"open": [], "closed": []},
                "dipbuy_universe": {"open": [], "closed": []},
-               "dipbuy_bluechip": {"open": [], "closed": []}}
+               "dipbuy_bluechip": {"open": [], "closed": []},
+               "squized_4h": {"open": [], "closed": []},
+               "decouple_4h": {"open": [], "closed": []},
+               "rangebreak_4h": {"open": [], "closed": []},
+               "trendsurge_4h": {"open": [], "closed": []}}
     try:
         if os.path.exists(SHADOW_FWDTEST_FILE):
             with open(SHADOW_FWDTEST_FILE, encoding="utf-8") as f:
@@ -16419,6 +16427,229 @@ def _shadow_dipbuy_bc_check_exits(data: dict) -> None:
     data['dipbuy_bluechip']['open'] = still_open
 
 
+# ── Shadow 4 strategi baru "momentum regime-change" (02/10/2026, riset sesi ini) ─────────────
+# Squized-4h, Decouple-4h, RangeBreak-4h, TrendSurge-4h -- 4 ide BEDA DIMENSI (lebar Bollinger
+# Band, kekuatan relatif vs BTC, struktur harga 50-candle, kekuatan tren ADX) yang SEMUANYA
+# lolos uji ketat: backtest 175 koin 2022-2026, signifikan vs baseline entry ACAK (bukan cuma
+# vs nol) di TRAIN(<=2024) *dan* TEST(>=2025) sekaligus. 5 ide lain yang dicoba sesi ini sama
+# (OBV Accumulation, Multi-TF Alignment, Range Accumulation 2 gaya exit, Liquidity Sweep)
+# GAGAL uji ini, sengaja TIDAK dimasukkan.
+# PAPER ONLY, sama seperti 4 kombo shadow di atas -- TIDAK PERNAH kirim order Binance. BEDA
+# dari conf3/dipbuy (TP/SL tetap): keempat ini pakai TRAILING STOP PRODUKSI ASLI
+# (hard_stop_pct/get_arm_pct/trailing_dist_progressive, fungsi SAMA dgn strategi live lain)
+# krn backtest-nya jg pakai exit itu -- exit tetap justru TERBUKTI GAGAL utk entry momentum
+# (lihat Range Accumulation: gagal di exit trailing MAUPUN TP/SL tetap -- bukan soal exit,
+# entry-nya sendiri yg tidak ada edge; beda dgn 4 strategi di bawah ini yg memang lolos dgn
+# exit trailing).
+SHADOW_SQUIZED_TARGET     = 20
+SHADOW_DECOUPLE_TARGET    = 20
+SHADOW_RANGEBREAK_TARGET  = 20
+SHADOW_TRENDSURGE_TARGET  = 20
+SHADOW_NEWSTRAT_MIN_VOL_USD      = 1_000_000   # sama ambang conf3/akuma
+SHADOW_NEWSTRAT_MAX_HOLD_CANDLES = 20          # sama persis yg dibacktest (robust di 10-40, lihat riset)
+
+# Parameter sinyal -- SAMA PERSIS angka yg divalidasi backtest (scratchpad sesi ini:
+# bbsqueeze_sim.py / newideas_sim.py / newideas2_sim.py).
+SQUIZED_BB_LOOKBACK   = 100
+SQUIZED_BB_PCTILE     = 20     # lebar band masuk 20% tersempit dlm 100 candle
+SQUIZED_RECENT_N      = 3      # squeeze terjadi dlm 3 candle terakhir
+SQUIZED_RVOL_MIN      = 2.0
+SQUIZED_ATR_MIN       = 3.0
+DECOUPLE_LOOKBACK     = 20
+DECOUPLE_REL_MIN_PCT  = 5.0    # keunggulan vs BTC >=5 poin persentase, DAN baru saja crossing
+RANGEBREAK_DONCHIAN_N = 50
+TRENDSURGE_ADX_TH     = 25.0
+
+
+def _shadow_newstrat_compute(df):
+    """Hitung semua indikator yg dibutuhkan ke-4 strategi baru sekaligus (1x fetch per symbol,
+    bukan 4x) -- formula PERSIS yg dipakai scratchpad backtest, supaya sinyal live identik dgn
+    yg divalidasi."""
+    import pandas_ta as _pta
+    c, h, l = df['close'], df['high'], df['low']
+    bb = _pta.bbands(c, length=20, std=2)
+    up = bb[[x for x in bb.columns if x.startswith('BBU')][0]]
+    lo = bb[[x for x in bb.columns if x.startswith('BBL')][0]]
+    mid = bb[[x for x in bb.columns if x.startswith('BBM')][0]]
+    df['bb_upper'] = up
+    df['bb_width_pct'] = (up - lo) / mid * 100
+    df['bbw_pctile'] = df['bb_width_pct'].rolling(SQUIZED_BB_LOOKBACK).rank(pct=True) * 100
+    df['atr_pct'] = _pta.atr(h, l, c, length=14) / c * 100
+    df['vol_ma20'] = df['vol'].rolling(20).mean()
+    df['rvol'] = df['vol'] / df['vol_ma20']
+    df['donchian_high'] = h.rolling(RANGEBREAK_DONCHIAN_N).max().shift(1)
+    adx_df = _pta.adx(h, l, c, length=14)
+    df['adx'] = adx_df[[x for x in adx_df.columns if x.startswith('ADX_')][0]]
+    df['plus_di'] = adx_df[[x for x in adx_df.columns if x.startswith('DMP_')][0]]
+    df['minus_di'] = adx_df[[x for x in adx_df.columns if x.startswith('DMN_')][0]]
+    return df
+
+
+def _shadow_newstrat_open_one(data: dict, combo: str, target: int, sym: str, entry_price: float,
+                               atr_pct: float, sig_ts: int, extra_note: str = "") -> None:
+    if _shadow_signal_already_traded(data[combo], sym, sig_ts):
+        return
+    pos = {"sym": sym, "entry_price": entry_price, "atr_pct": atr_pct, "peak_price": entry_price,
+           "armed": False, "sig_ts": sig_ts,
+           "opened_ts": int(time.time()), "opened_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S')}
+    data[combo]['open'].append(pos)
+    log(f"[SHADOW-{combo.upper()}] OPEN {sym} @ {entry_price:.8g} (ATR%={atr_pct:.2f}){extra_note}")
+    send_telegram(
+        f"🔬 Shadow FWD-TEST OPEN -- {combo} (paper, BUKAN order asli)\n"
+        f"{to_display_pair(sym)} @ {_fmt_price(entry_price)}{extra_note}",
+        parse_mode=None)
+
+
+def _shadow_newstrat_scan_entries(data: dict) -> None:
+    """Scan universe SEKALI, cek ke-4 kondisi sekaligus per symbol (hemat API vs 4 scan
+    terpisah). Entry = candle 4h TERTUTUP terakhir, sama persis gaya conf3/akuma."""
+    combos_active = [cb for cb, tg in [('squized_4h', SHADOW_SQUIZED_TARGET),
+                                        ('decouple_4h', SHADOW_DECOUPLE_TARGET),
+                                        ('rangebreak_4h', SHADOW_RANGEBREAK_TARGET),
+                                        ('trendsurge_4h', SHADOW_TRENDSURGE_TARGET)]
+                     if len(data[cb]['closed']) < tg and len(data[cb]['open']) < SHADOW_MAX_OPEN_PER_COMBO]
+    if not combos_active:
+        return
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST]
+    except Exception as e:
+        log(f"WARN [SHADOW-NEWSTRAT] gagal ambil universe: {e}")
+        return
+
+    # BTC sekali per siklus, dipakai Decouple-4h
+    btc_ret20 = None; btc_ret20_prev = None
+    if 'decouple_4h' in combos_active:
+        try:
+            btc_df = get_ohlcv_4h('BTCUSDT', limit=SQUIZED_BB_LOOKBACK + 50)
+            if btc_df is not None and btc_df['ct'].iloc[-1] >= int(time.time() * 1000):
+                btc_df = btc_df.iloc[:-1]
+            if btc_df is not None and len(btc_df) > DECOUPLE_LOOKBACK + 1:
+                bc = btc_df['close'].values
+                btc_ret20 = bc[-1] / bc[-1 - DECOUPLE_LOOKBACK] - 1
+                btc_ret20_prev = bc[-2] / bc[-2 - DECOUPLE_LOOKBACK] - 1
+        except Exception as e:
+            log(f"WARN [SHADOW-NEWSTRAT] gagal ambil BTC: {e}")
+
+    for sym in universe:
+        try:
+            df = get_ohlcv_4h(sym, limit=SQUIZED_BB_LOOKBACK + 50)
+            if df is None or len(df) < SQUIZED_BB_LOOKBACK + 25:
+                continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) < SQUIZED_BB_LOOKBACK + 20:
+                continue
+            df = _shadow_newstrat_compute(df)
+            i = len(df) - 1
+            r = df.iloc[i]
+            if pd.isna(r['atr_pct']) or r['atr_pct'] <= 0:
+                continue
+            entry_price = float(r['close']); atr_now = float(r['atr_pct'])
+            sig_ts = int(df['ts'].iloc[i])
+
+            if 'squized_4h' in combos_active and len(data['squized_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
+                was_squeeze = any((df['bbw_pctile'].iloc[i - k] <= SQUIZED_BB_PCTILE) for k in range(SQUIZED_RECENT_N)
+                                   if i - k >= 0 and not pd.isna(df['bbw_pctile'].iloc[i - k]))
+                breakout = entry_price > float(r['bb_upper']) if not pd.isna(r['bb_upper']) else False
+                rvol_ok = (not pd.isna(r['rvol'])) and r['rvol'] >= SQUIZED_RVOL_MIN
+                if was_squeeze and breakout and rvol_ok and atr_now >= SQUIZED_ATR_MIN:
+                    _shadow_newstrat_open_one(data, 'squized_4h', SHADOW_SQUIZED_TARGET, sym,
+                                               entry_price, atr_now, sig_ts,
+                                               f" | RVOL {r['rvol']:.2f}x ATR% {atr_now:.2f}")
+
+            if 'decouple_4h' in combos_active and btc_ret20 is not None \
+               and len(data['decouple_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
+                cc = df['close'].values
+                if len(cc) > DECOUPLE_LOOKBACK + 1:
+                    coin_ret20 = cc[i] / cc[i - DECOUPLE_LOOKBACK] - 1
+                    coin_ret20_prev = cc[i - 1] / cc[i - 1 - DECOUPLE_LOOKBACK] - 1
+                    rel_now = (coin_ret20 - btc_ret20) * 100
+                    rel_prev = (coin_ret20_prev - btc_ret20_prev) * 100
+                    if rel_now >= DECOUPLE_REL_MIN_PCT and rel_prev < DECOUPLE_REL_MIN_PCT:
+                        _shadow_newstrat_open_one(data, 'decouple_4h', SHADOW_DECOUPLE_TARGET, sym,
+                                                   entry_price, atr_now, sig_ts,
+                                                   f" | unggul {rel_now:+.1f}pp vs BTC")
+
+            if 'rangebreak_4h' in combos_active and len(data['rangebreak_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
+                dh = r['donchian_high']
+                if not pd.isna(dh) and entry_price > dh:
+                    _shadow_newstrat_open_one(data, 'rangebreak_4h', SHADOW_RANGEBREAK_TARGET, sym,
+                                               entry_price, atr_now, sig_ts,
+                                               f" | tembus HH{RANGEBREAK_DONCHIAN_N} {_fmt_price(dh)}")
+
+            if 'trendsurge_4h' in combos_active and len(data['trendsurge_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
+                adx_now = r['adx']; pdi = r['plus_di']; mdi = r['minus_di']
+                adx_prev = df['adx'].iloc[i - 1] if i >= 1 else float('nan')
+                if not any(pd.isna(x) for x in [adx_now, pdi, mdi, adx_prev]):
+                    if adx_now >= TRENDSURGE_ADX_TH and adx_prev < TRENDSURGE_ADX_TH and pdi > mdi:
+                        _shadow_newstrat_open_one(data, 'trendsurge_4h', SHADOW_TRENDSURGE_TARGET, sym,
+                                                   entry_price, atr_now, sig_ts,
+                                                   f" | ADX {adx_now:.1f} (fresh, +DI>-DI)")
+        except Exception as e:
+            log(f"WARN [SHADOW-NEWSTRAT] {sym}: {e}")
+
+
+def _shadow_newstrat_check_exits(data: dict, combo: str, target: int) -> None:
+    """Exit SAMA utk ke-4 kombo: trailing stop produksi asli (hard_stop_pct/get_arm_pct/
+    trailing_dist_progressive), dicek thd harga LIVE tiap siklus -- sama persis exit yg dipakai
+    strategi live lain (dan yg dibacktest), BUKAN TP/SL tetap spt conf3/dipbuy."""
+    still_open = []
+    for pos in data[combo]['open']:
+        sym = pos['sym']; entry_price = pos['entry_price']; atr_pct = pos['atr_pct']
+        peak = pos.get('peak_price', entry_price); armed = pos.get('armed', False)
+        closed = False; exit_price = None; reason = None
+        try:
+            age_sec = time.time() - pos['opened_ts']
+            price = get_price_now(sym)
+            if price <= 0:
+                still_open.append(pos); continue
+            _, _, hsp = hard_stop_pct(atr_pct)
+            hard_stop_price = entry_price * (1 - hsp / 100)
+            if price <= hard_stop_price:
+                closed, exit_price, reason = True, price, f"hard-stop ({hsp:.2f}%)"
+            if not closed:
+                if price > peak:
+                    peak = price
+                peak_profit_pct = (peak / entry_price - 1) * 100
+                arm_th = get_arm_pct(atr_pct)
+                if not armed and peak_profit_pct >= arm_th:
+                    armed = True
+                if armed:
+                    trail_dist = trailing_dist_progressive(atr_pct, peak_profit_pct)
+                    trail_price = peak * (1 - trail_dist / 100)
+                    if price <= trail_price:
+                        closed, exit_price, reason = True, price, f"trailing (puncak {peak_profit_pct:+.2f}%)"
+            if not closed and age_sec >= SHADOW_NEWSTRAT_MAX_HOLD_CANDLES * STRAT4H_SECONDS:
+                closed, exit_price, reason = True, price, "timeout"
+        except Exception as e:
+            log(f"WARN [SHADOW-{combo.upper()}] check exit {sym}: {e}")
+            still_open.append(pos); continue
+
+        if closed:
+            pct = (exit_price / entry_price - 1) * 100 - FEE_ROUND_TRIP_PCT
+            pos_closed = dict(pos, exit_price=exit_price, closed_ts=int(time.time()),
+                               closed_wib=now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                               pct=round(pct, 2), reason=reason)
+            data[combo]['closed'].append(pos_closed)
+            n_done = len(data[combo]['closed'])
+            log(f"[SHADOW-{combo.upper()}] CLOSE {sym} @ {exit_price:.8g} ({pct:+.2f}%) -- {reason} -- #{n_done}/{target}")
+            send_telegram(
+                f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- {combo} (paper)\n"
+                f"{to_display_pair(sym)} @ {_fmt_price(exit_price)} ({pct:+.2f}%) -- {reason}\n"
+                f"Progress: #{n_done}/{target} ({_shadow_wl_tag(data[combo]['closed'])})", parse_mode=None)
+        else:
+            pos['peak_price'] = peak; pos['armed'] = armed
+            still_open.append(pos)
+    data[combo]['open'] = still_open
+
+
 def thread_shadow_fwdtest_scan() -> None:
     with _shadow_fwdtest_lock:
         data = _load_shadow_fwdtest()
@@ -16427,6 +16658,10 @@ def thread_shadow_fwdtest_scan() -> None:
             _shadow_conf3_check_exits(data)
             _shadow_dipbuy_universe_check_exits(data)
             _shadow_dipbuy_bc_check_exits(data)
+            _shadow_newstrat_check_exits(data, 'squized_4h', SHADOW_SQUIZED_TARGET)
+            _shadow_newstrat_check_exits(data, 'decouple_4h', SHADOW_DECOUPLE_TARGET)
+            _shadow_newstrat_check_exits(data, 'rangebreak_4h', SHADOW_RANGEBREAK_TARGET)
+            _shadow_newstrat_check_exits(data, 'trendsurge_4h', SHADOW_TRENDSURGE_TARGET)
             if len(data['akuma_all3']['closed']) < SHADOW_AKUMA_TARGET:
                 _shadow_akuma_try_open(data)
             if len(data['conf3_stochrsibb']['closed']) < SHADOW_CONF3_TARGET:
@@ -16435,6 +16670,7 @@ def thread_shadow_fwdtest_scan() -> None:
                 _shadow_dipbuy_universe_try_open(data)
             if len(data['dipbuy_bluechip']['closed']) < SHADOW_DIPBUY_BC_TARGET:
                 _shadow_dipbuy_bc_try_open(data)
+            _shadow_newstrat_scan_entries(data)
         except Exception as e:
             log(f"ERROR [SHADOW-FWDTEST] scan fatal: {e}")
         _save_shadow_fwdtest(data)
