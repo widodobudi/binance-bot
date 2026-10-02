@@ -7395,7 +7395,6 @@ def heartbeat_general_tick():
                      f"  - reversal-8h: {_fmt_hunting_live(prog_rev)}\n"
                      f"  - brkX2-4h   : {_fmt_hunting_live(prog_4h)}\n"
                      f"    brkX2-4h: 2nd {_fmt_strat(prog_4h2, STRAT4H_PHASE2_TARGET)}\n"
-                     f"    Akumulasi-4h: all_three (LIVE, slot 2, param Ronde-2) {_fmt_strat(akum2_progress(), AKUM2_TARGET)}\n"
                      f"    brkX2-4h: Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
                      f"  - crossema-4h: {_fmt_hunting_live(prog_cx)}\n"
                      f"    crossema-4h: 2nd STOP@Stoch<25 "
