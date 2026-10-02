@@ -879,15 +879,11 @@ FWDTEST_TARGET_REVERSAL = 8         # target close deal reversal utk forward-tes
 REVERSAL_LIVE_BASELINE  = 8         # closed deals saat Reversal-8h dipromosikan ke LIVE
                                      # (TERCAPAI 28/08/2026 @ #10/8, 8W/2L, +16.4%; baseline=target
                                      # supaya 2 trade yg sudah lewat target ikut kehitung "sejak LIVE")
-REVERSAL_PHASE2_TARGET  = 15        # target fase-2 (counter "2nd") setelah LIVE, 28/08/2026
-# 12/09/2026: syarat entry Reversal-8h berubah (tambah Stoch%K<50 di reversal_blockers(),
-# lihat REVERSAL_STOCH_MAX) -- counter "2nd" DIBEKUKAN di angka ini (REVERSAL_LIVE_BASELINE
-# + 2, sesuai jumlah closed fase-2 SAAT patch di-deploy, dikonfirmasi 0 close baru sejak
-# deploy lewat cek log Railway) supaya trade dgn syarat entry lama & baru tidak tercampur
-# dalam 1 counter. Counter "3rd" (REVERSAL_PHASE3_TARGET) mulai dari sini, hitung KHUSUS
-# trade dgn syarat entry BARU (+Stoch<50).
-REVERSAL_STOCH_PATCH_BASELINE = REVERSAL_LIVE_BASELINE + 2
-REVERSAL_PHASE3_TARGET  = 15        # target fase-3 (counter "3rd", pasca syarat Stoch<50)
+# 02/10/2026 (permintaan Mas Budi): "2nd"/"3rd" (REVERSAL_PHASE2_TARGET/REVERSAL_STOCH_PATCH_BASELINE/
+# REVERSAL_PHASE3_TARGET -- counter yg dulu misahkan trade pra/pasca syarat Stoch%K<50, lihat
+# REVERSAL_STOCH_MAX) DIHAPUS bareng reaktivasi reversal_resumed_20261002 -- closed deals yg dulu
+# masuk situ juga dihapus dari CSV (migrate_trim_reversal_2nd3rd_once()), bukan cuma disembunyikan.
+# REVERSAL_LIVE_BASELINE dipertahankan (masih dipakai migrasi itu sbg batas berapa baris lama yg disimpan).
 FWDTEST_TARGET_4H       = 7         # target close deal brkX2-4h utk forward-test berhasil
 # Offset untuk multi-tahap forward-test brkX2:
 # Set ke total deal yang sudah selesai di AKHIR tahap sebelumnya.
@@ -1277,6 +1273,13 @@ def apply_one_time_config_migrations():
         # hasil bersih +9.90% PF 1.32 t=0.41; 6 trade terakhir (sejak 26/08) -22.68%; tidak ada trade sejak 3/09.
         # Sama seperti di atas: sekali jalan, nyalakan lagi kapan saja lewat Strategy Control. REMARK rollback: True.
         "reversal_paused_20260929":             ("reversal",         "strategy_enabled", False),
+        # 02/10/2026 (permintaan Mas Budi): REAKTIVASI reversal (Reversal-8h) -- sengaja, Mas Budi
+        # mau filter ATH-distance (shipped 20/09/2026, belum pernah teruji live krn trade terakhir
+        # 3/09 mendahuluinya) akhirnya diuji dgn data live baru. Histori closed deal lama (yg dulu
+        # dilabeli "2nd"/"3rd", performa real 10W/3L + skid -22,68% di 6 trade terakhir -- lihat
+        # REMARK di reversal_paused_20260929) sengaja DIHAPUS dari CSV, lihat
+        # migrate_trim_reversal_2nd3rd_once(), supaya counter LIVE baru mulai bersih dari sini.
+        "reversal_resumed_20261002":            ("reversal",         "strategy_enabled", True),
     }
     try:
         done = {}
@@ -1360,7 +1363,9 @@ def total_max_deals_all_strategies() -> int:
 # 28-29/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE dan SEMUA deal-nya disembunyikan dari tampilan dashboard default
 # (Closed Trades + kartu Performance per Strategi). Data tetap ada di CSV / counter fase / batas rugi harian; tampil lagi kalau
 # strategi dipilih eksplisit di filter Closed Trades atau ?show_paused=1. Satu sumber kebenaran utk kedua endpoint.
-PAUSED_HIDDEN_STRATEGIES = ('qscalp_3m', 'brkX2_crossema', 'reversal')
+PAUSED_HIDDEN_STRATEGIES = ('qscalp_3m', 'brkX2_crossema')
+# 02/10/2026: 'reversal' DIKELUARKAN dari daftar ini -- direaktivasi (reversal_resumed_20261002),
+# bukan paused lagi, jadi tidak perlu disembunyikan dari Closed Trades/kartu Performance.
 
 def is_strategy_enabled(strategy: str) -> bool:
     cfg = load_strategy_config()
@@ -2240,6 +2245,51 @@ def migrate_csv_hold_remark_once():
         log(f"WARN migrate_csv_hold_remark_once: {e}")
 
 
+def migrate_trim_reversal_2nd3rd_once():
+    """Sekali jalan (marker di config_migrations_done.json): HAPUS baris CLOSED reversal-8h yg
+    dulu dilabeli "2nd"/"3rd" (ke-9 dan seterusnya, by urutan file -- REVERSAL_LIVE_BASELINE=8
+    pertama DIPERTAHANKAN sbg "LIVE") dari trades_forwardtest.csv, permintaan EKSPLISIT Mas Budi
+    02/10/2026 ("hapus termasuk closed deals nya") saat reversal-8h direaktivasi (lihat
+    reversal_resumed_20261002) -- bukan cuma sembunyikan dari tampilan spt brkX2-12h kemarin.
+    Baris strategi lain & baris reversal yg masih OPEN TIDAK disentuh. Audit lengkap (symbol/
+    tanggal/profit%) disimpan di config_migrations_done.json + log, supaya tetap bisa ditelusuri
+    walau barisnya sudah tidak ada di CSV."""
+    key = "reversal_trim_2nd3rd_closed_20261002"
+    try:
+        done = {}
+        if os.path.exists(CONFIG_MIGRATIONS_FILE):
+            with open(CONFIG_MIGRATIONS_FILE) as f:
+                done = json.load(f)
+        if key in done or not os.path.exists(TRADES_CSV):
+            return
+        removed_detail = []
+        with trades_csv_lock:
+            with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                rows = list(csv.DictReader(f))
+            # SAMA PERSIS filter yg dipakai csv_progress('reversal') utk nentuin "closed"
+            reversal_closed_idx = [i for i, r in enumerate(rows)
+                                    if r.get('status') == 'CLOSED'
+                                    and (r.get('strategy') or 'brkX2') == 'reversal']
+            drop_idx = set(reversal_closed_idx[REVERSAL_LIVE_BASELINE:])   # ke-9 dst = "2nd"+"3rd"
+            if drop_idx:
+                for i in sorted(drop_idx):
+                    r = rows[i]
+                    removed_detail.append({k: r.get(k, '') for k in
+                                            ('symbol', 'open_time_wib', 'close_time_wib', 'profit_pct', 'exit_reason')})
+                rows = [r for i, r in enumerate(rows) if i not in drop_idx]
+                with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
+                    w = csv.DictWriter(f, fieldnames=CSV_FIELDS); w.writeheader(); w.writerows(rows)
+        done[key] = {"applied_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                     "rows_removed": len(removed_detail), "removed_detail": removed_detail}
+        with open(CONFIG_MIGRATIONS_FILE, "w") as f:
+            json.dump(done, f, indent=2)
+        log(f"[MIGRASI] reversal-8h: {len(removed_detail)} baris closed (2nd+3rd) dihapus dari CSV -- {removed_detail}")
+        if removed_detail:
+            sync_trades_csv_to_drive()
+    except Exception as e:
+        log(f"WARN migrate_trim_reversal_2nd3rd_once: {e}")
+
+
 def repair_stale_ondo_base_usd(row: dict) -> dict:
     """Koreksi row historical yang jelas stale untuk ONDO/USDT.
     Tujuannya hanya untuk data lama yang sudah jadi $8 default, tanpa memodifikasi trade normal lain.
@@ -2554,10 +2604,6 @@ def strategy_phase_breakdown() -> dict:
     try:
         out['reversal'] = [
             _phase_entry('LIVE', csv_progress('reversal')),
-            _phase_entry('2nd (STOP@Stoch<50)',
-                         csv_progress('reversal', offset=REVERSAL_LIVE_BASELINE, until=REVERSAL_STOCH_PATCH_BASELINE),
-                         REVERSAL_PHASE2_TARGET),
-            _phase_entry('3rd', csv_progress('reversal', offset=REVERSAL_STOCH_PATCH_BASELINE), REVERSAL_PHASE3_TARGET),
         ]
     except Exception as e:
         log(f"   [PHASE] gagal hitung reversal: {e}")
@@ -7316,11 +7362,10 @@ def heartbeat_general_tick():
     # (syarat Entry B berubah, tambah Stoch<25) -- lihat komentar konstantanya.
     prog_akum_stop = csv_progress('akumulasi', until=AKUM_ENTRY_STOCH_PATCH_BASELINE)
     prog_akum2     = csv_progress('akumulasi', offset=AKUM_ENTRY_STOCH_PATCH_BASELINE)
-    # 12/09/2026: fase-2 Reversal-8h DIBEKUKAN di REVERSAL_STOCH_PATCH_BASELINE (syarat entry
-    # berubah, tambah Stoch<50) -- lihat komentar REVERSAL_STOCH_PATCH_BASELINE. Fase-3 (prog_rev3)
-    # mulai dari situ, hitung khusus trade dgn syarat BARU.
-    prog_rev2  = csv_progress('reversal',    offset=REVERSAL_LIVE_BASELINE, until=REVERSAL_STOCH_PATCH_BASELINE)
-    prog_rev3  = csv_progress('reversal',    offset=REVERSAL_STOCH_PATCH_BASELINE)
+    # 02/10/2026 (permintaan Mas Budi): reversal-8h "2nd"/"3rd" dihapus, cuma "LIVE" (prog_rev,
+    # cumulative) yg tersisa -- strategi ini di-pause 29/09/2026 (b7425d2, performa real 10W/3L
+    # termasuk 3 hard-stop & skid -22,68% di 6 trade terakhir, bukan 10W/0L yg kelihatan di
+    # panel default), reaktivasi live masih menunggu konfirmasi terpisah.
     prog_4h2   = csv_progress('brkX2_4h',    offset=STRAT4H_LIVE_BASELINE)
     prog_hunt2 = csv_progress('hunting_4h',  offset=HUNTING_FWDTEST_PHASE_OFFSET + HUNTING_LIVE_BASELINE)
     # 02/10/2026 (permintaan Mas Budi): brkX2-12h disederhanakan jadi cuma "LIVE" (prog_brk,
@@ -7348,10 +7393,6 @@ def heartbeat_general_tick():
         prog_line = (f"Progress (gabungan): {nn} ({wl}, {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2-12h  : {_fmt_hunting_live(prog_brk)}\n"
                      f"  - reversal-8h: {_fmt_hunting_live(prog_rev)}\n"
-                     f"    reversal-8h: 2nd STOP@Stoch<50 "
-                     f"{prog_rev2['n']}/{REVERSAL_PHASE2_TARGET} "
-                     f"({prog_rev2['win']}W/{prog_rev2['loss']}L,{prog_rev2['total_pct']:+.1f}%)\n"
-                     f"    reversal-8h: 3rd {_fmt_strat(prog_rev3, REVERSAL_PHASE3_TARGET)}\n"
                      f"  - brkX2-4h   : {_fmt_hunting_live(prog_4h)}\n"
                      f"    brkX2-4h: 2nd {_fmt_strat(prog_4h2, STRAT4H_PHASE2_TARGET)}\n"
                      f"    Akumulasi-4h: all_three (LIVE, slot 2, param Ronde-2) {_fmt_strat(akum2_progress(), AKUM2_TARGET)}\n"
@@ -9086,31 +9127,14 @@ def thread2_monitor():
                 if pstrat and pstrat['n']>0:
                     done_n = pstrat['n']; wl = f"{pstrat['win']}W/{pstrat['loss']}L"
                     status = "TERCAPAI - waktunya evaluasi!" if done_n>=tgt else f"menuju {tgt}"
-                    if strat in ('hunting_4h', 'reversal', 'brkX2_4h'):
+                    if strat in ('hunting_4h', 'brkX2_4h'):
                         _live_baseline  = (HUNTING_LIVE_BASELINE if strat == 'hunting_4h'
-                                            else REVERSAL_LIVE_BASELINE if strat == 'reversal'
                                             else STRAT4H_LIVE_BASELINE)
                         _phase2_target  = (HUNTING_PHASE2_TARGET if strat == 'hunting_4h'
-                                            else REVERSAL_PHASE2_TARGET if strat == 'reversal'
                                             else STRAT4H_PHASE2_TARGET)
                         _phase2_offset  = (HUNTING_FWDTEST_PHASE_OFFSET if strat == 'hunting_4h' else 0) + _live_baseline
-                        # 12/09/2026: Reversal-8h fase-2 DIBEKUKAN di REVERSAL_STOCH_PATCH_BASELINE
-                        # (syarat entry berubah, tambah Stoch<50) -- notif per-close pakai fase yg
-                        # SEDANG AKTIF (2nd kalau masih di bawah batas beku, 3rd kalau sudah lewat).
-                        if strat == 'reversal':
-                            _since_live = csv_progress('reversal', offset=REVERSAL_LIVE_BASELINE)
-                            _since_live_n = _since_live['n'] if _since_live else 0
-                            _frozen_n = REVERSAL_STOCH_PATCH_BASELINE - REVERSAL_LIVE_BASELINE
-                            if _since_live_n <= _frozen_n:
-                                _phase_label = "2nd"
-                                _p2 = csv_progress('reversal', offset=_phase2_offset, until=REVERSAL_STOCH_PATCH_BASELINE)
-                            else:
-                                _phase_label = "3rd"
-                                _phase2_target = REVERSAL_PHASE3_TARGET
-                                _p2 = csv_progress('reversal', offset=REVERSAL_STOCH_PATCH_BASELINE)
-                        else:
-                            _phase_label = "2nd"
-                            _p2 = csv_progress(strat, offset=_phase2_offset)
+                        _phase_label = "2nd"
+                        _p2 = csv_progress(strat, offset=_phase2_offset)
                         _p2_n   = _p2['n'] if _p2 else 0
                         _p2_wl  = f"{_p2['win']}W/{_p2['loss']}L" if _p2 and _p2['n'] > 0 else "0W/0L"
                         _p2_tot = _p2['total_pct'] if _p2 else 0.0
@@ -9233,8 +9257,6 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
     prog_4h   = csv_progress('brkX2_4h')
     prog_cx   = csv_progress('brkX2_crossema')
     prog_hunt = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
-    prog_rev2  = csv_progress('reversal',   offset=REVERSAL_LIVE_BASELINE, until=REVERSAL_STOCH_PATCH_BASELINE)
-    prog_rev3  = csv_progress('reversal',   offset=REVERSAL_STOCH_PATCH_BASELINE)
     prog_hunt2 = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET + HUNTING_LIVE_BASELINE)
 
     if prog_all is None:
@@ -9245,10 +9267,6 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
         prog_line = (f"Progress (gabungan): {nn} ({wl}, {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2    : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2)}\n"
                      f"  - reversal : {_fmt_hunting_live(prog_rev)}\n"
-                     f"    reversal : 2nd STOP@Stoch<50 "
-                     f"{prog_rev2['n']}/{REVERSAL_PHASE2_TARGET} "
-                     f"({prog_rev2['win']}W/{prog_rev2['loss']}L,{prog_rev2['total_pct']:+.1f}%)\n"
-                     f"    reversal : 3rd {_fmt_strat(prog_rev3, REVERSAL_PHASE3_TARGET)}\n"
                      f"  - 4h       : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET)}\n"
                      f"    4h       : Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
                      f"  - crossema : {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST)}\n"
@@ -13298,7 +13316,8 @@ var SC_NO_PARTIAL = {qscalp_3m: true};  // QScalp selalu jual 100% saat close (k
 var SC_NO_AI = {qscalp_3m: true};  // strategi full rule-based, checkbox AI-call tidak berlaku
 // 01/10/2026 (permintaan Mas Budi): strategi yg di-PAUSE atas keputusan Mas Budi (sama dgn PAUSED_HIDDEN_STRATEGIES di Python,
 // baris ~1369 -- kalau daftar itu berubah, ubah juga di sini) barisnya di-DIM + DIKUNCI (tidak bisa diklik) selama flag OFF.
-var SC_PAUSED_LOCKED = {qscalp_3m: true, brkX2_crossema: true, reversal: true};
+// 02/10/2026: 'reversal' dikeluarkan -- direaktivasi (reversal_resumed_20261002), tidak lagi dikunci.
+var SC_PAUSED_LOCKED = {qscalp_3m: true, brkX2_crossema: true};
 var _scData = {};
 
 function buildStrategySelect() {
@@ -24332,6 +24351,7 @@ if __name__ == '__main__':
         log("[MIGRASI] STG/USDT ditambahkan ke blacklist manual (delisting Binance 6/10/2026)")
     apply_one_time_config_migrations()
     migrate_csv_hold_remark_once()
+    migrate_trim_reversal_2nd3rd_once()   # 02/10/2026: hapus closed deals "2nd"/"3rd" reversal-8h, permintaan Mas Budi
     threading.Thread(target=backfill_qscalp_rsi_once, daemon=True).start()   # 21/09/2026: isi RSI@Open QScalp lama
     threading.Thread(target=recompute_shadow_levels_once, daemon=True).start()   # 21/09/2026: hitung ulang paper test ber-level tetap
     threading.Thread(target=archive_akuma_all3_inflated_once, daemon=True).start()   # 27/09/2026: arsip akuma_all3 lama, reset ke 0/20
