@@ -16084,7 +16084,8 @@ def _shadow_akuma_try_open(data: dict) -> None:
             log(f"[SHADOW-AKUMA] OPEN {sym} @ {entry_price:.8g} (SL {sig['sl_price']:.8g})")
             send_telegram(
                 f"🔬 Shadow FWD-TEST OPEN -- Entry A 'all_three' (paper, BUKAN order asli)\n"
-                f"{to_display_pair(sym)} @ {_fmt_price(entry_price)} | SL {_fmt_price(sig['sl_price'])}",
+                f"{to_display_pair(sym)} @ {_fmt_price(entry_price)} | SL {_fmt_price(sig['sl_price'])}\n"
+                f"Progress: #{len(data['akuma_all3']['closed'])}/{SHADOW_AKUMA_TARGET} ({_shadow_wl_tag(data['akuma_all3']['closed'])})",
                 parse_mode=None)
         except Exception as e:
             log(f"WARN [SHADOW-AKUMA] {sym}: {e}")
@@ -16209,7 +16210,8 @@ def _shadow_conf3_try_open(data: dict) -> None:
             log(f"[SHADOW-CONF3] OPEN {sym} @ {entry_price:.8g} (SL {sl_price:.8g} / TP {tp_price:.8g})")
             send_telegram(
                 f"🔬 Shadow FWD-TEST OPEN -- 6Confluence stoch+rsi+bb (paper, BUKAN order asli)\n"
-                f"{to_display_pair(sym)} @ {_fmt_price(entry_price)} | SL {_fmt_price(sl_price)} / TP {_fmt_price(tp_price)}",
+                f"{to_display_pair(sym)} @ {_fmt_price(entry_price)} | SL {_fmt_price(sl_price)} / TP {_fmt_price(tp_price)}\n"
+                f"Progress: #{len(data['conf3_stochrsibb']['closed'])}/{SHADOW_CONF3_TARGET} ({_shadow_wl_tag(data['conf3_stochrsibb']['closed'])})",
                 parse_mode=None)
         except Exception as e:
             log(f"WARN [SHADOW-CONF3] {sym}: {e}")
@@ -16306,7 +16308,8 @@ def _shadow_dipbuy_universe_try_open(data: dict) -> None:
             send_telegram(
                 f"🔬 Shadow FWD-TEST OPEN -- Dip Buy Universe (paper, BUKAN order asli)\n"
                 f"{to_display_pair(sym)} @ {_fmt_price(entry_price)} | drop {chg_4h:+.2f}% (1 candle 4h)\n"
-                f"SL {_fmt_price(sl_price)} / TP {_fmt_price(tp_price)}",
+                f"SL {_fmt_price(sl_price)} / TP {_fmt_price(tp_price)}\n"
+                f"Progress: #{len(data['dipbuy_universe']['closed'])}/{SHADOW_DIPBUY_UNIVERSE_TARGET} ({_shadow_wl_tag(data['dipbuy_universe']['closed'])})",
                 parse_mode=None)
         except Exception as e:
             log(f"WARN [SHADOW-DIPBUY-UNIVERSE] {sym}: {e}")
@@ -16390,7 +16393,8 @@ def _shadow_dipbuy_bc_try_open(data: dict) -> None:
             send_telegram(
                 f"🔬 Shadow FWD-TEST OPEN -- Dip Buy Varian A, BLUE-CHIP 30 COIN (paper, BUKAN order asli)\n"
                 f"{to_display_pair(sym)} @ {_fmt_price(entry_price)} | drop {chg_4h:+.2f}% (1 candle 4h)\n"
-                f"SL {_fmt_price(sl_price)} / TP {_fmt_price(tp_price)}",
+                f"SL {_fmt_price(sl_price)} / TP {_fmt_price(tp_price)}\n"
+                f"Progress: #{len(data['dipbuy_bluechip']['closed'])}/{SHADOW_DIPBUY_BC_TARGET} ({_shadow_wl_tag(data['dipbuy_bluechip']['closed'])})",
                 parse_mode=None)
         except Exception as e:
             log(f"WARN [SHADOW-DIPBUY-BLUECHIP] {sym}: {e}")
@@ -16645,7 +16649,8 @@ def _shadow_newstrat_open_one(data: dict, combo: str, target: int, sym: str, ent
     log(f"[SHADOW-{combo.upper()}] OPEN {sym} @ {entry_price:.8g} (ATR%={atr_pct:.2f}){extra_note}")
     send_telegram(
         f"🔬 Shadow FWD-TEST OPEN -- {combo} (paper, BUKAN order asli)\n"
-        f"{to_display_pair(sym)} @ {_fmt_price(entry_price)}{extra_note}",
+        f"{to_display_pair(sym)} @ {_fmt_price(entry_price)}{extra_note}\n"
+        f"Progress: #{len(data[combo]['closed'])}/{target} ({_shadow_wl_tag(data[combo]['closed'])})",
         parse_mode=None)
 
 
