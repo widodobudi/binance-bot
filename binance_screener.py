@@ -869,15 +869,12 @@ FWDTEST_CHECK_TRADES   = 12         # (lama, gabungan) cek awal: deteksi masalah
 FWDTEST_TARGET_TRADES  = 25         # (lama, gabungan) evaluasi FINAL
 # Target per-strategi utk forward-test berhasil (tiap close update #X/N):
 FWDTEST_TARGET_BRKX2    = 15        # target close deal brkX2 utk forward-test berhasil
-FWDTEST_BRKX2_LIVE_BASELINE = 17    # closed deals (tahap 3, sejak FWDTEST_BRKX2_PHASE_OFFSET) saat
-                                     # brkX2-12h TERCAPAI target -> LIVE (05/09/2026, #17/15)
-FWDTEST_BRKX2_PHASE2_TARGET = 15    # target fase-2 (counter "2nd") setelah LIVE, 05/09/2026, samain hunting/reversal/4h
-# 21/09/2026 (permintaan Mas Budi): fase-2 brkX2-12h TERCAPAI (#15/15, 13W/2L, +32.1%, tanpa hard-stop) -> DIBEKUKAN
-# di 15 (until=PHASE_OFFSET+LIVE_BASELINE+PHASE2_TARGET). 19/09/2026 12:54 WIB ukuran modal dinaikkan (base $12->$60,
-# tier $30/$45->$60/$90, review Base order #2) dan sejak 20/09/2026 23:00 WIB close untung menjual 75% + sisa ke
-# Simple Earn -- sempat dilacak terpisah sbg "fase-3" (counter khusus ukuran baru), tapi 02/10/2026 (permintaan Mas
-# Budi, Opsi 1) counter "3rd" DIHAPUS: deal baru ikut dihitung di counter "LIVE" (prog_brk, cumulative, offset tetap)
-# tanpa sub-tracker terpisah -- bukan bug, cuma reporting-filter yg sudah tidak perlu dipisah lagi.
+# brkX2-12h TERCAPAI LIVE 05/09/2026 (#17/15); fase-2 "2nd" TERCAPAI 21/09/2026 (#15/15, 13W/2L,
+# +32.1%, tanpa hard-stop). 19/09/2026 12:54 WIB ukuran modal dinaikkan (base $12->$60, tier
+# $30/$45->$60/$90, review Base order #2) dan sejak 20/09/2026 23:00 WIB close untung menjual 75%
+# + sisa ke Simple Earn -- sempat dilacak terpisah sbg "2nd"/"3rd" (counter per-era), tapi
+# 02/10/2026 (permintaan Mas Budi) KEDUANYA DIHAPUS: brkX2-12h disederhanakan jadi cuma "LIVE"
+# (prog_brk, cumulative, offset tetap) karena strategi ini direncanakan diganti KeltnerBreak-12h.
 FWDTEST_TARGET_REVERSAL = 8         # target close deal reversal utk forward-test berhasil
 REVERSAL_LIVE_BASELINE  = 8         # closed deals saat Reversal-8h dipromosikan ke LIVE
                                      # (TERCAPAI 28/08/2026 @ #10/8, 8W/2L, +16.4%; baseline=target
@@ -2551,10 +2548,6 @@ def strategy_phase_breakdown() -> dict:
     try:
         out['brkX2'] = [
             _phase_entry('LIVE', csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)),
-            _phase_entry('2nd', csv_progress('brkX2',
-                         offset=FWDTEST_BRKX2_PHASE_OFFSET + FWDTEST_BRKX2_LIVE_BASELINE,
-                         until=FWDTEST_BRKX2_PHASE_OFFSET + FWDTEST_BRKX2_LIVE_BASELINE + FWDTEST_BRKX2_PHASE2_TARGET),
-                         FWDTEST_BRKX2_PHASE2_TARGET),
         ]
     except Exception as e:
         log(f"   [PHASE] gagal hitung brkX2: {e}")
@@ -7330,12 +7323,9 @@ def heartbeat_general_tick():
     prog_rev3  = csv_progress('reversal',    offset=REVERSAL_STOCH_PATCH_BASELINE)
     prog_4h2   = csv_progress('brkX2_4h',    offset=STRAT4H_LIVE_BASELINE)
     prog_hunt2 = csv_progress('hunting_4h',  offset=HUNTING_FWDTEST_PHASE_OFFSET + HUNTING_LIVE_BASELINE)
-    # 05/09/2026 (permintaan Mas Budi): brkX2-12h & crossema-4h baru saja TERCAPAI target
-    # -> ikutin pola LIVE yg sama spt reversal-8h/brkX2-4h/hunting-4h (format "LIVE: N closed",
-    # TANPA baris Last Close, DENGAN baris "2nd" fase-2). offset fase-2 = offset fase-1 (kalau
-    # ada) + baseline saat TERCAPAI, sama persis pola prog_4h2/prog_hunt2 di atas.
-    prog_brk2 = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET + FWDTEST_BRKX2_LIVE_BASELINE,
-                             until=FWDTEST_BRKX2_PHASE_OFFSET + FWDTEST_BRKX2_LIVE_BASELINE + FWDTEST_BRKX2_PHASE2_TARGET)  # fase-2 dibekukan @15
+    # 02/10/2026 (permintaan Mas Budi): brkX2-12h disederhanakan jadi cuma "LIVE" (prog_brk,
+    # cumulative sejak FWDTEST_BRKX2_PHASE_OFFSET) -- "3rd" sudah dihapus 985dae9, "2nd" dihapus
+    # di sini (strategi ini rencananya digantikan KeltnerBreak-12h, tidak perlu lagi sub-tracker).
     # 12/09/2026: fase-2 CrossEMA-4h DIBEKUKAN di STRAT_CROSSEMA_STOCH_PATCH_BASELINE (syarat
     # entry berubah, tambah Stoch<25) -- lihat komentar konstantanya. Masih #0/15 saat patch
     # di-deploy jadi frozen counter-nya 0, tapi tetap dipisah dari fase-3 (trade dgn syarat baru).
@@ -7357,7 +7347,6 @@ def heartbeat_general_tick():
         prog_qr = quick_reentry_progress()
         prog_line = (f"Progress (gabungan): {nn} ({wl}, {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2-12h  : {_fmt_hunting_live(prog_brk)}\n"
-                     f"    brkX2-12h: 2nd {_fmt_strat(prog_brk2, FWDTEST_BRKX2_PHASE2_TARGET, tercapai=False)}\n"
                      f"  - reversal-8h: {_fmt_hunting_live(prog_rev)}\n"
                      f"    reversal-8h: 2nd STOP@Stoch<50 "
                      f"{prog_rev2['n']}/{REVERSAL_PHASE2_TARGET} "
