@@ -7399,7 +7399,9 @@ def heartbeat_general_tick():
                      f"    {_fmt_shadow('squized_4h', SHADOW_SQUIZED_TARGET)}\n"
                      f"    {_fmt_shadow('decouple_4h', SHADOW_DECOUPLE_TARGET)}\n"
                      f"    {_fmt_shadow('rangebreak_4h', SHADOW_RANGEBREAK_TARGET)}\n"
-                     f"    {_fmt_shadow('trendsurge_4h', SHADOW_TRENDSURGE_TARGET)}")
+                     f"    {_fmt_shadow('trendsurge_4h', SHADOW_TRENDSURGE_TARGET)}\n"
+                     f"    {_fmt_shadow('ichibreak_4h', SHADOW_ICHIBREAK_TARGET)}\n"
+                     f"    {_fmt_shadow('psarflip_4h', SHADOW_PSARFLIP_TARGET)}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
     slot_line = (f"Slot brkX2-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2} | "
@@ -15824,7 +15826,9 @@ def _load_shadow_fwdtest() -> dict:
                "squized_4h": {"open": [], "closed": []},
                "decouple_4h": {"open": [], "closed": []},
                "rangebreak_4h": {"open": [], "closed": []},
-               "trendsurge_4h": {"open": [], "closed": []}}
+               "trendsurge_4h": {"open": [], "closed": []},
+               "ichibreak_4h": {"open": [], "closed": []},
+               "psarflip_4h": {"open": [], "closed": []}}
     try:
         if os.path.exists(SHADOW_FWDTEST_FILE):
             with open(SHADOW_FWDTEST_FILE, encoding="utf-8") as f:
@@ -16460,6 +16464,14 @@ DECOUPLE_REL_MIN_PCT  = 5.0    # keunggulan vs BTC >=5 poin persentase, DAN baru
 RANGEBREAK_DONCHIAN_N = 50
 TRENDSURGE_ADX_TH     = 25.0
 
+# ichiBreak-4h & pSARFlip-4h (02/10/2026, ronde riset ke-2 sesi ini -- 4 ide lain dicoba
+# bareng: F/G ini LOLOS vs baseline acak di TRAIN *dan* TEST, H (MACD hist accel) GAGAL di
+# TRAIN (p=0,51, pola overfit-ke-test spt Multi-TF Alignment dulu), I (VWAP reclaim) GAGAL
+# di TEST (p=0,25, edge pudar di luar sample) -- H & I sengaja TIDAK dimasukkan.
+# Scratchpad: newideas3_sim.py / newideas3_random_baseline.py.
+SHADOW_ICHIBREAK_TARGET  = 20
+SHADOW_PSARFLIP_TARGET   = 20
+
 
 def _shadow_newstrat_compute(df):
     """Hitung semua indikator yg dibutuhkan ke-4 strategi baru sekaligus (1x fetch per symbol,
@@ -16482,6 +16494,11 @@ def _shadow_newstrat_compute(df):
     df['adx'] = adx_df[[x for x in adx_df.columns if x.startswith('ADX_')][0]]
     df['plus_di'] = adx_df[[x for x in adx_df.columns if x.startswith('DMP_')][0]]
     df['minus_di'] = adx_df[[x for x in adx_df.columns if x.startswith('DMN_')][0]]
+    ich_a, _ich_b = _pta.ichimoku(h, l, c)
+    df['cloud_top'] = ich_a[['ISA_9', 'ISB_26']].max(axis=1)
+    psar = _pta.psar(h, l, c)
+    df['psar_r'] = psar['PSARr_0.02_0.2']   # 1 di candle reversal
+    df['psar_l'] = psar['PSARl_0.02_0.2']   # ada nilai (bukan NaN) kalau skrg bullish
     return df
 
 
@@ -16506,7 +16523,9 @@ def _shadow_newstrat_scan_entries(data: dict) -> None:
     combos_active = [cb for cb, tg in [('squized_4h', SHADOW_SQUIZED_TARGET),
                                         ('decouple_4h', SHADOW_DECOUPLE_TARGET),
                                         ('rangebreak_4h', SHADOW_RANGEBREAK_TARGET),
-                                        ('trendsurge_4h', SHADOW_TRENDSURGE_TARGET)]
+                                        ('trendsurge_4h', SHADOW_TRENDSURGE_TARGET),
+                                        ('ichibreak_4h', SHADOW_ICHIBREAK_TARGET),
+                                        ('psarflip_4h', SHADOW_PSARFLIP_TARGET)]
                      if len(data[cb]['closed']) < tg and len(data[cb]['open']) < SHADOW_MAX_OPEN_PER_COMBO]
     if not combos_active:
         return
@@ -16592,6 +16611,25 @@ def _shadow_newstrat_scan_entries(data: dict) -> None:
                         _shadow_newstrat_open_one(data, 'trendsurge_4h', SHADOW_TRENDSURGE_TARGET, sym,
                                                    entry_price, atr_now, sig_ts,
                                                    f" | ADX {adx_now:.1f} (fresh, +DI>-DI)")
+
+            if 'ichibreak_4h' in combos_active and len(data['ichibreak_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
+                cloud_top = r['cloud_top']
+                cloud_top_prev = df['cloud_top'].iloc[i - 1] if i >= 1 else float('nan')
+                close_prev = df['close'].iloc[i - 1] if i >= 1 else float('nan')
+                if not any(pd.isna(x) for x in [cloud_top, cloud_top_prev, close_prev]):
+                    above_now = entry_price > cloud_top
+                    above_prev = close_prev > cloud_top_prev
+                    if above_now and not above_prev:
+                        _shadow_newstrat_open_one(data, 'ichibreak_4h', SHADOW_ICHIBREAK_TARGET, sym,
+                                                   entry_price, atr_now, sig_ts,
+                                                   f" | tembus cloud {_fmt_price(cloud_top)}")
+
+            if 'psarflip_4h' in combos_active and len(data['psarflip_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
+                psar_r_now = r['psar_r']; psar_l_now = r['psar_l']
+                if (not pd.isna(psar_r_now)) and psar_r_now == 1 and (not pd.isna(psar_l_now)):
+                    _shadow_newstrat_open_one(data, 'psarflip_4h', SHADOW_PSARFLIP_TARGET, sym,
+                                               entry_price, atr_now, sig_ts,
+                                               f" | SAR flip bullish @ {_fmt_price(psar_l_now)}")
         except Exception as e:
             log(f"WARN [SHADOW-NEWSTRAT] {sym}: {e}")
 
@@ -16662,6 +16700,8 @@ def thread_shadow_fwdtest_scan() -> None:
             _shadow_newstrat_check_exits(data, 'decouple_4h', SHADOW_DECOUPLE_TARGET)
             _shadow_newstrat_check_exits(data, 'rangebreak_4h', SHADOW_RANGEBREAK_TARGET)
             _shadow_newstrat_check_exits(data, 'trendsurge_4h', SHADOW_TRENDSURGE_TARGET)
+            _shadow_newstrat_check_exits(data, 'ichibreak_4h', SHADOW_ICHIBREAK_TARGET)
+            _shadow_newstrat_check_exits(data, 'psarflip_4h', SHADOW_PSARFLIP_TARGET)
             if len(data['akuma_all3']['closed']) < SHADOW_AKUMA_TARGET:
                 _shadow_akuma_try_open(data)
             if len(data['conf3_stochrsibb']['closed']) < SHADOW_CONF3_TARGET:
