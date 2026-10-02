@@ -7382,7 +7382,8 @@ def heartbeat_general_tick():
                      f"    {_fmt_shadow('rangebreak_4h', SHADOW_RANGEBREAK_TARGET)}\n"
                      f"    {_fmt_shadow('trendsurge_4h', SHADOW_TRENDSURGE_TARGET)}\n"
                      f"    {_fmt_shadow('ichibreak_4h', SHADOW_ICHIBREAK_TARGET)}\n"
-                     f"    {_fmt_shadow('psarflip_4h', SHADOW_PSARFLIP_TARGET)}")
+                     f"    {_fmt_shadow('psarflip_4h', SHADOW_PSARFLIP_TARGET)}\n"
+                     f"    {_fmt_shadow('keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET)}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
     slot_line = (f"Slot brkX2-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2} | "
@@ -15809,7 +15810,8 @@ def _load_shadow_fwdtest() -> dict:
                "rangebreak_4h": {"open": [], "closed": []},
                "trendsurge_4h": {"open": [], "closed": []},
                "ichibreak_4h": {"open": [], "closed": []},
-               "psarflip_4h": {"open": [], "closed": []}}
+               "psarflip_4h": {"open": [], "closed": []},
+               "keltnerbreak_12h": {"open": [], "closed": []}}
     try:
         if os.path.exists(SHADOW_FWDTEST_FILE):
             with open(SHADOW_FWDTEST_FILE, encoding="utf-8") as f:
@@ -16453,6 +16455,137 @@ TRENDSURGE_ADX_TH     = 25.0
 SHADOW_ICHIBREAK_TARGET  = 20
 SHADOW_PSARFLIP_TARGET   = 20
 
+# KeltnerBreak-12h (02/10/2026, permintaan Mas Budi: strategi pengganti brkX2-12h -- TF 12h
+# SAMA spt brkX2-12h, formula beda total: close breakout FRESH di atas Keltner Channel (EMA20 +
+# 2xATR10), bukan Supertrend+EMA20+RSI+bullish-count spt brkX2-12h. Dites bareng 2 ide lain
+# (Vortex Cross, Awesome Oscillator Zero-Cross) -- keduanya GAGAL di test (p=0,084 & p=0,39,
+# pola overfit-ke-train spt Multi-TF Alignment dulu), Keltner LOLOS kuat di train *dan* test
+# (p<0,00001 keduanya, diff +1,9pp vs baseline acak, stabil di SETIAP tahun 2022-2026). Avg
+# backtest +3,26%/trade vs brkX2-12h sendiri cuma +0,999%. Scratchpad: brkx2_replace_sim.py /
+# brkx2_replace_random_baseline.py / brkx2_replace_eval.py. brkX2-12h TETAP LIVE seperti biasa
+# (sudah disederhanakan jadi cuma "LIVE", lihat 985dae9/2b06eed) -- Keltner jalan paper dulu,
+# target 20 closed trade, sama pola spt 6 strategi baru sebelumnya, SEBELUM dipertimbangkan jadi
+# pengganti sungguhan.
+STRAT12H_SECONDS = 43200   # 12h dalam detik
+SHADOW_KELTNERBREAK_TARGET = 20
+SHADOW_KELTNERBREAK_MAX_HOLD_CANDLES = 10   # sama persis yg dibacktest (HOLD=10 candle 12h, ~5 hari)
+KELTNER_EMA_LEN = 20
+KELTNER_ATR_LEN = 10
+KELTNER_MULT    = 2.0
+
+
+def _shadow_keltnerbreak_compute(df):
+    """Indikator Keltner Channel -- formula PERSIS brkx2_replace_sim.py (EMA20 mid, ATR10 x2)."""
+    import pandas_ta as _pta
+    c, h, l = df['close'], df['high'], df['low']
+    df['atr_pct'] = _pta.atr(h, l, c, length=14) / c * 100   # sama definisi ATR% dgn strategi lain (exit sizing)
+    df['atr10'] = _pta.atr(h, l, c, length=KELTNER_ATR_LEN)
+    df['ema20'] = _pta.ema(c, length=KELTNER_EMA_LEN)
+    df['kc_upper'] = df['ema20'] + KELTNER_MULT * df['atr10']
+    return df
+
+
+def _shadow_keltnerbreak_scan_entries(data: dict) -> None:
+    """Scan universe candle 12h TERTUTUP terakhir, cari breakout FRESH di atas Keltner upper band."""
+    if len(data['keltnerbreak_12h']['closed']) >= SHADOW_KELTNERBREAK_TARGET \
+       or len(data['keltnerbreak_12h']['open']) >= SHADOW_MAX_OPEN_PER_COMBO:
+        return
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST]
+    except Exception as e:
+        log(f"WARN [SHADOW-KELTNERBREAK] gagal ambil universe: {e}")
+        return
+
+    for sym in universe:
+        if len(data['keltnerbreak_12h']['open']) >= SHADOW_MAX_OPEN_PER_COMBO:
+            break
+        try:
+            df = get_ohlcv(sym, limit=80)   # TIMEFRAME default = "12h" (sama dgn brkX2-12h asli)
+            if df is None or len(df) < 60:
+                continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) < 55:
+                continue
+            df = _shadow_keltnerbreak_compute(df)
+            i = len(df) - 1
+            if i < 1:
+                continue
+            close_now = float(df['close'].iloc[i]); close_prev = float(df['close'].iloc[i - 1])
+            kc_now = df['kc_upper'].iloc[i]; kc_prev = df['kc_upper'].iloc[i - 1]
+            atr_now = df['atr_pct'].iloc[i]
+            if any(pd.isna(x) for x in [kc_now, kc_prev, atr_now]) or atr_now <= 0:
+                continue
+            if close_now > kc_now and close_prev <= kc_prev:
+                sig_ts = int(df['ts'].iloc[i]) if 'ts' in df.columns else int(df['ct'].iloc[i])
+                _shadow_newstrat_open_one(data, 'keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET, sym,
+                                           close_now, float(atr_now), sig_ts,
+                                           f" | tembus Keltner {_fmt_price(float(kc_now))}")
+        except Exception as e:
+            log(f"WARN [SHADOW-KELTNERBREAK] {sym}: {e}")
+
+
+def _shadow_keltnerbreak_check_exits(data: dict) -> None:
+    """Exit sama persis mekanisme _shadow_newstrat_check_exits (trailing stop produksi asli),
+    cuma timeout-nya pakai kadensi 12h (bukan 4h) -- fungsi terpisah supaya tidak mengubah
+    perilaku 6 kombo 4h yg sudah jalan."""
+    combo = 'keltnerbreak_12h'; target = SHADOW_KELTNERBREAK_TARGET
+    still_open = []
+    for pos in data[combo]['open']:
+        sym = pos['sym']; entry_price = pos['entry_price']; atr_pct = pos['atr_pct']
+        peak = pos.get('peak_price', entry_price); armed = pos.get('armed', False)
+        closed = False; exit_price = None; reason = None
+        try:
+            age_sec = time.time() - pos['opened_ts']
+            price = get_price_now(sym)
+            if price <= 0:
+                still_open.append(pos); continue
+            _, _, hsp = hard_stop_pct(atr_pct)
+            hard_stop_price = entry_price * (1 - hsp / 100)
+            if price <= hard_stop_price:
+                closed, exit_price, reason = True, price, f"hard-stop ({hsp:.2f}%)"
+            if not closed:
+                if price > peak:
+                    peak = price
+                peak_profit_pct = (peak / entry_price - 1) * 100
+                arm_th = get_arm_pct(atr_pct)
+                if not armed and peak_profit_pct >= arm_th:
+                    armed = True
+                if armed:
+                    trail_dist = trailing_dist_progressive(atr_pct, peak_profit_pct)
+                    trail_price = peak * (1 - trail_dist / 100)
+                    if price <= trail_price:
+                        closed, exit_price, reason = True, price, f"trailing (puncak {peak_profit_pct:+.2f}%)"
+            if not closed and age_sec >= SHADOW_KELTNERBREAK_MAX_HOLD_CANDLES * STRAT12H_SECONDS:
+                closed, exit_price, reason = True, price, "timeout"
+        except Exception as e:
+            log(f"WARN [SHADOW-KELTNERBREAK] check exit {sym}: {e}")
+            still_open.append(pos); continue
+
+        if closed:
+            pct = (exit_price / entry_price - 1) * 100 - FEE_ROUND_TRIP_PCT
+            pos_closed = dict(pos, exit_price=exit_price, closed_ts=int(time.time()),
+                               closed_wib=now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                               pct=round(pct, 2), reason=reason)
+            data[combo]['closed'].append(pos_closed)
+            n_done = len(data[combo]['closed'])
+            log(f"[SHADOW-KELTNERBREAK] CLOSE {sym} @ {exit_price:.8g} ({pct:+.2f}%) -- {reason} -- #{n_done}/{target}")
+            send_telegram(
+                f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- {combo} (paper)\n"
+                f"{to_display_pair(sym)} @ {_fmt_price(exit_price)} ({pct:+.2f}%) -- {reason}\n"
+                f"Progress: #{n_done}/{target} ({_shadow_wl_tag(data[combo]['closed'])})", parse_mode=None)
+        else:
+            pos['peak_price'] = peak; pos['armed'] = armed
+            still_open.append(pos)
+    data[combo]['open'] = still_open
+
 
 def _shadow_newstrat_compute(df):
     """Hitung semua indikator yg dibutuhkan ke-4 strategi baru sekaligus (1x fetch per symbol,
@@ -16683,6 +16816,7 @@ def thread_shadow_fwdtest_scan() -> None:
             _shadow_newstrat_check_exits(data, 'trendsurge_4h', SHADOW_TRENDSURGE_TARGET)
             _shadow_newstrat_check_exits(data, 'ichibreak_4h', SHADOW_ICHIBREAK_TARGET)
             _shadow_newstrat_check_exits(data, 'psarflip_4h', SHADOW_PSARFLIP_TARGET)
+            _shadow_keltnerbreak_check_exits(data)
             if len(data['akuma_all3']['closed']) < SHADOW_AKUMA_TARGET:
                 _shadow_akuma_try_open(data)
             if len(data['conf3_stochrsibb']['closed']) < SHADOW_CONF3_TARGET:
@@ -16692,6 +16826,7 @@ def thread_shadow_fwdtest_scan() -> None:
             if len(data['dipbuy_bluechip']['closed']) < SHADOW_DIPBUY_BC_TARGET:
                 _shadow_dipbuy_bc_try_open(data)
             _shadow_newstrat_scan_entries(data)
+            _shadow_keltnerbreak_scan_entries(data)
         except Exception as e:
             log(f"ERROR [SHADOW-FWDTEST] scan fatal: {e}")
         _save_shadow_fwdtest(data)
