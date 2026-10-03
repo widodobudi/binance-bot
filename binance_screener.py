@@ -2618,7 +2618,6 @@ def strategy_phase_breakdown() -> dict:
             _phase_entry('LIVE', csv_progress('brkX2_4h')),
             _phase_entry('2nd', csv_progress('brkX2_4h', offset=STRAT4H_LIVE_BASELINE), STRAT4H_PHASE2_TARGET),
             _phase_entry('Akumulasi-4h all_three (slot 2)', akum2_progress(), AKUM2_TARGET),
-            _phase_entry('Quick-Reentry', quick_reentry_progress(), QUICK_REENTRY_TARGET),
         ]
     except Exception as e:
         log(f"   [PHASE] gagal hitung brkX2_4h: {e}")
@@ -7360,13 +7359,11 @@ def heartbeat_general_tick():
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
     else:
         nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
-        prog_qr = quick_reentry_progress()
         prog_line = (f"Progress (gabungan): {nn} ({wl}, {prog_all['total_pct']:+.1f}%)\n"
                      f"  - KeltnerBreak-12h  : {_fmt_hunting_live(prog_brk)}\n"
                      f"  - reversal-8h: {_fmt_hunting_live(prog_rev)}\n"
                      f"  - brkX2-4h   : {_fmt_hunting_live(prog_4h)}\n"
                      f"    brkX2-4h: 2nd {_fmt_strat(prog_4h2, STRAT4H_PHASE2_TARGET)}\n"
-                     f"    brkX2-4h: Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
                      f"  - crossema-4h: {_fmt_hunting_live(prog_cx)}\n"
                      f"    crossema-4h: 2nd STOP@Stoch<25 "
                      f"{prog_cx2['n']}/{STRAT_CROSSEMA_PHASE2_TARGET} "
@@ -9236,12 +9233,10 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
     else:
         nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
-        prog_qr = quick_reentry_progress()
         prog_line = (f"Progress (gabungan): {nn} ({wl}, {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2    : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2)}\n"
                      f"  - reversal : {_fmt_hunting_live(prog_rev)}\n"
                      f"  - 4h       : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET)}\n"
-                     f"    4h       : Quick-Reentry {_fmt_strat(prog_qr, QUICK_REENTRY_TARGET)}\n"
                      f"  - crossema : {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST)}\n"
                      f"  - hunting  : {_fmt_hunting_live(prog_hunt)}\n"
                      f"    hunting  : 2nd {_fmt_strat(prog_hunt2, HUNTING_PHASE2_TARGET)}")
