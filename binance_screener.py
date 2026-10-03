@@ -12550,7 +12550,7 @@ refreshShadowChart();
       <tr data-performance="{{ d.get('performance_score', 0) }}" data-urgency="{{ d.get('urgency_sort', 3999) }}">
         <td class="sym {{ 'profit-pos' if d.get('upnl_usd',0) > 0 else 'profit-neg' }}">{{ sym.replace("USDT","/USDT") }}</td>
         <td style="white-space:nowrap">
-          {% set _sm = {"brkX2":"brkX2-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h"} %}
+          {% set _sm = {"brkX2":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h"} %}
           <div>{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</div>
           <div style="font-size:9px;color:var(--muted)">{{ d.get("opened_at","")[:16] if d.get("opened_at") else "-" }}</div>
         </td>
@@ -13279,7 +13279,7 @@ refreshQscalpSignals();
 // Inject Hunting-4h ke STRAT_SECONDARY setelah dash.js selesai load.
 // Guard ini penting supaya modal tidak crash jika script dipanggil sebelum DOM siap.
 var SC_LABELS = {
-    brkX2: 'brkX2-12h',
+    brkX2: 'KeltnerBreak-12h',
     reversal: 'Reversal-8h',
     brkX2_4h: 'brkX2-4h',
     brkX2_crossema: 'CrossEMA-4h',
@@ -13986,7 +13986,7 @@ function sortClosedTrades(key) {
 
 function renderClosedTradesRows() {
     var rows = closedTradesRows.slice();
-    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h'};
+    var strat_map = {brkX2:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h'};
     var searchBox = document.getElementById('ct-filter-search');
     var searchTerm = searchBox ? searchBox.value.trim().toUpperCase() : '';
     if (searchTerm) {
@@ -14047,7 +14047,7 @@ function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
     if (!el) return;
     if (!rows.length) { el.innerHTML = ''; return; }
-    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h'};
+    var strat_map = {brkX2:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h'};
     var groups = {};
     rows.forEach(function(r) {
         var key = r.strategy || 'brkX2';
@@ -14096,7 +14096,7 @@ function renderCtEquityCurve(rows) {
 function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
-    var strat_map = {brkX2:'brkX2-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h'};
+    var strat_map = {brkX2:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h'};
     var headers = ['Pair','Strategi','Opened','Entry','Closed','Exit','RSI@Open','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
@@ -20686,7 +20686,7 @@ def run_web_dashboard():
                 return jsonify({"ok": False, "error": f"{symbol} tidak ada di active deals"}), 404
             strategy = deal.get("strategy", "brkX2")
             _STRAT_DISPLAY = {
-                "brkX2": "brkX2-12h", "reversal": "Reversal-8h",
+                "brkX2": "KeltnerBreak-12h", "reversal": "Reversal-8h",
                 "brkX2_4h": "brkX2-4h", "brkX2_crossema": "CrossEMA-4h",
                 "hunting_4h": "Hunting-4h",
                 "akum_entry_a": "Akumulasi-4h", "akum_entry_b": "Akumulasi-4h",
