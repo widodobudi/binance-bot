@@ -1376,9 +1376,12 @@ def total_max_deals_all_strategies() -> int:
 # 28-29/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE dan SEMUA deal-nya disembunyikan dari tampilan dashboard default
 # (Closed Trades + kartu Performance per Strategi). Data tetap ada di CSV / counter fase / batas rugi harian; tampil lagi kalau
 # strategi dipilih eksplisit di filter Closed Trades atau ?show_paused=1. Satu sumber kebenaran utk kedua endpoint.
-PAUSED_HIDDEN_STRATEGIES = ('qscalp_3m', 'brkX2_crossema')
-# 02/10/2026: 'reversal' DIKELUARKAN dari daftar ini -- direaktivasi (reversal_resumed_20261002),
-# bukan paused lagi, jadi tidak perlu disembunyikan dari Closed Trades/kartu Performance.
+PAUSED_HIDDEN_STRATEGIES = ('qscalp_3m', 'brkX2_crossema', 'reversal')
+# 02/10/2026: 'reversal' sempat DIKELUARKAN dari daftar ini saat direaktivasi
+# (reversal_resumed_20261002). 03/10/2026: DIMASUKKAN LAGI -- Reversal-8h di-TERMINATE
+# permanen (lihat REVERSAL_ENABLED=False & REMARK di situ, gagal signifikansi di 8h/4h/1h
+# sekaligus), bukan sekadar pause sementara, tapi mekanisme hide yang sama tetap dipakai
+# supaya riwayat closed trade lamanya tidak lagi muncul di Closed Trades/kartu Performance.
 
 def is_strategy_enabled(strategy: str) -> bool:
     cfg = load_strategy_config()
