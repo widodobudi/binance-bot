@@ -7431,6 +7431,7 @@ def heartbeat_general_tick():
                      f"    {_fmt_shadow('ichibreak_4h', SHADOW_ICHIBREAK_TARGET)}\n"
                      f"    {_fmt_shadow('psarflip_4h', SHADOW_PSARFLIP_TARGET)}\n"
                      f"    {_fmt_shadow('keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET)}\n"
+                     f"    {_fmt_shadow('oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)}\n"
                      f"{_fmt_hsconfirm_status()}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
@@ -15837,7 +15838,8 @@ def _load_shadow_fwdtest() -> dict:
                "trendsurge_4h": {"open": [], "closed": []},
                "ichibreak_4h": {"open": [], "closed": []},
                "psarflip_4h": {"open": [], "closed": []},
-               "keltnerbreak_12h": {"open": [], "closed": []}}
+               "keltnerbreak_12h": {"open": [], "closed": []},
+               "oscconfluence_4h": {"open": [], "closed": []}}
     try:
         if os.path.exists(SHADOW_FWDTEST_FILE):
             with open(SHADOW_FWDTEST_FILE, encoding="utf-8") as f:
@@ -16477,6 +16479,21 @@ DECOUPLE_REL_MIN_PCT  = 5.0    # keunggulan vs BTC >=5 poin persentase, DAN baru
 RANGEBREAK_DONCHIAN_N = 50
 TRENDSURGE_ADX_TH     = 25.0
 
+# oscconfluence_4h (03/10/2026, permintaan Mas Budi -- diulang & DIPAKSA setelah sempat
+# dibatalkan 1 jam sebelumnya di sesi yang sama: backtest oscconfluence_sim.py, n=11.063,
+# 170 koin, WR 77,5%, avg +0,98% vs baseline acak avg +0,56% -- TRAIN diff +0,17pp p=0,094
+# (TIDAK lolos standar <0,05 sesi ini), TEST diff +0,64pp p=0,00000 (sangat signifikan).
+# Pola kebalikan overfit biasa: 2024 hampir flat/negatif yg bikin TRAIN gagal, tahun lain
+# positif. TIDAK ADA kode lama yg direvert -- backtest kemarin cuma script scratchpad,
+# tidak pernah ditulis jadi kode shadow. Jalan paper (zero risiko uang sungguhan) meski
+# belum lolos signifikansi ketat, sama spt kartu lain yg jalan paper duluan sblm diputuskan.
+SHADOW_OSCCONFLUENCE_TARGET = 20
+OSC_STOCH_TH = 20.0
+OSC_RSI_TH   = 30.0
+OSC_CCI_TH   = -100.0
+OSC_WILLR_TH = -80.0
+OSC_BBPCTB_TH = 0.0
+
 # ichiBreak-4h & pSARFlip-4h (02/10/2026, ronde riset ke-2 sesi ini -- 4 ide lain dicoba
 # bareng: F/G ini LOLOS vs baseline acak di TRAIN *dan* TEST, H (MACD hist accel) GAGAL di
 # TRAIN (p=0,51, pola overfit-ke-test spt Multi-TF Alignment dulu), I (VWAP reclaim) GAGAL
@@ -16643,6 +16660,12 @@ def _shadow_newstrat_compute(df):
     psar = _pta.psar(h, l, c)
     df['psar_r'] = psar['PSARr_0.02_0.2']   # 1 di candle reversal
     df['psar_l'] = psar['PSARl_0.02_0.2']   # ada nilai (bukan NaN) kalau skrg bullish
+    stoch = _pta.stoch(h, l, c)
+    df['stoch_k'] = stoch[[x for x in stoch.columns if x.startswith('STOCHk')][0]]
+    df['rsi'] = _pta.rsi(c, length=14)
+    df['cci'] = _cci_fixed(h, l, c, length=14)   # pandas_ta.cci() BUGGY, lihat _cci_fixed
+    df['willr'] = _pta.willr(h, l, c, length=14)
+    df['bb_pctb'] = (c - lo) / (up - lo)
     return df
 
 
@@ -16670,7 +16693,8 @@ def _shadow_newstrat_scan_entries(data: dict) -> None:
                                         ('rangebreak_4h', SHADOW_RANGEBREAK_TARGET),
                                         ('trendsurge_4h', SHADOW_TRENDSURGE_TARGET),
                                         ('ichibreak_4h', SHADOW_ICHIBREAK_TARGET),
-                                        ('psarflip_4h', SHADOW_PSARFLIP_TARGET)]
+                                        ('psarflip_4h', SHADOW_PSARFLIP_TARGET),
+                                        ('oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)]
                      if len(data[cb]['closed']) < tg and len(data[cb]['open']) < SHADOW_MAX_OPEN_PER_COMBO]
     if not combos_active:
         return
@@ -16775,6 +16799,30 @@ def _shadow_newstrat_scan_entries(data: dict) -> None:
                     _shadow_newstrat_open_one(data, 'psarflip_4h', SHADOW_PSARFLIP_TARGET, sym,
                                                entry_price, atr_now, sig_ts,
                                                f" | SAR flip bullish @ {_fmt_price(psar_l_now)}")
+
+            if 'oscconfluence_4h' in combos_active and len(data['oscconfluence_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
+                # candle i-1 = "candle merah tajam" dgn 5 oscillator oversold BARENG (asal
+                # chart TRB Mas Budi); candle i (sekarang) = konfirmasi balik naik (close
+                # hijau DAN lebih tinggi dari close candle sebelumnya, bukan cuma wick).
+                stoch_prev = df['stoch_k'].iloc[i - 1] if i >= 1 else float('nan')
+                rsi_prev = df['rsi'].iloc[i - 1] if i >= 1 else float('nan')
+                cci_prev = df['cci'].iloc[i - 1] if i >= 1 else float('nan')
+                willr_prev = df['willr'].iloc[i - 1] if i >= 1 else float('nan')
+                bbpctb_prev = df['bb_pctb'].iloc[i - 1] if i >= 1 else float('nan')
+                close_prev2 = df['close'].iloc[i - 1] if i >= 1 else float('nan')
+                open_now = df['open'].iloc[i]
+                if not any(pd.isna(x) for x in [stoch_prev, rsi_prev, cci_prev, willr_prev,
+                                                 bbpctb_prev, close_prev2, open_now]):
+                    was_oversold = (stoch_prev < OSC_STOCH_TH and rsi_prev < OSC_RSI_TH
+                                     and cci_prev < OSC_CCI_TH and willr_prev < OSC_WILLR_TH
+                                     and bbpctb_prev < OSC_BBPCTB_TH)
+                    turn_up = entry_price > open_now and entry_price > close_prev2
+                    if was_oversold and turn_up:
+                        _shadow_newstrat_open_one(
+                            data, 'oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET, sym,
+                            entry_price, atr_now, sig_ts,
+                            f" | oversold->balik (Stoch{stoch_prev:.0f} RSI{rsi_prev:.0f} "
+                            f"CCI{cci_prev:.0f} WR{willr_prev:.0f} %b{bbpctb_prev:.2f})")
         except Exception as e:
             log(f"WARN [SHADOW-NEWSTRAT] {sym}: {e}")
 
@@ -16847,6 +16895,7 @@ def thread_shadow_fwdtest_scan() -> None:
             _shadow_newstrat_check_exits(data, 'trendsurge_4h', SHADOW_TRENDSURGE_TARGET)
             _shadow_newstrat_check_exits(data, 'ichibreak_4h', SHADOW_ICHIBREAK_TARGET)
             _shadow_newstrat_check_exits(data, 'psarflip_4h', SHADOW_PSARFLIP_TARGET)
+            _shadow_newstrat_check_exits(data, 'oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)
             _shadow_keltnerbreak_check_exits(data)
             if len(data['akuma_all3']['closed']) < SHADOW_AKUMA_TARGET:
                 _shadow_akuma_try_open(data)
