@@ -308,6 +308,12 @@ BASE_ORDER_VOLUME       = 8    # diubah ke $8 (17/08/2026, saldo $85, agar semua
 # STRATEGY_CONFIG_DEFAULTS + sync_max_deals_globals()). Buat DISPLAY total gabungan, pakai
 # total_max_deals_all_strategies() yang otomatis jumlahin ke-6 slot per-strategi terkini.
 MAX_DEALS_BRKX2         = 2      # slot brkX2 (bot existing) — set Max active trades=2 di 3Commas
+# CATATAN (03/10/2026): nama/slot/identitas internal 'brkX2' TETAP (sejarah deal, kode, dsb),
+# TAPI syarat open long deal-nya SUDAH DIGANTI formula Keltner Channel (lihat check_entry() baris
+# ~6293) -- secara substansi strategi ini SEKARANG adalah "KeltnerBreak-12h" (nama resmi, sama
+# dgn kartu di robot-trading-app), bukan brkX2 lama lagi. Label tampilan (Telegram dll) akan
+# menyusul diseragamkan; kalau belum sempat, anggap setiap "brkX2-12h" yang muncul di log/Telegram
+# = KeltnerBreak-12h.
 MAX_DEALS_REVERSAL      = 2      # slot reversal (bot 16921019) — set Max active trades=2 di 3Commas
 
 # ── Batas GABUNGAN lintas SEMUA strategi (19/09/2026, permintaan Mas Budi setelah base
@@ -5936,6 +5942,14 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     elif strategy in ('akum_entry_a', 'akum_entry_b'):
         target  = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
         add_usd = 0
+    # brkX2-12h / "Keltner-12h" (03/10/2026, keputusan Mas Budi): base_usd TETAP, TANPA
+    # add-fund/conviction-tier -- score_to_target_usd lama (skor 0-1 vs >=2) terikat ke
+    # 7-kondisi entry LAMA yang sudah dibuang, tidak ada basis skor yang setara utk formula
+    # Keltner (1 syarat tunggal). Sama pola spt KeltnerBreak-12h shadow yg sudah terbukti
+    # bagus TANPA add-fund.
+    elif strategy == 'brkX2':
+        target  = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
+        add_usd = 0
     # brkX2_4h di Binance direct: pakai base_usd dari Strategy Control, KECUALI tier
     # conviction (ATR%+Volume tinggi bersamaan di candle sinyal, lihat BRKX2_4H_CONVICTION_*)
     elif strategy == 'brkX2_4h' and USE_BINANCE_DIRECT:
@@ -6031,6 +6045,10 @@ def compute_indicators(df):
     st=ta.supertrend(high,low,close,length=SUPERTREND_LENGTH,multiplier=SUPERTREND_MULT)
     df['st_dir']=st[[c for c in st.columns if 'SUPERTd' in c][0]]
     df['atr_pct']=ta.atr(high,low,close,length=14)/close*100
+    # Keltner Channel (03/10/2026, syarat open long BARU -- lihat check_entry()):
+    # ema_fast SUDAH EMA20 (=KELTNER_EMA_LEN), tinggal tambah ATR10 utk kc_upper.
+    df['atr10']=ta.atr(high,low,close,length=10)
+    df['kc_upper']=df['ema_fast']+2.0*df['atr10']
     df['hh']=high.rolling(BREAKOUT_LOOKBACK).max().shift(1)
     df['hh_early']=high.rolling(INTRABAR_EARLY_BREAKOUT_LOOKBACK).max().shift(1)
     df['vol_ma']=df['vol'].rolling(VOLUME_MA_PERIOD).mean()
@@ -6280,64 +6298,38 @@ def ath_distance_ok(sym: str, current_price: float, query_ts_ms: int, min_pct: f
 
 def check_entry(df) -> bool:
     """Evaluasi pada candle TERTUTUP terakhir (mode a).
-    Update 30/07/2026: hapus EMA20>EMA50, hapus MACD hist>0,
-    ATR<9% (dari <10%), tambah close>EMA50.
-    Backtest: backtest_no_ema_no_macd_filter_sweep.py — ATR<9+close>EMA50:
-    avg=+3.074% worst=-29.10% wf6 OK.
-    Update 01/09/2026: close>EMA20 diganti pita 0% s/d +EMA20_BAND_MAX_PCT%
-    (Roadmap Uji Pita EMA20 Fase 1, lihat komentar konstantanya).
-    """
-    if is_choppy(df): return False
-    row = df.iloc[-1]
-    if pd.isna(row['ema_fast']) or pd.isna(row['ema_slow']) or pd.isna(row['vol_ma']):
-        return False
-    if row['st_dir'] != 1: return False
-    _gap_ema20_pct = (row['close'] / row['ema_fast'] - 1) * 100 if row['ema_fast'] > 0 else -999
-    if not (0 <= _gap_ema20_pct <= EMA20_BAND_MAX_PCT): return False
-    # HH3 diganti minimal 2 dari 3 bar bullish
-    if not row.get('bull2of3', False): return False
-    if row['vol'] < VOLUME_MULT * row['vol_ma']: return False
-    if row['vol_ma'] > 0 and (row['vol'] / row['vol_ma']) > VOL_MAX_MULT: return False
-    if pd.isna(row['rsi']) or row['rsi'] > RSI_MAX: return False
-    _atr_pct = row.get('atr_pct')
-    if _atr_pct is not None and not pd.isna(_atr_pct) and _atr_pct >= ATR_MAX_PCT:
-        return False
-    # close > EMA50 dihapus (07/08/2026, keputusan Budi)
-    return True
+    DIGANTI TOTAL 03/10/2026 (keputusan Mas Budi): syarat 7-kondisi lama (EMA
+    band/Supertrend/bull2of3/volume/RSI/ATR/choppy) GAGAL lolos uji signifikansi
+    saat divalidasi ulang di granularitas 1 jam (vs acak p=0,603 keseluruhan,
+    p=0,335 di TRAIN -- lihat sesi 03/10/2026). Diganti formula KeltnerBreak-12h
+    yang TERBUKTI KUAT di presisi yang SAMA (WR 79,8%, avg +1,05%/trade, vs
+    acak signifikan p<0,00001) -- dipakai bersama sebagai KeltnerBreak-12h
+    shadow/paper SEJAK 02/10/2026, sekarang "naik kelas" jadi live brkX2-12h.
+    Sinyal: close candle TERTUTUP menembus FRESH di atas Keltner Channel upper
+    band (EMA20 + 2xATR10) -- breakout volatilitas dinormalisasi per-koin.
+    Identitas/slot/riwayat deal brkX2-12h TETAP (infrastruktur tidak diubah),
+    cuma syarat open long deal-nya yang diganti. Sizing JUGA disederhanakan:
+    base_usd TETAP, TANPA add-fund/conviction-tier (score_to_target_usd lama
+    tidak berlaku lagi utk formula baru -- lihat open_deal_with_sizing())."""
+    if len(df) < 2: return False
+    row = df.iloc[-1]; row_prev = df.iloc[-2]
+    kc_now = row.get('kc_upper'); kc_prev = row_prev.get('kc_upper')
+    if pd.isna(kc_now) or pd.isna(kc_prev): return False
+    return bool(row['close'] > kc_now and row_prev['close'] <= kc_prev)
 
 def entry_detail(df):
     """Untuk heartbeat: kembalikan (n_lolos, total, list_gagal) tanpa mempengaruhi keputusan entry.
-    list_gagal = daftar string syarat yg belum terpenuhi + nilai aktualnya. Return None kalau choppy/data kurang."""
-    if is_choppy(df): return None
-    row = df.iloc[-1]
-    if pd.isna(row['ema_fast']) or pd.isna(row['ema_slow']) or pd.isna(row['hh']) or pd.isna(row['vol_ma']):
+    list_gagal = daftar string syarat yg belum terpenuhi + nilai aktualnya. Return None kalau data kurang.
+    DISEDERHANAKAN 03/10/2026 sejalan dgn check_entry() -- cuma 1 syarat sekarang (KeltnerBreak-12h)."""
+    if len(df) < 2: return None
+    row = df.iloc[-1]; row_prev = df.iloc[-2]
+    kc_now = row.get('kc_upper'); kc_prev = row_prev.get('kc_upper')
+    if pd.isna(kc_now) or pd.isna(kc_prev):
         return None
     checks = []  # (lolos?, label_gagal)
-    checks.append((row['st_dir']==1, "Supertrend (masih Downtrend)"))
-    _gap_ema20_pct_d = (row['close']/row['ema_fast']-1)*100 if row['ema_fast'] > 0 else -999
-    ema20_band_ok = 0 <= _gap_ema20_pct_d <= EMA20_BAND_MAX_PCT
-    checks.append((ema20_band_ok, f"pita EMA20 0%-{EMA20_BAND_MAX_PCT}% (skrg {_gap_ema20_pct_d:+.2f}%, close {_fmt_price(row['close'])} vs EMA20 {_fmt_price(row['ema_fast'])})"))
-    # Minimal 2 dari 3 bar bullish
-    bull_count = sum(bool(df['close'].iloc[idx] > df['open'].iloc[idx]) for idx in (-1, -2, -3))
-    checks.append((bull_count >= 2, f"minimal 2/3 bar bullish ({bull_count}/3)"))
-    vx = (row['vol']/row['vol_ma']) if row['vol_ma'] else 0
-    vol_ok = row['vol']>=VOLUME_MULT*row['vol_ma'] and (row['vol_ma']<=0 or vx<=VOL_MAX_MULT)
-    checks.append((vol_ok, f"vol>={VOLUME_MULT}x dan <={VOL_MAX_MULT}xMA (skrg {vx:.2f}x)"))
-    rsi_ok = (not pd.isna(row['rsi'])) and row['rsi']<=RSI_MAX
-    checks.append((rsi_ok, f"RSI<{RSI_MAX} (skrg {row['rsi']:.1f})" if not pd.isna(row['rsi']) else "RSI (n/a)"))
-    # MACD filter dihapus 30/07/2026
-    if STOCH_MAX is not None:
-        sk = row['stoch_k'] if ('stoch_k' in row and not pd.isna(row['stoch_k'])) else None
-        stoch_ok = sk is not None and sk < STOCH_MAX
-        checks.append((stoch_ok, f"Stoch%K<{STOCH_MAX} (skrg {sk:.1f})" if sk is not None else "Stoch%K (n/a)"))
-    # ATR filter <9%
-    _atr = row.get('atr_pct')
-    if _atr is not None and not pd.isna(_atr):
-        atr_ok = _atr < ATR_MAX_PCT
-        checks.append((atr_ok, f"ATR%<{ATR_MAX_PCT} (skrg {_atr:.1f}%)"))
-    # close > EMA50 (syarat baru pengganti EMA20>EMA50)
-    close_ema50_ok = row['close'] > row['ema_slow']
-    checks.append((close_ema50_ok, f"close>EMA50 (close {_fmt_price(row['close'])} vs EMA50 {_fmt_price(row['ema_slow'])})"))
+    breakout_ok = row['close'] > kc_now and row_prev['close'] <= kc_prev
+    checks.append((breakout_ok,
+                   f"close tembus FRESH Keltner upper (close {_fmt_price(row['close'])} vs band {_fmt_price(kc_now)})"))
     n_pass = sum(1 for ok,_ in checks if ok)
     fails = [lab for ok,lab in checks if not ok]
     return (n_pass, len(checks), fails)
