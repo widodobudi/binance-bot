@@ -402,6 +402,11 @@ STRAT4H_PHASE2_TARGET   = 15      # target fase-2 (counter "2nd") setelah LIVE, 
 QSCALP_MAX_DEALS         = 2       # slot standalone, permintaan eksplisit Mas Budi -- TIDAK
                                     # mengurangi slot strategi lain, jangan diubah tanpa diminta.
 # ── Hunting-4h ───────────────────────────────────────────────────────────────
+# TERMINATED 03/10/2026 (keputusan Mas Budi, audit #20/21 granularitas exit 1 jam, replikasi
+# penuh termasuk Supertrend inkremental tervalidasi identik pandas_ta): TIDAK pernah lolos --
+# TRAIN diff-0,495pp p=0,086 (ke arah NEGATIF), TEST diff-0,350pp p=0,192 (negatif), SEMUA 5
+# tahun 2022-2026 rata-rata minus. Tidak ada bukti strategi ini pernah punya edge nyata.
+HUNTING_ENABLED          = False
 HUNTING_MAX_DEALS        = 3       # max deal hunting aktif bersamaan
 HUNTING_MAX_HOLD_CANDLES = 15      # timeout 15 candle 4h = 2.5 hari (sama brkX2-4h)
 HUNTING_FWDTEST_TARGET   = 7       # target forward-test
@@ -467,7 +472,13 @@ BTC_FILTER_ENABLED      = False
 # Window entry: 5–15% elapsed = menit ke 12–36 dari candle 4h (240 menit)
 # Perf filter: OFF (counter-trend, perf filter justru merugikan)
 # HTF RSI: ON (identik brkX2-4h)
-STRAT_CROSSEMA_ENABLED      = True
+# TERMINATED 03/10/2026 (keputusan Mas Budi, audit #19/21 granularitas exit 1 jam, replikasi
+# penuh termasuk Supertrend_cx inkremental tervalidasi identik pandas_ta): TIDAK lolos
+# signifikansi di kedua periode -- TRAIN diff+0,219pp p=0,544 (positif tapi jauh dari
+# signifikan), TEST diff-0,287pp p=0,320 (negatif). 2022-2024 tipis positif tiap tahun, TAPI
+# 2025 (-0,33%) & 2026 (-0,25%) sudah berbalik minus -- pola sama spt Reversal-8h: kebetulan
+# di data lama, tidak terbukti di data baru.
+STRAT_CROSSEMA_ENABLED      = False
 STRAT_CROSSEMA_ENTRY_MIN    = 5/240    # 5% elapsed = menit ke-12
 STRAT_CROSSEMA_ENTRY_MAX    = 75/240   # 75% elapsed = menit ke-180 (dilonggarkan dari 50%, 20/08/2026)
 STRAT_CROSSEMA_SCAN_INTERVAL= 240      # scan tiap 4 menit
@@ -1385,7 +1396,11 @@ def total_max_deals_all_strategies() -> int:
 # 28-29/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE dan SEMUA deal-nya disembunyikan dari tampilan dashboard default
 # (Closed Trades + kartu Performance per Strategi). Data tetap ada di CSV / counter fase / batas rugi harian; tampil lagi kalau
 # strategi dipilih eksplisit di filter Closed Trades atau ?show_paused=1. Satu sumber kebenaran utk kedua endpoint.
-PAUSED_HIDDEN_STRATEGIES = ('qscalp_3m', 'brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b')
+PAUSED_HIDDEN_STRATEGIES = ('qscalp_3m', 'brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h')
+# 03/10/2026: 'hunting_4h' DITAMBAHKAN -- Hunting-4h di-TERMINATE (lihat REMARK di
+# HUNTING_ENABLED). 'brkX2_crossema' SUDAH ada di daftar ini sejak 28-29/09/2026 (pause lama)
+# dan TIDAK PERNAH dikeluarkan lagi meski STRAT_CROSSEMA_ENABLED sempat True -- kebetulan
+# cocok dgn keputusan 03/10/2026 ini (TERMINATE permanen), tidak perlu diubah.
 # 02/10/2026: 'reversal' sempat DIKELUARKAN dari daftar ini saat direaktivasi
 # (reversal_resumed_20261002). 03/10/2026: DIMASUKKAN LAGI -- Reversal-8h di-TERMINATE
 # permanen (lihat REVERSAL_ENABLED=False & REMARK di situ, gagal signifikansi di 8h/4h/1h
@@ -7382,10 +7397,6 @@ def heartbeat_general_tick():
                      f"  - KeltnerBreak-12h  : {_fmt_hunting_live(prog_brk)}\n"
                      f"  - brkX2-4h   : {_fmt_hunting_live(prog_4h)}\n"
                      f"    brkX2-4h: 2nd {_fmt_strat(prog_4h2, STRAT4H_PHASE2_TARGET)}\n"
-                     f"  - crossema-4h: {_fmt_hunting_live(prog_cx)}\n"
-                     f"    crossema-4h: 3rd {_fmt_strat(prog_cx3, STRAT_CROSSEMA_PHASE3_TARGET)}\n"
-                     f"  - hunting-4h : {_fmt_hunting_live(prog_hunt)}\n"
-                     f"    hunting-4h: 2nd {_fmt_strat(prog_hunt2, HUNTING_PHASE2_TARGET)}\n"
                      f"  - trend_confirm_4h: {_fmt_hunting_live(prog_trend)}\n"
                      f"    trend_confirm_4h review hard-stop K1.5/cap10.8: {tc_hardstop_progress_line()}\n"
                      f"    jual-sebagian->Earn (brkX2-12h 75%): {earn_partial_progress_line()}\n"
@@ -9244,10 +9255,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
         nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
         prog_line = (f"Progress (gabungan): {nn} ({wl}, {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2    : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2)}\n"
-                     f"  - 4h       : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET)}\n"
-                     f"  - crossema : {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST)}\n"
-                     f"  - hunting  : {_fmt_hunting_live(prog_hunt)}\n"
-                     f"    hunting  : 2nd {_fmt_strat(prog_hunt2, HUNTING_PHASE2_TARGET)}")
+                     f"  - 4h       : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET)}")
 
     # Status T3 intrabar
     t3_str = ""
@@ -10475,6 +10483,8 @@ def thread1d_scan_4h():
 def scan_hunting_signals_only():
     """Scan Hunting-4h independen — tidak diblokir gating window intrabar brkX2-4h.
     Dipanggil tiap loop run_thread1d_4h() agar dashboard selalu update."""
+    if not HUNTING_ENABLED:  # 03/10/2026: TERMINATED, lihat REMARK di definisinya
+        return
     if not is_strategy_enabled('hunting_4h'):  # 11/09/2026, lihat catatan di thread1_scan()
         return
     try:
@@ -10549,7 +10559,8 @@ def run_thread1d_4h():
                 with t1d_near_miss_lock:
                     near_4h = t1d_near_miss[:]
                 heartbeat_4h_tick(status_4h, near_4h)
-                heartbeat_crossema_tick()
+                if STRAT_CROSSEMA_ENABLED:  # 03/10/2026: CrossEMA-4h TERMINATED, stop heartbeat-nya juga
+                    heartbeat_crossema_tick()
                 heartbeat_general_tick()
                 check_delisting_announcements_tick()
                 dust_sweep_weekly_tick()
