@@ -654,7 +654,16 @@ AI_BATCH_MAX_APPROVE = 5
 #   S3. MACD histogram flat dekat nol (|hist| < AKUM_MACD_FLAT_PCT * close)
 #   S4. Candle body/range ratio kecil (rata-rata < AKUM_BODY_RATIO_MAX → konsolidasi)
 # Output: maks AKUM_MAX_RESULTS pair dengan skor akumulasi tertinggi (max 5)
-STRAT_AKUM_ENABLED        = True
+# TERMINATED 03/10/2026 (keputusan Mas Budi, audit #18/21 granularitas exit 1 jam): Entry A
+# (Spring) SIGNIFIKAN LEBIH BURUK dari acak di KEDUA periode (TRAIN diff-0,41pp p=0,00055,
+# TEST diff-0,31pp p=0,00615 -- bukan sekadar tidak ada edge, aktif merugikan dibanding acak).
+# Entry B (Breakout+Retest) tidak konsisten (TRAIN diff+0,24pp p=0,00104 signifikan, TAPI
+# TEST diff+0,07pp p=0,372 gagal -- pola klasik kebetulan di data lama). Exit custom (SL tetap
+# + TP1 swing-high + TP2 momentum + TP3 pivot + timeout) diuji APA ADANYA, baseline acak pakai
+# jarak SL yg sama (bootstrap dari distribusi SL asli, median 4,6%). Matikan di sini (satu2nya
+# sumber _akum_near_miss) menghentikan thread_akum_scan() DAN thread_akum_entry_scan() sekaligus
+# (yg kedua baca _akum_near_miss, jadi otomatis kosong & return awal) -- Entry A & B mati bareng.
+STRAT_AKUM_ENABLED        = False
 AKUM_TIMEFRAME            = "4h"
 AKUM_TIMEFRAME_HOURS      = 4           # jam per candle — ubah ini kalau TF berubah
 AKUM_SIDEWAYS_DAYS        = 30          # minimum hari sideways (Wyckoff standard: 30-56 hari)
@@ -1376,12 +1385,15 @@ def total_max_deals_all_strategies() -> int:
 # 28-29/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE dan SEMUA deal-nya disembunyikan dari tampilan dashboard default
 # (Closed Trades + kartu Performance per Strategi). Data tetap ada di CSV / counter fase / batas rugi harian; tampil lagi kalau
 # strategi dipilih eksplisit di filter Closed Trades atau ?show_paused=1. Satu sumber kebenaran utk kedua endpoint.
-PAUSED_HIDDEN_STRATEGIES = ('qscalp_3m', 'brkX2_crossema', 'reversal')
+PAUSED_HIDDEN_STRATEGIES = ('qscalp_3m', 'brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b')
 # 02/10/2026: 'reversal' sempat DIKELUARKAN dari daftar ini saat direaktivasi
 # (reversal_resumed_20261002). 03/10/2026: DIMASUKKAN LAGI -- Reversal-8h di-TERMINATE
 # permanen (lihat REVERSAL_ENABLED=False & REMARK di situ, gagal signifikansi di 8h/4h/1h
 # sekaligus), bukan sekadar pause sementara, tapi mekanisme hide yang sama tetap dipakai
 # supaya riwayat closed trade lamanya tidak lagi muncul di Closed Trades/kartu Performance.
+# 03/10/2026: 'akum_entry_a'/'akum_entry_b' DITAMBAHKAN -- Akumulasi-4h Entry A & B SAMA-SAMA
+# di-TERMINATE (lihat REMARK di STRAT_AKUM_ENABLED), Entry A signifikan lebih buruk dari acak,
+# Entry B tidak konsisten train-vs-test.
 
 def is_strategy_enabled(strategy: str) -> bool:
     cfg = load_strategy_config()
@@ -7338,10 +7350,8 @@ def heartbeat_general_tick():
     prog_4h   = csv_progress('brkX2_4h')
     prog_cx   = csv_progress('brkX2_crossema')
     prog_hunt = csv_progress('hunting_4h', offset=HUNTING_FWDTEST_PHASE_OFFSET)
-    # 12/09/2026: fase-1 Akumulasi-4h (gabungan Entry A+B) DIBEKUKAN di AKUM_ENTRY_STOCH_PATCH_BASELINE
-    # (syarat Entry B berubah, tambah Stoch<25) -- lihat komentar konstantanya.
-    prog_akum_stop = csv_progress('akumulasi', until=AKUM_ENTRY_STOCH_PATCH_BASELINE)
-    prog_akum2     = csv_progress('akumulasi', offset=AKUM_ENTRY_STOCH_PATCH_BASELINE)
+    # 03/10/2026: baris progress Akumulasi-4h (1st/2nd/review Entry A/B) dihapus dari laporan ini --
+    # Entry A & B di-TERMINATE (lihat REMARK di STRAT_AKUM_ENABLED), tidak lagi relevan ditampilkan.
     # 02/10/2026 (permintaan Mas Budi): reversal-8h "2nd"/"3rd" dihapus, cuma "LIVE" (prog_rev,
     # cumulative) yg tersisa -- strategi ini di-pause 29/09/2026 (b7425d2, performa real 10W/3L
     # termasuk 3 hard-stop & skid -22,68% di 6 trade terakhir, bukan 10W/0L yg kelihatan di
@@ -7376,12 +7386,6 @@ def heartbeat_general_tick():
                      f"    crossema-4h: 3rd {_fmt_strat(prog_cx3, STRAT_CROSSEMA_PHASE3_TARGET)}\n"
                      f"  - hunting-4h : {_fmt_hunting_live(prog_hunt)}\n"
                      f"    hunting-4h: 2nd {_fmt_strat(prog_hunt2, HUNTING_PHASE2_TARGET)}\n"
-                     f"  - akumulasi-4h: 1st STOP@Stoch<25 "
-                     f"{prog_akum_stop['n']}/{AKUM_ENTRY_FWDTEST_TARGET} "
-                     f"({prog_akum_stop['win']}W/{prog_akum_stop['loss']}L,{prog_akum_stop['total_pct']:+.1f}%)\n"
-                     f"    akumulasi-4h: 2nd {_fmt_strat(prog_akum2, AKUM_ENTRY_PHASE2_TARGET)}\n"
-                     f"    akum entry A review base $8: {akum_ab_progress_line('akum_entry_a')}\n"
-                     f"    akum entry B review base $8: {akum_ab_progress_line('akum_entry_b')}\n"
                      f"  - trend_confirm_4h: {_fmt_hunting_live(prog_trend)}\n"
                      f"    trend_confirm_4h review hard-stop K1.5/cap10.8: {tc_hardstop_progress_line()}\n"
                      f"    jual-sebagian->Earn (brkX2-12h 75%): {earn_partial_progress_line()}\n"
