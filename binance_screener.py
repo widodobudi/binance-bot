@@ -7432,6 +7432,7 @@ def heartbeat_general_tick():
                      f"    {_fmt_shadow('psarflip_4h', SHADOW_PSARFLIP_TARGET)}\n"
                      f"    {_fmt_shadow('keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET)}\n"
                      f"    {_fmt_shadow('oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)}\n"
+                     f"    {_fmt_shadow('rvolbreak_1h', SHADOW_RVOLBREAK_TARGET)}\n"
                      f"{_fmt_hsconfirm_status()}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
@@ -15839,7 +15840,8 @@ def _load_shadow_fwdtest() -> dict:
                "ichibreak_4h": {"open": [], "closed": []},
                "psarflip_4h": {"open": [], "closed": []},
                "keltnerbreak_12h": {"open": [], "closed": []},
-               "oscconfluence_4h": {"open": [], "closed": []}}
+               "oscconfluence_4h": {"open": [], "closed": []},
+               "rvolbreak_1h": {"open": [], "closed": []}}
     try:
         if os.path.exists(SHADOW_FWDTEST_FILE):
             with open(SHADOW_FWDTEST_FILE, encoding="utf-8") as f:
@@ -16520,6 +16522,21 @@ KELTNER_EMA_LEN = 20
 KELTNER_ATR_LEN = 10
 KELTNER_MULT    = 2.0
 
+# RVOLBreak-1h (03/10/2026, permintaan Mas Budi: strategi baru TF di bawah 4h). Close
+# menembus FRESH di atas HIGH 24-candle (~1 hari) sebelumnya (Donchian breakout) DENGAN
+# RVOL (vol/avg-vol-20) >= 3.0 (lebih ketat dari Squized-4h RVOL>=2.0, krn 1h lebih noisy).
+# Backtest (rvolbreak_1h_sim.py, 175 koin 2022-2026, TF 1h native/tanpa resample): n=37.124,
+# 174 koin, WR 73,6%, avg +0,761%/trade. TRAIN diff +0,653pp p=0,00000, TEST diff +0,752pp
+# p=0,00000 -- LOLOS KUAT dua-duanya, stabil di SETIAP tahun 2022-2026 (avg +0,65% s/d
+# +0,89%, WR 72,5%-74,8%). Scratchpad: rvolbreak_1h_sim.py / rvolbreak_1h_random_baseline.py
+# / rvolbreak_1h_eval.py. Jalan paper dulu (target 20 closed trade), sama pola spt strategi
+# baru lain sebelum dipertimbangkan live.
+STRAT1H_SECONDS = 3600
+SHADOW_RVOLBREAK_TARGET = 20
+SHADOW_RVOLBREAK_MAX_HOLD_CANDLES = 24   # sama persis yg dibacktest (HOLD=24 candle 1h, ~1 hari)
+RVOLBREAK_LOOKBACK = 24
+RVOLBREAK_RVOL_MIN = 3.0
+
 
 def _shadow_keltnerbreak_compute(df):
     """Indikator Keltner Channel -- formula PERSIS brkx2_replace_sim.py (EMA20 mid, ATR10 x2)."""
@@ -16624,6 +16641,115 @@ def _shadow_keltnerbreak_check_exits(data: dict) -> None:
             data[combo]['closed'].append(pos_closed)
             n_done = len(data[combo]['closed'])
             log(f"[SHADOW-KELTNERBREAK] CLOSE {sym} @ {exit_price:.8g} ({pct:+.2f}%) -- {reason} -- #{n_done}/{target}")
+            send_telegram(
+                f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- {combo} (paper)\n"
+                f"{to_display_pair(sym)} @ {_fmt_price(exit_price)} ({pct:+.2f}%) -- {reason}\n"
+                f"Progress: #{n_done}/{target} ({_shadow_wl_tag(data[combo]['closed'])})", parse_mode=None)
+        else:
+            pos['peak_price'] = peak; pos['armed'] = armed
+            still_open.append(pos)
+    data[combo]['open'] = still_open
+
+
+def _shadow_rvolbreak_compute(df):
+    """Indikator RVOL Breakout-1h -- formula PERSIS rvolbreak_1h_sim.py."""
+    import pandas_ta as _pta
+    c, h, l, v = df['close'], df['high'], df['low'], df['vol']
+    df['atr_pct'] = _pta.atr(h, l, c, length=14) / c * 100
+    df['donchian_high'] = h.rolling(RVOLBREAK_LOOKBACK).max().shift(1)
+    df['vol_ma20'] = v.rolling(20).mean()
+    df['rvol'] = v / df['vol_ma20']
+    return df
+
+
+def _shadow_rvolbreak_scan_entries(data: dict) -> None:
+    """Scan universe candle 1h TERTUTUP terakhir, cari breakout Donchian 24-candle + RVOL>=3.0."""
+    if len(data['rvolbreak_1h']['closed']) >= SHADOW_RVOLBREAK_TARGET \
+       or len(data['rvolbreak_1h']['open']) >= SHADOW_MAX_OPEN_PER_COMBO:
+        return
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST]
+    except Exception as e:
+        log(f"WARN [SHADOW-RVOLBREAK] gagal ambil universe: {e}")
+        return
+
+    for sym in universe:
+        if len(data['rvolbreak_1h']['open']) >= SHADOW_MAX_OPEN_PER_COMBO:
+            break
+        try:
+            df = get_ohlcv(sym, interval="1h", limit=80)
+            if df is None or len(df) < 50:
+                continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) < 46:
+                continue
+            df = _shadow_rvolbreak_compute(df)
+            i = len(df) - 1
+            close_now = float(df['close'].iloc[i])
+            dh = df['donchian_high'].iloc[i]; rvol_now = df['rvol'].iloc[i]
+            atr_now = df['atr_pct'].iloc[i]
+            if any(pd.isna(x) for x in [dh, rvol_now, atr_now]) or atr_now <= 0:
+                continue
+            if close_now > dh and rvol_now >= RVOLBREAK_RVOL_MIN:
+                sig_ts = int(df['ts'].iloc[i]) if 'ts' in df.columns else int(df['ct'].iloc[i])
+                _shadow_newstrat_open_one(data, 'rvolbreak_1h', SHADOW_RVOLBREAK_TARGET, sym,
+                                           close_now, float(atr_now), sig_ts,
+                                           f" | tembus HH{RVOLBREAK_LOOKBACK} RVOL {rvol_now:.2f}x")
+        except Exception as e:
+            log(f"WARN [SHADOW-RVOLBREAK] {sym}: {e}")
+
+
+def _shadow_rvolbreak_check_exits(data: dict) -> None:
+    """Exit sama persis mekanisme _shadow_newstrat_check_exits, cuma timeout pakai kadensi 1h."""
+    combo = 'rvolbreak_1h'; target = SHADOW_RVOLBREAK_TARGET
+    still_open = []
+    for pos in data[combo]['open']:
+        sym = pos['sym']; entry_price = pos['entry_price']; atr_pct = pos['atr_pct']
+        peak = pos.get('peak_price', entry_price); armed = pos.get('armed', False)
+        closed = False; exit_price = None; reason = None
+        try:
+            age_sec = time.time() - pos['opened_ts']
+            price = get_price_now(sym)
+            if price <= 0:
+                still_open.append(pos); continue
+            _, _, hsp = hard_stop_pct(atr_pct)
+            hard_stop_price = entry_price * (1 - hsp / 100)
+            if price <= hard_stop_price:
+                closed, exit_price, reason = True, price, f"hard-stop ({hsp:.2f}%)"
+            if not closed:
+                if price > peak:
+                    peak = price
+                peak_profit_pct = (peak / entry_price - 1) * 100
+                arm_th = get_arm_pct(atr_pct)
+                if not armed and peak_profit_pct >= arm_th:
+                    armed = True
+                if armed:
+                    trail_dist = trailing_dist_progressive(atr_pct, peak_profit_pct)
+                    trail_price = peak * (1 - trail_dist / 100)
+                    if price <= trail_price:
+                        closed, exit_price, reason = True, price, f"trailing (puncak {peak_profit_pct:+.2f}%)"
+            if not closed and age_sec >= SHADOW_RVOLBREAK_MAX_HOLD_CANDLES * STRAT1H_SECONDS:
+                closed, exit_price, reason = True, price, "timeout"
+        except Exception as e:
+            log(f"WARN [SHADOW-RVOLBREAK] check exit {sym}: {e}")
+            still_open.append(pos); continue
+
+        if closed:
+            pct = (exit_price / entry_price - 1) * 100 - FEE_ROUND_TRIP_PCT
+            pos_closed = dict(pos, exit_price=exit_price, closed_ts=int(time.time()),
+                               closed_wib=now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                               pct=round(pct, 2), reason=reason)
+            data[combo]['closed'].append(pos_closed)
+            n_done = len(data[combo]['closed'])
+            log(f"[SHADOW-RVOLBREAK] CLOSE {sym} @ {exit_price:.8g} ({pct:+.2f}%) -- {reason} -- #{n_done}/{target}")
             send_telegram(
                 f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- {combo} (paper)\n"
                 f"{to_display_pair(sym)} @ {_fmt_price(exit_price)} ({pct:+.2f}%) -- {reason}\n"
@@ -16900,6 +17026,7 @@ def thread_shadow_fwdtest_scan() -> None:
             _shadow_newstrat_check_exits(data, 'psarflip_4h', SHADOW_PSARFLIP_TARGET)
             _shadow_newstrat_check_exits(data, 'oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)
             _shadow_keltnerbreak_check_exits(data)
+            _shadow_rvolbreak_check_exits(data)
             if len(data['akuma_all3']['closed']) < SHADOW_AKUMA_TARGET:
                 _shadow_akuma_try_open(data)
             if len(data['conf3_stochrsibb']['closed']) < SHADOW_CONF3_TARGET:
@@ -16910,6 +17037,7 @@ def thread_shadow_fwdtest_scan() -> None:
                 _shadow_dipbuy_bc_try_open(data)
             _shadow_newstrat_scan_entries(data)
             _shadow_keltnerbreak_scan_entries(data)
+            _shadow_rvolbreak_scan_entries(data)
         except Exception as e:
             log(f"ERROR [SHADOW-FWDTEST] scan fatal: {e}")
         _save_shadow_fwdtest(data)
