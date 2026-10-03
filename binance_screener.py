@@ -1189,21 +1189,31 @@ def _fetch_3m_klines_1y(symbol: str) -> pd.DataFrame | None:
     df = df[["ts","open","high","low","close","vol"]].drop_duplicates("ts").sort_values("ts").reset_index(drop=True)
     return df
 
-def qscalp_export_3m_cache_once():
+def qscalp_export_3m_cache_once(only_symbols: list | None = None):
     """Job ekspor sekali-jalan -- lihat REMARK di atas. Dipanggil dari endpoint admin,
-    bukan otomatis saat startup."""
-    log("[QSCALP3M-EXPORT] Mulai -- ambil universe top-N likuid...")
-    try:
-        ticker = get_ticker_24h()
-        if not ticker:
-            log("WARN [QSCALP3M-EXPORT] gagal ambil ticker, batal.")
+    bukan otomatis saat startup. only_symbols: kalau diisi, skip hitung ulang top-N
+    likuid dan langsung proses daftar simbol itu saja (dipakai utk retry pair yang
+    gagal upload di run sebelumnya -- placeholder Drive-nya belum ada saat itu)."""
+    if only_symbols:
+        universe = only_symbols
+        log(f"[QSCALP3M-EXPORT] Mulai -- retry {len(universe)} pair spesifik...")
+    else:
+        log("[QSCALP3M-EXPORT] Mulai -- ambil universe top-N likuid...")
+        try:
+            ticker = get_ticker_24h()
+            if not ticker:
+                log("WARN [QSCALP3M-EXPORT] gagal ambil ticker, batal.")
+                return
+            volmap = {}
+            for t in ticker:
+                try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+                except Exception: pass
+            pairs_all = [s for s in volmap if s.endswith('USDT') and s not in SYMBOL_BLACKLIST]
+            universe = sorted(pairs_all, key=lambda s: volmap[s], reverse=True)[:QSCALP_UNIVERSE_SIZE]
+        except Exception as e:
+            log(f"WARN [QSCALP3M-EXPORT] job error: {e}")
             return
-        volmap = {}
-        for t in ticker:
-            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
-            except Exception: pass
-        pairs_all = [s for s in volmap if s.endswith('USDT') and s not in SYMBOL_BLACKLIST]
-        universe = sorted(pairs_all, key=lambda s: volmap[s], reverse=True)[:QSCALP_UNIVERSE_SIZE]
+    try:
         log(f"[QSCALP3M-EXPORT] Universe {len(universe)} pair. Mulai fetch+upload satu per satu...")
 
         n_ok, n_skip, n_fail = 0, 0, 0
@@ -22201,8 +22211,11 @@ def run_web_dashboard():
             expected = os.environ.get("DIAG_TOKEN", "")
             if not expected or token != expected:
                 return jsonify({"ok": False, "error": "token salah/belum di-set"}), 403
-            threading.Thread(target=qscalp_export_3m_cache_once, daemon=True).start()
-            return jsonify({"ok": True, "msg": "Export job dimulai di background, cek Railway log [QSCALP3M-EXPORT]"})
+            symbols_param = request.args.get("symbols", "")
+            only_symbols = [s.strip().upper() for s in symbols_param.split(",") if s.strip()] or None
+            threading.Thread(target=qscalp_export_3m_cache_once, args=(only_symbols,), daemon=True).start()
+            return jsonify({"ok": True, "msg": "Export job dimulai di background, cek Railway log [QSCALP3M-EXPORT]",
+                             "only_symbols": only_symbols})
 
         @app.route("/api/auto_sell_price")
         def api_auto_sell_price():
