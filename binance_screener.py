@@ -788,7 +788,14 @@ HTF_VOL_MULT        = 0.7  # diubah dari 0.8 → 0.7 (backtest_brkx2_sweep2.py, 
 HTF_VOL_MA_PERIOD   = 20
 
 # ---- STRATEGI 2: REVERSAL DOJI + HEIKIN ASHI (8h) ----
-REVERSAL_ENABLED      = True
+# TERMINATED 03/10/2026 (keputusan Mas Budi): audit ulang #16/21 di granularitas exit 1 jam
+# GAGAL lolos signifikansi di 8h (TRAIN p=0,094, TEST p=0,964 -- praktis sama dgn acak), DAN
+# retune ke 4h (TRAIN p=0,387, TEST p=0,386, malah negatif) maupun 1h (TRAIN negatif p=0,285,
+# TEST p=0,050 nyaris tapi tidak konsisten) SAMA-SAMA gagal -- tidak ada timeframe yg
+# menyelamatkan pattern ini. Live record 8W/0L (+35,4%) cuma sample n=8, bukan bukti edge
+# (baseline acak jg WR~79% krn exit hard-stop/trailing-nya sendiri sudah bagus). Posisi yg
+# masih open (kalau ada) TETAP dipantau & exit normal -- cuma entry baru yg dihentikan.
+REVERSAL_ENABLED      = False
 # Reversal pakai bot 3Commas terpisah (split). Kalau env var-nya belum diset, matikan reversal
 # supaya tidak salah kirim sinyal reversal ke bot brkX2.
 # 03/09/2026: syarat kredensial 3Commas di atas HANYA relevan kalau send_open_long() benar2
@@ -7360,7 +7367,6 @@ def heartbeat_general_tick():
         nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
         prog_line = (f"Progress (gabungan): {nn} ({wl}, {prog_all['total_pct']:+.1f}%)\n"
                      f"  - KeltnerBreak-12h  : {_fmt_hunting_live(prog_brk)}\n"
-                     f"  - reversal-8h: {_fmt_hunting_live(prog_rev)}\n"
                      f"  - brkX2-4h   : {_fmt_hunting_live(prog_4h)}\n"
                      f"    brkX2-4h: 2nd {_fmt_strat(prog_4h2, STRAT4H_PHASE2_TARGET)}\n"
                      f"  - crossema-4h: {_fmt_hunting_live(prog_cx)}\n"
@@ -9231,7 +9237,6 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
         nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
         prog_line = (f"Progress (gabungan): {nn} ({wl}, {prog_all['total_pct']:+.1f}%)\n"
                      f"  - brkX2    : {_fmt_strat(prog_brk,  FWDTEST_TARGET_BRKX2)}\n"
-                     f"  - reversal : {_fmt_hunting_live(prog_rev)}\n"
                      f"  - 4h       : {_fmt_strat(prog_4h,   STRAT4H_FWDTEST_TARGET)}\n"
                      f"  - crossema : {_fmt_strat(prog_cx,   STRAT_CROSSEMA_FWDTEST)}\n"
                      f"  - hunting  : {_fmt_hunting_live(prog_hunt)}\n"
@@ -24803,8 +24808,9 @@ if __name__ == '__main__':
     # Catatan: heartbeat 4h/CrossEMA/General dihandle oleh T1d loop (run_thread1d_4h)
     # sehingga tidak perlu dikirim di sini — cukup Reversal saja.
     time.sleep(15)
-    try: heartbeat_rev_tick("REVERSAL: memulai scan...")
-    except Exception as e: log(f"WARN heartbeat rev START: {e}")
+    if REVERSAL_ENABLED:
+        try: heartbeat_rev_tick("REVERSAL: memulai scan...")
+        except Exception as e: log(f"WARN heartbeat rev START: {e}")
     try:
         while True: time.sleep(60)
     except KeyboardInterrupt:
