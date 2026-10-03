@@ -16801,28 +16801,31 @@ def _shadow_newstrat_scan_entries(data: dict) -> None:
                                                f" | SAR flip bullish @ {_fmt_price(psar_l_now)}")
 
             if 'oscconfluence_4h' in combos_active and len(data['oscconfluence_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
-                # candle i-1 = "candle merah tajam" dgn 5 oscillator oversold BARENG (asal
-                # chart TRB Mas Budi); candle i (sekarang) = konfirmasi balik naik (close
-                # hijau DAN lebih tinggi dari close candle sebelumnya, bukan cuma wick).
-                stoch_prev = df['stoch_k'].iloc[i - 1] if i >= 1 else float('nan')
-                rsi_prev = df['rsi'].iloc[i - 1] if i >= 1 else float('nan')
-                cci_prev = df['cci'].iloc[i - 1] if i >= 1 else float('nan')
-                willr_prev = df['willr'].iloc[i - 1] if i >= 1 else float('nan')
-                bbpctb_prev = df['bb_pctb'].iloc[i - 1] if i >= 1 else float('nan')
-                close_prev2 = df['close'].iloc[i - 1] if i >= 1 else float('nan')
-                open_now = df['open'].iloc[i]
-                if not any(pd.isna(x) for x in [stoch_prev, rsi_prev, cci_prev, willr_prev,
-                                                 bbpctb_prev, close_prev2, open_now]):
-                    was_oversold = (stoch_prev < OSC_STOCH_TH and rsi_prev < OSC_RSI_TH
-                                     and cci_prev < OSC_CCI_TH and willr_prev < OSC_WILLR_TH
-                                     and bbpctb_prev < OSC_BBPCTB_TH)
-                    turn_up = entry_price > open_now and entry_price > close_prev2
-                    if was_oversold and turn_up:
-                        _shadow_newstrat_open_one(
-                            data, 'oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET, sym,
-                            entry_price, atr_now, sig_ts,
-                            f" | oversold->balik (Stoch{stoch_prev:.0f} RSI{rsi_prev:.0f} "
-                            f"CCI{cci_prev:.0f} WR{willr_prev:.0f} %b{bbpctb_prev:.2f})")
+                # Formula PERSIS oscconfluence_sim.py (script backtest asli, bukan tafsiran
+                # ulang) -- koreksi 03/10/2026 setelah ketahuan beda: oversold di i-1 ATAU
+                # i-2 (bukan cuma i-1), "balik naik" = KELIMA indikator naik dibanding candle
+                # sebelumnya (bukan harga candle).
+                if i >= 2:
+                    sk_i, sk_1, sk_2 = r['stoch_k'], df['stoch_k'].iloc[i-1], df['stoch_k'].iloc[i-2]
+                    rsi_i, rsi_1, rsi_2 = r['rsi'], df['rsi'].iloc[i-1], df['rsi'].iloc[i-2]
+                    cci_i, cci_1, cci_2 = r['cci'], df['cci'].iloc[i-1], df['cci'].iloc[i-2]
+                    wr_i, wr_1, wr_2 = r['willr'], df['willr'].iloc[i-1], df['willr'].iloc[i-2]
+                    bb_i, bb_1, bb_2 = r['bb_pctb'], df['bb_pctb'].iloc[i-1], df['bb_pctb'].iloc[i-2]
+                    vals = [sk_i, sk_1, sk_2, rsi_i, rsi_1, rsi_2, cci_i, cci_1, cci_2,
+                            wr_i, wr_1, wr_2, bb_i, bb_1, bb_2]
+                    if not any(pd.isna(x) for x in vals):
+                        oversold_1 = sk_1 < OSC_STOCH_TH and rsi_1 < OSC_RSI_TH and cci_1 < OSC_CCI_TH \
+                            and wr_1 < OSC_WILLR_TH and bb_1 < OSC_BBPCTB_TH
+                        oversold_2 = sk_2 < OSC_STOCH_TH and rsi_2 < OSC_RSI_TH and cci_2 < OSC_CCI_TH \
+                            and wr_2 < OSC_WILLR_TH and bb_2 < OSC_BBPCTB_TH
+                        setup = oversold_1 or oversold_2
+                        turn_up = sk_i > sk_1 and rsi_i > rsi_1 and cci_i > cci_1 and wr_i > wr_1 and bb_i > bb_1
+                        if setup and turn_up:
+                            _shadow_newstrat_open_one(
+                                data, 'oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET, sym,
+                                entry_price, atr_now, sig_ts,
+                                f" | oversold->balik (Stoch{sk_i:.0f} RSI{rsi_i:.0f} "
+                                f"CCI{cci_i:.0f} WR{wr_i:.0f} %b{bb_i:.2f})")
         except Exception as e:
             log(f"WARN [SHADOW-NEWSTRAT] {sym}: {e}")
 
