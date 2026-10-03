@@ -7342,9 +7342,8 @@ def heartbeat_general_tick():
     # cumulative sejak FWDTEST_BRKX2_PHASE_OFFSET) -- "3rd" sudah dihapus 985dae9, "2nd" dihapus
     # di sini (strategi ini rencananya digantikan KeltnerBreak-12h, tidak perlu lagi sub-tracker).
     # 12/09/2026: fase-2 CrossEMA-4h DIBEKUKAN di STRAT_CROSSEMA_STOCH_PATCH_BASELINE (syarat
-    # entry berubah, tambah Stoch<25) -- lihat komentar konstantanya. Masih #0/15 saat patch
-    # di-deploy jadi frozen counter-nya 0, tapi tetap dipisah dari fase-3 (trade dgn syarat baru).
-    prog_cx2  = csv_progress('brkX2_crossema', offset=STRAT_CROSSEMA_LIVE_BASELINE, until=STRAT_CROSSEMA_STOCH_PATCH_BASELINE)
+    # entry berubah, tambah Stoch<25) -- lihat komentar konstantanya. Frozen permanen di 0/15,
+    # baris "2nd"-nya dihapus dari laporan 03/10/2026 (permintaan Mas Budi); fase-3 tetap jalan.
     prog_cx3  = csv_progress('brkX2_crossema', offset=STRAT_CROSSEMA_STOCH_PATCH_BASELINE)
     # 17/09/2026 (permintaan Mas Budi, temuan bug): trend_confirm_4h (TrenKonfirmasi-4h) dan
     # qscalp_3m TIDAK PERNAH ditambahkan ke ringkasan General ini sejak awal dibuat -- kedua
@@ -7365,9 +7364,6 @@ def heartbeat_general_tick():
                      f"  - brkX2-4h   : {_fmt_hunting_live(prog_4h)}\n"
                      f"    brkX2-4h: 2nd {_fmt_strat(prog_4h2, STRAT4H_PHASE2_TARGET)}\n"
                      f"  - crossema-4h: {_fmt_hunting_live(prog_cx)}\n"
-                     f"    crossema-4h: 2nd STOP@Stoch<25 "
-                     f"{prog_cx2['n']}/{STRAT_CROSSEMA_PHASE2_TARGET} "
-                     f"({prog_cx2['win']}W/{prog_cx2['loss']}L,{prog_cx2['total_pct']:+.1f}%)\n"
                      f"    crossema-4h: 3rd {_fmt_strat(prog_cx3, STRAT_CROSSEMA_PHASE3_TARGET)}\n"
                      f"  - hunting-4h : {_fmt_hunting_live(prog_hunt)}\n"
                      f"    hunting-4h: 2nd {_fmt_strat(prog_hunt2, HUNTING_PHASE2_TARGET)}\n"
