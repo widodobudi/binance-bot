@@ -3604,6 +3604,13 @@ def add_to_active_deals(symbol: str, data: dict):
         active_deals[symbol] = enriched
     save_active_deals()
     log(f"   {symbol} ditambah ke active_deals.json")
+    # 03/10/2026 (permintaan Mas Budi): trial PAPER mekanisme exit baru (jeda konfirmasi
+    # hard-stop) -- lihat _shadow_hsconfirm_spawn() & blok di dekat run_thread_shadow_fwdtest().
+    # TIDAK menyentuh deal real ini sama sekali, cuma baca entry_price/atr_pct final-nya.
+    try:
+        _shadow_hsconfirm_spawn(symbol, enriched)
+    except Exception as e:
+        log(f"WARN [SHADOW-HSCONFIRM] gagal spawn {symbol}: {e}")
 
 def remove_from_active_deals(symbol: str):
     with active_deals_lock:
@@ -7423,7 +7430,8 @@ def heartbeat_general_tick():
                      f"    {_fmt_shadow('trendsurge_4h', SHADOW_TRENDSURGE_TARGET)}\n"
                      f"    {_fmt_shadow('ichibreak_4h', SHADOW_ICHIBREAK_TARGET)}\n"
                      f"    {_fmt_shadow('psarflip_4h', SHADOW_PSARFLIP_TARGET)}\n"
-                     f"    {_fmt_shadow('keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET)}")
+                     f"    {_fmt_shadow('keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET)}\n"
+                     f"{_fmt_hsconfirm_status()}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
     slot_line = (f"Slot brkX2-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2} | "
@@ -16855,6 +16863,193 @@ def thread_shadow_fwdtest_scan() -> None:
         _save_shadow_fwdtest(data)
 
 
+# ── Trial PAPER: jeda konfirmasi hard-stop (03/10/2026, permintaan Mas Budi) ─────────────
+# Backtest (hsconfirm_sim.py, data real 2022-2026): tunggu CONFIRM candle-close berturut2 di
+# bawah level hard-stop (bukan langsung close begitu harga LIVE menyentuhnya sekali, rawan
+# wick sesaat) DENGAN batas absolut (+CEILING_EXTRA_PCT poin, konstanta SAMA dgn
+# CLOSE_HARD_CEILING_EXTRA_PCT produksi) supaya rugi tidak bisa membengkak tak terbatas.
+# Hasil: brkX2-12h avg +2,91%->+3,30% (HS 14,7%->2,0%), TrenKonfirmasi-4h avg +1,34%->+1,43%
+# (HS 10,6%->3,5%) -- tapi worst-case per-trade sedikit lebih dalam (+CEILING_EXTRA_PCT poin)
+# kalau toh kena. Mas Budi SENGAJA TIDAK mau ini dipatch ke exit live dulu -- jalur ini
+# MENGIKUTI entry REAL brkX2-12h & TrenKonfirmasi-4h (harga fill yg sama persis, dibaca dari
+# add_to_active_deals()), tapi exit dipantau TERPISAH pakai mekanisme baru, murni paper.
+# TIDAK PERNAH kirim order Binance, TIDAK PERNAH menyentuh deal/exit real sama sekali.
+SHADOW_HSCONFIRM_FILE = os.path.join(DATA_DIR, "shadow_hsconfirm.json")
+_shadow_hsconfirm_lock = threading.Lock()
+HSCONFIRM_N = 2                                        # candle close berturut-turut di bawah hard-stop
+HSCONFIRM_CEILING_EXTRA_PCT = CLOSE_HARD_CEILING_EXTRA_PCT   # reuse konstanta produksi (5.0 poin)
+HSCONFIRM_SCAN_INTERVAL = 90                            # detik
+
+
+def _load_shadow_hsconfirm() -> dict:
+    default = {"brkX2": {"open": [], "closed": []},
+               "trend_confirm_4h": {"open": [], "closed": []}}
+    try:
+        if os.path.exists(SHADOW_HSCONFIRM_FILE):
+            with open(SHADOW_HSCONFIRM_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+            for k in default:
+                if k not in data:
+                    data[k] = default[k]
+            return data
+    except Exception as e:
+        log(f"WARN _load_shadow_hsconfirm: {e}")
+    return default
+
+
+def _save_shadow_hsconfirm(data: dict) -> None:
+    try:
+        with open(SHADOW_HSCONFIRM_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN _save_shadow_hsconfirm: {e}")
+
+
+def _fmt_hsconfirm_status() -> str:
+    """1 baris ringkasan per strategi utk heartbeat Telegram (dibaca heartbeat_general_tick(),
+    panggil fungsi ini langsung bukan _fmt_shadow() krn struktur file beda dari shadow_fwdtest.json)."""
+    try:
+        data = _load_shadow_hsconfirm()
+    except Exception:
+        return "    Trial jeda-konfirmasi hard-stop: #? (gagal baca)"
+    lines = []
+    for strat, label in (('brkX2', 'brkX2-12h'), ('trend_confirm_4h', 'TrenKonfirmasi-4h')):
+        closed = data.get(strat, {}).get('closed', [])
+        n_open = len(data.get(strat, {}).get('open', []))
+        extra = f" | {n_open} open" if n_open else ""
+        if not closed:
+            lines.append(f"    Trial jeda-konfirmasi ({label}, paper): #0 (belum ada){extra}")
+        else:
+            lines.append(f"    Trial jeda-konfirmasi ({label}, paper): #{len(closed)} ({_shadow_wl_tag(closed)}){extra}")
+    return "\n".join(lines)
+
+
+def _shadow_hsconfirm_spawn(symbol: str, deal: dict) -> None:
+    """Dipanggil dari add_to_active_deals() tiap kali deal REAL brkX2/TrenKonfirmasi-4h kebuka --
+    catat posisi PAPER dgn entry SAMA PERSIS (harga fill, ATR%), dipantau mekanisme exit BARU.
+    Posisi real sama sekali tidak tersentuh/tidak tahu posisi paper ini ada."""
+    strat = deal.get('strategy')
+    if strat not in ('brkX2', 'trend_confirm_4h'):
+        return
+    entry_price = deal.get('entry_price', 0) or 0
+    atr_pct = deal.get('atr_pct', 0) or 0
+    if entry_price <= 0 or atr_pct <= 0:
+        return
+    pos = {"sym": symbol, "entry_price": entry_price, "atr_pct": atr_pct,
+           "peak_price": entry_price, "armed": False, "streak": 0, "last_candle_ts": 0,
+           "opened_ts": int(time.time()), "opened_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S')}
+    with _shadow_hsconfirm_lock:
+        data = _load_shadow_hsconfirm()
+        data.setdefault(strat, {"open": [], "closed": []})['open'].append(pos)
+        _save_shadow_hsconfirm(data)
+    log(f"[SHADOW-HSCONFIRM] spawn paralel {symbol} ({strat}) entry={entry_price:.8g} ATR%={atr_pct:.2f}")
+    send_telegram(
+        f"🔬 Trial PAPER jeda-konfirmasi hard-stop -- {strat} (BUKAN order asli, mengikuti entry real)\n"
+        f"{to_display_pair(symbol)} @ {_fmt_price(entry_price)}", parse_mode=None)
+
+
+def _shadow_hsconfirm_check_exits() -> None:
+    """Dipanggil tiap HSCONFIRM_SCAN_INTERVAL detik -- cek tiap posisi paper vs harga live +
+    candle tertutup terbaru, pakai mekanisme hard-stop BARU (confirm candle-close + batas
+    absolut). Arm/trailing SAMA PERSIS fungsi produksi (itu tidak diubah, cuma timing
+    hard-stop yg diuji)."""
+    with _shadow_hsconfirm_lock:
+        data = _load_shadow_hsconfirm()
+        for strat, hold_candles, candle_sec, fetch_fn in (
+                ('brkX2', MAX_HOLD_DAYS, SECONDS_PER_CANDLE, lambda sym: get_ohlcv(sym, limit=10)),
+                ('trend_confirm_4h', TRENDCONFIRM_MAX_HOLD_CANDLES, STRAT4H_SECONDS,
+                 lambda sym: get_ohlcv_4h(sym, limit=10))):
+            still_open = []
+            for pos in data.get(strat, {}).get('open', []):
+                sym = pos['sym']; entry_price = pos['entry_price']; atr_pct = pos['atr_pct']
+                peak = pos.get('peak_price', entry_price); armed = pos.get('armed', False)
+                streak = pos.get('streak', 0); last_candle_ts = pos.get('last_candle_ts', 0)
+                closed = False; exit_price = None; reason = None
+                try:
+                    age_sec = time.time() - pos['opened_ts']
+                    price = get_price_now(sym)
+                    if price <= 0:
+                        still_open.append(pos); continue
+                    _, _, hsp = hard_stop_pct(atr_pct, strat)
+                    hs_price = entry_price * (1 - hsp / 100)
+                    ceiling_price = entry_price * (1 - (hsp + HSCONFIRM_CEILING_EXTRA_PCT) / 100)
+
+                    if price <= ceiling_price:
+                        closed, exit_price = True, price
+                        reason = f"hard-stop batas absolut ({hsp + HSCONFIRM_CEILING_EXTRA_PCT:.2f}%)"
+
+                    if not closed:
+                        df = fetch_fn(sym)
+                        if df is not None and len(df) >= 2:
+                            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                                df = df.iloc[:-1]
+                            if len(df) >= 1:
+                                candle_ts = int(df['ct'].iloc[-1])
+                                candle_close = float(df['close'].iloc[-1])
+                                if candle_ts > last_candle_ts:
+                                    last_candle_ts = candle_ts
+                                    streak = streak + 1 if candle_close <= hs_price else 0
+                                    if streak >= HSCONFIRM_N:
+                                        closed, exit_price = True, candle_close
+                                        reason = f"hard-stop terkonfirmasi ({HSCONFIRM_N}x candle close, {hsp:.2f}%)"
+
+                    if not closed:
+                        if price > peak: peak = price
+                        peak_profit_pct = (peak / entry_price - 1) * 100
+                        arm_th = get_arm_pct(atr_pct)
+                        if not armed and peak_profit_pct >= arm_th: armed = True
+                        if armed:
+                            trail_dist = trailing_dist_progressive(atr_pct, peak_profit_pct)
+                            trail_price = peak * (1 - trail_dist / 100)
+                            if price <= trail_price:
+                                closed, exit_price = True, price
+                                reason = f"trailing (puncak {peak_profit_pct:+.2f}%)"
+
+                    hold_limit_sec = hold_candles * candle_sec
+                    if not closed and age_sec >= hold_limit_sec:
+                        closed, exit_price, reason = True, price, "timeout"
+                except Exception as e:
+                    log(f"WARN [SHADOW-HSCONFIRM] check {sym}: {e}")
+                    still_open.append(pos); continue
+
+                if closed:
+                    pct = (exit_price / entry_price - 1) * 100 - FEE_ROUND_TRIP_PCT
+                    pos_closed = dict(pos, exit_price=exit_price, closed_ts=int(time.time()),
+                                       closed_wib=now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                                       pct=round(pct, 2), reason=reason)
+                    data[strat]['closed'].append(pos_closed)
+                    n_done = len(data[strat]['closed'])
+                    log(f"[SHADOW-HSCONFIRM] CLOSE {sym} ({strat}) @ {exit_price:.8g} ({pct:+.2f}%) -- {reason} -- #{n_done}")
+                    send_telegram(
+                        f"{'✅' if pct > 0 else '❌'} Trial PAPER jeda-konfirmasi hard-stop -- {strat} (paper)\n"
+                        f"{to_display_pair(sym)} @ {_fmt_price(exit_price)} ({pct:+.2f}%) -- {reason}\n"
+                        f"Progress: #{n_done} ({_shadow_wl_tag(data[strat]['closed'])})", parse_mode=None)
+                else:
+                    pos['peak_price'] = peak; pos['armed'] = armed
+                    pos['streak'] = streak; pos['last_candle_ts'] = last_candle_ts
+                    still_open.append(pos)
+            data.setdefault(strat, {"open": [], "closed": []})['open'] = still_open
+        # Selalu simpan (BUKAN cuma saat closed) -- streak/peak/armed posisi yg MASIH terbuka
+        # juga harus persisten antar-panggilan, sama pola dgn shadow check_exits lain yg tidak
+        # pakai dirty-flag sama sekali (lihat thread_shadow_fwdtest_scan()).
+        _save_shadow_hsconfirm(data)
+
+
+def run_thread_shadow_hsconfirm():
+    """Thread terpisah -- trial PAPER mekanisme exit baru (jeda konfirmasi hard-stop) di atas
+    entry REAL brkX2-12h & TrenKonfirmasi-4h. TIDAK PERNAH kirim order, TIDAK PERNAH menyentuh
+    posisi/exit asli -- murni catatan paralel utk bandingkan hasil (permintaan Mas Budi,
+    03/10/2026 -- JANGAN dipatch ke exit live dulu)."""
+    log("[SHADOW-HSCONFIRM] Thread trial jeda-konfirmasi hard-stop dimulai (paper only, TIDAK ada order asli).")
+    time.sleep(200)
+    while True:
+        try:
+            _shadow_hsconfirm_check_exits()
+        except Exception as e:
+            log(f"WARN [SHADOW-HSCONFIRM] thread error: {e}")
+        time.sleep(HSCONFIRM_SCAN_INTERVAL)
+
+
 def run_thread_shadow_fwdtest():
     """Thread T-ShadowFwdTest: paper forward-test 4 kandidat (akuma_all3, conf3_stochrsibb,
     dipbuy_universe, dipbuy_bluechip) -- TIDAK PERNAH kirim order asli, murni catat sinyal+exit
@@ -24411,6 +24606,9 @@ if __name__ == '__main__':
         n_threads += 1
     t_shadow = threading.Thread(target=run_thread_shadow_fwdtest, daemon=True, name="T-ShadowFwdTest")
     threads.append(t_shadow)
+    n_threads += 1
+    t_hsconfirm = threading.Thread(target=run_thread_shadow_hsconfirm, daemon=True, name="T-ShadowHSConfirm")
+    threads.append(t_hsconfirm)
     n_threads += 1
     t_s6 = threading.Thread(target=run_thread_strat6, daemon=True, name="T-Strat6")
     threads.append(t_s6)
