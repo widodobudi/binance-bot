@@ -6904,6 +6904,11 @@ def compute_indicators_4h(df):
     df["ema20"] = _pta.ema(c, length=20)
     df["ema50"] = _pta.ema(c, length=50)
     df["chg_from_open"] = (df["close"] - df["open"]) / df["open"].replace(0, float("nan")) * 100
+    # Keltner upper (brkX2-4h REDESAIN 03/10/2026, gaya KeltnerBreak-12h) --
+    # dipakai blockers_entry_4h(), kolom lain di atas TIDAK disentuh krn masih
+    # dibaca CrossEMA-4h/Hunting-4h dari compute_indicators_4h() yang sama.
+    df["atr10"]    = _pta.atr(h, l, c, length=10)
+    df["kc_upper"] = df["ema20"] + 2.0 * df["atr10"]
     # Tambahan indicators untuk AI decision context
     try:
         bb = _pta.bbands(c, length=20, std=2)
@@ -6958,66 +6963,33 @@ def htf_filter_4h_ok(symbol: str, for_crossema: bool = False) -> bool:
         return True  # fail-open
 
 def blockers_entry_4h(df) -> list:
-    """Return every brkX2-4h condition that fails for the latest candle."""
-    failures = []
-    if len(df) < STRAT4H_MACD_SLOW + STRAT4H_MACD_SIGNAL + 5:
+    """brkX2-4h REDESAIN TOTAL 03/10/2026 (permintaan Mas Budi): formula lama
+    (Supertrend/MACD/ATR-range/Volume-range/Stoch/RSI/chg/EMA20-gap) diganti
+    gaya Keltner breakout -- PERSIS seperti KeltnerBreak-12h, cuma TF 4h.
+    df.iloc[-1] di sini SELALU candle yang masih BERJALAN (get_ohlcv_4h tidak
+    buang candle forming -- itu caranya thread1d_scan_4h() baca harga live).
+    Level Keltner (kc_upper) WAJIB dari candle 4h TERAKHIR YANG SUDAH TUTUP
+    (df.iloc[-2]), supaya tidak kontaminasi data candle yang masih parsial.
+    Tembusnya dicek pakai close candle yang masih berjalan itu (live-updating
+    price) -- mode INTRABAR, lolos backtest JAUH lebih kuat drpd closed-candle
+    (live_brkx2_4h_intrabar_sim.py: n=127.868, WR79,9%, avg+1,499%, TRAIN p=
+    0,00000 TEST p=0,00000 vs versi closed-candle avg+0,601%). HTF 12h filter
+    & gate waktu "menit 5-60" DIHAPUS -- keduanya tidak ada di backtest yang
+    lolos ini."""
+    if len(df) < 2:
         return ["Data candle kurang"]
-    r = df.iloc[-1]
-    sd = r.get("st_dir")
-    if pd.isna(sd) or sd != 1:
-        failures.append("Supertrend bullish")
-    mh = r.get("macd_hist")
-    if pd.isna(mh) or mh < 0:
-        failures.append("MACD histogram")
-    atr = r.get("atr_pct")
-    if pd.isna(atr) or atr < STRAT4H_ATR_MIN_PCT:
-        failures.append("ATR minimum")
-    vol_ma = r.get("vol_ma")
-    if pd.isna(vol_ma) or vol_ma <= 0:
-        failures.append("Volume MA tersedia")
-    elif r["vol"] < STRAT4H_VOLUME_MULT * vol_ma:
-        failures.append("Volume minimum")
-    v24 = r.get("vol24h_usd")
-    if not pd.isna(v24) and v24 < STRAT4H_MIN_VOL_USD:
-        failures.append("Volume 24h minimum")
-    sk = r.get("stoch_k")
-    if sk is not None and not pd.isna(sk) and sk >= STRAT4H_STOCH_MAX:
-        failures.append("Stoch oversold ceiling")
-    rsi = r.get("rsi")
-    if rsi is not None and not pd.isna(rsi) and rsi >= STRAT4H_RSI_MAX:
-        failures.append("RSI maximum")
-    if rsi is not None and not pd.isna(rsi) and rsi <= STRAT4H_RSI_MIN:
-        failures.append("RSI minimum")
-    if not pd.isna(atr) and atr >= STRAT4H_ATR_MAX_PCT:
-        failures.append("ATR maximum")
-    if pd.notna(vol_ma) and vol_ma > 0 and r["vol"] > STRAT4H_VOL_MAX_MULT * vol_ma:
-        failures.append("Volume maximum")
-    chg = r.get("chg_from_open")
-    if chg is not None and not pd.isna(chg) and chg > STRAT4H_CHG_MAX_PCT:
-        failures.append("Change from open maximum")
-    ema20 = r.get("ema20")
-    if pd.isna(ema20) or ema20 <= 0:
-        failures.append("EMA20 tidak tersedia")
-    else:
-        gap_ema20_pct = (float(r["close"]) / float(ema20) - 1) * 100
-        if gap_ema20_pct < STRAT4H_EMA20_GAP_MIN_PCT:
-            failures.append("Jarak ke EMA20 kurang dari minimum")
-    return failures
+    r_closed = df.iloc[-2]
+    kc_now = r_closed.get("kc_upper")
+    atr = r_closed.get("atr_pct")
+    if pd.isna(kc_now) or pd.isna(atr) or atr <= 0:
+        return ["Keltner/ATR belum tersedia"]
+    live_price = float(df.iloc[-1]["close"])
+    if not (live_price > float(kc_now)):
+        return ["Belum tembus Keltner upper"]
+    return []
 
 def check_entry_4h(df) -> bool:
-    """
-    Entry 4h:
-      - Supertrend dir = +1 (uptrend)
-      - MACD hist > 0
-      - ATR% >= 2.0%
-      - Volume >= 0.25x MA20
-      - Vol24h >= $3jt
-      - Stoch%K < 80 (backtest_4h_rsi_stoch_sweep.py, 31/07/2026)
-      - RSI < 60 (07/08/2026, keputusan Budi): hindari entry saat harga sudah terlalu tinggi
-      - Harga minimal +5.0% di atas EMA20, tanpa batas atas (30/09/2026, Pilihan C, keputusan Budi --
-        lihat STRAT4H_EMA20_GAP_MIN_PCT; DIBALIK dari versi lama yg mensyaratkan harga DEKAT EMA20,
-        backtest menunjukkan justru entry yg SUDAH JAUH dari EMA20 rata-rata lebih baik)
-    """
+    """Entry 4h = breakout Keltner intrabar. Lihat blockers_entry_4h()."""
     return not blockers_entry_4h(df)
 
 def active_deal_count_4h() -> int:
@@ -10147,8 +10119,11 @@ last_4h_candle_ts = {}  # sym -> ts candle 4h yang sudah dientry, cegah double e
 def thread1d_scan_4h():
     """
     Scan sinyal strategi ke-3 (brkX2-4h) setiap 3 menit.
-    Entry saat elapsed candle 4h berada di menit ke 5-60 (2.08%-25%).
-    Syarat: Supertrend+1 + MACD>0 + ATR>=2% + Vol>=1.5xMA + HTF3D filter.
+    REDESAIN TOTAL 03/10/2026: breakout Keltner intrabar (gaya KeltnerBreak-12h,
+    TF 4h) -- dicek SEPANJANG candle 4h berjalan, TIDAK ADA LAGI gate waktu
+    "menit 5-60" (dihapus, tidak ada di backtest yang lolos). Syarat tunggal:
+    harga live > kc_upper (EMA20+2xATR10) dari candle 4h TERAKHIR YANG SUDAH
+    TUTUP. Lihat blockers_entry_4h().
     """
     global last_4h_candle_ts
     if not STRAT4H_ENABLED:
@@ -10158,23 +10133,16 @@ def thread1d_scan_4h():
 
     now_ms   = int(time.time() * 1000)
     sec4h    = STRAT4H_SECONDS
-    # Open candle 4h saat ini
+    # Open candle 4h saat ini (dipakai dedup last_4h_candle_ts, bukan lagi gate waktu)
     candle_open_ms = (now_ms // (sec4h * 1000)) * (sec4h * 1000)
-    elapsed_pct    = (now_ms - candle_open_ms) / (sec4h * 1000)
-
-    # Hanya entry di window menit ke-5 sampai ke-10
-    if not (STRAT4H_ENTRY_MIN_PCT <= elapsed_pct <= STRAT4H_ENTRY_MAX_PCT):
-        if elapsed_pct > STRAT4H_ENTRY_MAX_PCT:
-            log(f"[T1d] TF% LEWAT window: {elapsed_pct*100:.1f}% > {STRAT4H_ENTRY_MAX_PCT*100:.1f}% (window menit 5-60 sudah tutup)")
-            log_tfpct_blocked("T1d", "brkX2-4h", elapsed_pct, STRAT4H_ENTRY_MAX_PCT, "window menit 5-60 sudah tutup")
-        return
+    elapsed_pct    = (now_ms - candle_open_ms) / (sec4h * 1000)  # cuma dicatat di deal_log_write(), bukan gate lagi
 
     # Cek slot tersedia
     n4h = active_deal_count_4h()
     if n4h >= STRAT4H_MAX_DEALS:
         return
 
-    log(f"[T1d] Scan 4h intrabar ({elapsed_pct*100:.1f}% elapsed)...")
+    log(f"[T1d] Scan 4h intrabar (breakout Keltner)...")
     ticker = get_ticker_24h()
     vol_map = {t["symbol"]: float(t.get("quoteVolume", 0)) for t in ticker} if ticker else {}
 
@@ -10207,19 +10175,9 @@ def thread1d_scan_4h():
             for failure in failures_4h:
                 count_blocker(scan_blockers_4h, failure, True)
             if failures_4h:
-                # Cek berapa syarat yang lolos untuk near_miss
-                r = df.iloc[-1]
-                if len(failures_4h) <= 1:
-                    near_miss_4h.append((max(0, 11 - len(failures_4h)), sym, failures_4h, 11))
-                continue
-
-            # HTF 12h filter
-            if not htf_filter_4h_ok(sym):
-                count_blocker(scan_blockers_4h, "HTF 12h", True)
-                log(f"  [T1d] {sym} lolos 4h tapi DITOLAK HTF 12h filter")
-                _rvol4h = htf_vol_ratio(sym, STRAT4H_HTF_TF, STRAT4H_HTF_LIMIT, STRAT4H_HTF_VOL_MA)
-                _rvol4h_str = f"{_rvol4h:.2f}xMA" if _rvol4h >= 0 else "?"
-                near_miss_4h.append((6, sym, [f"HTF 12h: vol<{STRAT4H_HTF_VOL_MULT}xMA (skrg {_rvol4h_str})"], 7))
+                # Cuma 1 syarat sekarang (breakout Keltner) -- selalu near-miss krn
+                # failures_4h paling panjang 1 item.
+                near_miss_4h.append((0, sym, failures_4h, 1))
                 continue
 
             # Performance filter
@@ -10231,10 +10189,11 @@ def thread1d_scan_4h():
                     near_miss_4h.append((6, sym, [f"Perf Grade masih <B (score {pscore:.2f})"], 7))
                     continue
 
-            r    = df.iloc[-1]
-            atrp = float(r["atr_pct"]) if not pd.isna(r["atr_pct"]) else 3.0
+            r_closed = df.iloc[-2]
+            atrp     = float(r_closed["atr_pct"]) if not pd.isna(r_closed["atr_pct"]) else 3.0
+            kc_level = float(r_closed["kc_upper"])
             sc   = 1
-            candidates.append((sym, float(r["close"]), atrp, sc))
+            candidates.append((sym, float(df.iloc[-1]["close"]), atrp, sc, kc_level))
         except Exception as e:
             log(f"  [T1d] error {sym}: {e}")
 
@@ -10261,7 +10220,7 @@ def thread1d_scan_4h():
     candidates.sort(key=lambda x: x[3], reverse=True)
 
     held_bx = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
-    for sym, signal_price, atrp, score in candidates:
+    for sym, signal_price, atrp, score, kc_level in candidates:
         if len(held_bx) >= AI_BATCH_POOL_SIZE:
             log(f"[T1d] Kolam babak-1 penuh ({AI_BATCH_POOL_SIZE}), berhenti kumpulkan kandidat baru siklus ini.")
             break
@@ -10307,7 +10266,7 @@ def thread1d_scan_4h():
 
         held_bx[sym] = {
             'signal_price': signal_price, 'atrp': atrp, 'score': score,
-            'quick_reentry': _quick_reentry,
+            'quick_reentry': _quick_reentry, 'kc_level': kc_level,
             'detail': {'atr_pct': atrp, 'rvol': _rvol_bx, 'bb_pct': _bb_bx,
                        'gap_ema20_pct': _gap_bx, 'rsi': _rsi_val_bx or 0.0},
         }
@@ -10332,16 +10291,17 @@ def thread1d_scan_4h():
             if sym in active_deals: continue
         v = held_bx[sym]
         signal_price = v['signal_price']; atrp = v['atrp']; score = v['score']
-        _quick_reentry = v['quick_reentry']
+        _quick_reentry = v['quick_reentry']; kc_level = v['kc_level']
         _vol_ratio_bx = v.get('detail', {}).get('rvol')
 
         ok, target_usd, add_usd = open_deal_with_sizing(
             sym, score, strategy="brkX2_4h", atr_pct=atrp, vol_ratio=_vol_ratio_bx)
         if not ok: continue
 
-        # Konfirmasi real-time: price_now harus cross EMA20 ke atas, jarak 0–0.75%
-        # (fetch fresh per-simbol -- babak 2 bisa berjarak waktu dari babak 1, dan ini
-        #  juga dipakai ulang sbg _r4msg utk indikator open, ganti fetch _df4 terpisah)
+        # Konfirmasi real-time: harga masih di atas level Keltner yang sama (babak 2
+        # bisa berjarak waktu dari babak 1) -- level kc_level dari candle 4h TERTUTUP
+        # sudah fix, tidak perlu fetch ulang OHLCV, cukup harga live terbaru.
+        # _r4msg dipakai ulang sbg indikator open (RSI/StochK/EMA20 dll utk pesan/log).
         _r4msg = pd.Series(dtype=float)
         try:
             _pnow = get_price_now(sym)
@@ -10349,14 +10309,11 @@ def thread1d_scan_4h():
             if _dfx is not None and len(_dfx) >= 20:
                 _dfx = compute_indicators_4h(_dfx)
                 _r4msg = _dfx.iloc[-1]
-            _ema20_rt = float(_r4msg.get("ema20", 0)) if not pd.isna(_r4msg.get("ema20", float('nan'))) else 0.0
-            if _pnow > 0 and _ema20_rt > 0:
-                _dist_rt = (_pnow - _ema20_rt) / _ema20_rt * 100
-                if not (_dist_rt >= STRAT4H_EMA20_GAP_MIN_PCT):
-                    log(f"[T1d] {sym} SKIP: price_now {_fmt_price(_pnow)} vs EMA20 {_fmt_price(_ema20_rt)} dist={_dist_rt:+.2f}% (harus >={STRAT4H_EMA20_GAP_MIN_PCT:g}%)")
-                    continue
+            if _pnow > 0 and not (_pnow > kc_level):
+                log(f"[T1d] {sym} SKIP: price_now {_fmt_price(_pnow)} sudah di bawah level Keltner {_fmt_price(kc_level)} lagi")
+                continue
         except Exception as _e:
-            log(f"[T1d] {sym} cross EMA20 check error: {_e} — lanjut")
+            log(f"[T1d] {sym} cek ulang level Keltner error: {_e} — lanjut")
 
         try:
             ticker_now = _binance_get("/api/v3/ticker/price", {"symbol": sym})
@@ -20445,10 +20402,8 @@ def run_web_dashboard():
                     f"Elapsed skrg: {el_8h*100:.1f}%"
                 ),
                 "brkX2-4h": (
-                    f"Scan hanya menit ke 5-60 candle 4h (2%-25% elapsed). "
-                    f"Elapsed skrg: {el_4h*100:.1f}% — "
-                    + ("dalam window, data segera muncul." if STRAT4H_ENTRY_MIN_PCT <= el_4h <= STRAT4H_ENTRY_MAX_PCT
-                       else f"tunggu candle berikutnya menit ke {int(STRAT4H_ENTRY_MIN_PCT*240)}-{int(STRAT4H_ENTRY_MAX_PCT*240)}.")
+                    f"Breakout Keltner intrabar, dicek sepanjang candle 4h berjalan "
+                    f"(tidak ada lagi window waktu). Elapsed skrg: {el_4h*100:.1f}%."
                 ),
                 "CrossEMA-4h": (
                     f"Scan hanya menit ke 5-60 candle 4h (2%-25% elapsed). "
