@@ -17028,7 +17028,11 @@ def thread_shadow_fwdtest_scan() -> None:
             if len(data['dipbuy_bluechip']['closed']) < SHADOW_DIPBUY_BC_TARGET:
                 _shadow_dipbuy_bc_try_open(data)
             _shadow_newstrat_scan_entries(data)
-            _shadow_keltnerbreak_scan_entries(data)
+            # keltnerbreak_12h DIPENSIUNKAN 03/10/2026 (keputusan Mas Budi): tugasnya sbg
+            # kandidat pengganti brkX2-12h sudah selesai -- formula-nya sekarang LIVE di
+            # brkX2-12h (lihat check_entry(), commit 3c5c19d). Posisi yg masih OPEN tetap
+            # dipantau normal lewat _shadow_newstrat_check_exits(), cuma TIDAK buka baru lagi.
+            # _shadow_keltnerbreak_scan_entries(data)
             _shadow_rvolbreak_scan_entries(data)
         except Exception as e:
             log(f"ERROR [SHADOW-FWDTEST] scan fatal: {e}")
