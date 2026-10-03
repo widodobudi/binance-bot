@@ -15921,6 +15921,38 @@ def archive_akuma_all3_inflated_once():
         log(f"WARN archive_akuma_all3_inflated_once: {e}")
 
 
+def reset_shadow_keltnerbreak_closed_once():
+    """Sekali jalan (marker di config_migrations_done.json): arsipkan 'closed' LAMA shadow
+    keltnerbreak_12h (3 trade, 0W/3L -25.5% -- dari SEBELUM trial ini dipensiunkan dari buka
+    posisi baru 03/10/2026) lalu RESET ke [] supaya tidak lagi bikin bingung Mas Budi (dikira
+    performa live KeltnerBreak-12h, padahal ini trial paper lama yang sudah tidak buka posisi
+    baru). 5 posisi 'open' yang masih berjalan TIDAK disentuh, tetap dipantau normal dan akan
+    nambah ke counter baru begitu closed. Data lama TIDAK dihapus, dipindah ke key
+    'keltnerbreak_12h_closed_archive_20261003'."""
+    key = "keltnerbreak_12h_closed_reset_20261003"
+    try:
+        done = {}
+        if os.path.exists(CONFIG_MIGRATIONS_FILE):
+            with open(CONFIG_MIGRATIONS_FILE) as f:
+                done = json.load(f)
+        if key in done:
+            return
+        with _shadow_fwdtest_lock:
+            data = _load_shadow_fwdtest()
+            combo = data.get("keltnerbreak_12h", {"open": [], "closed": []})
+            n_old = len(combo.get("closed", []))
+            data["keltnerbreak_12h_closed_archive_20261003"] = list(combo.get("closed", []))
+            combo["closed"] = []
+            data["keltnerbreak_12h"] = combo
+            _save_shadow_fwdtest(data)
+        done[key] = {"ts": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "n_archived": n_old}
+        with open(CONFIG_MIGRATIONS_FILE, "w") as f:
+            json.dump(done, f, indent=2)
+        log(f"[MIGRASI] keltnerbreak_12h: {n_old} closed lama diarsipkan, counter direset ke 0/{SHADOW_KELTNERBREAK_TARGET}")
+    except Exception as e:
+        log(f"WARN reset_shadow_keltnerbreak_closed_once: {e}")
+
+
 def recompute_shadow_levels_once():
     """Sekali jalan (marker di config_migrations_done.json): hitung ULANG posisi shadow dipbuy_universe / dipbuy_bluechip /
     conf3_stochrsibb yg SUDAH tutup dgn logika level baru (harga keluar di level TP/SL dari penelusuran candle antara
@@ -24676,6 +24708,7 @@ if __name__ == '__main__':
     threading.Thread(target=backfill_qscalp_rsi_once, daemon=True).start()   # 21/09/2026: isi RSI@Open QScalp lama
     threading.Thread(target=recompute_shadow_levels_once, daemon=True).start()   # 21/09/2026: hitung ulang paper test ber-level tetap
     threading.Thread(target=archive_akuma_all3_inflated_once, daemon=True).start()   # 27/09/2026: arsip akuma_all3 lama, reset ke 0/20
+    threading.Thread(target=reset_shadow_keltnerbreak_closed_once, daemon=True).start()   # 03/10/2026: arsip 3 closed lama shadow keltnerbreak_12h, reset ke 0/20
     mcap_refresh_async(force=True)   # 20/09/2026: siapkan cache peringkat CoinGecko sebelum OPEN pertama
     threading.Thread(target=earn_selfcheck, daemon=True).start()   # 20/09/2026: cek read-only akses Simple Earn
     sync_max_deals_globals()
