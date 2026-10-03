@@ -7077,13 +7077,13 @@ def heartbeat_tick(status_line: str):
     if first_time:
         start_str = now_dt.strftime('%d/%m %H:%M')
         next_str  = next_scheduled_heartbeat_wib().strftime('%d/%m %H:%M')
-        header = (f"HEARTBEAT — START — brkX2-12h\n"
+        header = (f"HEARTBEAT — START — KeltnerBreak-12h\n"
                   f"Mulai memantau: {start_str} WIB\n"
                   f"Notif berikutnya: {next_str} WIB")
     else:
         start_str = heartbeat_window_start.strftime('%d/%m %H:%M')
         end_str   = now_dt.strftime('%d/%m %H:%M')
-        header = (f"HEARTBEAT — brkX2-12h\n"
+        header = (f"HEARTBEAT — KeltnerBreak-12h\n"
                   f"Periode: {start_str} -> {end_str} WIB")
     # Status T3 intrabar
     t3_str = ""
@@ -7096,14 +7096,14 @@ def heartbeat_tick(status_line: str):
         t3_str += f"\nIntrabar BASE (60-75%): {bs}"
         if bn: t3_str += " | " + ", ".join(to_display_pair(s) for s,_ in bn[:2])
     except: pass
-    log(f"[T1] Heartbeat brkX2-12h {'START' if first_time else start_str+' -> '+end_str} — near-miss digabung ke General")
+    log(f"[T1] Heartbeat KeltnerBreak-12h {'START' if first_time else start_str+' -> '+end_str} — near-miss digabung ke General")
     if HEARTBEAT_TELEGRAM_ENABLED:
         send_telegram(
             f"{header}\n"
-            f"\nbrkX2-12h\n"
+            f"\nKeltnerBreak-12h\n"
             f"{status_line}\n"
             f"{t3_str}\n"
-            f"\nSlot brkX2-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2}",
+            f"\nSlot KeltnerBreak-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2}",
         )
     heartbeat_last_sent    = now
     heartbeat_window_start = now_dt
@@ -7390,7 +7390,7 @@ def heartbeat_general_tick():
         nn=prog_all['n']; wl=f"{prog_all['win']}W/{prog_all['loss']}L"
         prog_qr = quick_reentry_progress()
         prog_line = (f"Progress (gabungan): {nn} ({wl}, {prog_all['total_pct']:+.1f}%)\n"
-                     f"  - brkX2-12h  : {_fmt_hunting_live(prog_brk)}\n"
+                     f"  - KeltnerBreak-12h  : {_fmt_hunting_live(prog_brk)}\n"
                      f"  - reversal-8h: {_fmt_hunting_live(prog_rev)}\n"
                      f"  - brkX2-4h   : {_fmt_hunting_live(prog_4h)}\n"
                      f"    brkX2-4h: 2nd {_fmt_strat(prog_4h2, STRAT4H_PHASE2_TARGET)}\n"
@@ -7428,7 +7428,7 @@ def heartbeat_general_tick():
                      f"{_fmt_hsconfirm_status()}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
-    slot_line = (f"Slot brkX2-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2} | "
+    slot_line = (f"Slot KeltnerBreak-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2} | "
                  f"Slot reversal-8h: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL}\n"
                  f"Slot brkX2-4h: {active_deal_count_4h()}/{STRAT4H_MAX_DEALS} | "
                  f"Slot crossema-4h: {n_cx}/{STRAT_CROSSEMA_MAX_DEALS} | "
@@ -7445,7 +7445,7 @@ def heartbeat_general_tick():
             total = item[3] if len(item) > 3 else "?"
             nm12.append(f"  • {to_display_pair(sym)} ({n_pass}/{total}): {'; '.join(fails[:2])}")
         if nm12:
-            near_lines.append("brkX2-12h near-miss:")
+            near_lines.append("KeltnerBreak-12h near-miss:")
             near_lines.extend(nm12)
     except: pass
     # brkX2-4h near-miss — format: (n_pass, sym, fails, total)
@@ -7954,26 +7954,26 @@ def thread1_scan():
             addfund_txt = f" (+add ${add_usd} delay 15s)" if add_usd>0 else ""
             _ind_block = _fmt_indicators_open_block(_open_fields)
             send_telegram(
-                f"brkX2-12h | OPEN LONG\n"
+                f"KeltnerBreak-12h | OPEN LONG\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
                 f"Harga sinyal (candle close): {_fmt_price(signal_price)}\n"
                 f"Selisih (lonjakan/slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
-                f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
+                f"Modal: ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}\n"
                 f"{_ind_block}"
             )
             threading.Thread(target=send_email_open_long, args=("OPEN LONG brkX2-12h: " + to_display_pair(sym), 
-                f"brkX2-12h | OPEN LONG\n"
+                f"KeltnerBreak-12h | OPEN LONG\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
                 f"Harga sinyal (candle close): {_fmt_price(signal_price)}\n"
                 f"Selisih (lonjakan/slippage): {slip_pct:+.2f}%\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
-                f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
+                f"Modal: ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}\n"
                 f"{_ind_block}"
             ), daemon=True).start()
@@ -9298,7 +9298,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
     except: pass
 
     # Slot info
-    slot_12h = f"Slot brkX2-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2}"
+    slot_12h = f"Slot KeltnerBreak-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2}"
     slot_rev  = f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL}"
     slot_4h   = f"Slot 4h: {active_deal_count_4h()}/{STRAT4H_MAX_DEALS}"
     slot_cx   = f"Slot crossema: {sum(1 for d in active_deals.values() if d.get('strategy')=='brkX2_crossema')}/{STRAT_CROSSEMA_MAX_DEALS}"
@@ -9307,7 +9307,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
     msg = (
         f"{header}\n"
         f"---\n"
-        f"brkX2-12h: {status_12h}\n"
+        f"KeltnerBreak-12h: {status_12h}\n"
         f"Reversal : {status_rev or '—'}\n"
         f"4h       : {status_4h or '—'}"
         f"{near_4h_str}\n"
@@ -9551,7 +9551,7 @@ def thread1c_scan_intrabar():
             })
             addfund_txt = f" (+add ${add_usd} delay 15s)" if add_usd > 0 else ""
             send_telegram(
-                f"brkX2-12h | OPEN LONG INTRABAR\n"
+                f"KeltnerBreak-12h | OPEN LONG INTRABAR\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
@@ -9559,11 +9559,11 @@ def thread1c_scan_intrabar():
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
-                f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
+                f"Modal: ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}"
             )
             threading.Thread(target=send_email_open_long, args=("OPEN LONG INTRABAR brkX2-12h: " + to_display_pair(sym), 
-                f"brkX2-12h | OPEN LONG INTRABAR\n"
+                f"KeltnerBreak-12h | OPEN LONG INTRABAR\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
@@ -9571,7 +9571,7 @@ def thread1c_scan_intrabar():
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
-                f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
+                f"Modal: ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}"
             ), daemon=True).start()
             # ── DEAL LOG lengkap T1c ──────────────────────────────────────
@@ -9798,7 +9798,7 @@ def thread1c_scan_intrabar_early():
             })
             addfund_txt = f" (+add ${add_usd} delay 15s)" if add_usd > 0 else ""
             send_telegram(
-                f"brkX2-12h | OPEN LONG INTRABAR EARLY\n"
+                f"KeltnerBreak-12h | OPEN LONG INTRABAR EARLY\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
@@ -9806,11 +9806,11 @@ def thread1c_scan_intrabar_early():
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
-                f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
+                f"Modal: ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}"
             )
             threading.Thread(target=send_email_open_long, args=("OPEN LONG INTRABAR EARLY brkX2-12h: " + to_display_pair(sym), 
-                f"brkX2-12h | OPEN LONG INTRABAR EARLY\n"
+                f"KeltnerBreak-12h | OPEN LONG INTRABAR EARLY\n"
                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
@@ -9818,7 +9818,7 @@ def thread1c_scan_intrabar_early():
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
                 f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
-                f"Skor sinyal: {score}/5 -> modal ${target_usd}{addfund_txt}\n"
+                f"Modal: ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}"
             ), daemon=True).start()
             # Deal log
