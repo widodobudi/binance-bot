@@ -13994,7 +13994,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
     <div class="card-header" onclick="toggleCard(this)" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">CLOSED TRADES <span class="card-toggle">&#9660;</span></h2>
     <div style="display:flex;gap:8px;align-items:center">
-    <select id="ct-filter-strat" onclick="event.stopPropagation()" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+    <select id="ct-filter-strat" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua strategi</option>
         <option value="brkX2">brkX2-12h</option>
         <option value="brkX2_4h">brkX2-4h</option>
@@ -14006,7 +14006,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="qscalp_3m">QScalp-3m</option>
         <option value="__exclude_hardstop__">Semua strategi, exclude hardstop volatilitas</option>
       </select>
-    <select id="ct-filter-pair" onclick="event.stopPropagation()" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+    <select id="ct-filter-pair" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua pair</option>
       </select>
     <select id="ct-filter-time" onclick="event.stopPropagation()" onchange="onCtTimeFilterChange()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
@@ -14017,21 +14017,21 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="custom">Custom</option>
       </select>
     <span id="ct-filter-custom-range" onclick="event.stopPropagation()" style="display:none;gap:4px;align-items:center">
-        <input type="date" id="ct-filter-from" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+        <input type="date" id="ct-filter-from" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <span style="color:var(--muted);font-size:11px">s/d</span>
-        <input type="date" id="ct-filter-to" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+        <input type="date" id="ct-filter-to" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
       </span>
-    <button onclick="event.stopPropagation();loadClosedTrades()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Refresh</button>
+    <button onclick="event.stopPropagation();loadClosedTrades()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reload</button>
     <button onclick="event.stopPropagation();resetCtFilters()" style="background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reset</button>
     </div>
   </div>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
-    <select id="ct-filter-outcome" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+    <select id="ct-filter-outcome" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua hasil</option>
         <option value="win">Profit saja</option>
         <option value="loss">Loss saja</option>
       </select>
-    <select id="ct-filter-reason" onchange="loadClosedTrades()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+    <select id="ct-filter-reason" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua alasan close</option>
         <option value="Take Profit (custom)">Take Profit (custom)</option>
         <option value="Trailing">Trailing</option>
@@ -14061,7 +14061,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <th data-sort-key="duration" onclick="sortClosedTrades('duration')" style="text-align:right;padding:5px 8px;cursor:pointer">Durasi</th>
         <th style="text-align:left;padding:5px 8px">Alasan</th>
       </tr></thead>
-      <tbody id="ct-body"><tr><td colspan="12" style="color:var(--muted);padding:12px 8px;text-align:center">Klik Refresh untuk muat data</td></tr></tbody>
+      <tbody id="ct-body"><tr><td colspan="12" style="color:var(--muted);padding:12px 8px;text-align:center">Pilih filter (opsional), lalu klik Reload untuk muat data</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -14214,10 +14214,14 @@ function exportCtCsv() {
 }
 
 function onCtTimeFilterChange() {
+  // 04/10/2026 (permintaan Mas Budi): dulu langsung loadClosedTrades() di sini -- sekarang
+  // SEMUA dropdown filter (termasuk ini) cuma ubah pilihan, TIDAK langsung query. Toggle
+  // tampilan custom-range tetap jalan instan (perlu, biar inputnya muncul), tapi query
+  // baru jalan begitu tombol "Reload" diklik -- biar bisa pilih banyak dropdown dulu baru
+  // sekali apply, bukan 1 query per dropdown yang diganti.
   var sel = document.getElementById('ct-filter-time');
   var box = document.getElementById('ct-filter-custom-range');
   if (box) box.style.display = (sel && sel.value === 'custom') ? 'inline-flex' : 'none';
-  loadClosedTrades();
 }
 
 function _ctDateStr(d) {
