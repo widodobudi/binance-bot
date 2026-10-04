@@ -1510,7 +1510,10 @@ def total_max_deals_all_strategies() -> int:
 # 28-29/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE dan SEMUA deal-nya disembunyikan dari tampilan dashboard default
 # (Closed Trades + kartu Performance per Strategi). Data tetap ada di CSV / counter fase / batas rugi harian; tampil lagi kalau
 # strategi dipilih eksplisit di filter Closed Trades atau ?show_paused=1. Satu sumber kebenaran utk kedua endpoint.
-PAUSED_HIDDEN_STRATEGIES = ('qscalp_3m', 'brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h')
+PAUSED_HIDDEN_STRATEGIES = ('brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h')
+# 04/10/2026: 'qscalp_3m' DIKELUARKAN -- "Izinkan Open Long" di-unlock hari ini (fd0fe3d),
+# strategi aktif live lagi (ada deal riil, IOTA/USDT 21:21 WIB), sama pola persis spt 'reversal'
+# 02/10/2026 di bawah -- daftar ini sempat tidak ikut di-sync saat unlock-nya dikerjakan.
 # 03/10/2026: 'hunting_4h' DITAMBAHKAN -- Hunting-4h di-TERMINATE (lihat REMARK di
 # HUNTING_ENABLED). 'brkX2_crossema' SUDAH ada di daftar ini sejak 28-29/09/2026 (pause lama)
 # dan TIDAK PERNAH dikeluarkan lagi meski STRAT_CROSSEMA_ENABLED sempat True -- kebetulan
@@ -12348,7 +12351,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <div class="container dash-section-start" data-tab="monitor">
   <div class="card" style="margin-bottom:16px">
     <div class="card-header" onclick="toggleCard(this)">
-        <h2>Performance per Strategi <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Proporsi menang/kalah forward-test kumulatif</span></h2>
+        <h2>Performance per Strategy <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Proporsi menang/kalah forward-test kumulatif</span></h2>
     </div>
     <div class="card-body">
       <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
