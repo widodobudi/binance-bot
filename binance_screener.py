@@ -1154,6 +1154,58 @@ def _binance_get(endpoint: str, params: dict = None, timeout: int = 15):
 ACTIVE_DEALS_FILE = os.path.join(DATA_DIR, "active_deals.json")
 TRADES_CSV = os.path.join(DATA_DIR, "trades_forwardtest.csv")
 
+# 04/10/2026 (riset TRB/JASMY, permintaan Mas Budi): snapshot unrealized P&L TIAP KALI posisi
+# dicek (bukan cuma saat near-timeout) untuk strategi yg pakai mekanisme ai_decision_near_timeout
+# -- data candle harga asli selama hold tidak bisa diambil (Binance API diblokir di SEMUA sandbox
+# riset yg tersedia saat ini, lokal maupun cloud), jadi bangun data forward mulai sekarang supaya
+# hipotesis "potong di tengah hold kalau masih rugi" bisa diuji nanti dari telemetri live
+# sungguhan, bukan replay historis. Append-only, baris baru tiap scan cycle per deal terbuka.
+MIDHOLD_SNAPSHOT_CSV = os.path.join(DATA_DIR, "mid_hold_snapshots.csv")
+MIDHOLD_SNAPSHOT_FIELDS = ["ts_wib", "symbol", "strategy", "hold_candle_now", "max_candle",
+                           "pct_elapsed", "entry_price", "price_now", "unrealized_pct_after_fee"]
+_midhold_snapshot_lock = threading.Lock()
+_midhold_last_drive_sync = [0.0]  # list = mutable cell, dibaca/ditulis dari banyak thread
+# Placeholder "mid_hold_snapshots.csv" sudah dibuat manual di folder Drive tradingview
+# (04/10/2026) -- WAJIB ada duluan, service account bot tidak punya quota storage buat bikin
+# file baru sendiri (sama constraint drive_sync_full() yg lain, lihat _drive_get_or_create_file_id).
+
+def log_mid_hold_snapshot(sym: str, strat: str, hold_candle_now: int, max_candle: int,
+                           entry: float, price: float) -> None:
+    try:
+        pct_elapsed = round(100 * hold_candle_now / max_candle, 1) if max_candle > 0 else 0
+        unrealized = (price / entry - 1) * 100 - 0.3 if entry > 0 else 0  # fee round-trip 0.3%, sama AI near-timeout
+        with _midhold_snapshot_lock:
+            is_new = not os.path.exists(MIDHOLD_SNAPSHOT_CSV)
+            if is_new:
+                os.makedirs(os.path.dirname(MIDHOLD_SNAPSHOT_CSV) or '.', exist_ok=True)
+            with open(MIDHOLD_SNAPSHOT_CSV, 'a', newline='', encoding='utf-8') as f:
+                w = csv.DictWriter(f, fieldnames=MIDHOLD_SNAPSHOT_FIELDS)
+                if is_new:
+                    w.writeheader()
+                w.writerow({
+                    "ts_wib": now_wib().strftime("%Y-%m-%d %H:%M:%S"),
+                    "symbol": sym, "strategy": strat,
+                    "hold_candle_now": hold_candle_now, "max_candle": max_candle,
+                    "pct_elapsed": pct_elapsed, "entry_price": entry, "price_now": price,
+                    "unrealized_pct_after_fee": round(unrealized, 3),
+                })
+        # File ini ditulis jauh lebih sering drpd trades_forwardtest.csv (tiap scan cycle per
+        # deal terbuka, bukan cuma saat open/close) -- sync ke Drive di-throttle max tiap 15
+        # menit, bukan tiap baris, supaya tidak membanjiri Drive API / API call bot sendiri.
+        # Tujuannya: riset masa depan (termasuk cloud agent yg tidak punya akses Binance tapi
+        # PUNYA akses Google Drive, lihat riset TRB/JASMY 04/10) bisa baca data terbaru.
+        now_ts = time.time()
+        if now_ts - _midhold_last_drive_sync[0] >= 900:
+            _midhold_last_drive_sync[0] = now_ts
+            try:
+                with open(MIDHOLD_SNAPSHOT_CSV, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                threading.Thread(target=drive_sync_full, args=("mid_hold_snapshots.csv", content), daemon=True).start()
+            except Exception as e:
+                log(f"WARN [DRIVE] sync mid_hold_snapshots: {e}")
+    except Exception as e:
+        log(f"WARN log_mid_hold_snapshot {sym}: {e}")
+
 # ── Strategy Control config ──────────────────────────────────────────────────
 STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # Default values — edit hard-coded di sini untuk ubah nilai RESET
@@ -8897,6 +8949,7 @@ def thread2_monitor():
             hold_candle_now = int(elapsed_sec / candle_sec)
             max_candle      = int(hold_limit_sec / candle_sec)
             sisa_candle     = max_candle - hold_candle_now
+            log_mid_hold_snapshot(sym, strat, hold_candle_now, max_candle, entry, price)
             if sisa_candle <= 1 and sisa_candle >= 0:
                 # Guard: hanya panggil AI sekali per candle near-timeout
                 _nt_key = f"nt_ai_called_{hold_candle_now}"
