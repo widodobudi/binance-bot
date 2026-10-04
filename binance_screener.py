@@ -13315,7 +13315,9 @@ var SC_NO_AI = {qscalp_3m: true};  // strategi full rule-based, checkbox AI-call
 // 01/10/2026 (permintaan Mas Budi): strategi yg di-PAUSE atas keputusan Mas Budi (sama dgn PAUSED_HIDDEN_STRATEGIES di Python,
 // baris ~1369 -- kalau daftar itu berubah, ubah juga di sini) barisnya di-DIM + DIKUNCI (tidak bisa diklik) selama flag OFF.
 // 02/10/2026: 'reversal' dikeluarkan -- direaktivasi (reversal_resumed_20261002), tidak lagi dikunci.
-var SC_PAUSED_LOCKED = {qscalp_3m: true, brkX2_crossema: true};
+// 04/10/2026: 'qscalp_3m' dikeluarkan juga -- diresume (validasi ulang #21/21 lolos kuat kedua
+// periode), sama pola dgn reversal. Centang "Izinkan Open Long" sekarang bisa diklik Mas Budi.
+var SC_PAUSED_LOCKED = {brkX2_crossema: true};
 var _scData = {};
 
 function buildStrategySelect() {
