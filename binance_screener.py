@@ -15721,6 +15721,14 @@ _shadow_fwdtest_lock      = threading.Lock()
 SHADOW_SCAN_INTERVAL      = 1800   # 30 menit -- cukup responsif utk exit, hemat API utk entry scan
 SHADOW_MAX_OPEN_PER_COMBO = 5      # batas posisi shadow terbuka bersamaan per kombo (anti runaway)
 SHADOW_AKUMA_TARGET       = 20     # target forward-test (paper) akuma_all3
+# TERMINATED 04/10/2026 (keputusan Mas Budi, re-audit metode walk-forward per-kuartal 2022-2026,
+# beda dari 2-blok train/test biasa): cuma 7/19 kuartal (37%) arah positif, 5 kuartal SIGNIFIKAN
+# NEGATIF (makin parah di 2025-2026: 2025Q1/2026Q1/2026Q3 semua signifikan negatif) -- konsisten
+# dgn Entry A & Entry B penyusunnya yg sudah di-terminate duluan (lihat STRAT_AKUM_ENABLED) dan
+# dgn riwayat promosi live-nya yg ternyata terinflasi bug re-open (lihat REMARK AKUM2_LIVE_ENABLED).
+# Posisi shadow yg masih terbuka TETAP dicek exit-nya seperti biasa (_shadow_akuma_check_exits),
+# cuma TIDAK buka posisi baru lagi (_shadow_akuma_try_open).
+SHADOW_AKUMA_ENABLED      = False
 SHADOW_CONF3_TARGET       = 20     # target forward-test (paper) conf3_stochrsibb
 # Params Ronde 2 "all_three": (vol_spike_mult, rsi_min, rsi_max_entry, obv_slope_candles,
 # support_touch_buffer, reentry_candles) -- sama persis baris 'all_three' di AKUMA_ENTRY_SWEEP.
@@ -17022,7 +17030,7 @@ def thread_shadow_fwdtest_scan() -> None:
             _shadow_newstrat_check_exits(data, 'oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)
             _shadow_keltnerbreak_check_exits(data)
             _shadow_rvolbreak_check_exits(data)
-            if len(data['akuma_all3']['closed']) < SHADOW_AKUMA_TARGET:
+            if SHADOW_AKUMA_ENABLED and len(data['akuma_all3']['closed']) < SHADOW_AKUMA_TARGET:
                 _shadow_akuma_try_open(data)
             if len(data['conf3_stochrsibb']['closed']) < SHADOW_CONF3_TARGET:
                 _shadow_conf3_try_open(data)
