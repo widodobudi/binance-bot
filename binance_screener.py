@@ -14315,6 +14315,22 @@ window.addEventListener('load', function(){ restoreCtFilters(); loadClosedTrades
         </div>
     </div>
 </div>
+<div class="container dash-section-start" data-tab="tools" style="margin-top:12px">
+    <div class="card">
+        <div class="card-header" onclick="toggleCard(this)"><h2>AI DECISION LOG <span class="card-toggle">&#9660;</span></h2></div>
+        <div class="card-body" style="font-size:11px">
+            <div style="color:var(--muted);margin-bottom:10px">Baca langsung dari file lokal <code>/data/ai_decisions_log.txt</code> di server (BUKAN mirror Drive -- mirror itu bisa bolong kalau keputusan AI lagi ramai, lihat REMARK di drive_append()). Alasan lengkap AI (indikator + konteks HTF/LTF + reasoning) per kandidat, OPEN maupun SKIP.</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+                <label>Strategi <input type="text" id="aidec-strategy" placeholder="mis. TrenKonfirmasi-4h" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;width:170px"></label>
+                <label>Pair <input type="text" id="aidec-symbol" placeholder="mis. STRK" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;width:100px"></label>
+                <label>Jumlah <input type="number" id="aidec-n" value="20" min="1" max="200" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;width:60px"></label>
+                <button type="button" onclick="loadAiDecisionsLog()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">Muat</button>
+                <span id="aidec-status" style="color:var(--muted)"></span>
+            </div>
+            <div id="aidec-results" style="display:flex;flex-direction:column;gap:8px;max-height:600px;overflow-y:auto"></div>
+        </div>
+    </div>
+</div>
 <div class="container dash-section-start" data-tab="control" style="margin-top:12px">
     <div class="card">
         <div class="card-header" onclick="toggleCard(this)"><h2>BLOCK PAIRS <span class="card-toggle">&#9660;</span></h2></div>
@@ -14339,6 +14355,50 @@ window.addEventListener('load', function(){ restoreCtFilters(); loadClosedTrades
     </div>
 </div>
 <script>
+function loadAiDecisionsLog() {
+    var strategy = document.getElementById('aidec-strategy').value.trim();
+    var symbol = document.getElementById('aidec-symbol').value.trim();
+    var n = document.getElementById('aidec-n').value || 20;
+    var status = document.getElementById('aidec-status');
+    var results = document.getElementById('aidec-results');
+    status.textContent = 'Memuat...';
+    var qs = '?n=' + encodeURIComponent(n) +
+        (strategy ? '&strategy=' + encodeURIComponent(strategy) : '') +
+        (symbol ? '&symbol=' + encodeURIComponent(symbol) : '');
+    fetch('/api/ai_decisions_log' + qs).then(function(r){ return r.json(); }).then(function(d) {
+        if (!d.ok) {
+            status.textContent = 'Error: ' + (d.error || 'gagal memuat');
+            results.innerHTML = '';
+            return;
+        }
+        status.textContent = 'Menampilkan ' + d.returned + ' dari ' + d.total_matching + ' entri cocok.';
+        if (!d.blocks.length) {
+            results.innerHTML = '<div style="color:var(--muted);padding:8px">Tidak ada entri cocok filter ini.</div>';
+            return;
+        }
+        results.innerHTML = '';
+        d.blocks.forEach(function(block) {
+            var firstLine = block.split('\\n')[0];
+            var isOpen = / OPEN /.test(firstLine) || / OPEN\\|/.test(firstLine);
+            var isSkip = / SKIP /.test(firstLine);
+            var borderColor = isOpen ? 'var(--green)' : (isSkip ? 'var(--red)' : 'var(--border)');
+            var det = document.createElement('details');
+            det.style.cssText = 'border:1px solid var(--border);border-left:3px solid ' + borderColor + ';border-radius:4px;padding:6px 8px;background:var(--surface)';
+            var summary = document.createElement('summary');
+            summary.style.cssText = 'cursor:pointer;color:var(--text);font-family:monospace;white-space:pre-wrap';
+            summary.textContent = firstLine;
+            var pre = document.createElement('pre');
+            pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;color:var(--muted);font-family:monospace;font-size:10.5px;margin-top:6px;line-height:1.5';
+            pre.textContent = block.split('\\n').slice(1).join('\\n');
+            det.appendChild(summary);
+            det.appendChild(pre);
+            results.appendChild(det);
+        });
+    }).catch(function(e) {
+        status.textContent = 'Error: ' + e;
+    });
+}
+
 function loadBlockedPairs() {
     fetch('/api/blocked_pairs').then(function(r){ return r.json(); }).then(function(d) {
         if (!d.ok) return;
@@ -22474,6 +22534,37 @@ def run_web_dashboard():
             log(f"[CACHE-ZIP] {n_files} file di-zip jadi {size_mb:.1f}MB, dikirim ke Mas Budi utk download.")
             return send_file(buf, mimetype='application/zip', as_attachment=True,
                               download_name='stoch_bt_cache.zip')
+
+        @app.route("/api/ai_decisions_log")
+        def api_ai_decisions_log():
+            """04/10/2026 (permintaan Mas Budi, setelah investigasi babak-1 brkX2-4h/TrenKonfirmasi-4h
+            yang menolak semua kandidat berjam-jam): baca ai_decisions_log.txt LANGSUNG dari file
+            lokal /data -- BUKAN mirror Drive (drive_append() terbukti lossy di bawah beban tinggi:
+            tiap keputusan individual bikin 1 thread yang download+upload ULANG seluruh file ke
+            Drive API, tanpa retry -- kalau gagal/rate-limited, teksnya hilang permanen dari Drive,
+            cuma ter-WARN di log Railway yang ephemeral. File lokal ini ditulis sinkron, tidak
+            bergantung Drive sama sekali, jadi selalu lengkap)."""
+            strategy = request.args.get("strategy", "").strip()
+            symbol   = request.args.get("symbol", "").strip().upper()
+            n        = request.args.get("n", 20, type=int)
+            n = max(1, min(n, 200))
+            if not os.path.exists(AI_DECISIONS_LOG):
+                return jsonify({"ok": False, "error": "File belum ada (belum pernah ada keputusan AI tercatat)."})
+            try:
+                with open(AI_DECISIONS_LOG, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)})
+            sep = "─" * 36
+            blocks = [b.strip() for b in content.split(sep) if b.strip()]
+            if strategy:
+                blocks = [b for b in blocks if strategy.lower() in b.lower()]
+            if symbol:
+                blocks = [b for b in blocks if symbol in b.upper()]
+            total = len(blocks)
+            tail = blocks[-n:]
+            tail.reverse()  # terbaru duluan
+            return jsonify({"ok": True, "total_matching": total, "returned": len(tail), "blocks": tail})
 
         @app.route("/api/delete_stoch_cache", methods=["GET", "POST"])
         def api_delete_stoch_cache():
