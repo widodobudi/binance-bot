@@ -12485,6 +12485,16 @@ function renderPerfChart(data) {
         return '~' + days.toFixed(1) + 'D';
       }
       var RATE_UNIT_SHORT = {hari: 'D', minggu: 'W', bulan: 'M'};
+      // 04/10/2026 (permintaan Mas Budi): mode sinyal open long per strategi, supaya selalu
+      // kelihatan di panel ini -- tidak semua strategi sama (KeltnerBreak-12h dual, brkX2-4h
+      // intrabar SAJA sejak redesain 03/10, TrenKonfirmasi-4h closed-candle SAJA by design
+      // -- intrabar sempat dicoba 22/09, dicabut 23/09, backtest ulang 04/10 tetap tidak
+      // nunjukkin keunggulan). Update manual kalau ada strategi yang mode-nya diubah lagi.
+      var ENTRY_MODE_LABEL = {
+        brkX2: 'Closed-candle + Intrabar',
+        brkX2_4h: 'Intrabar saja',
+        trend_confirm_4h: 'Closed-candle saja',
+      };
       function togglePhaseRow(key) {
         var det = document.getElementById('perf-phase-' + key);
         var chev = document.getElementById('perf-chev-' + key);
@@ -12523,8 +12533,10 @@ function renderPerfChart(data) {
         var chevHtml = hasPhases
           ? '<span id="perf-chev-' + r.key + '" data-key="' + r.key + '" onclick="togglePhaseRow(this.dataset.key)" style="cursor:pointer;margin-right:3px;color:var(--accent)">&#9656;</span>'
           : '<span style="margin-right:3px;color:transparent">&#9656;</span>';
+        var modeLabel = ENTRY_MODE_LABEL[r.key];
+        var modeTag = modeLabel ? '<div style="font-size:9px;color:var(--muted);font-weight:400">' + modeLabel + '</div>' : '';
         return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px">'
-          + '<div style="width:118px;flex-shrink:0;text-align:right;color:var(--text)">' + chevHtml + r.label + '</div>'
+          + '<div style="width:118px;flex-shrink:0;text-align:right;color:var(--text)">' + chevHtml + r.label + modeTag + '</div>'
           + '<div style="flex:1;background:rgba(255,255,255,0.05);border-radius:3px;height:16px">' + wlBar + '</div>'
           + '<div style="width:95px;flex-shrink:0;color:var(--muted)">' + (hasDeals ? (winPct.toFixed(0) + '% (' + r.win + 'W/' + r.loss + 'L)') : '-') + '</div>'
           + '<div style="width:65px;flex-shrink:0" class="' + (r.total_pct > 0 ? 'profit-pos' : (r.total_pct < 0 ? 'profit-neg' : '')) + '">' + (r.total_pct >= 0 ? '+' : '') + r.total_pct + '%</div>'
