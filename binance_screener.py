@@ -1467,6 +1467,25 @@ def is_strategy_enabled(strategy: str) -> bool:
     item = cfg.get(strategy, {})
     return item.get("strategy_enabled", item.get("enabled", True))
 
+def get_terminated_strategies() -> set:
+    """Satu sumber kebenaran strategi yang PERMANEN di-terminate (hardcoded kill-switch) --
+    dibaca LANGSUNG dari flag aslinya, bukan daftar terpisah yang harus diingat-ingat
+    disinkron manual. Pelajaran 04/10/2026: 5 strategi di-terminate via kill-switch tapi
+    panel Strategy Control (JS, SC_LABELS) tetap menampilkannya sbg aktif krn daftarnya
+    terpisah & lupa diupdate. Dipakai GET /api/strategy_config utk exclude strategi ini dari
+    respons -- begitu API tidak lagi menyertakannya, panel (JS, baca keys dari respons API,
+    bukan daftar hardcode sendiri) otomatis berhenti menampilkan barisnya. Strategi baru yang
+    di-terminate ke depannya CUKUP ditambahkan satu baris di dict ini, tidak perlu edit JS."""
+    return {
+        k for k, enabled in {
+            "reversal": REVERSAL_ENABLED,
+            "brkX2_crossema": STRAT_CROSSEMA_ENABLED,
+            "akum_entry_a": STRAT_AKUM_ENABLED,
+            "akum_entry_b": STRAT_AKUM_ENABLED,
+            "hunting_4h": HUNTING_ENABLED,
+        }.items() if not enabled
+    }
+
 def is_sizing_enabled(strategy: str) -> bool:
     cfg = load_strategy_config()
     return cfg.get(strategy, {}).get("sizing_enabled", True)
@@ -13246,19 +13265,24 @@ refreshQscalpSignals();
 <script>
 // Inject Hunting-4h ke STRAT_SECONDARY setelah dash.js selesai load.
 // Guard ini penting supaya modal tidak crash jika script dipanggil sebelum DOM siap.
-// 04/10/2026 (permintaan Mas Budi -- "jangan di-disabled saja, destroy"): 5 strategi yang
-// sudah di-TERMINATE permanen (reversal/brkX2_crossema/akum_entry_a/akum_entry_b/hunting_4h --
-// semua punya kill-switch hardcoded REVERSAL_ENABLED/STRAT_CROSSEMA_ENABLED/STRAT_AKUM_ENABLED/
-// HUNTING_ENABLED=False, lihat REMARK di masing2 konstanta) DIHAPUS dari sini, bukan cuma
-// di-dim -- panel ini kontrol OPERASIONAL, tidak ada gunanya nampilkan toggle utk strategi yg
-// tidak akan pernah bisa buka posisi lagi apa pun isi togglenya. Baris lama (sebelum dihapus)
-// utk referensi: reversal:'Reversal-8h', brkX2_crossema:'CrossEMA-4h',
-// akum_entry_a:'Akum-4h Entry A', akum_entry_b:'Akum-4h Entry B', hunting_4h:'Hunting-4h'.
-// Data historis performa mereka TETAP ada & tetap bisa dilihat di panel "Performance per
-// Strategi" (beda mekanisme, sengaja tetap "disembunyikan (dipause)" bukan dihapus di sana).
+// 04/10/2026 (permintaan Mas Budi -- "destroy, jangan cuma di-disabled", lalu "diintegrasikan"):
+// strategi yang di-TERMINATE permanen (kill-switch hardcoded REVERSAL_ENABLED/
+// STRAT_CROSSEMA_ENABLED/STRAT_AKUM_ENABLED/HUNTING_ENABLED dst, lihat get_terminated_strategies()
+// di Python) sekarang di-exclude LANGSUNG di respons GET /api/strategy_config -- baris mana yang
+// muncul di tabel & dropdown ditentukan oleh KEY YANG BENERAN ADA di respons API (lihat
+// buildStrategySelect()/loadStrategyConfig() di bawah, pakai Object.keys(d)/Object.keys(_scData),
+// BUKAN lagi Object.keys(SC_LABELS)). SC_LABELS sekarang CUMA kamus nama tampilan -- aman diisi
+// lengkap (termasuk strategi yang sedang terminate), tidak lagi jadi sumber "yang mana muncul".
+// Terminate strategi baru ke depan: CUKUP tambah 1 baris di get_terminated_strategies() (Python),
+// TIDAK perlu edit JS ini lagi.
 var SC_LABELS = {
     brkX2: 'KeltnerBreak-12h',
+    reversal: 'Reversal-8h',
     brkX2_4h: 'brkX2-4h',
+    brkX2_crossema: 'CrossEMA-4h',
+    akum_entry_a: 'Akum-4h Entry A',
+    akum_entry_b: 'Akum-4h Entry B',
+    hunting_4h: 'Hunting-4h',
     trend_confirm_4h: 'TrendConfirm-4h',
     qscalp_3m: 'QScalp-3m'
 };
@@ -13295,7 +13319,9 @@ var SC_PAUSED_LOCKED = {qscalp_3m: true, brkX2_crossema: true};
 var _scData = {};
 
 function buildStrategySelect() {
-    var keys = Object.keys(SC_LABELS);
+    // Keys dari _scData (hasil GET /api/strategy_config, sudah exclude strategi terminate oleh
+    // backend) -- BUKAN Object.keys(SC_LABELS) lagi, itu sekarang cuma kamus nama tampilan.
+    var keys = Object.keys(_scData);
     var select = document.getElementById('sc-strategy-select');
     if (!select) return;
     select.innerHTML = '';
@@ -13303,7 +13329,7 @@ function buildStrategySelect() {
         var k = keys[i];
         var opt = document.createElement('option');
         opt.value = k;
-        opt.textContent = SC_LABELS[k];
+        opt.textContent = SC_LABELS[k] || k;
         select.appendChild(opt);
     }
     var allOpt = document.createElement('option');
@@ -13324,14 +13350,14 @@ function loadStrategyConfig() {
             var selectedKey = select && select.value ? select.value : '__all__';
             buildStrategySelect();
             if (select && select.options.length) {
-                if (selectedKey === '__all__' || (selectedKey && SC_LABELS[selectedKey])) {
+                if (selectedKey === '__all__' || (selectedKey && _scData[selectedKey])) {
                     select.value = selectedKey;
                 } else {
                     selectedKey = select.options[0].value;
                 }
             }
             var rows = '';
-            var keys = selectedKey === '__all__' ? Object.keys(SC_LABELS) : (selectedKey ? [selectedKey] : Object.keys(SC_LABELS));
+            var keys = selectedKey === '__all__' ? Object.keys(_scData) : (selectedKey ? [selectedKey] : Object.keys(_scData));
             var tbody = document.getElementById('sc-body');
             if (!tbody) return;
             if (!keys.length || !Object.keys(d || {}).length) {
@@ -13359,7 +13385,7 @@ function loadStrategyConfig() {
                     addFundCell = '<td style="text-align:center;padding:5px 8px;color:var(--muted);white-space:nowrap">—</td>';
                 }
                 rows += '<tr data-strategy="' + k + '"' + (strategyEnabled ? '' : ' data-off="1"') + ' style="border-bottom:1px solid rgba(255,255,255,0.04)">'
-                    + '<td style="padding:5px 8px;font-weight:600">' + SC_LABELS[k] + '</td>'
+                    + '<td style="padding:5px 8px;font-weight:600">' + (SC_LABELS[k] || k) + '</td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-maxdeals-' + k + '" value="' + (cfg.max_deals || 2) + '" min="1" step="1" style="width:50px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-run-' + k + '" ' + (strategyEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + (SC_NO_AI[k]
@@ -20849,7 +20875,9 @@ def run_web_dashboard():
         @app.route("/api/strategy_config", methods=["GET", "POST"])
         def api_strat_config():
             if request.method == "GET":
-                return jsonify(load_strategy_config())
+                cfg = load_strategy_config()
+                terminated = get_terminated_strategies()
+                return jsonify({k: v for k, v in cfg.items() if k not in terminated})
             save_strategy_config(request.get_json(force=True, silent=True) or {})
             sync_max_deals_globals()  # biar perubahan max_deals langsung kepakai tanpa restart
             return jsonify({"ok": True})
