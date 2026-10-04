@@ -2837,6 +2837,17 @@ def strategy_phase_breakdown() -> dict:
         ]
     except Exception as e:
         log(f"   [PHASE] gagal hitung trend_confirm_4h: {e}")
+    try:
+        # 04/10/2026 (permintaan Mas Budi): sama pola spt trend_confirm_4h di atas -- qscalp_3m
+        # juga belum pernah masuk sini. Cuma 1 fase "LIVE" (bukan 2 fase) krn pause->resume
+        # hari ini TIDAK ganti formula (sudah diverifikasi persis sama dgn versi sebelum pause,
+        # lihat commit fd0fe3d) -- histori closed deal sebelum & sesudah pause tetap 1 populasi
+        # yang sama, bukan 2 formula berbeda spt brkX2_4h/brkX2_crossema yg benar2 redesain.
+        out['qscalp_3m'] = [
+            _phase_entry('LIVE', csv_progress('qscalp_3m')),
+        ]
+    except Exception as e:
+        log(f"   [PHASE] gagal hitung qscalp_3m: {e}")
     return out
 
 
