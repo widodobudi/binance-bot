@@ -1063,22 +1063,6 @@ def _drive_write(svc, file_id: str, content: str):
     except Exception as e:
         log(f"WARN [DRIVE] write {file_id}: {e}")
 
-def drive_append(filename: str, new_text: str):
-    """Append new_text ke file Drive. Thread-safe."""
-    with _drive_lock:
-        svc = _get_drive_service()
-        if not svc:
-            return
-        try:
-            fid  = _drive_get_or_create_file_id(svc, filename)
-            if not fid:
-                return
-            old  = _drive_read(svc, fid)
-            sep  = "" if (not old or old.endswith("\n")) else "\n"
-            _drive_write(svc, fid, old + sep + new_text)
-        except Exception as e:
-            log(f"WARN [DRIVE] drive_append {filename}: {e}")
-
 def drive_sync_full(filename: str, full_content: str):
     """TIMPA PENUH isi file Drive dgn full_content (bukan append) -- dipakai buat
     trades_forwardtest.csv, karena baris CSV-nya berubah status OPEN->CLOSED DI
@@ -1111,6 +1095,84 @@ def sync_trades_csv_to_drive():
         threading.Thread(target=drive_sync_full, args=("trades_forwardtest.csv", content), daemon=True).start()
     except Exception as e:
         log(f"WARN [DRIVE] sync_trades_csv_to_drive: {e}")
+
+# ===================== LOG ROTATION (04/10/2026, permintaan Mas Budi) =====================
+# ai_decisions_log.txt/near_miss_log.txt/open-arm-close.txt dulu numpuk TANPA BATAS di /data
+# DAN di-mirror ke Drive per-baris lewat drive_append() (1 thread per entri, download+upload
+# ULANG seluruh file tiap kali) -- selain lama-lama berat dibaca (lihat /api/ai_decisions_log),
+# mirror itu juga LOSSY di bawah beban tinggi: kalau panggilan Drive API gagal/rate-limited,
+# exception-nya cuma ke-WARN ke log Railway (ephemeral) lalu entrinya hilang permanen dari
+# Drive, tanpa retry. Dibuktikan 04/10/2026: dari puluhan keputusan individual brkX2-4h/
+# TrenKonfirmasi-4h dalam 1 siklus sibuk, cuma segelintir yang sempat ke-mirror.
+#
+# Pola baru: file AKTIF di /data selalu kecil -- begitu tembus LOG_ROTATE_MAX_BYTES ATAU bulan
+# kalender berganti sejak entri pertamanya, file itu di-rename jadi arsip ber-tanggal (PERMANEN,
+# tidak pernah dihapus/ditimpa otomatis -- histori lengkap selalu ada di volume Railway yang
+# persisten) dan file aktif baru mulai dari nol. Backup ke Drive cuma 1x PER ROTATE (bukan per
+# baris) -- TAPI service account bot ini TIDAK BISA bikin file baru di Drive (nggak ada storage
+# quota, lihat _drive_get_or_create_file_id) jadi backup ini REUSE nama file Drive yang sudah
+# ada (ai_decisions_log.txt dst, overwrite PENUH tiap rotate) -- Drive jadinya cuma simpan
+# salinan lengkap chunk yang PALING BARU ditutup, bukan 1 file bernama-tanggal per bulan (itu
+# perlu bikin file baru, yang mentok quota). Histori ber-tanggal LENGKAP semua bulan tetap aman
+# di volume Railway lokal -- tidak hilang, cuma tidak semuanya ikut ter-mirror ke Drive dengan
+# nama terpisah.
+LOG_ROTATE_MAX_BYTES = 5 * 1024 * 1024  # 5MB
+_log_rotate_lock = threading.Lock()
+
+def _log_entry_month(path: str) -> str:
+    """Baca baris pertama file log, ambil 'YYYY-MM' dari timestamp di dalamnya (dengan atau
+    tanpa kurung siku -- near_miss_log.txt dan ai_decisions_log.txt/open-arm-close.txt beda
+    format). '' kalau file kosong/tidak ada/gagal parse."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            first_line = f.readline()
+        m = re.search(r"(\d{4}-\d{2})-\d{2}", first_line)
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+def _archive_log_name(base_filename: str, period: str) -> str:
+    """base_filename (mis. 'ai_decisions_log.txt') + period 'YYYY-MM' -> nama arsip lokal unik
+    di /data. Nambah sufiks _2/_3 dst kalau bulan itu SUDAH pernah dipakai juga (kasus rotate
+    dipicu ukuran, bukan ganti bulan -- jarang, tapi harus tetap aman)."""
+    stem, ext = os.path.splitext(base_filename)
+    name = f"{stem}_{period}{ext}"
+    i = 2
+    while os.path.exists(os.path.join("/data", name)):
+        name = f"{stem}_{period}_{i}{ext}"
+        i += 1
+    return name
+
+def append_rotating_log(local_path: str, drive_filename: str, text: str):
+    """Pengganti pola lama (open().write() + threading.Thread(drive_append) per baris) untuk
+    ai_decisions_log.txt/near_miss_log.txt/open-arm-close.txt. Append ke local_path; auto-rotate
+    (lihat REMARK LOG ROTATION di atas) kalau perlu, baru append teks baru ke file aktif
+    (yang sudah pasti fresh/kecil kalau barusan dirotate)."""
+    with _log_rotate_lock:
+        try:
+            if os.path.exists(local_path):
+                need_rotate = os.path.getsize(local_path) >= LOG_ROTATE_MAX_BYTES
+                first_month = _log_entry_month(local_path)
+                if not need_rotate and first_month and first_month != now_wib().strftime("%Y-%m"):
+                    need_rotate = True
+                if need_rotate:
+                    period = first_month or now_wib().strftime("%Y-%m")
+                    archive_name = _archive_log_name(os.path.basename(local_path), period)
+                    archive_path = os.path.join("/data", archive_name)
+                    os.rename(local_path, archive_path)
+                    size_kb = os.path.getsize(archive_path) / 1024
+                    log(f"[LOG-ROTATE] {os.path.basename(local_path)} -> {archive_name} "
+                        f"({size_kb:.0f}KB, arsip lokal permanen) -- file aktif mulai dari nol")
+                    with open(archive_path, "r", encoding="utf-8") as f:
+                        archive_content = f.read()
+                    threading.Thread(target=drive_sync_full, args=(drive_filename, archive_content), daemon=True).start()
+        except Exception as e:
+            log(f"WARN [LOG-ROTATE] {local_path}: {e}")
+        try:
+            with open(local_path, "a", encoding="utf-8") as f:
+                f.write(text)
+        except Exception as e:
+            log(f"WARN append_rotating_log {local_path}: {e}")
 
 # ===================== RETRY / ERROR HANDLING =====================
 # Konstanta retry untuk request ke Binance (klines, ticker, price).
@@ -3476,13 +3538,7 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
         f"{ind_lines}\n"
         f"{'─'*36}\n"
     )
-    try:
-        oac_path = os.path.join("/data", "open-arm-close.txt")
-        with open(oac_path, "a", encoding="utf-8") as f:
-            f.write(text)
-    except Exception as e:
-        log(f"WARN log_oac file error: {e}")
-    threading.Thread(target=drive_append, args=("open-arm-close.txt", text), daemon=True).start()
+    append_rotating_log(os.path.join("/data", "open-arm-close.txt"), "open-arm-close.txt", text)
     # 16/09/2026 (permintaan Mas Budi, temuan dobel notif via screenshot -- CrossEMA-4h OPEN
     # KAVA/AVA, TrenKonfirmasi-4h OPEN SENT/RED, TrenKonfirmasi-4h CLOSE RED dobel semua):
     # log_oac() DULU SELALU kirim Telegram sendiri (raw indicator dump, TANPA tanggal
@@ -3509,13 +3565,9 @@ def log_oac(event: str, symbol: str, strategy: str, indicators: dict):
 AI_DECISIONS_LOG = "/data/ai_decisions_log.txt"
 
 def log_ai_decision(text: str):
-    """Append 1 entri riwayat keputusan AI ke ai_decisions_log.txt + mirror Drive."""
-    try:
-        with open(AI_DECISIONS_LOG, "a", encoding="utf-8") as f:
-            f.write(text)
-        threading.Thread(target=drive_append, args=("ai_decisions_log.txt", text), daemon=True).start()
-    except Exception as e:
-        log(f"WARN log_ai_decision: {e}")
+    """Append 1 entri riwayat keputusan AI ke ai_decisions_log.txt (auto-rotate, lihat REMARK
+    LOG ROTATION dekat definisi append_rotating_log)."""
+    append_rotating_log(AI_DECISIONS_LOG, "ai_decisions_log.txt", text)
 
 def log_ai_babak1(strategy_label: str, symbols_display: list, max_approve: int,
                    total_evaluated: int | None = None):
@@ -7679,13 +7731,7 @@ def log_near_miss(strategi: str, near_miss_list: list, total_syarat: int):
             lines.append(f"{ts} | {strategi} | {sym} | lolos {n_pass}/{item_total} | belum: {fails_str}\n")
         if lines:
             text = "".join(lines)
-            with open(NEAR_MISS_LOG, "a", encoding="utf-8") as f:
-                f.write(text)
-            # Sync ke Google Drive folder tradingview
-            try:
-                threading.Thread(target=drive_append, args=("near_miss_log.txt", text), daemon=True).start()
-            except Exception:
-                pass
+            append_rotating_log(NEAR_MISS_LOG, "near_miss_log.txt", text)
     except Exception as e:
         log(f"WARN log_near_miss: {e}")
 
@@ -14319,7 +14365,7 @@ window.addEventListener('load', function(){ restoreCtFilters(); loadClosedTrades
     <div class="card">
         <div class="card-header" onclick="toggleCard(this)"><h2>AI DECISION LOG <span class="card-toggle">&#9660;</span></h2></div>
         <div class="card-body" style="font-size:11px">
-            <div style="color:var(--muted);margin-bottom:10px">Baca langsung dari file lokal <code>/data/ai_decisions_log.txt</code> di server (BUKAN mirror Drive -- mirror itu bisa bolong kalau keputusan AI lagi ramai, lihat REMARK di drive_append()). Alasan lengkap AI (indikator + konteks HTF/LTF + reasoning) per kandidat, OPEN maupun SKIP.</div>
+            <div style="color:var(--muted);margin-bottom:10px">Baca langsung dari file lokal <code>/data/ai_decisions_log.txt</code> di server (file aktif, auto-rotate per bulan/5MB -- arsip bulan-bulan sebelumnya tetap ada di volume tapi tidak ditampilkan di sini). Alasan lengkap AI (indikator + konteks HTF/LTF + reasoning) per kandidat, OPEN maupun SKIP.</div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
                 <label>Strategi <input type="text" id="aidec-strategy" placeholder="mis. TrenKonfirmasi-4h" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;width:170px"></label>
                 <label>Pair <input type="text" id="aidec-symbol" placeholder="mis. STRK" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;width:100px"></label>
