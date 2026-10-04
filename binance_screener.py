@@ -9758,6 +9758,7 @@ def thread1c_scan_intrabar_early():
         kc_level = r12.get('kc_upper')
         if pd.isna(kc_level): continue
         vol_ma12 = float(r12.get('vol_ma', 0)) if not pd.isna(r12.get('vol_ma', 0)) else 0
+        rsi_now  = float(r12['rsi']) if not pd.isna(r12.get('rsi')) else 0.0
 
         # Harga LIVE saat ini tembus Keltner
         price_now = get_price_now(sym)
