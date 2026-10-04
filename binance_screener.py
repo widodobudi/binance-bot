@@ -13993,7 +13993,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
 <div class="card" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 22px;margin-top:0">
     <div class="card-header" onclick="toggleCard(this)" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">CLOSED TRADES <span class="card-toggle">&#9660;</span></h2>
-    <div style="display:flex;gap:8px;align-items:center">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
     <select id="ct-filter-strat" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua strategi</option>
         <option value="brkX2">brkX2-12h</option>
@@ -14021,17 +14021,12 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <span style="color:var(--muted);font-size:11px">s/d</span>
         <input type="date" id="ct-filter-to" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
       </span>
-    <button onclick="event.stopPropagation();loadClosedTrades()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reload</button>
-    <button onclick="event.stopPropagation();resetCtFilters()" style="background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reset</button>
-    </div>
-  </div>
-  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
-    <select id="ct-filter-outcome" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+    <select id="ct-filter-outcome" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua hasil</option>
         <option value="win">Profit saja</option>
         <option value="loss">Loss saja</option>
       </select>
-    <select id="ct-filter-reason" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+    <select id="ct-filter-reason" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua alasan close</option>
         <option value="Take Profit (custom)">Take Profit (custom)</option>
         <option value="Trailing">Trailing</option>
@@ -14040,8 +14035,11 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="Manual Reconcile">Manual Reconcile</option>
         <option value="Lainnya">Lainnya</option>
       </select>
-    <input type="text" id="ct-filter-search" oninput="renderClosedTradesRows()" placeholder="cari pair..." style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;width:110px">
-    <button onclick="exportCtCsv()" style="background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Export CSV</button>
+    <input type="text" id="ct-filter-search" onclick="event.stopPropagation()" oninput="renderClosedTradesRows()" placeholder="cari pair..." style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;width:110px">
+    <button onclick="event.stopPropagation();loadClosedTrades()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reload</button>
+    <button onclick="event.stopPropagation();resetCtFilters()" style="background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reset</button>
+    <button onclick="event.stopPropagation();exportCtCsv()" style="background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Export CSV</button>
+    </div>
   </div>
   <div id="ct-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px"></div>  <div id="ct-stats-all" style="display:none;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px;color:var(--muted)"></div>  <div id="ct-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:10px"></div>
   <div id="ct-equity" style="margin-bottom:14px"></div>
