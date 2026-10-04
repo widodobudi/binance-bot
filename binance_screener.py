@@ -7476,27 +7476,31 @@ def heartbeat_general_tick():
         if last_close and last_close.get('time'):
             base += f"\n    ↳ Last Close: {last_close.get('symbol','?')} {last_close.get('time','?')} WIB {last_close.get('profit_pct','?')}%"
         return base
-    def _fmt_shadow(key: str, target: int) -> str:
+    def _fmt_shadow(key: str, target: int, label: str = None) -> str:
         """13/09/2026: progress 2 shadow forward-test (paper, BUKAN CSV live) -- baca
         langsung dari shadow_fwdtest.json, bukan csv_progress(). Ringkas (1 baris per
         kombo, "(paper)" cuma disebut 1x di baris induk) -- versi awal kepanjangan sampai
-        kebungkus 2 baris di Telegram, permintaan Mas Budi dipersingkat."""
+        kebungkus 2 baris di Telegram, permintaan Mas Budi dipersingkat.
+        label (opsional, 04/10/2026): override teks tampilan beda dari `key` -- dipakai utk
+        keltnerbreak_12h supaya tidak ketukar nama dgn strategi live KeltnerBreak-12h (brkX2)
+        yang baru di-rename hari ini, lihat REMARK di _shadow_keltnerbreak_check_exits()."""
+        disp = label or key
         try:
             with _shadow_fwdtest_lock:
                 sdata = _load_shadow_fwdtest()
             closed = sdata.get(key, {}).get('closed', [])
             n_open = len(sdata.get(key, {}).get('open', []))
         except Exception:
-            return f"{key}: #? (gagal baca)"
+            return f"{disp}: #? (gagal baca)"
         n = len(closed)
         extra = f" | {n_open} open" if n_open else ""
         if n == 0:
-            return f"{key}: #0/{target} (belum ada){extra}"
+            return f"{disp}: #0/{target} (belum ada){extra}"
         win = sum(1 for c in closed if c['pct'] > 0)
         loss = n - win
         total_pct = sum(c['pct'] for c in closed)
         tag = " TERCAPAI!" if n >= target else ""
-        return f"{key}: #{n}/{target} ({win}W/{loss}L, {total_pct:+.1f}%){tag}{extra}"
+        return f"{disp}: #{n}/{target} ({win}W/{loss}L, {total_pct:+.1f}%){tag}{extra}"
     prog_all  = csv_progress_active()
     prog_brk  = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)
     prog_rev  = csv_progress('reversal')
@@ -7549,7 +7553,7 @@ def heartbeat_general_tick():
                      f"    {_fmt_shadow('trendsurge_4h', SHADOW_TRENDSURGE_TARGET)}\n"
                      f"    {_fmt_shadow('ichibreak_4h', SHADOW_ICHIBREAK_TARGET)}\n"
                      f"    {_fmt_shadow('psarflip_4h', SHADOW_PSARFLIP_TARGET)}\n"
-                     f"    {_fmt_shadow('keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET)}\n"
+                     f"    {_fmt_shadow('keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET, label='keltnerbreak_12h-shadow (RETIRED, formula sudah live)')}\n"
                      f"    {_fmt_shadow('oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)}\n"
                      f"    {_fmt_shadow('rvolbreak_1h', SHADOW_RVOLBREAK_TARGET)}\n"
                      f"{_fmt_hsconfirm_status()}")
@@ -16797,7 +16801,8 @@ def _shadow_keltnerbreak_check_exits(data: dict) -> None:
             n_done = len(data[combo]['closed'])
             log(f"[SHADOW-KELTNERBREAK] CLOSE {sym} @ {exit_price:.8g} ({pct:+.2f}%) -- {reason} -- #{n_done}/{target}")
             send_telegram(
-                f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- {combo} (paper)\n"
+                f"{'✅' if pct > 0 else '❌'} Shadow FWD-TEST CLOSE -- keltnerbreak_12h-shadow "
+                f"(RETIRED 03/10, formula sudah LIVE di KeltnerBreak-12h -- ini cuma posisi lama)\n"
                 f"{to_display_pair(sym)} @ {_fmt_price(exit_price)} ({pct:+.2f}%) -- {reason}\n"
                 f"Progress: #{n_done}/{target} ({_shadow_wl_tag(data[combo]['closed'])})", parse_mode=None)
         else:
