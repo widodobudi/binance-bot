@@ -9414,7 +9414,14 @@ def run_thread2():
 
 def thread1c_scan_intrabar():
     """Scan sinyal brkX2 di tengah candle 12h (60-75% elapsed).
-    Lapis 1: indikator candle n-1. Lapis 2: konfirmasi real-time 15m.
+    REDESAIN 04/10/2026 (keputusan Mas Budi): syarat lama (Supertrend/EMA/hh/
+    choppy/volume/RSI/Stoch 15m) GAGAL uji signifikansi (p=0,603 keseluruhan,
+    p=0,335 TRAIN -- sama temuan yg sudah bikin check_entry() closed-candle
+    diganti 03/10/2026). Diganti formula KeltnerBreak-12h INTRABAR yang sudah
+    tervalidasi terpisah (backtest proxy sub-candle 1h, 175 koin 2022-2026):
+    n=41.207, WR 81,4%, avg +2,29%/trade, TRAIN diff +2,16pp p=0,00000, TEST
+    diff +2,34pp p=0,00000 -- level Keltner (EMA20+2xATR10) dari candle 12h
+    TERAKHIR YANG SUDAH TUTUP, dicek tembus terhadap HARGA LIVE saat ini.
     Anti-double-entry per candle via last_intrabar_candle_ts.
     """
     global last_intrabar_candle_ts
@@ -9457,7 +9464,9 @@ def thread1c_scan_intrabar():
             if sym in active_deals: continue
         if is_cooldown_enabled('brkX2') and cooldown_remaining(sym) > 0: continue
         if sizing_fail_remaining(sym) > 0: continue   # baru gagal sizing/open, jangan coba lagi dulu
-        # LAPIS 1: candle 12h n-1
+        # Candle 12h TERAKHIR YANG SUDAH TUTUP -> level Keltner (EMA20+2xATR10,
+        # kc_upper sudah dihitung di compute_indicators(), sama persis dgn check_entry()
+        # closed-candle -- lihat REMARK di sana).
         df12 = get_ohlcv(sym, interval=TIMEFRAME, limit=120)
         if df12 is None: continue
         if df12['ct'].iloc[-1] >= now_ms:
@@ -9465,47 +9474,12 @@ def thread1c_scan_intrabar():
         if len(df12) < 60: continue
         df12 = compute_indicators(df12)
         r12  = df12.iloc[-1]
-        if pd.isna(r12.get('st_dir')) or r12.get('st_dir') != 1: continue
-        if pd.isna(r12.get('ema_fast')) or pd.isna(r12.get('ema_slow')): continue
-        # EMA20>EMA50 dihapus 30/07/2026 — diganti close>EMA50
-        if r12['close'] <= r12['ema_slow']: continue
-        if pd.isna(r12.get('hh')): continue
-        # 03/09/2026: syarat choppy lama pakai kolom 'br' + CHOPPY_LOOK/CHOPPY_MIN yang
-        # TIDAK PERNAH ada di codebase (df12['br'] tidak pernah di-set, CHOPPY_LOOK/CHOPPY_MIN
-        # tidak pernah didefinisikan) -- akibatnya r12.get('br') selalu None, pd.isna(None)
-        # selalu True, baris ini selalu `continue` utk SEMUA kandidat sejak kode ini ada.
-        # T1c (scan intrabar baseline) akibatnya tidak pernah meloloskan satupun kandidat.
-        # Diganti is_choppy(df12) -- fungsi choppy-filter asli yg benar & valid, sudah dipakai
-        # T1c-E (intrabar EARLY). Ditemukan & diperbaiki saat dry-run restrukturisasi 2-babak.
-        if is_choppy(df12): continue
-        # LAPIS 2: data 15m candle aktif
-        # 03/09/2026: limit dinaikkan dari 50 -> 100 (get_ohlcv() menolak & return None
-        # kalau hasil < 60 baris, jadi limit=50 bikin baris ini SELALU None -> selalu
-        # `continue` di semua kandidat, LAPIS 2 tidak pernah tercapai). Kolom df15['ts']
-        # diganti df15['ot'] (open time) -- get_ohlcv() tidak pernah punya kolom 'ts',
-        # cuma 'ot'/'ct', jadi baris ini juga selalu KeyError kalau df15 sempat non-None.
-        # Ditemukan & diperbaiki saat dry-run restrukturisasi 2-babak.
-        df15 = get_ohlcv(sym, interval='15m', limit=100)
-        if df15 is None: continue
-        intra = df15[df15['ot'] >= candle_open_ms]
-        if len(intra) == 0: continue
-        price_now    = float(intra['close'].iloc[-1])
-        vol_so_far   = float(intra['vol'].sum())
-        vol_ma12     = float(r12.get('vol_ma', 0)) if not pd.isna(r12.get('vol_ma', 0)) else 0
-        vol_projected = vol_so_far / elapsed_pct if elapsed_pct > 0 else vol_so_far
-        try:
-            rsi15   = ta.rsi(intra['close'], length=14)
-            stoch15 = ta.stoch(intra['high'], intra['low'], intra['close'], k=14, d=3, smooth_k=3)
-            rsi_now   = float(rsi15.iloc[-1]) if rsi15 is not None and len(rsi15) > 0 and not pd.isna(rsi15.iloc[-1]) else 50.0
-            sk_cols   = [c for c in stoch15.columns if 'STOCHk' in c]
-            stoch_now = float(stoch15[sk_cols[0]].iloc[-1]) if sk_cols and not pd.isna(stoch15[sk_cols[0]].iloc[-1]) else 50.0
-        except Exception:
-            rsi_now = 50.0; stoch_now = 50.0
-        if price_now <= float(r12['hh']): continue
-        if price_now <= float(r12['ema_fast']): continue
-        if vol_ma12 > 0 and vol_projected < VOLUME_MULT * vol_ma12: continue
-        if rsi_now >= RSI_MAX: continue
-        if STOCH_MAX is not None and stoch_now >= STOCH_MAX: continue
+        kc_level = r12.get('kc_upper')
+        if pd.isna(kc_level): continue
+        vol_ma12 = float(r12.get('vol_ma', 0)) if not pd.isna(r12.get('vol_ma', 0)) else 0
+        # Harga LIVE saat ini (bukan tunggu candle 12h berikutnya tutup) tembus Keltner
+        price_now = get_price_now(sym)
+        if price_now <= 0 or price_now <= float(kc_level): continue
         # HTF 3D filter
         if HTF_FILTER_ENABLED and not htf_filter_ok(sym):
             log(f"  [T1c] {sym} lolos intrabar tapi DITOLAK HTF 3D filter (price<EMA50 atau MACD<0)")
@@ -9650,8 +9624,12 @@ t1d_near_miss_lock   = threading.Lock()
 def thread1c_scan_intrabar_early():
     """
     T3-EARLY: Scan sinyal brkX2 di awal candle 12h (5-59% elapsed = menit ke 36-424).
-    Syarat entry IDENTIK dengan T3-baseline dan T1 (close candle).
-    Backtest 17/07/2026: avg +9.519%, WR 75.7%, tona 12, wf6 OK (203 symbol).
+    REDESAIN 04/10/2026 (keputusan Mas Budi, sama dgn thread1c_scan_intrabar --
+    lihat REMARK lengkap di sana): syarat entry sekarang IDENTIK dgn T1c-baseline
+    DAN T1 (close candle) dlm artian formula KeltnerBreak-12h yg sama persis,
+    bukan lagi 7-syarat lama yg sudah terbukti gagal uji signifikansi. Window
+    waktu (5-59% elapsed) TETAP beda dari T1c (60-75%) -- cuma jendela kapan
+    boleh cek yg beda, levelnya (Keltner dari candle n-1) sama.
     Anti-double-entry per candle via last_intrabar_early_candle_ts.
     """
     global last_intrabar_early_candle_ts
@@ -9701,7 +9679,9 @@ def thread1c_scan_intrabar_early():
         if is_cooldown_enabled('brkX2') and cooldown_remaining(sym) > 0: continue
         if sizing_fail_remaining(sym) > 0: continue   # baru gagal sizing/open, jangan coba lagi dulu
 
-        # LAPIS 1: indikator dari candle 12h yang sudah tutup (n-1)
+        # Candle 12h TERAKHIR YANG SUDAH TUTUP -> level Keltner (EMA20+2xATR10),
+        # sama persis dgn check_entry() closed-candle & thread1c_scan_intrabar() --
+        # lihat REMARK di sana.
         df12 = get_ohlcv(sym, interval=TIMEFRAME, limit=120)
         if df12 is None: continue
         # Buang candle yang sedang berjalan (belum tutup)
@@ -9710,49 +9690,13 @@ def thread1c_scan_intrabar_early():
         if len(df12) < 60: continue
         df12 = compute_indicators(df12)
         r12  = df12.iloc[-1]
+        kc_level = r12.get('kc_upper')
+        if pd.isna(kc_level): continue
+        vol_ma12 = float(r12.get('vol_ma', 0)) if not pd.isna(r12.get('vol_ma', 0)) else 0
 
-        # Cek semua syarat dari candle n-1 (7 syarat + filter)
-        if is_choppy(df12): continue
-        if pd.isna(r12.get('st_dir')) or r12.get('st_dir') != 1: continue
-        if pd.isna(r12.get('ema_fast')) or pd.isna(r12.get('ema_slow')): continue
-        # EMA20>EMA50 dihapus 30/07/2026 — diganti close>EMA50
-        if r12['close'] <= r12['ema_slow']: continue
-        if pd.isna(r12.get('hh_early')): continue
-        if MACD_FILTER_ENABLED:
-            mh = r12.get('macd_hist')
-            if mh is None or pd.isna(mh) or mh <= 0: continue
-
-        # LAPIS 2: konfirmasi harga live dari data 15m
-        # 03/09/2026: limit dinaikkan dari 50 -> 100 (get_ohlcv() menolak & return None
-        # kalau hasil < 60 baris, jadi limit=50 bikin baris ini SELALU None -> selalu
-        # `continue` di semua kandidat, LAPIS 2 tidak pernah tercapai). Kolom df15['ts']
-        # diganti df15['ot'] (open time) -- get_ohlcv() tidak pernah punya kolom 'ts',
-        # cuma 'ot'/'ct', jadi baris ini juga selalu KeyError kalau df15 sempat non-None.
-        # Ditemukan & diperbaiki saat dry-run restrukturisasi 2-babak.
-        df15 = get_ohlcv(sym, interval='15m', limit=100)
-        if df15 is None: continue
-        intra = df15[df15['ot'] >= candle_open_ms]
-        if len(intra) == 0: continue
-        price_now  = float(intra['close'].iloc[-1])
-        vol_so_far = float(intra['vol'].sum())
-        vol_ma12   = float(r12.get('vol_ma', 0)) if not pd.isna(r12.get('vol_ma', 0)) else 0
-        # Volume diproyeksikan ke akhir candle
-        vol_projected = vol_so_far / elapsed_pct if elapsed_pct > 0 else vol_so_far
-
-        # Cek syarat live
-        if price_now <= float(r12['hh_early']): continue   # breakout HH7 (T3-EARLY, backtest 20/07)
-        if price_now <= float(r12['ema_fast']): continue   # price > EMA20
-        if vol_ma12 > 0 and vol_projected < VOLUME_MULT * vol_ma12: continue  # volume
-        try:
-            rsi15 = ta.rsi(intra['close'], length=14)
-            stoch15 = ta.stoch(intra['high'], intra['low'], intra['close'], k=14, d=3, smooth_k=3)
-            rsi_now   = float(rsi15.iloc[-1]) if rsi15 is not None and len(rsi15) > 0 and not pd.isna(rsi15.iloc[-1]) else 50.0
-            sk_cols   = [c for c in stoch15.columns if 'STOCHk' in c]
-            stoch_now = float(stoch15[sk_cols[0]].iloc[-1]) if sk_cols and not pd.isna(stoch15[sk_cols[0]].iloc[-1]) else 50.0
-        except Exception:
-            rsi_now = 50.0; stoch_now = 50.0
-        if rsi_now >= RSI_MAX: continue
-        if STOCH_MAX is not None and stoch_now >= STOCH_MAX: continue
+        # Harga LIVE saat ini tembus Keltner
+        price_now = get_price_now(sym)
+        if price_now <= 0 or price_now <= float(kc_level): continue
 
         # HTF 3D filter
         if HTF_FILTER_ENABLED and not htf_filter_ok(sym):
@@ -22562,7 +22506,7 @@ def run_web_dashboard():
         def api_strategy_performance():
             """Ringkasan total% forward-test kumulatif per strategi, utk bar chart Monitor tab."""
             defs = [
-                ("brkX2", "brkX2-12h"),
+                ("brkX2", "KeltnerBreak-12h"),  # 04/10/2026: brkX2-12h diganti formula Keltner, nama disamakan
                 ("reversal", "Reversal-8h"),
                 ("brkX2_4h", "brkX2-4h"),
                 ("brkX2_crossema", "CrossEMA-4h"),
