@@ -1112,135 +1112,6 @@ def sync_trades_csv_to_drive():
     except Exception as e:
         log(f"WARN [DRIVE] sync_trades_csv_to_drive: {e}")
 
-def _drive_write_binary(svc, file_id: str, data: bytes):
-    """Sama spt _drive_write() tapi utk konten BINER (bukan teks utf-8) -- dipakai
-    qscalp_export_3m_cache_once() upload pickle candle 3m."""
-    try:
-        media = _GMU(data, mimetype="application/octet-stream", resumable=False)
-        svc.files().update(fileId=file_id, media_body=media).execute()
-    except Exception as e:
-        log(f"WARN [DRIVE] write_binary {file_id}: {e}")
-
-def drive_write_binary(filename: str, data: bytes) -> bool:
-    """Timpa PENUH isi file Drive dgn data biner (pickle dll). File tujuan HARUS
-    sudah ada duluan (service account tidak punya storage quota, sama spt
-    drive_sync_full). Return True kalau berhasil ketemu & ditulis."""
-    with _drive_lock:
-        svc = _get_drive_service()
-        if not svc:
-            return False
-        try:
-            fid = _drive_get_or_create_file_id(svc, filename)
-            if not fid:
-                return False
-            _drive_write_binary(svc, fid, data)
-            return True
-        except Exception as e:
-            log(f"WARN [DRIVE] drive_write_binary {filename}: {e}")
-            return False
-
-# ── Ekspor cache candle 3m QScalp-3m (ALAT SEKALI PAKAI, 03/10/2026, permintaan Mas Budi) ──
-# Backtest QScalp-3m butuh histori candle 3 MENIT (cache lokal Claude cuma resolusi 1 jam,
-# tidak bisa direkonstruksi jadi 3 menit) -- job ini fetch 1 tahun candle 3m utk top-120 pair
-# TERLIKUID saat ini (sama spt QSCALP_UNIVERSE_SIZE live), LANGSUNG upload ke file placeholder
-# Drive yang sudah disiapkan (nama qscalp3m_<SYMBOL>.pkl, dibuat manual oleh Claude lewat akun
-# Drive Mas Budi -- service account bot tidak bisa bikin file baru). TIDAK PERNAH simpan ke
-# disk Railway (langsung di memori -> Drive) supaya TIDAK mengulang insiden storage hampir
-# penuh dari cache 4h dulu. Dipicu manual via /admin/qscalp3m_export (token sama dgn
-# DIAG_TOKEN), jalan di background thread, dipacing supaya tidak ganggu rate-limit Binance
-# punya live trading. ALAT INI akan DIHAPUS lagi dari kode setelah dipakai sekali.
-QSCALP3M_EXPORT_DAYS = 365
-
-def _fetch_3m_klines_1y(symbol: str) -> pd.DataFrame | None:
-    """Fetch candle 3m paginated (1000/request) mundur QSCALP3M_EXPORT_DAYS hari dari sekarang."""
-    end_ms = int(time.time() * 1000)
-    start_ms = end_ms - QSCALP3M_EXPORT_DAYS * 86400 * 1000
-    rows = []
-    cursor = start_ms
-    step_ms = 1000 * 180_000  # 1000 candle x 180000ms (3 menit)
-    while cursor < end_ms:
-        try:
-            r = _binance_get("/api/v3/klines", params={
-                "symbol": symbol, "interval": "3m", "limit": 1000,
-                "startTime": cursor, "endTime": min(cursor + step_ms, end_ms),
-            }, timeout=20)
-            if r is None:
-                break
-            data = r.json()
-            if not isinstance(data, list) or not data:
-                cursor += step_ms
-                continue
-            rows.extend(data)
-            last_ot = int(data[-1][0])
-            if last_ot <= cursor:
-                break
-            cursor = last_ot + 180_000
-            time.sleep(0.12)  # pacing -- jangan rebutan rate-limit dgn live trading
-        except Exception as e:
-            log(f"WARN [QSCALP3M-EXPORT] fetch {symbol}: {e}")
-            break
-    if not rows:
-        return None
-    df = pd.DataFrame(rows, columns=["ts","open","high","low","close","vol","ct",
-                                      "qvol","ntrades","tbbv","tbqv","ig"])
-    for c in ["open","high","low","close","vol"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    df["ts"] = df["ts"].astype("int64")
-    df = df[["ts","open","high","low","close","vol"]].drop_duplicates("ts").sort_values("ts").reset_index(drop=True)
-    return df
-
-def qscalp_export_3m_cache_once(only_symbols: list | None = None):
-    """Job ekspor sekali-jalan -- lihat REMARK di atas. Dipanggil dari endpoint admin,
-    bukan otomatis saat startup. only_symbols: kalau diisi, skip hitung ulang top-N
-    likuid dan langsung proses daftar simbol itu saja (dipakai utk retry pair yang
-    gagal upload di run sebelumnya -- placeholder Drive-nya belum ada saat itu)."""
-    if only_symbols:
-        universe = only_symbols
-        log(f"[QSCALP3M-EXPORT] Mulai -- retry {len(universe)} pair spesifik...")
-    else:
-        log("[QSCALP3M-EXPORT] Mulai -- ambil universe top-N likuid...")
-        try:
-            ticker = get_ticker_24h()
-            if not ticker:
-                log("WARN [QSCALP3M-EXPORT] gagal ambil ticker, batal.")
-                return
-            volmap = {}
-            for t in ticker:
-                try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
-                except Exception: pass
-            pairs_all = [s for s in volmap if s.endswith('USDT') and s not in SYMBOL_BLACKLIST]
-            universe = sorted(pairs_all, key=lambda s: volmap[s], reverse=True)[:QSCALP_UNIVERSE_SIZE]
-        except Exception as e:
-            log(f"WARN [QSCALP3M-EXPORT] job error: {e}")
-            return
-    try:
-        log(f"[QSCALP3M-EXPORT] Universe {len(universe)} pair. Mulai fetch+upload satu per satu...")
-
-        n_ok, n_skip, n_fail = 0, 0, 0
-        for idx, sym in enumerate(universe, start=1):
-            filename = f"qscalp3m_{sym}.pkl"
-            try:
-                df = _fetch_3m_klines_1y(sym)
-                if df is None or len(df) < 100:
-                    log(f"[QSCALP3M-EXPORT] ({idx}/{len(universe)}) {sym}: data kosong/kurang, skip.")
-                    n_skip += 1
-                    continue
-                buf = _io.BytesIO()
-                df.to_pickle(buf)
-                ok = drive_write_binary(filename, buf.getvalue())
-                if ok:
-                    n_ok += 1
-                    log(f"[QSCALP3M-EXPORT] ({idx}/{len(universe)}) {sym}: OK, {len(df)} candle -> {filename}")
-                else:
-                    n_fail += 1
-                    log(f"WARN [QSCALP3M-EXPORT] ({idx}/{len(universe)}) {sym}: upload gagal (placeholder Drive belum ada?)")
-            except Exception as e:
-                n_fail += 1
-                log(f"WARN [QSCALP3M-EXPORT] ({idx}/{len(universe)}) {sym}: error {e}")
-        log(f"[QSCALP3M-EXPORT] SELESAI. OK={n_ok} skip={n_skip} fail={n_fail} dari {len(universe)} pair.")
-    except Exception as e:
-        log(f"WARN [QSCALP3M-EXPORT] job error: {e}")
-
 # ===================== RETRY / ERROR HANDLING =====================
 # Konstanta retry untuk request ke Binance (klines, ticker, price).
 # Tidak dipakai untuk 3Commas webhook (kirim sekali, hasil langsung dipakai).
@@ -20387,7 +20258,7 @@ def run_web_dashboard():
                 return None
             if session.get("dashboard_authenticated"):
                 return None
-            if request.path in {"/login", "/logout", "/dash.js", "/tradingview_webhook", "/api/diag_avg_price", "/admin/qscalp3m_export"} or request.method == "OPTIONS":
+            if request.path in {"/login", "/logout", "/dash.js", "/tradingview_webhook", "/api/diag_avg_price"} or request.method == "OPTIONS":
                 return None
             if request.path.startswith("/api/") or request.is_json:
                 return jsonify({"ok": False, "error": "login diperlukan"}), 401
@@ -22200,22 +22071,6 @@ def run_web_dashboard():
                                 "qty": qty, "value_usd": (qty * price) if price else None})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
-
-        # 03/10/2026: ALAT SEKALI PAKAI (lihat REMARK di qscalp_export_3m_cache_once()) --
-        # token sama dgn /api/diag_avg_price (DIAG_TOKEN), dipicu manual oleh Claude sekali,
-        # jalan di background thread spy tidak blokir request Flask. Akan dihapus lagi
-        # setelah dipakai.
-        @app.route("/admin/qscalp3m_export")
-        def admin_qscalp3m_export():
-            token = request.args.get("token", "")
-            expected = os.environ.get("DIAG_TOKEN", "")
-            if not expected or token != expected:
-                return jsonify({"ok": False, "error": "token salah/belum di-set"}), 403
-            symbols_param = request.args.get("symbols", "")
-            only_symbols = [s.strip().upper() for s in symbols_param.split(",") if s.strip()] or None
-            threading.Thread(target=qscalp_export_3m_cache_once, args=(only_symbols,), daemon=True).start()
-            return jsonify({"ok": True, "msg": "Export job dimulai di background, cek Railway log [QSCALP3M-EXPORT]",
-                             "only_symbols": only_symbols})
 
         @app.route("/api/auto_sell_price")
         def api_auto_sell_price():
