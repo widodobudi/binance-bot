@@ -2819,6 +2819,21 @@ def strategy_phase_breakdown() -> dict:
         out['akum_entry_b'] = _akum_phases
     except Exception as e:
         log(f"   [PHASE] gagal hitung akumulasi: {e}")
+    try:
+        # 04/10/2026 (permintaan Mas Budi): TrenKonfirmasi-4h belum pernah masuk sini sejak
+        # fitur ini dibuat 26/09 -- bukan kelupaan dari strategi lain, strategi ini memang
+        # belum pernah ganti formula/reset baseline sejak live (lihat REMARK 17/09 dekat
+        # pemanggilan csv_progress('trend_confirm_4h') di heartbeat_general_tick()), jadi
+        # cuma 1 fase "LIVE" -- sama persis polanya dgn brkX2/reversal di atas. Counter lain
+        # yg terkait strategi ini (review hard-stop K1.5/cap10.8 via tc_hardstop_progress_line(),
+        # partial-sell->Earn via earn_partial_progress_line()) SENGAJA TIDAK dimasukkan ke sini --
+        # bentuk datanya beda (hard-stop-rate/Earn-success, bukan win/loss+total%), maksa masuk ke
+        # _phase_entry() akan salah representasi.
+        out['trend_confirm_4h'] = [
+            _phase_entry('LIVE', csv_progress('trend_confirm_4h')),
+        ]
+    except Exception as e:
+        log(f"   [PHASE] gagal hitung trend_confirm_4h: {e}")
     return out
 
 
