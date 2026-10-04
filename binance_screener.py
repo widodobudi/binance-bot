@@ -13246,14 +13246,19 @@ refreshQscalpSignals();
 <script>
 // Inject Hunting-4h ke STRAT_SECONDARY setelah dash.js selesai load.
 // Guard ini penting supaya modal tidak crash jika script dipanggil sebelum DOM siap.
+// 04/10/2026 (permintaan Mas Budi -- "jangan di-disabled saja, destroy"): 5 strategi yang
+// sudah di-TERMINATE permanen (reversal/brkX2_crossema/akum_entry_a/akum_entry_b/hunting_4h --
+// semua punya kill-switch hardcoded REVERSAL_ENABLED/STRAT_CROSSEMA_ENABLED/STRAT_AKUM_ENABLED/
+// HUNTING_ENABLED=False, lihat REMARK di masing2 konstanta) DIHAPUS dari sini, bukan cuma
+// di-dim -- panel ini kontrol OPERASIONAL, tidak ada gunanya nampilkan toggle utk strategi yg
+// tidak akan pernah bisa buka posisi lagi apa pun isi togglenya. Baris lama (sebelum dihapus)
+// utk referensi: reversal:'Reversal-8h', brkX2_crossema:'CrossEMA-4h',
+// akum_entry_a:'Akum-4h Entry A', akum_entry_b:'Akum-4h Entry B', hunting_4h:'Hunting-4h'.
+// Data historis performa mereka TETAP ada & tetap bisa dilihat di panel "Performance per
+// Strategi" (beda mekanisme, sengaja tetap "disembunyikan (dipause)" bukan dihapus di sana).
 var SC_LABELS = {
     brkX2: 'KeltnerBreak-12h',
-    reversal: 'Reversal-8h',
     brkX2_4h: 'brkX2-4h',
-    brkX2_crossema: 'CrossEMA-4h',
-    akum_entry_a: 'Akum-4h Entry A',
-    akum_entry_b: 'Akum-4h Entry B',
-    hunting_4h: 'Hunting-4h',
     trend_confirm_4h: 'TrendConfirm-4h',
     qscalp_3m: 'QScalp-3m'
 };
