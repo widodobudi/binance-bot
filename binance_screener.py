@@ -12179,6 +12179,37 @@ def save_deal_overrides(overrides: dict):
     except Exception as e:
         log(f"WARN save_deal_overrides: {e}")
 
+TP_TIER_MODES = ("price", "usd", "pct")
+TP_TIER_MAX = 2
+
+def parse_tp_tiers(form) -> tuple:
+    tiers = []
+    for i in range(1, TP_TIER_MAX + 1):
+        if not form.get(f"t{i}_enabled"):
+            continue
+        mode = form.get(f"t{i}_mode", "")
+        if mode not in TP_TIER_MODES:
+            return [], f"Tier {i}: jenis target tidak valid"
+        try:
+            value = float(form.get(f"t{i}_value", ""))
+            sell_pct = float(form.get(f"t{i}_sell_pct", ""))
+        except (TypeError, ValueError):
+            return [], f"Tier {i}: nilai target dan % jual harus berupa angka"
+        if value <= 0:
+            return [], f"Tier {i}: nilai target harus lebih dari 0"
+        if not (0 < sell_pct <= 100):
+            return [], f"Tier {i}: % jual harus antara 1 dan 100"
+        tiers.append({"n": i, "mode": mode, "value": value, "sell_pct": sell_pct, "done": False})
+    if sum(t["sell_pct"] for t in tiers) > 100:
+        return [], "Total % jual semua tier tidak boleh lebih dari 100%"
+    if len(tiers) == 2:
+        a, b = tiers
+        if a["mode"] != b["mode"]:
+            return [], "Kedua tier harus memakai jenis target yang sama (harga, $, atau %)"
+        if b["value"] <= a["value"]:
+            return [], "Target tier 2 harus lebih tinggi dari target tier 1"
+    return tiers, ""
+
 def get_deal_override(sym: str, key: str, default: bool = True) -> bool:
     return load_deal_overrides().get(sym, {}).get(key, default)
 
@@ -21032,6 +21063,27 @@ def run_web_dashboard():
                 save_deal_overrides(overrides)
                 _tp_hold_armed_since.pop(sym, None)
             return redirect("/")
+
+        @app.route("/set_tp_tiers", methods=["POST"])
+        def set_tp_tiers():
+            sym = request.form.get("sym", "")
+            with active_deals_lock:
+                deal = dict(active_deals.get(sym, {}))
+            qty = float(deal.get("qty_coin", 0) or 0)
+            if not sym or qty <= 0:
+                return jsonify({"ok": False, "error": "deal aktif tidak ditemukan"}), 404
+            tiers, err = parse_tp_tiers(request.form)
+            if err:
+                return jsonify({"ok": False, "error": err}), 400
+            overrides = load_deal_overrides()
+            entry = overrides.setdefault(sym, {})
+            if any(t.get("done") for t in entry.get("tp_tiers", [])):
+                return jsonify({"ok": False, "error": "Ada tier yang sudah terpicu, pengaturan tier tidak bisa diubah"}), 400
+            entry["tp_tiers"] = tiers
+            entry["tp_tiers_base_qty"] = qty
+            save_deal_overrides(overrides)
+            _tp_hold_armed_since.pop(sym, None)
+            return jsonify({"ok": True, "tiers": tiers, "base_qty": qty})
 
         @app.route("/api/strategy_config", methods=["GET", "POST"])
         def api_strat_config():
