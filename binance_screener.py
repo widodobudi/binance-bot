@@ -12876,6 +12876,41 @@ refreshShadowChart();
             <input type="number" name="minutes" min="0" step="1" value="{{ overrides.get(sym,{}).get('tp1_hold_minutes', 0) }}" style="width:50px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)">
             <button type="submit" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Save</button>
           </form>
+          {% set _tiers = overrides.get(sym,{}).get("tp_tiers",[]) %}
+          {% set _lk = namespace(v=false) %}
+          {% for _tt in _tiers %}{% if _tt.done %}{% set _lk.v = true %}{% endif %}{% endfor %}
+          {% set _a = _tiers[0] if _tiers|length > 0 else none %}
+          {% set _b = _tiers[1] if _tiers|length > 1 else none %}
+          <div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--border)" title="Tier TP: bisa jual sebagian di beberapa target (maks 2). Setiap tier menjual persen tertentu dari jumlah koin saat tier disimpan. Sisa koin tetap dipantau hard stop, trailing, dan timeout. Tier menggantikan TP tunggal di atas untuk deal ini. Penjualan tier tidak ditahan AI.">
+            <div style="font-size:9px;color:var(--muted);margin-bottom:2px">Tier TP (jual sebagian):</div>
+            {% for _tt in _tiers %}
+            <div style="font-size:9px;color:var(--accent)">Tier {{ _tt.n }}: {{ _tt.mode }} {{ _tt.value }} → jual {{ _tt.sell_pct }}% — {% if _tt.skipped %}dilewati (nilai di bawah minimum){% elif _tt.done %}TERPICU{% else %}menunggu{% endif %}</div>
+            {% endfor %}
+            {% if _lk.v %}
+            <div style="font-size:9px;color:var(--muted)">Ada tier yang sudah terpicu, pengaturan tidak bisa diubah.</div>
+            {% else %}
+            <div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start">
+              <label style="font-size:9px;color:var(--muted)" title="Jenis target untuk kedua tier. Harga: jual saat harga koin mencapai nilai ini. $: jual saat profit bersih (setelah fee) dari koin yang masih dipegang mencapai nilai ini. %: jual saat profit dari harga rata-rata entry mencapai nilai ini. Kedua tier harus memakai jenis yang sama.">Jenis target:
+                <select name="tier_mode" style="background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 3px;font-size:10px;font-family:var(--font)">
+                  <option value="price" {{ "selected" if (not _a) or _a.mode=="price" else "" }}>Harga</option>
+                  <option value="usd" {{ "selected" if _a and _a.mode=="usd" else "" }}>$</option>
+                  <option value="pct" {{ "selected" if _a and _a.mode=="pct" else "" }}>%</option>
+                </select>
+              </label>
+              <div title="Tier 1 dijual lebih dulu. Persen jual dihitung dari jumlah koin saat tier disimpan. Kosongkan atau hilangkan centang = tier ini tidak dipakai." style="font-size:9px;color:var(--muted)">
+                <label><input type="checkbox" name="t1_enabled" {{ "checked" if _a else "" }}> Tier 1</label>
+                target <input type="text" inputmode="decimal" name="t1_value" value="{{ _a.value if _a else '' }}" style="width:70px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)">
+                jual <input type="text" inputmode="decimal" name="t1_sell_pct" value="{{ _a.sell_pct if _a else '' }}" style="width:40px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)">%
+              </div>
+              <div title="Tier 2 dijual setelah tier 1. Target tier 2 harus lebih tinggi dari tier 1. Total % jual kedua tier maksimal 100%. Kalau kedua tier menghabiskan posisi, sisa yang tersisa dijual lewat jalur close biasa." style="font-size:9px;color:var(--muted)">
+                <label><input type="checkbox" name="t2_enabled" {{ "checked" if _b else "" }}> Tier 2</label>
+                target <input type="text" inputmode="decimal" name="t2_value" value="{{ _b.value if _b else '' }}" style="width:70px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)">
+                jual <input type="text" inputmode="decimal" name="t2_sell_pct" value="{{ _b.sell_pct if _b else '' }}" style="width:40px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)">%
+              </div>
+              <button type="button" onclick="saveTpTiers(this, '{{ sym }}', {{ d.get('last_price',0) or 0 }})" title="Simpan tier. Untuk menghapus semua tier dan kembali ke TP tunggal, hilangkan semua centang lalu simpan." style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font)">Simpan Tier</button>
+            </div>
+            {% endif %}
+          </div>
           {% if d.get("tp_hold_status") %}
           <div style="font-size:9px;color:var(--accent);margin-top:2px">{{ d.get("tp_hold_status") }}</div>
           {% endif %}
@@ -13817,6 +13852,35 @@ function resendOpenNotification(sym) {
     }).then(function(r){ return r.json(); }).then(function(d) {
         alert(d.ok ? 'Laporan OPEN LONG sudah dikirim ke Telegram.' : 'Gagal: ' + d.error);
     }).catch(function(e){ alert('Gagal mengirim laporan: ' + e); });
+}
+
+function saveTpTiers(btn, sym, lastPrice) {
+    var box = btn.parentElement;
+    var mode = box.querySelector('select[name=tier_mode]').value;
+    var fd = new FormData();
+    fd.append('sym', sym);
+    var count = 0, belowPrice = null;
+    [1, 2].forEach(function (i) {
+        var en = box.querySelector('input[name=t' + i + '_enabled]');
+        if (!en || !en.checked) return;
+        var v = box.querySelector('input[name=t' + i + '_value]').value.replace(',', '.');
+        var p = box.querySelector('input[name=t' + i + '_sell_pct]').value.replace(',', '.');
+        fd.append('t' + i + '_enabled', 'on');
+        fd.append('t' + i + '_mode', mode);
+        fd.append('t' + i + '_value', v);
+        fd.append('t' + i + '_sell_pct', p);
+        count++;
+        if (mode === 'price' && lastPrice > 0 && parseFloat(v) <= lastPrice) belowPrice = parseFloat(v);
+    });
+    if (count === 0 && !confirm('Tidak ada tier yang dicentang. Simpan akan menghapus semua tier dan deal kembali memakai TP tunggal. Lanjutkan?')) return;
+    if (belowPrice !== null && !confirm('Target harga ' + belowPrice + ' sudah sama atau di bawah harga sekarang (' + lastPrice + '). Tier ini akan langsung terpicu dan menjual sebagian koin. Lanjutkan?')) return;
+    fetch('/set_tp_tiers', {method: 'POST', body: fd, credentials: 'same-origin'})
+        .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+        .then(function (res) {
+            if (res.ok && res.j.ok) { location.reload(); }
+            else { alert('Gagal menyimpan tier: ' + ((res.j && res.j.error) || 'tidak diketahui')); }
+        })
+        .catch(function (e) { alert('Gagal menyimpan tier: ' + e); });
 }
 
 function loadAutoSellConfig() {
