@@ -3751,7 +3751,14 @@ def load_active_deals():
                     qty_total = binance_get_asset_qty_total(asset)
                     qty_coin_saved = float(d.get("qty_coin", 0) or 0)
                     if qty_total > 0:
-                        log(f"   [RECONCILE] {sym}: qty={qty_total:.4f} {asset} ✓")
+                        diff = qty_total - qty_coin_saved
+                        d["qty_wallet"] = qty_total
+                        d["qty_diff"] = diff
+                        if qty_coin_saved > 0 and abs(diff) > qty_coin_saved * RECONCILE_QTY_TOL_PCT / 100:
+                            log(f"WARN [RECONCILE] {sym}: wallet {qty_total:.4f} vs bot {qty_coin_saved:.4f} "
+                                f"(selisih {diff:+.4f} {asset}) -- cek fee/qty")
+                        else:
+                            log(f"   [RECONCILE] {sym}: wallet {qty_total:.4f} vs bot {qty_coin_saved:.4f} ✓")
                     elif qty_coin_saved > 0:
                         # Wallet baca 0 tapi deal punya qty_coin > 0 (mungkin Soft Staking)
                         log(f"   [RECONCILE] {sym}: Binance qty=0 tapi qty_coin={qty_coin_saved:.4f} di deal — dipertahankan")
@@ -3760,6 +3767,7 @@ def load_active_deals():
                         log(f"   [RECONCILE] {sym}: qty=0 di Binance → auto-remove (deal sudah close)")
                 except Exception as e:
                     log(f"   [RECONCILE] {sym}: error cek qty ({e}) — dipertahankan")
+            save_active_deals()
             if to_remove:
                 with active_deals_lock:
                     for sym in to_remove:
@@ -4033,13 +4041,17 @@ def binance_buy_market(symbol: str, usdt_amount: float) -> dict:
     qty    = float(data.get("executedQty", 0))
     cost   = sum(float(f["price"]) * float(f["qty"]) for f in fills) if fills else usdt_amount
     price_avg = cost / qty if qty > 0 else 0
+    base_asset = symbol.replace("USDT", "")
+    fee_base = sum(float(f.get("commission", 0)) for f in fills if f.get("commissionAsset") == base_asset)
+    qty_net = max(qty - fee_base, 0.0)
     fee_str = ", ".join(
         f"{a}={sum(float(f.get('commission', 0)) for f in fills if f.get('commissionAsset') == a):.8f}"
         for a in sorted({f.get('commissionAsset', '') for f in fills})
     )
-    log(f"[BINANCE] BUY {symbol}: qty={qty:.6f} avg={price_avg:.6f} cost={cost:.2f} USDT orderId={data.get('orderId')} fee: {fee_str or '-'}")
+    log(f"[BINANCE] BUY {symbol}: qty={qty_net:.6f} (kotor {qty:.6f}, fee {base_asset} {fee_base:.8f}) "
+        f"avg={price_avg:.6f} cost={cost:.2f} USDT orderId={data.get('orderId')} fee: {fee_str or '-'}")
     return {"symbol": symbol, "orderId": data.get("orderId"),
-            "qty": qty, "price_avg": price_avg, "cost_usdt": cost}
+            "qty": qty_net, "price_avg": price_avg, "cost_usdt": cost}
 
 
 def binance_sell_market(symbol: str, qty: float) -> dict:
@@ -12253,6 +12265,7 @@ def parse_tp_tiers(form) -> tuple:
     return tiers, ""
 
 TP_TIER_MIN_NOTIONAL_USD = 5.0
+RECONCILE_QTY_TOL_PCT = 0.01
 _tp_tier_lock = threading.Lock()
 
 def tp_tier_trigger(tier: dict, price: float, prof_from_entry: float, upnl_usd: float) -> bool:
@@ -12813,6 +12826,11 @@ refreshShadowChart();
           <div style="font-size:9px;color:var(--muted)">
             estd {{ "%.2f"|format(d.get("total_usd_display",0) / d.get("entry_price",1)) }} {{ sym.replace("USDT","") }}
           </div>
+          {% if d.get("qty_wallet") is not none %}
+          <div style="font-size:9px;color:{{ 'var(--muted)' if (d.get('qty_diff',0)|abs) <= (d.get('qty_coin',0)|float * 0.0001) else '#f85149' }}" title="Saldo wallet Binance saat pengecekan terakhir (saat bot start). Selisih = wallet dikurangi qty yang dicatat bot. Toleransi 0,01%.">
+            wallet {{ "%.4f"|format(d.get("qty_wallet",0)) }} {{ sym.replace("USDT","") }}{% if (d.get('qty_diff',0)|abs) > (d.get('qty_coin',0)|float * 0.0001) %} (selisih {{ "%+.4f"|format(d.get("qty_diff",0)) }}){% else %} ✓{% endif %}
+          </div>
+          {% endif %}
           {% endif %}
         </td>
         <td style="white-space:nowrap">
