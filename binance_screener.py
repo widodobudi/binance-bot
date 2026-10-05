@@ -4033,7 +4033,11 @@ def binance_buy_market(symbol: str, usdt_amount: float) -> dict:
     qty    = float(data.get("executedQty", 0))
     cost   = sum(float(f["price"]) * float(f["qty"]) for f in fills) if fills else usdt_amount
     price_avg = cost / qty if qty > 0 else 0
-    log(f"[BINANCE] BUY {symbol}: qty={qty:.6f} avg={price_avg:.6f} cost={cost:.2f} USDT orderId={data.get('orderId')}")
+    fee_str = ", ".join(
+        f"{a}={sum(float(f.get('commission', 0)) for f in fills if f.get('commissionAsset') == a):.8f}"
+        for a in sorted({f.get('commissionAsset', '') for f in fills})
+    )
+    log(f"[BINANCE] BUY {symbol}: qty={qty:.6f} avg={price_avg:.6f} cost={cost:.2f} USDT orderId={data.get('orderId')} fee: {fee_str or '-'}")
     return {"symbol": symbol, "orderId": data.get("orderId"),
             "qty": qty, "price_avg": price_avg, "cost_usdt": cost}
 
