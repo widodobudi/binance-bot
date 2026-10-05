@@ -21210,13 +21210,14 @@ def run_web_dashboard():
             tiers, err = parse_tp_tiers(request.form)
             if err:
                 return jsonify({"ok": False, "error": err}), 400
-            overrides = load_deal_overrides()
-            entry = overrides.setdefault(sym, {})
-            if any(t.get("done") for t in entry.get("tp_tiers", [])):
-                return jsonify({"ok": False, "error": "Ada tier yang sudah terpicu, pengaturan tier tidak bisa diubah"}), 400
-            entry["tp_tiers"] = tiers
-            entry["tp_tiers_base_qty"] = qty
-            save_deal_overrides(overrides)
+            with _tp_tier_lock:
+                overrides = load_deal_overrides()
+                entry = overrides.setdefault(sym, {})
+                if any(t.get("done") for t in entry.get("tp_tiers", [])):
+                    return jsonify({"ok": False, "error": "Ada tier yang sudah terpicu, pengaturan tier tidak bisa diubah"}), 400
+                entry["tp_tiers"] = tiers
+                entry["tp_tiers_base_qty"] = qty
+                save_deal_overrides(overrides)
             _tp_hold_armed_since.pop(sym, None)
             return jsonify({"ok": True, "tiers": tiers, "base_qty": qty})
 
