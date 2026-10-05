@@ -3935,6 +3935,9 @@ def get_binance_open_orders_value(symbol: str) -> float:
 
 
 # ── Binance Direct Trading (Railway Pro + static IP + BINANCE_TRADING_KEY) ──────────
+# REMARK (05/10/2026, permintaan Mas Budi): data pasar Binance publik bisa diakses dari sandbox
+# lewat https://data-api.binance.vision (HTTP 200, diuji 05/10/2026). api.binance.com timeout dari
+# sandbox. Dipakai utk cek indikator/kondisi entry historis -- lihat memory reference_binance_data_api_vision.
 BINANCE_TRADING_BASE = "https://api.binance.com"
 AUTO_SELL_CONFIG_FILE = os.path.join(DATA_DIR, "auto_sell_config.json")
 _auto_sell_filter_cache = {}
@@ -24640,7 +24643,9 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
         # 08/09/2026: APPROVE juga kena cooldown (lebih pendek dari SKIP) -- lihat
         # AI_OPEN_APPROVE_COOLDOWN_SEC. Pakai key/dict yg sama, cuma durasi beda.
         _ai_open_skip_cooldown[_cd_key] = time.time() + AI_OPEN_APPROVE_COOLDOWN_SEC
-    log(f"[AI] OPEN decision {symbol}: {first_line} → {'BUKA' if decision else 'SKIP'}")
+    # 05/10/2026 (permintaan Mas Budi, ukur kualitas keputusan per model): provider yg benar2
+    # memutuskan dicatat di baris ini (anthropic / alibaba=Qwen / gemini), supaya bisa dipisah saat analisis.
+    log(f"[AI] OPEN decision {symbol}: {first_line} → {'BUKA' if decision else 'SKIP'} | provider={AI_LAST_PROVIDER}")
     # Riwayat lengkap semua keputusan (OPEN maupun SKIP) ke ai_decisions_log.txt (04/09/2026,
     # permintaan Mas Budi -- utk investigasi/penyelidikan nanti, terlepas dari notify Telegram).
     # 30/09/2026 (permintaan Mas Budi): sebelum ini, log_ai_decision() cuma menyimpan ind_str (dict
@@ -24812,7 +24817,7 @@ def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: i
         return fallback
     picked_syms = picked_syms[:max_approve]
 
-    log(f"[AI] BATCH rank {strategy_label}: {len(picked_syms)}/{len(candidates)} diloloskan → {picked_syms}")
+    log(f"[AI] BATCH rank {strategy_label}: {len(picked_syms)}/{len(candidates)} diloloskan → {picked_syms} | provider={AI_LAST_PROVIDER}")
     log_ai_decision(
         f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] AI-BATCH-ANALYSIS | {strategy_label}\n"
         f"Dievaluasi: {len(candidates)} kandidat | Diloloskan: {len(picked_syms)}\n"
