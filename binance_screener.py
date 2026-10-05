@@ -8866,6 +8866,28 @@ def thread2_monitor():
             if get_deal_override(sym, 'tp1usd', False) and _upnl_usd_now >= _tp_target_usd:
                 _tp_condition_met = True
                 _tp_reason = f"TP ${_tp_target_usd:.2f}: profit bersih ${_upnl_usd_now:.2f} (modal ${_total_usd_now:.0f})"
+        _tp_tiers_cfg = get_deal_override(sym, 'tp_tiers', []) or []
+        if _tp_tiers_cfg:
+            _tp_condition_met = False   # tier menggantikan TP tunggal untuk deal ini
+            for _t in _tp_tiers_cfg:
+                if _t.get('done') or not tp_tier_trigger(_t, price, prof_from_entry, _upnl_usd_now):
+                    continue
+                _tr = execute_tp_tier(sym, _t['n'], price)
+                if _tr.get('action') == 'close_all':
+                    do_close = True
+                    reason = f"TP tier {_t['n']} ({_t['mode']} {_t['value']}): tercapai, sisa posisi dijual semua"
+                elif _tr.get('action') == 'partial':
+                    _f = _tr['fill']
+                    log(f"[TP-TIER] {sym} tier {_t['n']} terpicu: jual {_f['qty']} @ {_fmt_price(_f['price'])} "
+                        f"(proceeds {_f['proceeds_usdt']:.2f} USDT, order {_f['order_id']})")
+                    send_telegram(
+                        f"TP TIER {_t['n']} TERCAPAI — {to_display_pair(sym)}\n"
+                        f"Terjual {_f['qty']:.6g} @ {_fmt_price(_f['price'])} (+{_f['proceeds_usdt']:.2f} USDT)\n"
+                        f"Sisa posisi tetap dipantau (hard stop/trailing/timeout)."
+                    )
+                elif _tr.get('action') == 'error':
+                    log(f"WARN [TP-TIER] {sym} tier {_t['n']} gagal jual: {_tr.get('error')} -- dicoba lagi siklus berikut")
+                break
         # 05/09/2026 (permintaan Mas Budi): jangan langsung close begitu syarat TP
         # Target terpenuhi -- tunggu dulu tp1_hold_minutes (default 0 = instan spt
         # sebelumnya) SELAMA syaratnya tetap terpenuhi. Kalau di tengah jalan syaratnya
@@ -12209,6 +12231,71 @@ def parse_tp_tiers(form) -> tuple:
         if b["value"] <= a["value"]:
             return [], "Target tier 2 harus lebih tinggi dari target tier 1"
     return tiers, ""
+
+TP_TIER_MIN_NOTIONAL_USD = 5.0
+_tp_tier_lock = threading.Lock()
+
+def tp_tier_trigger(tier: dict, price: float, prof_from_entry: float, upnl_usd: float) -> bool:
+    if tier["mode"] == "price":
+        return price >= tier["value"]
+    if tier["mode"] == "pct":
+        return prof_from_entry >= tier["value"]
+    return upnl_usd >= tier["value"]
+
+def _tp_tier_persist(sym: str, mutate) -> None:
+    with _tp_tier_lock:
+        overrides = load_deal_overrides()
+        entry = overrides.setdefault(sym, {})
+        mutate(entry)
+        save_deal_overrides(overrides)
+
+def _tp_tier_mark(entry: dict, tier_n: int, **fields) -> None:
+    for t in entry.get("tp_tiers", []):
+        if t.get("n") == tier_n:
+            t.update(fields)
+
+def execute_tp_tier(sym: str, tier_n: int, price: float) -> dict:
+    with _tp_tier_lock:
+        overrides = load_deal_overrides()
+        entry = overrides.get(sym, {})
+        tier = next((t for t in entry.get("tp_tiers", []) if t.get("n") == tier_n), None)
+        if tier is None or tier.get("done"):
+            return {"action": "skip", "reason": "tier tidak aktif atau sudah terpicu"}
+        base_qty = float(entry.get("tp_tiers_base_qty", 0) or 0)
+        _tp_tier_mark(entry, tier_n, done=True)
+        save_deal_overrides(overrides)
+    with active_deals_lock:
+        qty_coin = float(active_deals.get(sym, {}).get("qty_coin", 0) or 0)
+    if qty_coin <= 0 or price <= 0:
+        _tp_tier_persist(sym, lambda e: _tp_tier_mark(e, tier_n, done=False))
+        return {"action": "skip", "reason": "qty atau harga tidak valid"}
+    sell_qty = min(base_qty * tier["sell_pct"] / 100.0, qty_coin)
+    if (qty_coin - sell_qty) * price < TP_TIER_MIN_NOTIONAL_USD:
+        sell_qty = qty_coin
+    if sell_qty * price < TP_TIER_MIN_NOTIONAL_USD:
+        _tp_tier_persist(sym, lambda e: _tp_tier_mark(e, tier_n, skipped=True))
+        return {"action": "skip", "reason": "nilai jual di bawah minimum"}
+    if sell_qty >= qty_coin - 1e-12:
+        return {"action": "close_all"}
+    try:
+        res = binance_sell_market(sym, sell_qty)
+    except Exception as e:
+        _tp_tier_persist(sym, lambda e_: _tp_tier_mark(e_, tier_n, done=False))
+        return {"action": "error", "error": str(e)}
+    sold = float(res.get("qty", 0) or 0)
+    if sold <= 0:
+        _tp_tier_persist(sym, lambda e_: _tp_tier_mark(e_, tier_n, done=False))
+        return {"action": "error", "error": "order jual tidak terisi"}
+    fill = {"n": tier_n, "ts": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "qty": sold,
+            "price": float(res.get("price_avg", 0) or 0),
+            "proceeds_usdt": float(res.get("proceeds_usdt", 0) or 0),
+            "order_id": res.get("orderId")}
+    _tp_tier_persist(sym, lambda e_: e_.setdefault("tp_tier_fills", []).append(fill))
+    with active_deals_lock:
+        if sym in active_deals:
+            active_deals[sym]["qty_coin"] = max(0.0, qty_coin - sold)
+    save_active_deals()
+    return {"action": "partial", "fill": fill}
 
 def get_deal_override(sym: str, key: str, default: bool = True) -> bool:
     return load_deal_overrides().get(sym, {}).get(key, default)
