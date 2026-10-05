@@ -8876,6 +8876,7 @@ def thread2_monitor():
                 _tp_condition_met = True
                 _tp_reason = f"TP ${_tp_target_usd:.2f}: profit bersih ${_upnl_usd_now:.2f} (modal ${_total_usd_now:.0f})"
         _tp_tiers_cfg = get_deal_override(sym, 'tp_tiers', []) or []
+        _tier_forced_close = False   # penjualan tier tidak boleh ditahan AI (keputusan Mas Budi)
         if _tp_tiers_cfg:
             _tp_condition_met = False   # tier menggantikan TP tunggal untuk deal ini
             for _t in _tp_tiers_cfg:
@@ -8884,6 +8885,7 @@ def thread2_monitor():
                 _tr = execute_tp_tier(sym, _t['n'], price)
                 if _tr.get('action') == 'close_all':
                     do_close = True
+                    _tier_forced_close = True
                     reason = f"TP tier {_t['n']} ({_t['mode']} {_t['value']}): tercapai, sisa posisi dijual semua"
                 elif _tr.get('action') == 'partial':
                     _f = _tr['fill']
@@ -9138,7 +9140,7 @@ def thread2_monitor():
             # notifikasi Telegram + boros API call AI utk keputusan yg pada dasarnya sama
             # berulang-ulang. Generik lintas SEMUA strategi (bukan cuma trend_confirm_4h),
             # krn ini bug pemborosan, bukan pilihan desain per-strategi.
-            if not _ai_override_bypassed and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
+            if not _ai_override_bypassed and not _tier_forced_close and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
                 _close_ai_hold_until = float(d.get('close_ai_hold_until', 0) or 0)
                 if time.time() < _close_ai_hold_until:
                     log(f"[T2] {sym} CLOSE di-hold (cooldown AI {(_close_ai_hold_until - time.time())/60:.1f} menit lagi, reason: {reason})")
