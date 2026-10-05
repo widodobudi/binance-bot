@@ -5599,7 +5599,16 @@ def execute_close_now(sym: str, reason: str, telegram_header: str = "CLOSE MANUA
         if send_close_long(sym, strat):
             ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
             total_usd = estimate_deal_total_usd(d)
+            with active_deals_lock:
+                _final_qty = float(active_deals.get(sym, {}).get('qty_coin', 0) or 0)
+            _tier_sum = tp_tier_close_summary(sym, _final_qty, price_now, entry)
+            if _tier_sum:
+                price_now = _tier_sum['avg_exit']
+                prof = _tier_sum['profit_pct']
+                total_usd = _tier_sum['base_usd']
+                reason += f" [{_tier_sum['note']}]"
             csv_log_close(to_display_pair(sym), ts, price_now, prof, reason, strategy=strat, base_usd=total_usd)
+            tp_tier_clear(sym)
             _opened_ts = (d.get('opened_candle_ts', 0) or 0) / 1000.0
             _hold_c = round((time.time() - _opened_ts) / _candle_seconds_for_strategy(strat)) if _opened_ts > 0 else ''
             deal_log_write({
@@ -9212,6 +9221,14 @@ def thread2_monitor():
                     total_usd = total_usd * _close_info['sold_fraction']
                     reason += (f" [JUAL {_close_info['sold_pct']:.0f}%, SISA {100 - _close_info['sold_pct']:.0f}% "
                                f"({_close_info['residual_qty']:.6g} {_close_info['asset']} ~${_close_info['residual_usd']:.2f}) -> Earn Flexible]")
+                with active_deals_lock:
+                    _final_qty_t2 = float(active_deals.get(sym, {}).get('qty_coin', 0) or 0)
+                _tier_sum_t2 = tp_tier_close_summary(sym, _final_qty_t2, price, entry)
+                if _tier_sum_t2:
+                    price = _tier_sum_t2['avg_exit']
+                    prof_from_entry = _tier_sum_t2['profit_pct']
+                    total_usd = _tier_sum_t2['base_usd']
+                    reason += f" [{_tier_sum_t2['note']}]"
                 csv_log_close(
                     to_display_pair(sym),
                     now_wib().strftime('%Y-%m-%d %H:%M:%S'),
@@ -9221,6 +9238,7 @@ def thread2_monitor():
                     base_usd=total_usd,
                     exit_ticker=_exit_ticker
                 )
+                tp_tier_clear(sym)
                 # ── DEAL LOG lengkap CLOSE ────────────────────────────────
                 # opened_candle_ts disimpan dalam MILIDETIK -- wajib dibagi 1000 dulu sebelum
                 # dikurangi time.time() (detik), dan pembagi candle wajib sesuai timeframe
@@ -12296,6 +12314,35 @@ def execute_tp_tier(sym: str, tier_n: int, price: float) -> dict:
             active_deals[sym]["qty_coin"] = max(0.0, qty_coin - sold)
     save_active_deals()
     return {"action": "partial", "fill": fill}
+
+def tp_tier_close_summary(sym: str, final_qty: float, final_price: float, entry_price: float):
+    with _tp_tier_lock:
+        entry = load_deal_overrides().get(sym, {})
+    fills = entry.get("tp_tier_fills", [])
+    if not fills or entry_price <= 0:
+        return None
+    base_qty = float(entry.get("tp_tiers_base_qty", 0) or 0)
+    final_qty = max(final_qty, 0.0)
+    sold_qty = sum(f["qty"] for f in fills) + final_qty
+    if sold_qty <= 0:
+        return None
+    notional = sum(f["qty"] * f["price"] for f in fills) + final_qty * final_price
+    avg_exit = notional / sold_qty
+    tiers_txt = ", ".join(f"T{f['n']} {f['qty']:.6g}@{f['price']:.6g}" for f in fills)
+    return {
+        "avg_exit": avg_exit,
+        "profit_pct": (avg_exit / entry_price - 1) * 100 - FEE_ROUND_TRIP_PCT,
+        "base_usd": base_qty * entry_price,
+        "note": f"TP TIER: {tiers_txt}; sisa {final_qty:.6g}@{final_price:.6g}",
+    }
+
+def tp_tier_clear(sym: str) -> None:
+    with _tp_tier_lock:
+        overrides = load_deal_overrides()
+        if sym in overrides:
+            for k in ("tp_tiers", "tp_tiers_base_qty", "tp_tier_fills"):
+                overrides[sym].pop(k, None)
+            save_deal_overrides(overrides)
 
 def get_deal_override(sym: str, key: str, default: bool = True) -> bool:
     return load_deal_overrides().get(sym, {}).get(key, default)
@@ -20983,6 +21030,7 @@ def run_web_dashboard():
             csv_log_close(sym, now_wib().strftime('%Y-%m-%d %H:%M:%S'), price, prof_pct,
                           "manual reconcile (koin sudah terjual di luar jalur normal)",
                           strategy=strat, base_usd=total_usd)
+            tp_tier_clear(sym)
             remove_from_active_deals(sym)
             if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
                 record_closed(sym)
