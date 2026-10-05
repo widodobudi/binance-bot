@@ -21306,6 +21306,40 @@ def run_web_dashboard():
             _tp_hold_armed_since.pop(sym, None)
             return jsonify({"ok": True, "tiers": tiers, "base_qty": qty})
 
+        @app.route("/fix_deal_qty", methods=["GET", "POST"])
+        def fix_deal_qty():
+            sym = request.values.get("sym", "")
+            if request.values.get("confirm") != "1":
+                return jsonify({"ok": False, "error": "tambahkan &confirm=1"}), 400
+            with active_deals_lock:
+                if sym not in active_deals:
+                    return jsonify({"ok": False, "error": "deal aktif tidak ditemukan"}), 404
+                old = float(active_deals[sym].get("qty_coin", 0) or 0)
+            wallet = binance_get_asset_qty_total(sym.replace("USDT", ""))
+            if wallet <= 0 or old <= 0:
+                return jsonify({"ok": False, "error": "saldo wallet atau qty deal tidak valid"}), 400
+            if abs(wallet - old) / old > 0.01:
+                return jsonify({"ok": False, "error": f"selisih terlalu besar ({wallet:.4f} vs {old:.4f}), tidak dikoreksi otomatis"}), 400
+            with active_deals_lock:
+                active_deals[sym]["qty_coin"] = wallet
+                active_deals[sym]["qty_wallet"] = wallet
+                active_deals[sym]["qty_diff"] = 0.0
+            save_active_deals()
+            tier_note = "tidak ada tier"
+            with _tp_tier_lock:
+                overrides = load_deal_overrides()
+                entry = overrides.get(sym, {})
+                tiers = entry.get("tp_tiers", [])
+                if tiers and not any(t.get("done") for t in tiers):
+                    entry["tp_tiers_base_qty"] = wallet
+                    overrides[sym] = entry
+                    save_deal_overrides(overrides)
+                    tier_note = "basis tier disamakan dengan saldo wallet"
+                elif tiers:
+                    tier_note = "tier sudah ada yang terpicu, basis tier tidak diubah"
+            log(f"[FIX-QTY] {sym} qty bot {old:.4f} -> wallet {wallet:.4f} (selisih {wallet - old:+.4f}); {tier_note}")
+            return jsonify({"ok": True, "sym": sym, "qty_lama": old, "qty_baru": wallet, "tier": tier_note})
+
         @app.route("/api/strategy_config", methods=["GET", "POST"])
         def api_strat_config():
             if request.method == "GET":
