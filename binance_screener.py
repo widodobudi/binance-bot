@@ -12858,6 +12858,7 @@ refreshShadowChart();
             </form>
             <span style="font-size:9px;color:var(--muted)">Auto TP aktif</span>
           </div>
+          <div style="font-size:9px;color:var(--muted);margin-bottom:3px" title="TP tunggal ini tidak dipakai selama deal punya tier TP. Tier yang dipasang di bawah yang berlaku.">diabaikan jika tier aktif</div>
           {% set _tpmode = overrides.get(sym,{}).get("tp1_target_mode","usd") %}
           <div style="font-size:9px;color:var(--muted);margin-bottom:2px">Target tercapai:</div>
           <form method="POST" action="/set_tp_target" style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:4px">
@@ -12884,7 +12885,7 @@ refreshShadowChart();
           <div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--border)" title="Tier TP: bisa jual sebagian di beberapa target (maks 2). Setiap tier menjual persen tertentu dari jumlah koin saat tier disimpan. Sisa koin tetap dipantau hard stop, trailing, dan timeout. Tier menggantikan TP tunggal di atas untuk deal ini. Penjualan tier tidak ditahan AI.">
             <div style="font-size:9px;color:var(--muted);margin-bottom:2px">Tier TP (jual sebagian):</div>
             {% for _tt in _tiers %}
-            <div style="font-size:9px;color:var(--accent)">Tier {{ _tt.n }}: {{ _tt.mode }} {{ _tt.value }} → jual {{ _tt.sell_pct }}% — {% if _tt.skipped %}dilewati (nilai di bawah minimum){% elif _tt.done %}TERPICU{% else %}menunggu{% endif %}</div>
+            <div style="font-size:9px;color:var(--accent)">Tier {{ _tt.n }}: {{ {'price':'harga','usd':'$','pct':'%'}[_tt.mode] }} {{ fmt_price(_tt.value) if _tt.mode == 'price' else _tt.value }} → jual {{ _tt.sell_pct }}% — {% if _tt.skipped %}dilewati (nilai di bawah minimum){% elif _tt.done %}TERPICU{% else %}menunggu{% endif %}</div>
             {% endfor %}
             {% if _lk.v %}
             <div style="font-size:9px;color:var(--muted)">Ada tier yang sudah terpicu, pengaturan tidak bisa diubah.</div>
@@ -12899,12 +12900,12 @@ refreshShadowChart();
               </label>
               <div title="Tier 1 dijual lebih dulu. Persen jual dihitung dari jumlah koin saat tier disimpan. Kosongkan atau hilangkan centang = tier ini tidak dipakai." style="font-size:9px;color:var(--muted)">
                 <label><input type="checkbox" name="t1_enabled" {{ "checked" if _a else "" }}> Tier 1</label>
-                target <input type="text" inputmode="decimal" name="t1_value" value="{{ _a.value if _a else '' }}" style="width:70px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)">
+                target <input type="text" inputmode="decimal" name="t1_value" value="{{ (fmt_price(_a.value) if _a.mode == 'price' else _a.value) if _a else '' }}" style="width:70px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)">
                 jual <input type="text" inputmode="decimal" name="t1_sell_pct" value="{{ _a.sell_pct if _a else '' }}" style="width:40px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)">%
               </div>
               <div title="Tier 2 dijual setelah tier 1. Target tier 2 harus lebih tinggi dari tier 1. Total % jual kedua tier maksimal 100%. Kalau kedua tier menghabiskan posisi, sisa yang tersisa dijual lewat jalur close biasa." style="font-size:9px;color:var(--muted)">
                 <label><input type="checkbox" name="t2_enabled" {{ "checked" if _b else "" }}> Tier 2</label>
-                target <input type="text" inputmode="decimal" name="t2_value" value="{{ _b.value if _b else '' }}" style="width:70px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)">
+                target <input type="text" inputmode="decimal" name="t2_value" value="{{ (fmt_price(_b.value) if _b.mode == 'price' else _b.value) if _b else '' }}" style="width:70px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)">
                 jual <input type="text" inputmode="decimal" name="t2_sell_pct" value="{{ _b.sell_pct if _b else '' }}" style="width:40px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)">%
               </div>
               <button type="button" onclick="saveTpTiers(this, '{{ sym }}', {{ d.get('last_price',0) or 0 }})" title="Simpan tier. Untuk menghapus semua tier dan kembali ke TP tunggal, hilangkan semua centang lalu simpan." style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font)">Simpan Tier</button>
