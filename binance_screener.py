@@ -239,6 +239,9 @@ HARD_STOP_MULT_BY_STRATEGY = {
 # tidak ditandai hard stop, dan tidak diubah menjadi timeout, jadi hold-no-sell tidak menahan koinnya.
 # Angka backtest ada di memory project_hardstop_backtest_status. 0 = mati.
 BRKX2_4H_BE_TRIGGER_PCT = 1.0
+# 06/10/2026: impas +1% untuk TrenKonfirmasi-4h (tanpa faktor 0.8). 0 = mati. Hanya aktif setelah di-push.
+TC4H_BE_TRIGGER_PCT = 1.0
+BE_TRIGGER_BY_STRATEGY = {'brkX2_4h': BRKX2_4H_BE_TRIGGER_PCT, 'trend_confirm_4h': TC4H_BE_TRIGGER_PCT}
 # TrenKonfirmasi-4h K1.5 + cap 10.8% (permintaan Mas Budi, prioritas: hard-stop lebih jarang & untung terjaga):
 # hard-stop 18.2% -> 14.0% dari trade, rugi terburuk -12.3% -> -11.0%, avg +1.80% -> +1.85% (2025+: 20.6% -> 16.2%,
 # +1.52% -> +1.53%). Stop per tier ATR: <1% 6.0%, <2% 8.25%, <4% 10.5%, >=4% 10.8% (cap). REMARK nilai lama (rollback):
@@ -8996,14 +8999,14 @@ def thread2_monitor():
                 _tp_hold_armed_since.pop(sym, None)
         if not do_close and not _is_akum:
             _hs_label, _hs_base, _hs_pct = qscalp_hard_stop_pct() if strat == 'qscalp_3m' else hard_stop_pct(atrp, strat)
-            _be_active = (strat == 'brkX2_4h' and BRKX2_4H_BE_TRIGGER_PCT > 0 and entry > 0
-                          and peak >= entry * (1 + BRKX2_4H_BE_TRIGGER_PCT / 100))
+            _be_trig = BE_TRIGGER_BY_STRATEGY.get(strat, 0)
+            _be_active = (_be_trig > 0 and entry > 0 and peak >= entry * (1 + _be_trig / 100))
             if _be_active:
                 # impas: setelah pernah untung >= trigger, batas jual = entry +0.1% (bukan hard stop)
                 if price <= entry * 1.001:
                     do_close = True
                     _be_forced_close = True
-                    reason = (f"impas setelah untung +{BRKX2_4H_BE_TRIGGER_PCT:g}%: price {_fmt_price(price)} "
+                    reason = (f"impas setelah untung +{_be_trig:g}%: price {_fmt_price(price)} "
                               f"turun ke harga beli (entry +0.1%)")
             elif price <= entry * (1 - _hs_pct / 100):
                 do_close = True
