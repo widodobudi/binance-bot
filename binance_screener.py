@@ -230,7 +230,7 @@ HARD_STOP_MULT = 1.1              # pengali (K) atas base hard-stop per tier ATR
 # Semua strategi eksplisit ditulis 1.1 (= perilaku lama, TIDAK berubah) sampai diuji satu per satu.
 # Cap = batas atas hard-stop % dari entry (None = tanpa cap): rugi terburuk ~ cap + fee.
 HARD_STOP_MULT_BY_STRATEGY = {
-    'brkX2': 1.1, 'reversal': 1.1, 'brkX2_4h': 0.88, 'brkX2_crossema': 1.1, 'hunting_4h': 1.1,   # 06/10/2026: brkX2_4h 1.1 x faktor 0.8 = 0.88 (backtest 160 pair, lihat memory project_hardstop_backtest_status)
+    'brkX2': 1.1, 'reversal': 1.1, 'brkX2_4h': 1.1, 'brkX2_crossema': 1.1, 'hunting_4h': 1.1,
     'trend_confirm_4h': 1.5,   # 20/09/2026: 1.1 -> 1.5 + cap 10.8% (backtest 42.133 sinyal 2022-2026, lihat di bawah)
 }
 # TrenKonfirmasi-4h K1.5 + cap 10.8% (permintaan Mas Budi, prioritas: hard-stop lebih jarang & untung terjaga):
