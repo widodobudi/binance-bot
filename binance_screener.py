@@ -10533,6 +10533,16 @@ def thread1d_scan_4h():
         _quick_reentry = v['quick_reentry']; kc_level = v['kc_level']
         _vol_ratio_bx = v.get('detail', {}).get('rvol')
 
+        # 06/10/2026: cek harga live SEBELUM beli. Dulu cek hanya dilakukan setelah order beli, sehingga kalau harga
+        # sudah di bawah level Keltner koinnya terbeli tapi tidak tercatat di active_deals (kasus SUSDT 05/10 17:20 WIB).
+        try:
+            _pre_buy = get_price_now(sym)
+        except Exception:
+            _pre_buy = 0
+        if _pre_buy > 0 and not (_pre_buy > kc_level):
+            log(f"[T1d] {sym} SKIP sebelum beli: price_now {_fmt_price(_pre_buy)} sudah di bawah level Keltner {_fmt_price(kc_level)}")
+            continue
+
         ok, target_usd, add_usd = open_deal_with_sizing(
             sym, score, strategy="brkX2_4h", atr_pct=atrp, vol_ratio=_vol_ratio_bx)
         if not ok: continue
@@ -10549,8 +10559,9 @@ def thread1d_scan_4h():
                 _dfx = compute_indicators_4h(_dfx)
                 _r4msg = _dfx.iloc[-1]
             if _pnow > 0 and not (_pnow > kc_level):
-                log(f"[T1d] {sym} SKIP: price_now {_fmt_price(_pnow)} sudah di bawah level Keltner {_fmt_price(kc_level)} lagi")
-                continue
+                # 06/10/2026: order beli sudah terkirim, jadi koin harus tercatat. Dulu di sini `continue`
+                # sehingga koin terbeli tapi tidak dikelola bot. Sekarang deal tetap dicatat dan dikelola.
+                log(f"[T1d] {sym} WARN: price_now {_fmt_price(_pnow)} di bawah level Keltner {_fmt_price(kc_level)} sesudah beli -- deal tetap dicatat")
         except Exception as _e:
             log(f"[T1d] {sym} cek ulang level Keltner error: {_e} — lanjut")
 
