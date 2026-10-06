@@ -1889,6 +1889,10 @@ daily_loss_limit_lock = threading.Lock()
 # di posisi $90-100 bisa sampai -$9 s/d -$12, hampir/lebih besar dari limit lama $6 (satu trade
 # wajar saja sudah bisa mengunci SEMUA strategi). REMARK nilai lama: $6.0.
 daily_loss_limit_usd: float = 18.0   # default direvisi 25/09/2026 (dulu $15.0 sejak 19/09, $6.0 sebelumnya)
+# 06/10/2026 (permintaan Mas Budi, no 2): batas rugi MINGGUAN (Senin-Minggu WIB), realized + unrealized,
+# dalam dollar tetap. Dipasang bersama batas harian: salah satu tersulut -> OPEN deal baru diblokir.
+# Angka $40 adalah default awal, bisa disesuaikan. 0 = mati.
+WEEKLY_LOSS_LIMIT_USD: float = 40.0
 
 def load_daily_loss_limit():
     global daily_loss_limit_usd
@@ -2021,16 +2025,60 @@ def is_daily_loss_limit_breached() -> bool:
     try:
         with daily_loss_limit_lock:
             limit_usd = daily_loss_limit_usd
-        if limit_usd <= 0:
-            _daily_loss_notified_flag = False
-            return False
-        pnl_usd = get_today_pnl_usd()
-        breached = pnl_usd <= -abs(limit_usd)
+        daily_breached = limit_usd > 0 and get_today_pnl_usd() <= -abs(limit_usd)
+        weekly_breached = is_weekly_loss_limit_breached()
+        breached = daily_breached or weekly_breached
+        if weekly_breached and not daily_breached:
+            log(f"[RISK] batas rugi MINGGUAN tersulut (${WEEKLY_LOSS_LIMIT_USD:.2f}) -- OPEN baru diblokir")
         if not breached:
             _daily_loss_notified_flag = False
         return breached
     except Exception as e:
         log(f"WARN is_daily_loss_limit_breached: {e}")
+        return False
+
+def get_week_pnl_usd() -> float:
+    """06/10/2026 (no 2): P&L minggu ini (Senin WIB s/d sekarang) = realized trade CLOSED + unrealized deal aktif."""
+    week_start = (now_wib().date() - __import__('datetime').timedelta(days=now_wib().weekday())).strftime('%Y-%m-%d')
+    realized = 0.0
+    try:
+        if os.path.exists(TRADES_CSV):
+            with trades_csv_lock:
+                with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                    rows = list(csv.DictReader(f))
+            for r in rows:
+                if r.get('status') != 'CLOSED':
+                    continue
+                if (r.get('close_time_wib') or '').strip()[:10] < week_start:
+                    continue
+                try:
+                    realized += float(r.get('profit_pct') or 0) / 100 * float(r.get('base_usd') or 8)
+                except (ValueError, TypeError):
+                    pass
+    except Exception as e:
+        log(f"WARN get_week_pnl_usd realized: {e}")
+    unrealized = 0.0
+    try:
+        with active_deals_lock:
+            deals = dict(active_deals)
+        for d in deals.values():
+            ep = d.get('entry_price', 0) or 0
+            if ep <= 0:
+                continue
+            lp = d.get('last_price', ep) or ep
+            unrealized += ((lp / ep - 1) * 100 - FEE_ROUND_TRIP_PCT) / 100 * estimate_deal_total_usd(d)
+    except Exception as e:
+        log(f"WARN get_week_pnl_usd unrealized: {e}")
+    return realized + unrealized
+
+def is_weekly_loss_limit_breached() -> bool:
+    """06/10/2026 (no 2): True kalau P&L minggu ini <= -WEEKLY_LOSS_LIMIT_USD. 0 = mati."""
+    if WEEKLY_LOSS_LIMIT_USD <= 0:
+        return False
+    try:
+        return get_week_pnl_usd() <= -abs(WEEKLY_LOSS_LIMIT_USD)
+    except Exception as e:
+        log(f"WARN is_weekly_loss_limit_breached: {e}")
         return False
 
 
