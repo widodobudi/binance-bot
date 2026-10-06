@@ -234,9 +234,10 @@ HARD_STOP_MULT_BY_STRATEGY = {
     'trend_confirm_4h': 1.5,   # 20/09/2026: 1.1 -> 1.5 + cap 10.8% (backtest 42.133 sinyal 2022-2026, lihat di bawah)
 }
 # 06/10/2026 (permintaan Mas Budi): brkX2-4h, setelah posisi pernah untung >= BRKX2_4H_BE_TRIGGER_PCT,
-# hard stop dipindah ke impas (entry +0.1%, menutup biaya). Penutupan impas mekanis: tidak melewati
-# gerbang AI close dan TIDAK ditandai hard stop, jadi hold-no-sell tidak menahan koinnya. Backtest
-# 160 pair: total +6% vs faktor 0.8 biasa, max DD -299 vs -332. 0 = mati.
+# batas jual dipindah ke harga beli (entry +0.1%). Setelah biaya 0.2%, hasil keluar sekitar -0.1%,
+# jadi ini hanya mencegah rugi lebih besar. Penutupan impas mekanis: tidak melewati gerbang AI close,
+# tidak ditandai hard stop, dan tidak diubah menjadi timeout, jadi hold-no-sell tidak menahan koinnya.
+# Angka backtest ada di memory project_hardstop_backtest_status. 0 = mati.
 BRKX2_4H_BE_TRIGGER_PCT = 1.0
 # TrenKonfirmasi-4h K1.5 + cap 10.8% (permintaan Mas Budi, prioritas: hard-stop lebih jarang & untung terjaga):
 # hard-stop 18.2% -> 14.0% dari trade, rugi terburuk -12.3% -> -11.0%, avg +1.80% -> +1.85% (2025+: 20.6% -> 16.2%,
@@ -9147,7 +9148,11 @@ def thread2_monitor():
             hold_limit_sec = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
             hold_label = f"batas {MAX_HOLD_DAYS} candle"
         if opened_ts>0 and (time.time()-opened_ts) >= hold_limit_sec:
-            do_close=True; reason=hold_label+" tercapai"; timeout_triggered=True
+            do_close=True
+            # 06/10/2026: penutupan impas brkX2-4h tidak boleh diubah jadi timeout, karena timeout + profit
+            # negatif memicu hold-no-sell dan koinnya tertahan 96 jam. Alasan impas tetap dipakai.
+            if not _be_forced_close:
+                reason=hold_label+" tercapai"; timeout_triggered=True
         elif opened_ts>0 and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
             # Tanya AI saat tersisa 2 candle menuju timeout
             elapsed_sec = time.time() - opened_ts
