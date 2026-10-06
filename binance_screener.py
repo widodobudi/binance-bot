@@ -20455,6 +20455,14 @@ QSCALP_LIVE_STOP_PCT          = 2.0   # varian C ronde 1 (hard stop%, FLAT dari 
 QSCALP_LIVE_TIMEOUT_CANDLES   = 15    # varian C ronde 1 (15 candle x 3m = 45 menit)
 QSCALP_SCAN_INTERVAL          = 60    # detik -- lebih rapat dari strategi 4h/8h krn TF 3m
 QSCALP_FWDTEST_TARGET         = 12    # target forward-test awal (permintaan Mas Budi 12/09/2026)
+# 06/10/2026 (permintaan Mas Budi): lapisan TERTIARY overbought -- setelah primary lolos, sinyal DIBLOKIR
+# hanya kalau RSI(14) 3m di atas QSCALP_TERTIARY_RSI_MAX DAN BB %B di atas QSCALP_TERTIARY_BB_MAX
+# sekaligus. Dua syarat sekaligus dipilih supaya deal untung yang RSI-nya 70-90 tetap lolos.
+# Mematikan lapisan ini: QSCALP_TERTIARY_ENABLED = False. Nilai ambang belum diuji backtest, jadi
+# perlu ditinjau lagi setelah ada data cukup (lihat memory reminder_qscalp_tertiary_check).
+QSCALP_TERTIARY_ENABLED       = True
+QSCALP_TERTIARY_RSI_MAX       = 90.0
+QSCALP_TERTIARY_BB_MAX        = 1.0
 
 _qscalp_lock = threading.Lock()
 _qscalp_signals: list = []       # untuk dashboard (kandidat lolos scan terakhir)
@@ -20520,9 +20528,28 @@ def check_qscalp_signal(df: pd.DataFrame, symbol: str):
     except Exception:
         rsi_now = None
 
+    # 06/10/2026: BB %B(20,2) 3m di candle yang sama (dipakai lapisan TERTIARY, lihat QSCALP_TERTIARY_*).
+    bb_pct = None
+    try:
+        _cl = pd.Series(df['close']).astype(float)
+        _mid = _cl.rolling(20).mean().iloc[-1]
+        _sd = _cl.rolling(20).std(ddof=0).iloc[-1]
+        if _sd == _sd and _sd > 0:
+            _up = _mid + 2 * _sd
+            _lo = _mid - 2 * _sd
+            bb_pct = float((_cl.iloc[-1] - _lo) / (_up - _lo))
+    except Exception:
+        bb_pct = None
+
+    # Lapisan TERTIARY: blokir hanya kalau RSI DAN BB %B sama-sama overbought (lihat komentar di konstanta).
+    tertiary_block = bool(
+        QSCALP_TERTIARY_ENABLED and rsi_now is not None and bb_pct is not None
+        and rsi_now > QSCALP_TERTIARY_RSI_MAX and bb_pct > QSCALP_TERTIARY_BB_MAX
+    )
+
     return {'symbol': symbol, 'close': float(close[i]), 'momentum_pct': float(momentum_pct),
-            'vol_ratio': float(vol[i] / vm), 'atr_pct': atr_pct, 'rsi': rsi_now,
-            'candle_ot': int(df['ot'].iloc[i])}
+            'vol_ratio': float(vol[i] / vm), 'atr_pct': atr_pct, 'rsi': rsi_now, 'bb_pct': bb_pct,
+            'tertiary_block': tertiary_block, 'candle_ot': int(df['ot'].iloc[i])}
 
 
 def open_qscalp_if_signal(sig: dict) -> bool:
@@ -20655,6 +20682,10 @@ def thread_qscalp_scan():
                 sig = check_qscalp_signal(df, sym)
                 if sig is None:
                     count_blocker(blockers, "Syarat entry belum lolos", True)
+                    continue
+                if sig.get('tertiary_block'):
+                    # 06/10/2026: primary lolos tapi RSI & BB %B sama-sama overbought -> tidak dibuka
+                    count_blocker(blockers, "Tertiary: RSI & BB%b overbought", True)
                     continue
                 display.append(sig)
                 open_qscalp_if_signal(sig)
