@@ -230,9 +230,14 @@ HARD_STOP_MULT = 1.1              # pengali (K) atas base hard-stop per tier ATR
 # Semua strategi eksplisit ditulis 1.1 (= perilaku lama, TIDAK berubah) sampai diuji satu per satu.
 # Cap = batas atas hard-stop % dari entry (None = tanpa cap): rugi terburuk ~ cap + fee.
 HARD_STOP_MULT_BY_STRATEGY = {
-    'brkX2': 1.1, 'reversal': 1.1, 'brkX2_4h': 1.1, 'brkX2_crossema': 1.1, 'hunting_4h': 1.1,
+    'brkX2': 1.1, 'reversal': 1.1, 'brkX2_4h': 0.88, 'brkX2_crossema': 1.1, 'hunting_4h': 1.1,   # 06/10/2026: brkX2_4h 1.1 x 0.8 = 0.88 (backtest 160 pair)
     'trend_confirm_4h': 1.5,   # 20/09/2026: 1.1 -> 1.5 + cap 10.8% (backtest 42.133 sinyal 2022-2026, lihat di bawah)
 }
+# 06/10/2026 (permintaan Mas Budi): brkX2-4h, setelah posisi pernah untung >= BRKX2_4H_BE_TRIGGER_PCT,
+# hard stop dipindah ke impas (entry +0.1%, menutup biaya). Penutupan impas mekanis: tidak melewati
+# gerbang AI close dan TIDAK ditandai hard stop, jadi hold-no-sell tidak menahan koinnya. Backtest
+# 160 pair: total +6% vs faktor 0.8 biasa, max DD -299 vs -332. 0 = mati.
+BRKX2_4H_BE_TRIGGER_PCT = 1.0
 # TrenKonfirmasi-4h K1.5 + cap 10.8% (permintaan Mas Budi, prioritas: hard-stop lebih jarang & untung terjaga):
 # hard-stop 18.2% -> 14.0% dari trade, rugi terburuk -12.3% -> -11.0%, avg +1.80% -> +1.85% (2025+: 20.6% -> 16.2%,
 # +1.52% -> +1.53%). Stop per tier ATR: <1% 6.0%, <2% 8.25%, <4% 10.5%, >=4% 10.8% (cap). REMARK nilai lama (rollback):
@@ -8911,6 +8916,7 @@ def thread2_monitor():
                 want_fast = True
 
         do_close=False; reason=""; hard_stop_triggered=False; trail_stop_triggered=False; timeout_triggered=False
+        _be_forced_close=False   # 06/10/2026: penutupan impas brkX2-4h (lewati gerbang AI close)
         # TP custom: tutup otomatis begitu U/PnL bersih (net -0.2% fee) sudah >= target $ per deal
         # (default $1.00 kalau belum diisi manual). Pakai estimate_deal_total_usd()
         # (qty_coin * entry_price aktual) supaya modal yang dipakai cek TP sama persis dengan
@@ -8989,7 +8995,16 @@ def thread2_monitor():
                 _tp_hold_armed_since.pop(sym, None)
         if not do_close and not _is_akum:
             _hs_label, _hs_base, _hs_pct = qscalp_hard_stop_pct() if strat == 'qscalp_3m' else hard_stop_pct(atrp, strat)
-            if price <= entry * (1 - _hs_pct / 100):
+            _be_active = (strat == 'brkX2_4h' and BRKX2_4H_BE_TRIGGER_PCT > 0 and entry > 0
+                          and peak >= entry * (1 + BRKX2_4H_BE_TRIGGER_PCT / 100))
+            if _be_active:
+                # impas: setelah pernah untung >= trigger, batas jual = entry +0.1% (bukan hard stop)
+                if price <= entry * 1.001:
+                    do_close = True
+                    _be_forced_close = True
+                    reason = (f"impas setelah untung +{BRKX2_4H_BE_TRIGGER_PCT:g}%: price {_fmt_price(price)} "
+                              f"turun ke harga beli (entry +0.1%)")
+            elif price <= entry * (1 - _hs_pct / 100):
                 do_close = True
                 reason = (f"hard stop {_hs_pct:.2f}% flat (varian C ronde 1): price {_fmt_price(price)} turun "
                           f">= {_hs_pct:.2f}% dari entry" if strat == 'qscalp_3m' else
@@ -9203,7 +9218,7 @@ def thread2_monitor():
             # notifikasi Telegram + boros API call AI utk keputusan yg pada dasarnya sama
             # berulang-ulang. Generik lintas SEMUA strategi (bukan cuma trend_confirm_4h),
             # krn ini bug pemborosan, bukan pilihan desain per-strategi.
-            if not _ai_override_bypassed and not _tier_forced_close and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
+            if not _ai_override_bypassed and not _tier_forced_close and not _be_forced_close and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
                 _close_ai_hold_until = float(d.get('close_ai_hold_until', 0) or 0)
                 if time.time() < _close_ai_hold_until:
                     log(f"[T2] {sym} CLOSE di-hold (cooldown AI {(_close_ai_hold_until - time.time())/60:.1f} menit lagi, reason: {reason})")
