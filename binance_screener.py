@@ -23546,6 +23546,18 @@ def run_web_dashboard():
                             "open": data[key]['open'], "closed": closed[-10:]}
             return jsonify({"ok": True, **out})
 
+        @app.route("/api/shadow_fwdtest_raw")
+        def api_shadow_fwdtest_raw():
+            """Dump mentah SEMUA kombo shadow (shadow_fwdtest.json + shadow_hsconfirm.json),
+            open+closed penuh (bukan dipotong 10 terakhir seperti endpoint di atas) -- dipakai
+            utk analisis ad-hoc (mis. riset circuit-breaker BTC-regime, 07/10/2026), BUKAN
+            dikonsumsi dashboard. Read-only, tidak menyentuh state trading sama sekali."""
+            with _shadow_fwdtest_lock:
+                fwdtest = _load_shadow_fwdtest()
+            with _shadow_hsconfirm_lock:
+                hsconfirm = _load_shadow_hsconfirm()
+            return jsonify({"ok": True, "shadow_fwdtest": fwdtest, "shadow_hsconfirm": hsconfirm})
+
         log(f"[WEB] Dashboard jalan di port {WEB_PORT}")
         app.run(host="0.0.0.0", port=WEB_PORT, debug=False, use_reloader=False)
     except Exception as e:
