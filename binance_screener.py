@@ -6798,35 +6798,45 @@ def hard_stop_pct(atr_pct: float, strategy=None):
 # murah drpd dibiarkan sampai hard-stop penuh. Posisi yang SUDAH armed/trailing TIDAK disentuh.
 # Backtest KeltnerBreak-12h (live, identitas 'brkX2' -- lihat REMARK _shadow_keltnerbreak_check_exits):
 # 474 pasang 2022-2026, window 8 jam/ambang -2,0% = total profit +4,9% & hard-stop rate turun
-# 19,8%->13,1% (script scratchpad btc_exit_side_gate.py sesi ini). Strategi lain BELUM diuji --
-# JANGAN tambah ke BTC_DUMP_EXIT_STRATEGIES tanpa backtest sendiri per strategi dulu.
-BTC_DUMP_EXIT_WINDOW_H = 8
-BTC_DUMP_EXIT_THRESHOLD_PCT = -2.0
-BTC_DUMP_EXIT_STRATEGIES = {"brkX2"}   # KeltnerBreak-12h -- lihat REMARK di atas
-_btc_dump_exit_cache = {"ts": 0.0, "pct": None}
-BTC_DUMP_EXIT_CACHE_TTL = 300   # detik -- window 8 jam tidak butuh update tiap siklus T2 (~15-20 detik)
+# 19,8%->13,1% (script scratchpad btc_exit_side_gate.py sesi ini).
+# Backtest brkX2_4h (08/10/2026, agent terpisah, 172.872 sinyal 2022-2026): parameter OPTIMAL
+# BEDA -- 8h/-2,0% (punya brkX2) malah HAMPIR NETRAL (-0,6%) utk brkX2_4h; yang terbukti untung
+# cuma window 12h/ambang -1,5% (+5,1% total profit, hard-stop rate 22,3%->17,8%), dan parameter
+# itu jugalah yang akan menyelamatkan insiden FLOKI/RESOLV 07/10/2026 (lihat memory). KONFIRMASI
+# bahwa parameter TIDAK otomatis sama antar strategi -- karena itu per-strategi, bukan 1 nilai
+# global. Strategi lain SELAIN brkX2/brkX2_4h BELUM diuji (atau sudah diuji dan DITOLAK, lihat
+# memory project_btc_dump_exit_backtests_oct8 kalau ada) -- JANGAN tambah ke
+# BTC_DUMP_EXIT_PARAMS tanpa backtest sendiri per strategi dulu.
+BTC_DUMP_EXIT_PARAMS = {
+    "brkX2":    (8, -2.0),    # KeltnerBreak-12h
+    "brkX2_4h": (12, -1.5),   # window/ambang beda dari brkX2 -- lihat REMARK di atas
+}
+_btc_dump_exit_cache = {}   # key: window_hours -> {"ts": float, "pct": float}
+BTC_DUMP_EXIT_CACHE_TTL = 300   # detik -- window 8-12 jam tidak butuh update tiap siklus T2 (~15-20 detik)
 
-def get_btc_chg_pct(window_hours: int = BTC_DUMP_EXIT_WINDOW_H):
+def get_btc_chg_pct(window_hours: int):
     """% perubahan BTCUSDT (candle 1h tertutup terakhir vs window_hours candle sebelumnya).
-    None kalau gagal fetch DAN belum ada cache -- caller harus skip gate, bukan anggap 0%."""
+    None kalau gagal fetch DAN belum ada cache -- caller harus skip gate, bukan anggap 0%.
+    Cache per window_hours (08/10/2026: brkX2 pakai 8h, brkX2_4h pakai 12h -- jangan campur)."""
     now = time.time()
-    if _btc_dump_exit_cache["pct"] is not None and (now - _btc_dump_exit_cache["ts"]) < BTC_DUMP_EXIT_CACHE_TTL:
-        return _btc_dump_exit_cache["pct"]
+    slot = _btc_dump_exit_cache.setdefault(window_hours, {"ts": 0.0, "pct": None})
+    if slot["pct"] is not None and (now - slot["ts"]) < BTC_DUMP_EXIT_CACHE_TTL:
+        return slot["pct"]
     try:
         df = get_ohlcv_htf("BTCUSDT", interval="1h", limit=window_hours + 2)
         if df is None or len(df) < window_hours + 1:
-            return _btc_dump_exit_cache["pct"]
+            return slot["pct"]
         now_close = float(df["close"].iloc[-1])
         past_close = float(df["close"].iloc[-1 - window_hours])
         if past_close <= 0:
-            return _btc_dump_exit_cache["pct"]
+            return slot["pct"]
         pct = (now_close / past_close - 1) * 100
-        _btc_dump_exit_cache["ts"] = now
-        _btc_dump_exit_cache["pct"] = pct
+        slot["ts"] = now
+        slot["pct"] = pct
         return pct
     except Exception as e:
         log(f"  [BTC-DUMP-EXIT] error: {e}")
-        return _btc_dump_exit_cache["pct"]
+        return slot["pct"]
 
 def get_arm_pct(atr_pct: float) -> float:
     """Arm threshold, 5 tier ATR% (konsisten dgn hard_stop_pct()/trailing_dist()).
@@ -9038,13 +9048,14 @@ def thread2_monitor():
                 reason = _tp_reason
                 _tp_hold_armed_since.pop(sym, None)
         if not do_close and not _is_akum:
-            if (not armed) and strat in BTC_DUMP_EXIT_STRATEGIES:
-                _btc_chg = get_btc_chg_pct(BTC_DUMP_EXIT_WINDOW_H)
-                if _btc_chg is not None and _btc_chg <= BTC_DUMP_EXIT_THRESHOLD_PCT:
+            if (not armed) and strat in BTC_DUMP_EXIT_PARAMS:
+                _btc_win_h, _btc_thresh = BTC_DUMP_EXIT_PARAMS[strat]
+                _btc_chg = get_btc_chg_pct(_btc_win_h)
+                if _btc_chg is not None and _btc_chg <= _btc_thresh:
                     do_close = True
                     btc_dump_exit_triggered = True
-                    reason = (f"exit dini BTC-dump: BTC turun {_btc_chg:.2f}% dlm {BTC_DUMP_EXIT_WINDOW_H} jam "
-                              f"(ambang {BTC_DUMP_EXIT_THRESHOLD_PCT:g}%), posisi belum armed, price {_fmt_price(price)}")
+                    reason = (f"exit dini BTC-dump: BTC turun {_btc_chg:.2f}% dlm {_btc_win_h} jam "
+                              f"(ambang {_btc_thresh:g}%), posisi belum armed, price {_fmt_price(price)}")
                     # SENGAJA TIDAK set hard_stop_triggered -- supaya _hold_no_sell (baris di bawah)
                     # TIDAK aktif utk exit ini: tujuannya keluar beneran dari market yg lagi turun,
                     # bukan menahan koin terus jatuh. Lihat REMARK BTC_DUMP_EXIT_* di atas.
