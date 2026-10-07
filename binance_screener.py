@@ -6789,6 +6789,45 @@ def hard_stop_pct(atr_pct: float, strategy=None):
         final = min(final, cap)
     return label, base, round(final, 4)
 
+# ── Exit-side circuit breaker BTC-dump (08/10/2026, permintaan Mas Budi setelah
+# streak hard-stop beruntun 06-07/10, lihat sesi riset BTC-regime) -- BEDA dari entry-side
+# filter (ATR%/BTC-regime-lambat/BTC-drop-cepat) yang SEMUA terbukti merugikan total profit
+# kalau dipakai utk nolak entry (lihat memory project_kb12h_atr_gate_backtest_oct7 dkk).
+# Idenya: posisi yang BELUM armed trailing (belum pernah untung cukup) itu paling rentan
+# terseret turun kalau market berbalik SETELAH entry -- keluar lebih awal di situ jauh lebih
+# murah drpd dibiarkan sampai hard-stop penuh. Posisi yang SUDAH armed/trailing TIDAK disentuh.
+# Backtest KeltnerBreak-12h (live, identitas 'brkX2' -- lihat REMARK _shadow_keltnerbreak_check_exits):
+# 474 pasang 2022-2026, window 8 jam/ambang -2,0% = total profit +4,9% & hard-stop rate turun
+# 19,8%->13,1% (script scratchpad btc_exit_side_gate.py sesi ini). Strategi lain BELUM diuji --
+# JANGAN tambah ke BTC_DUMP_EXIT_STRATEGIES tanpa backtest sendiri per strategi dulu.
+BTC_DUMP_EXIT_WINDOW_H = 8
+BTC_DUMP_EXIT_THRESHOLD_PCT = -2.0
+BTC_DUMP_EXIT_STRATEGIES = {"brkX2"}   # KeltnerBreak-12h -- lihat REMARK di atas
+_btc_dump_exit_cache = {"ts": 0.0, "pct": None}
+BTC_DUMP_EXIT_CACHE_TTL = 300   # detik -- window 8 jam tidak butuh update tiap siklus T2 (~15-20 detik)
+
+def get_btc_chg_pct(window_hours: int = BTC_DUMP_EXIT_WINDOW_H):
+    """% perubahan BTCUSDT (candle 1h tertutup terakhir vs window_hours candle sebelumnya).
+    None kalau gagal fetch DAN belum ada cache -- caller harus skip gate, bukan anggap 0%."""
+    now = time.time()
+    if _btc_dump_exit_cache["pct"] is not None and (now - _btc_dump_exit_cache["ts"]) < BTC_DUMP_EXIT_CACHE_TTL:
+        return _btc_dump_exit_cache["pct"]
+    try:
+        df = get_ohlcv_htf("BTCUSDT", interval="1h", limit=window_hours + 2)
+        if df is None or len(df) < window_hours + 1:
+            return _btc_dump_exit_cache["pct"]
+        now_close = float(df["close"].iloc[-1])
+        past_close = float(df["close"].iloc[-1 - window_hours])
+        if past_close <= 0:
+            return _btc_dump_exit_cache["pct"]
+        pct = (now_close / past_close - 1) * 100
+        _btc_dump_exit_cache["ts"] = now
+        _btc_dump_exit_cache["pct"] = pct
+        return pct
+    except Exception as e:
+        log(f"  [BTC-DUMP-EXIT] error: {e}")
+        return _btc_dump_exit_cache["pct"]
+
 def get_arm_pct(atr_pct: float) -> float:
     """Arm threshold, 5 tier ATR% (konsisten dgn hard_stop_pct()/trailing_dist()).
     Titik Aktif=2.0% & Ekstrem=3.5% tervalidasi backtest_arm_sweep; 3 titik tengah interpolasi.
@@ -8920,6 +8959,7 @@ def thread2_monitor():
                 want_fast = True
 
         do_close=False; reason=""; hard_stop_triggered=False; trail_stop_triggered=False; timeout_triggered=False
+        btc_dump_exit_triggered=False
         _be_forced_close=False   # 06/10/2026: penutupan impas brkX2-4h (lewati gerbang AI close)
         # TP custom: tutup otomatis begitu U/PnL bersih (net -0.2% fee) sudah >= target $ per deal
         # (default $1.00 kalau belum diisi manual). Pakai estimate_deal_total_usd()
@@ -8998,24 +9038,35 @@ def thread2_monitor():
                 reason = _tp_reason
                 _tp_hold_armed_since.pop(sym, None)
         if not do_close and not _is_akum:
-            _hs_label, _hs_base, _hs_pct = qscalp_hard_stop_pct() if strat == 'qscalp_3m' else hard_stop_pct(atrp, strat)
-            _be_trig = BE_TRIGGER_BY_STRATEGY.get(strat, 0)
-            _be_active = (_be_trig > 0 and entry > 0 and peak >= entry * (1 + _be_trig / 100))
-            if _be_active:
-                # impas: setelah pernah untung >= trigger, batas jual = entry +0.1% (bukan hard stop)
-                if price <= entry * 1.001:
+            if (not armed) and strat in BTC_DUMP_EXIT_STRATEGIES:
+                _btc_chg = get_btc_chg_pct(BTC_DUMP_EXIT_WINDOW_H)
+                if _btc_chg is not None and _btc_chg <= BTC_DUMP_EXIT_THRESHOLD_PCT:
                     do_close = True
-                    _be_forced_close = True
-                    reason = (f"impas setelah untung +{_be_trig:g}%: price {_fmt_price(price)} "
-                              f"turun ke harga beli (entry +0.1%)")
-            elif price <= entry * (1 - _hs_pct / 100):
-                do_close = True
-                reason = (f"hard stop {_hs_pct:.2f}% flat (varian C ronde 1): price {_fmt_price(price)} turun "
-                          f">= {_hs_pct:.2f}% dari entry" if strat == 'qscalp_3m' else
-                          f"hard stop volatilitas [{_hs_label}, ATR {atrp:.2f}%]: price {_fmt_price(price)} "
-                          f"turun >= {_hs_pct:.2f}% dari entry (base {_hs_base:.1f}% x K{hard_stop_mult_for(strat):.2f}"
-                          + (f", cap {HARD_STOP_CAP_PCT_BY_STRATEGY[strat]:g}%" if HARD_STOP_CAP_PCT_BY_STRATEGY.get(strat) else "") + ")")
-                hard_stop_triggered = True
+                    btc_dump_exit_triggered = True
+                    reason = (f"exit dini BTC-dump: BTC turun {_btc_chg:.2f}% dlm {BTC_DUMP_EXIT_WINDOW_H} jam "
+                              f"(ambang {BTC_DUMP_EXIT_THRESHOLD_PCT:g}%), posisi belum armed, price {_fmt_price(price)}")
+                    # SENGAJA TIDAK set hard_stop_triggered -- supaya _hold_no_sell (baris di bawah)
+                    # TIDAK aktif utk exit ini: tujuannya keluar beneran dari market yg lagi turun,
+                    # bukan menahan koin terus jatuh. Lihat REMARK BTC_DUMP_EXIT_* di atas.
+            if not do_close:
+                _hs_label, _hs_base, _hs_pct = qscalp_hard_stop_pct() if strat == 'qscalp_3m' else hard_stop_pct(atrp, strat)
+                _be_trig = BE_TRIGGER_BY_STRATEGY.get(strat, 0)
+                _be_active = (_be_trig > 0 and entry > 0 and peak >= entry * (1 + _be_trig / 100))
+                if _be_active:
+                    # impas: setelah pernah untung >= trigger, batas jual = entry +0.1% (bukan hard stop)
+                    if price <= entry * 1.001:
+                        do_close = True
+                        _be_forced_close = True
+                        reason = (f"impas setelah untung +{_be_trig:g}%: price {_fmt_price(price)} "
+                                  f"turun ke harga beli (entry +0.1%)")
+                elif price <= entry * (1 - _hs_pct / 100):
+                    do_close = True
+                    reason = (f"hard stop {_hs_pct:.2f}% flat (varian C ronde 1): price {_fmt_price(price)} turun "
+                              f">= {_hs_pct:.2f}% dari entry" if strat == 'qscalp_3m' else
+                              f"hard stop volatilitas [{_hs_label}, ATR {atrp:.2f}%]: price {_fmt_price(price)} "
+                              f"turun >= {_hs_pct:.2f}% dari entry (base {_hs_base:.1f}% x K{hard_stop_mult_for(strat):.2f}"
+                              + (f", cap {HARD_STOP_CAP_PCT_BY_STRATEGY[strat]:g}%" if HARD_STOP_CAP_PCT_BY_STRATEGY.get(strat) else "") + ")")
+                    hard_stop_triggered = True
         if not do_close and armed and not _is_akum:
             stop = peak*(1 - tdist/100)
             if price <= stop:
