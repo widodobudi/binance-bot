@@ -6804,12 +6804,24 @@ def hard_stop_pct(atr_pct: float, strategy=None):
 # cuma window 12h/ambang -1,5% (+5,1% total profit, hard-stop rate 22,3%->17,8%), dan parameter
 # itu jugalah yang akan menyelamatkan insiden FLOKI/RESOLV 07/10/2026 (lihat memory). KONFIRMASI
 # bahwa parameter TIDAK otomatis sama antar strategi -- karena itu per-strategi, bukan 1 nilai
-# global. Strategi lain SELAIN brkX2/brkX2_4h BELUM diuji (atau sudah diuji dan DITOLAK, lihat
-# memory project_btc_dump_exit_backtests_oct8 kalau ada) -- JANGAN tambah ke
-# BTC_DUMP_EXIT_PARAMS tanpa backtest sendiri per strategi dulu.
+# global.
+# Backtest 5 strategi kecil (08/10/2026, agent terpisah): hunting_4h untung di semua kombinasi
+# tapi strategi itu SUDAH DIHENTIKAN (tidak relevan lagi); brkX2_crossema untung 5/6 kombinasi,
+# terbaik 8h/-2,0% (sama persis brkX2); reversal CAMPURAN (cuma window 24h untung, 4 kombinasi
+# lain rugi) -- TIDAK dimasukkan, data belum cukup meyakinkan; akum_entry_a overlay cuma kurangi
+# rugi (baseline tetap rugi) -- TIDAK dimasukkan, Mas Budi minta ditahan; akum_entry_b flip
+# breakeven jadi untung bersih di semua 6 kombinasi, terbaik 12h/-1,5%, tanpa tail-risk --
+# DIMASUKKAN. Akumulasi tidak punya konsep armed -- exit-check-nya pakai peak<entry sbg ganti
+# (lihat blok 'akum_entry_a'/'akum_entry_b' di thread2_monitor).
+# Strategi lain SELAIN yang ada di dict ini BELUM diuji atau sudah DITOLAK (trend_confirm_4h,
+# squized_4h, ichibreak_4h, psarflip_4h, oscconfluence_4h, rvolbreak_1h, conf3_stochrsibb --
+# semua terbukti merugikan total profit di backtest) -- JANGAN tambah ke BTC_DUMP_EXIT_PARAMS
+# tanpa backtest sendiri per strategi dulu.
 BTC_DUMP_EXIT_PARAMS = {
-    "brkX2":    (8, -2.0),    # KeltnerBreak-12h
-    "brkX2_4h": (12, -1.5),   # window/ambang beda dari brkX2 -- lihat REMARK di atas
+    "brkX2":          (8, -2.0),    # KeltnerBreak-12h
+    "brkX2_4h":       (12, -1.5),   # window/ambang beda dari brkX2 -- lihat REMARK di atas
+    "brkX2_crossema": (8, -2.0),
+    "akum_entry_b":   (12, -1.5),   # Akumulasi Entry B saja -- akum_entry_a TIDAK (lihat REMARK)
 }
 _btc_dump_exit_cache = {}   # key: window_hours -> {"ts": float, "pct": float}
 BTC_DUMP_EXIT_CACHE_TTL = 300   # detik -- window 8-12 jam tidak butuh update tiap siklus T2 (~15-20 detik)
@@ -9129,9 +9141,25 @@ def thread2_monitor():
             timeout_c = d.get('timeout_candles', AKUM_ENTRY_TIMEOUT)
             hold_limit_sec = timeout_c * STRAT4H_SECONDS
             hold_label = f"batas {timeout_c} candle 4h (akumulasi)"
+            # BTC-dump-exit (08/10/2026): Akumulasi tidak punya konsep armed/trailing (exit murni
+            # SL/TP), jadi "belum armed" diganti "peak belum pernah tembus breakeven" (peak<entry,
+            # peak sudah dihitung unconditional di baris ~8785 utk semua strategi) -- sekali peak
+            # >=entry, posisi dianggap sudah "aman" dan dikecualikan seterusnya (sticky, sama pola
+            # dgn armed). HANYA akum_entry_b (lihat backtest smallstrats_akumb -- flip breakeven
+            # jadi untung di semua 6 kombinasi, tanpa tail-risk); akum_entry_a TIDAK dimasukkan
+            # (overlay cuma kurangi rugi, baseline-nya sendiri tetap rugi -- Mas Budi minta ditahan
+            # dulu, lihat memory project_btc_dump_exit_backtests_oct8 kalau ada).
+            if strat in BTC_DUMP_EXIT_PARAMS and peak < entry:
+                _btc_win_h, _btc_thresh = BTC_DUMP_EXIT_PARAMS[strat]
+                _btc_chg = get_btc_chg_pct(_btc_win_h)
+                if _btc_chg is not None and _btc_chg <= _btc_thresh:
+                    do_close = True
+                    btc_dump_exit_triggered = True
+                    reason = (f"exit dini BTC-dump: BTC turun {_btc_chg:.2f}% dlm {_btc_win_h} jam "
+                              f"(ambang {_btc_thresh:g}%), posisi belum breakeven, price {_fmt_price(price)}")
             # Cek SL khusus akumulasi
             sl_price = d.get('sl_price', 0)
-            if sl_price > 0 and price <= sl_price:
+            if not do_close and sl_price > 0 and price <= sl_price:
                 do_close = True
                 reason = f"SL akumulasi tercapai (price {_fmt_price(price)} <= SL {_fmt_price(sl_price)})"
             # Cek TP akumulasi: swing high lokal ATAU momentum overbought
