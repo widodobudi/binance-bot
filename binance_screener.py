@@ -14459,6 +14459,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="Timeout (candle limit)">Timeout (candle limit)</option>
         <option value="Manual Reconcile">Manual Reconcile</option>
         <option value="Lainnya">Lainnya</option>
+        <option value="__show_all__">— Tampilkan SEMUA (termasuk tersembunyi) —</option>
       </select>
     <input type="text" id="ct-filter-search" onclick="event.stopPropagation()" oninput="renderClosedTradesRows()" placeholder="cari pair..." style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;width:110px">
     <button onclick="event.stopPropagation();loadClosedTrades()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reload</button>
@@ -14694,7 +14695,15 @@ function loadClosedTrades() {
   var outcomeSel = document.getElementById('ct-filter-outcome');
   if (outcomeSel && outcomeSel.value) params.push('outcome=' + outcomeSel.value);
   var reasonSel = document.getElementById('ct-filter-reason');
-  if (reasonSel && reasonSel.value) params.push('reason_category=' + encodeURIComponent(reasonSel.value));
+  if (reasonSel && reasonSel.value === '__show_all__') {
+    // 09/10/2026 (permintaan Mas Budi): satu pilihan yg benar-benar menampilkan SEMUA baris,
+    // termasuk yg disembunyikan default (hard-stop/[HOLD:.../manual reconcile/strategi dipause) --
+    // sebelumnya tidak ada kombinasi dropdown yg bisa itu ("Semua alasan close" & "Lainnya" tetap
+    // ikut nyembunyiin). Tidak kirim reason_category supaya tidak ikut membatasi per kategori juga.
+    params.push('show_hardstop=1', 'show_paused=1', 'show_manual_reconcile=1');
+  } else if (reasonSel && reasonSel.value) {
+    params.push('reason_category=' + encodeURIComponent(reasonSel.value));
+  }
   var range = ctTimeFilterRange();
   if (range) {
     if (range.from) params.push('date_from=' + range.from);
