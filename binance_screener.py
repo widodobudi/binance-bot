@@ -1316,6 +1316,8 @@ STRATEGY_CONFIG_DEFAULTS = {
     # target 24/20 (18W/6L, +56.9%). max_deals di sini cuma utk tampilan dashboard -- enforcement
     # sungguhan tetap pakai konstanta DECOUPLE_4H_MAX_DEALS di thread_decouple_scan().
     "decouple_4h":   {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    # 09/10/2026 (Tahap 2/4): rvolbreak_1h naik dari shadow ke live, lulus target 24/20 (15W/9L, +61.8%).
+    "rvolbreak_1h":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
 }
 # 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
 # default TRUE di semua strategi (kecuali qscalp_3m, sama seperti ai_call_open -- desain rule-based
@@ -6233,6 +6235,11 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     elif strategy == 'decouple_4h':
         target  = float(_cfg_base if _cfg_base else 50.0)
         add_usd = 0
+    # RVOLBreak-1h LIVE (09/10/2026, Tahap 2/4): sama pola decouple_4h -- base_usd TETAP $50,
+    # TANPA add-fund/conviction-tier.
+    elif strategy == 'rvolbreak_1h':
+        target  = float(_cfg_base if _cfg_base else 50.0)
+        add_usd = 0
     # brkX2_4h di Binance direct: pakai base_usd dari Strategy Control, KECUALI tier
     # conviction (ATR%+Volume tinggi bersamaan di candle sinyal, lihat BRKX2_4H_CONVICTION_*)
     elif strategy == 'brkX2_4h' and USE_BINANCE_DIRECT:
@@ -7721,7 +7728,7 @@ def heartbeat_general_tick():
                      f"    {_fmt_shadow('trendsurge_4h', SHADOW_TRENDSURGE_TARGET)}\n"
                      f"    {_fmt_shadow('keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET, label='keltnerbreak_12h-shadow (RETIRED, formula sudah live)')}\n"
                      f"    {_fmt_shadow('oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)}\n"
-                     f"    {_fmt_shadow('rvolbreak_1h', SHADOW_RVOLBREAK_TARGET)}\n"
+                     f"    {_fmt_shadow('rvolbreak_1h', SHADOW_RVOLBREAK_TARGET, label='rvolbreak_1h-shadow (RETIRED, formula sudah live)')}\n"
                      f"{_fmt_hsconfirm_status()}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
@@ -9143,6 +9150,9 @@ def thread2_monitor():
         elif d.get('strategy','brkX2') == 'decouple_4h':
             hold_limit_sec = DECOUPLE_4H_MAX_HOLD_CANDLES * STRAT4H_SECONDS
             hold_label = f"batas {DECOUPLE_4H_MAX_HOLD_CANDLES} candle 4h (decouple)"
+        elif d.get('strategy','brkX2') == 'rvolbreak_1h':
+            hold_limit_sec = RVOLBREAK_1H_MAX_HOLD_CANDLES * STRAT1H_SECONDS
+            hold_label = f"batas {RVOLBREAK_1H_MAX_HOLD_CANDLES} candle 1h (rvolbreak)"
         elif d.get('strategy','brkX2') == 'qscalp_3m':
             hold_limit_sec = QSCALP_LIVE_TIMEOUT_CANDLES * 180
             hold_label = f"batas {QSCALP_LIVE_TIMEOUT_CANDLES} candle 3m (qscalp)"
@@ -9264,6 +9274,7 @@ def thread2_monitor():
                 else HUNTING_MAX_HOLD_CANDLES if d.get('strategy') in ('brkX2_crossema', 'hunting_4h')
                 else TRENDCONFIRM_MAX_HOLD_CANDLES if d.get('strategy') == 'trend_confirm_4h'
                 else DECOUPLE_4H_MAX_HOLD_CANDLES if d.get('strategy') == 'decouple_4h'
+                else RVOLBREAK_1H_MAX_HOLD_CANDLES if d.get('strategy') == 'rvolbreak_1h'
                 else d.get('timeout_candles', AKUM_ENTRY_TIMEOUT) if d.get('strategy','') in ('akum_entry_a','akum_entry_b')
                 else MAX_HOLD_DAYS
             )
@@ -13787,7 +13798,8 @@ var SC_LABELS = {
     hunting_4h: 'Hunting-4h',
     trend_confirm_4h: 'TrendConfirm-4h',
     qscalp_3m: 'QScalp-3m',
-    decouple_4h: 'Decouple-4h'
+    decouple_4h: 'Decouple-4h',
+    rvolbreak_1h: 'RVOLBreak-1h'
 };
 // 24/09/2026 (permintaan Mas Budi): Entry A & Entry B sekarang baris terpisah supaya base_usd
 // masing-masing kelihatan & bisa diedit sendiri-sendiri (base_usd MEMANG sudah independen di
@@ -14445,6 +14457,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="trend_confirm_4h">TrenKonfirmasi-4h</option>
         <option value="qscalp_3m">QScalp-3m</option>
         <option value="decouple_4h">Decouple-4h</option>
+        <option value="rvolbreak_1h">RVOLBreak-1h</option>
         <option value="__exclude_hardstop__">Semua strategi, exclude hardstop volatilitas</option>
       </select>
     <select id="ct-filter-pair" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
@@ -17170,6 +17183,15 @@ SHADOW_RVOLBREAK_MAX_HOLD_CANDLES = 24   # sama persis yg dibacktest (HOLD=24 ca
 RVOLBREAK_LOOKBACK = 24
 RVOLBREAK_RVOL_MIN = 3.0
 
+# ── RVOLBreak-1h LIVE (09/10/2026, Tahap 2/4 -- permintaan Mas Budi): lulus target shadow
+# 24/20 (15W/9L, +61.8%) 09/10/2026. Sinyal & exit IDENTIK dengan versi shadow di atas
+# (trailing produksi asli) -- cuma sekarang kirim order Binance sungguhan, sama pola persis
+# Tahap 1 (Decouple-4h). Modal $50 tetap tanpa add-fund, 2 slot, lewat AI konfirmasi.
+RVOLBREAK_1H_ENABLED       = True
+RVOLBREAK_1H_SCAN_INTERVAL = 300     # detik -- TF 1h, lebih cepat dari strategi 4h (sama alasan qscalp lebih cepat dari 4h)
+RVOLBREAK_1H_MAX_DEALS     = 2
+RVOLBREAK_1H_MAX_HOLD_CANDLES = SHADOW_RVOLBREAK_MAX_HOLD_CANDLES   # 24 candle 1h, sama persis dibacktest
+
 
 def _shadow_keltnerbreak_compute(df):
     """Indikator Keltner Channel -- formula PERSIS brkx2_replace_sim.py (EMA20 mid, ATR10 x2)."""
@@ -17768,6 +17790,153 @@ def run_thread_decouple() -> None:
         time.sleep(DECOUPLE_4H_SCAN_INTERVAL)
 
 
+def thread_rvolbreak_scan() -> None:
+    """Scan sinyal RVOLBreak-1h LIVE (09/10/2026, Tahap 2/4). Sinyal IDENTIK dengan
+    _shadow_rvolbreak_scan_entries() (close candle 1h TERTUTUP menembus FRESH di atas
+    Donchian high 24-candle DAN RVOL >= RVOLBREAK_RVOL_MIN) -- bedanya di sini AI konfirmasi
+    2 babak lalu open_deal_with_sizing() benar2 kirim order, sama pola persis Tahap 1
+    (Decouple-4h)."""
+    if not RVOLBREAK_1H_ENABLED: return
+    if not is_strategy_enabled('rvolbreak_1h'): return
+
+    if is_daily_loss_limit_breached():
+        log(f"[T_RVOLBREAK] Scan di-skip -- batas rugi harian tersulut")
+        return
+
+    n_active = deal_count_by_strategy('rvolbreak_1h')
+    if n_active >= RVOLBREAK_1H_MAX_DEALS: return
+
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST]
+    except Exception as e:
+        log(f"WARN [T_RVOLBREAK] gagal ambil universe: {e}")
+        return
+
+    with active_deals_lock:
+        existing = set(active_deals.keys())
+
+    candidates = []
+    for sym in universe:
+        if sym in existing: continue
+        if is_cooldown_enabled('rvolbreak_1h') and cooldown_remaining(sym) > 0: continue
+        if sizing_fail_remaining(sym) > 0: continue
+        try:
+            df = get_ohlcv(sym, interval="1h", limit=80)
+            if df is None or len(df) < 50: continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) < 46: continue
+            df = _shadow_rvolbreak_compute(df)
+            i = len(df) - 1
+            close_now = float(df['close'].iloc[i])
+            dh = df['donchian_high'].iloc[i]; rvol_now = df['rvol'].iloc[i]
+            atr_now = df['atr_pct'].iloc[i]
+            if any(pd.isna(x) for x in [dh, rvol_now, atr_now]) or atr_now <= 0:
+                continue
+            if not (close_now > dh and rvol_now >= RVOLBREAK_RVOL_MIN):
+                continue
+            candidates.append((sym, close_now, float(atr_now), float(rvol_now)))
+        except Exception as e:
+            log(f"  [T_RVOLBREAK] error {sym}: {e}")
+
+    if not candidates:
+        return
+    candidates.sort(key=lambda x: x[3], reverse=True)   # RVOL tertinggi dulu
+    log(f"[T_RVOLBREAK] {len(candidates)} kandidat. Buka deal terbaik (slot {n_active}/{RVOLBREAK_1H_MAX_DEALS})...")
+
+    # ============ BABAK 1: AI individual per-kandidat (notify=False) ============
+    held = {}
+    for sym, signal_price, atr_now, rvol_now in candidates:
+        with active_deals_lock:
+            if sym in active_deals: continue
+        if is_ai_call_open_enabled('rvolbreak_1h'):
+            _ai_ind = {'atr_pct': f"{atr_now:.2f}%", 'signal_price': _fmt_price(signal_price),
+                       'rvol': f"{rvol_now:.2f}x"}
+            if not ai_decision_open(sym, 'RVOLBreak-1h', _ai_ind, deal_count_by_strategy('rvolbreak_1h'), notify=False):
+                log(f"[T_RVOLBREAK] {sym} babak-1 di-skip oleh AI individual")
+                continue
+        held[sym] = {'signal_price': signal_price, 'atr_now': atr_now, 'rvol_now': rvol_now}
+
+    if not held:
+        return
+
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+    log(f"[T_RVOLBREAK] Babak 1 selesai: {len(held)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+    log_ai_babak1('RVOLBreak-1h', [to_display_pair(s) for s in held.keys()], AI_BATCH_MAX_APPROVE)
+    batch_input = [{'symbol': s, 'strategy': 'rvolbreak_1h', 'score': 1,
+                     'detail': {'atr_pct': v['atr_now'], 'rvol': v['rvol_now']}}
+                    for s, v in held.items()]
+    approved = ai_decision_batch_rank(
+        batch_input, strategy_label='RVOLBreak-1h', max_approve=AI_BATCH_MAX_APPROVE,
+        criteria_note="Kriteria: besarnya RVOL (lonjakan volume), ATR%",
+    )
+
+    for sym in approved:
+        n_active = deal_count_by_strategy('rvolbreak_1h')
+        if n_active >= RVOLBREAK_1H_MAX_DEALS: break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        v = held[sym]
+        signal_price = v['signal_price']; atr_now = v['atr_now']; rvol_now = v['rvol_now']
+
+        # Sama spt Decouple-4h (Tahap 1): tidak ada re-check level/harga sebelum beli di sini --
+        # shadow yg dibacktest juga tidak punya pengecekan ini, dan harga eksekusi riil tetap
+        # dari fill order (fill_price di bawah), bukan signal_price yg sudah agak basi.
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='rvolbreak_1h')
+        if not ok: continue
+
+        try:
+            ticker_now = _binance_get("/api/v3/ticker/price", {"symbol": sym})
+            fill_price = float(ticker_now["price"]) if ticker_now else signal_price
+        except Exception:
+            fill_price = signal_price
+
+        now_ms = int(time.time() * 1000)
+        candle_open_ms = (now_ms // (STRAT1H_SECONDS * 1000)) * (STRAT1H_SECONDS * 1000)
+        add_to_active_deals(sym, {
+            "strategy":          "rvolbreak_1h",
+            "entry_price":       fill_price,
+            "signal_price":      signal_price,
+            "atr_pct":           atr_now,
+            "target_usd":        target_usd,
+            "add_usd":           add_usd,
+            "opened_ts":         time.time(),
+            "opened_candle_ts":  candle_open_ms,
+            "tf":                "1h",
+        })
+        n_active += 1
+        slip_pct = (fill_price / signal_price - 1) * 100 if signal_price > 0 else 0
+        send_telegram(
+            f"RVOLBreak-1h | OPEN LONG\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Pair  : {to_display_pair(sym)}\n"
+            f"Harga entry (pasar): {_fmt_price(fill_price)}\n"
+            f"Harga sinyal (1h): {_fmt_price(signal_price)}\n"
+            f"Selisih (slippage): {slip_pct:+.2f}%\n"
+            f"ATR%  : {atr_now:.2f}  |  RVOL: {rvol_now:.2f}x\n"
+            f"Modal: ${target_usd:.0f}" + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else ""),
+            parse_mode=None
+        )
+        log(f"[T_RVOLBREAK] OPEN {sym} @ {fill_price:.8g} (sinyal {signal_price:.8g}, ATR%={atr_now:.2f}, RVOL={rvol_now:.2f}x)")
+
+
+def run_thread_rvolbreak() -> None:
+    """Thread T_RVOLBREAK: scan RVOLBreak-1h tiap RVOLBREAK_1H_SCAN_INTERVAL detik."""
+    while True:
+        try:
+            thread_rvolbreak_scan()
+        except Exception as e:
+            log(f"WARN T_RVOLBREAK error: {e}")
+        time.sleep(RVOLBREAK_1H_SCAN_INTERVAL)
+
+
 def thread_shadow_fwdtest_scan() -> None:
     with _shadow_fwdtest_lock:
         data = _load_shadow_fwdtest()
@@ -17795,7 +17964,11 @@ def thread_shadow_fwdtest_scan() -> None:
             # KeltnerBreak-12h (lihat check_entry(), commit 3c5c19d). Posisi yg masih OPEN tetap
             # dipantau normal lewat _shadow_newstrat_check_exits(), cuma TIDAK buka baru lagi.
             # _shadow_keltnerbreak_scan_entries(data)
-            _shadow_rvolbreak_scan_entries(data)
+            # rvolbreak_1h DIPENSIUNKAN 09/10/2026 (Tahap 2/4, permintaan Mas Budi): lulus target
+            # 24/20 (+61.8%), formula sekarang LIVE (lihat thread_rvolbreak_scan()). Posisi paper
+            # lama tetap dipantau normal lewat _shadow_rvolbreak_check_exits(), cuma tidak buka
+            # posisi paper baru lagi -- pola sama persis retirement keltnerbreak_12h/decouple_4h.
+            # _shadow_rvolbreak_scan_entries(data)
         except Exception as e:
             log(f"ERROR [SHADOW-FWDTEST] scan fatal: {e}")
         _save_shadow_fwdtest(data)
@@ -25669,6 +25842,10 @@ if __name__ == '__main__':
     if DECOUPLE_4H_ENABLED:
         t_dc = threading.Thread(target=run_thread_decouple, daemon=True, name="T-Decouple")
         threads.append(t_dc)
+        n_threads += 1
+    if RVOLBREAK_1H_ENABLED:
+        t_rv = threading.Thread(target=run_thread_rvolbreak, daemon=True, name="T-RVOLBreak")
+        threads.append(t_rv)
         n_threads += 1
     if STRAT_AKUM_ENABLED:
         t_akum = threading.Thread(target=run_thread_akum, daemon=True, name="T-Akum")
