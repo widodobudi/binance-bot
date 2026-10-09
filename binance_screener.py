@@ -23041,6 +23041,70 @@ def run_web_dashboard():
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)})
 
+        @app.route("/admin/backfill_keltnerbreak12h_entry_mode", methods=["POST"])
+        def admin_backfill_keltnerbreak12h_entry_mode():
+            """One-off (09/10/2026, permintaan Mas Budi): isi entry_mode retroaktif utk 39 trade
+            KeltnerBreak-12h (strategy='brkX2') yang sudah closed SEBELUM field entry_mode ada.
+            18 dari 39 berhasil ditelusuri lewat log Railway (dicocokkan persis symbol+open_time_wib
+            thd data CSV yang Mas Budi export) -- SEMUANYA ternyata lewat jalur intrabar (T1c/T1c-E),
+            tidak ada yang closed-candle (T1) di rentang yang masih terekam log. 21 sisanya (07/09/2026
+            ke belakang) TIDAK BISA ditelusuri -- di luar jangkauan retensi log Railway (~3 minggu),
+            tidak ada sumber data lain. Baris itu TETAP kosong entry_mode-nya (akan tampil "entry mode
+            blm tercatat" di dashboard selamanya, bukan bug, memang tidak ada datanya).
+            Idempotent -- baris yg entry_mode-nya sudah terisi dilewati."""
+            FIXES = [
+                ("RAYUSDT",   "2026-10-08 12:47:51", "intrabar"),
+                ("JASMYUSDT", "2026-10-02 01:56:23", "intrabar"),
+                ("MOVRUSDT",  "2026-10-01 19:56:30", "intrabar"),
+                ("XVGUSDT",   "2026-09-28 03:04:54", "intrabar"),
+                ("RAREUSDT",  "2026-09-26 23:56:17", "intrabar"),
+                ("ADAUSDT",   "2026-09-22 20:20:35", "intrabar"),
+                ("ETCUSDT",   "2026-09-22 03:45:23", "intrabar"),
+                ("BTCUSDT",   "2026-09-21 21:02:10", "intrabar"),
+                ("NEARUSDT",  "2026-09-21 03:11:41", "intrabar"),
+                ("DYDXUSDT",  "2026-09-19 02:15:58", "intrabar"),
+                ("STRKUSDT",  "2026-09-19 12:14:56", "intrabar"),
+                ("UNIUSDT",   "2026-09-18 19:38:46", "intrabar"),
+                ("XLMUSDT",   "2026-09-18 15:48:40", "intrabar"),
+                ("UNIUSDT",   "2026-09-18 07:40:22", "intrabar"),
+                ("ZECUSDT",   "2026-09-18 07:40:23", "intrabar"),
+                ("NEARUSDT",  "2026-09-17 22:42:38", "intrabar"),
+                ("XLMUSDT",   "2026-09-15 02:47:32", "intrabar"),
+                ("TUSDT",     "2026-09-14 19:36:51", "intrabar"),
+            ]
+            try:
+                with trades_csv_lock:
+                    if not os.path.exists(TRADES_CSV):
+                        return jsonify({"ok": False, "error": "CSV tidak ditemukan"})
+                    with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                        rows = list(csv.DictReader(f))
+                    result = []
+                    for sym_raw, open_wib, mode in FIXES:
+                        sym_disp = to_display_pair(sym_raw)
+                        target = None
+                        for r in rows:
+                            if (to_display_pair(r.get('symbol', '')) == sym_disp
+                                    and r.get('strategy') == 'brkX2'
+                                    and str(r.get('open_time_wib', '')).strip() == open_wib):
+                                target = r; break
+                        if target is None:
+                            result.append(f"{sym_raw}@{open_wib}: skip -- baris tidak ketemu")
+                            continue
+                        if str(target.get('entry_mode', '')).strip():
+                            result.append(f"{sym_raw}@{open_wib}: skip -- entry_mode sudah terisi")
+                            continue
+                        target['entry_mode'] = mode
+                        result.append(f"{sym_raw}@{open_wib}: diisi '{mode}'")
+                    with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
+                        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+                        w.writeheader()
+                        w.writerows(rows)
+                log(f"[ADMIN] backfill_keltnerbreak12h_entry_mode: {result}")
+                sync_trades_csv_to_drive()
+                return jsonify({"ok": True, "result": result})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)})
+
         @app.route("/admin/test_buy", methods=["POST"])
         def admin_test_buy():
             """
