@@ -230,7 +230,8 @@ HARD_STOP_MULT = 1.1              # pengali (K) atas base hard-stop per tier ATR
 # Semua strategi eksplisit ditulis 1.1 (= perilaku lama, TIDAK berubah) sampai diuji satu per satu.
 # Cap = batas atas hard-stop % dari entry (None = tanpa cap): rugi terburuk ~ cap + fee.
 HARD_STOP_MULT_BY_STRATEGY = {
-    'brkX2': 1.1, 'reversal': 1.1, 'brkX2_4h': 0.88, 'brkX2_crossema': 1.1, 'hunting_4h': 1.1,   # 06/10/2026: brkX2_4h 1.1 x 0.8 = 0.88 (backtest 160 pair)
+    'brkX2': 1.1, 'brkX2_closed': 1.1, 'brkX2_intrabar': 1.1,   # 09/10/2026: 2 entri baru = sama persis K lama brkX2, lihat split KeltnerBreak-12h
+    'reversal': 1.1, 'brkX2_4h': 0.88, 'brkX2_crossema': 1.1, 'hunting_4h': 1.1,   # 06/10/2026: brkX2_4h 1.1 x 0.8 = 0.88 (backtest 160 pair)
     'trend_confirm_4h': 1.5,   # 20/09/2026: 1.1 -> 1.5 + cap 10.8% (backtest 42.133 sinyal 2022-2026, lihat di bawah)
 }
 # 06/10/2026 (permintaan Mas Budi): brkX2-4h, setelah posisi pernah untung >= BRKX2_4H_BE_TRIGGER_PCT,
@@ -316,7 +317,11 @@ BASE_ORDER_VOLUME       = 8    # diubah ke $8 (17/08/2026, saldo $85, agar semua
 # MAX_DEALS_*/di bawah, semua sudah bisa diatur lewat dashboard Strategy Control -> max_deals di
 # STRATEGY_CONFIG_DEFAULTS + sync_max_deals_globals()). Buat DISPLAY total gabungan, pakai
 # total_max_deals_all_strategies() yang otomatis jumlahin ke-6 slot per-strategi terkini.
-MAX_DEALS_BRKX2         = 2      # slot brkX2 (bot existing) — set Max active trades=2 di 3Commas
+# 09/10/2026: MAX_DEALS_BRKX2 (slot gabungan lama) DIPECAH jadi 2 konstanta independen -- lihat
+# REMARK lengkap di STRATEGY_CONFIG_DEFAULTS ('brkX2_closed'/'brkX2_intrabar'). 1/1 (bukan 2/2)
+# supaya total kapasitas TIDAK diam-diam naik di deploy ini.
+MAX_DEALS_BRKX2_CLOSED   = 1      # slot KeltnerBreak-12h closed-candle (thread1_scan/T1)
+MAX_DEALS_BRKX2_INTRABAR = 1      # slot KeltnerBreak-12h intrabar (thread1c + thread1c_scan_intrabar_early)
 # CATATAN (03/10/2026): nama/slot/identitas internal 'brkX2' TETAP (sejarah deal, kode, dsb),
 # TAPI syarat open long deal-nya SUDAH DIGANTI formula Keltner Channel (lihat check_entry() baris
 # ~6293) -- secara substansi strategi ini SEKARANG adalah "KeltnerBreak-12h" (nama resmi, sama
@@ -1317,6 +1322,17 @@ STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # lihat close_deal_maybe_partial()). Tahap 1: HANYA brkX2 (KeltnerBreak-12h) = 75; strategi lain 100 (= jual semua, nonaktif);
 # QScalp-3m selalu 100 (dikunci di kode + dimmed di dashboard).
 STRATEGY_CONFIG_DEFAULTS = {
+    # 09/10/2026 (permintaan Mas Budi): KeltnerBreak-12h dipecah jadi 2 strategi INDEPENDEN --
+    # 'brkX2_closed' (closed-candle, thread1_scan/T1) dan 'brkX2_intrabar' (gabungan
+    # thread1c_scan_intrabar/T1c + thread1c_scan_intrabar_early/T1c-E, dua jendela waktu beda
+    # tapi sama-sama cek harga live mid-candle, bukan candle tertutup -- satu identitas). Entry
+    # 'brkX2' polos DIPERTAHANKAN di bawah (bukan dihapus) murni utk kompatibilitas deal LAMA yg
+    # masih open & fallback generik -- TIDAK ADA kode baru yg membuka deal baru dgn key itu lagi
+    # sejak split ini. max_deals dipecah 1/1 (dari 2 gabungan sebelumnya) SENGAJA supaya deploy
+    # ini TIDAK diam-diam menaikkan kapasitas total -- Mas Budi yg akan atur ulang sendiri dari
+    # Strategy Control kalau mau beda.
+    "brkX2_closed":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 1, "close_sell_pct": 75},
+    "brkX2_intrabar":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 1, "close_sell_pct": 75},
     "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 75},
     "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 5, "close_sell_pct": 100},
@@ -1522,12 +1538,13 @@ def sync_max_deals_globals():
     guard slot & log yang sudah ada (puluhan tempat, sudah dipakai lama sebelum fitur ini)
     otomatis ikut nilai terbaru tanpa perlu diubah manual satu-satu (jauh lebih aman daripada
     ubah puluhan call-site sekaligus)."""
-    global MAX_DEALS_BRKX2, MAX_DEALS_REVERSAL, STRAT4H_MAX_DEALS
+    global MAX_DEALS_BRKX2_CLOSED, MAX_DEALS_BRKX2_INTRABAR, MAX_DEALS_REVERSAL, STRAT4H_MAX_DEALS
     global STRAT_CROSSEMA_MAX_DEALS, HUNTING_MAX_DEALS, AKUM_ENTRY_MAX_DEALS
     global TRENDCONFIRM_MAX_DEALS, QSCALP_MAX_DEALS
     try:
         cfg = load_strategy_config()
-        MAX_DEALS_BRKX2          = int(cfg.get('brkX2', {}).get('max_deals', MAX_DEALS_BRKX2) or MAX_DEALS_BRKX2)
+        MAX_DEALS_BRKX2_CLOSED   = int(cfg.get('brkX2_closed', {}).get('max_deals', MAX_DEALS_BRKX2_CLOSED) or MAX_DEALS_BRKX2_CLOSED)
+        MAX_DEALS_BRKX2_INTRABAR = int(cfg.get('brkX2_intrabar', {}).get('max_deals', MAX_DEALS_BRKX2_INTRABAR) or MAX_DEALS_BRKX2_INTRABAR)
         MAX_DEALS_REVERSAL       = int(cfg.get('reversal', {}).get('max_deals', MAX_DEALS_REVERSAL) or MAX_DEALS_REVERSAL)
         STRAT4H_MAX_DEALS        = int(cfg.get('brkX2_4h', {}).get('max_deals', STRAT4H_MAX_DEALS) or STRAT4H_MAX_DEALS)
         STRAT_CROSSEMA_MAX_DEALS = int(cfg.get('brkX2_crossema', {}).get('max_deals', STRAT_CROSSEMA_MAX_DEALS) or STRAT_CROSSEMA_MAX_DEALS)
@@ -1535,7 +1552,8 @@ def sync_max_deals_globals():
         AKUM_ENTRY_MAX_DEALS     = int(cfg.get('akum_entry_a', {}).get('max_deals', AKUM_ENTRY_MAX_DEALS) or AKUM_ENTRY_MAX_DEALS)
         TRENDCONFIRM_MAX_DEALS   = int(cfg.get('trend_confirm_4h', {}).get('max_deals', TRENDCONFIRM_MAX_DEALS) or TRENDCONFIRM_MAX_DEALS)
         QSCALP_MAX_DEALS         = int(cfg.get('qscalp_3m', {}).get('max_deals', QSCALP_MAX_DEALS) or QSCALP_MAX_DEALS)
-        log(f"   Max deals per strategi: brkX2={MAX_DEALS_BRKX2} reversal={MAX_DEALS_REVERSAL} "
+        log(f"   Max deals per strategi: brkX2_closed={MAX_DEALS_BRKX2_CLOSED} brkX2_intrabar={MAX_DEALS_BRKX2_INTRABAR} "
+            f"reversal={MAX_DEALS_REVERSAL} "
             f"4h={STRAT4H_MAX_DEALS} crossema={STRAT_CROSSEMA_MAX_DEALS} "
             f"hunting={HUNTING_MAX_DEALS} akum={AKUM_ENTRY_MAX_DEALS} trendconfirm={TRENDCONFIRM_MAX_DEALS} "
             f"qscalp={QSCALP_MAX_DEALS}")
@@ -1543,9 +1561,9 @@ def sync_max_deals_globals():
         log(f"WARN sync_max_deals_globals: {e}")
 
 def total_max_deals_all_strategies() -> int:
-    """Jumlah semua slot maks lintas 6 strategi -- dipakai murni buat DISPLAY (ganti
+    """Jumlah semua slot maks lintas strategi -- dipakai murni buat DISPLAY (ganti
     COMMAS_MAX_ACTIVE_DEALS yang lama & basi, lihat penjelasan di dekat definisinya)."""
-    return (MAX_DEALS_BRKX2 + MAX_DEALS_REVERSAL + STRAT4H_MAX_DEALS
+    return (MAX_DEALS_BRKX2_CLOSED + MAX_DEALS_BRKX2_INTRABAR + MAX_DEALS_REVERSAL + STRAT4H_MAX_DEALS
             + STRAT_CROSSEMA_MAX_DEALS + HUNTING_MAX_DEALS + AKUM_ENTRY_MAX_DEALS
             + QSCALP_MAX_DEALS)
 
@@ -2765,6 +2783,19 @@ def csv_progress(strategy: str = None, offset: int = 0, until: int = None, since
         if strategy is not None:
             if strategy == 'akumulasi':
                 closed = [r for r in closed if r.get('strategy') in ('akum_entry_a', 'akum_entry_b')]
+            # 09/10/2026 (permintaan Mas Budi): KeltnerBreak-12h dipecah 2 strategi INDEPENDEN
+            # ('brkX2_closed'/'brkX2_intrabar') -- deal BARU (sejak split ini) langsung tercatat
+            # strategy='brkX2_closed'/'brkX2_intrabar' di kolom strategy (match langsung, baris A).
+            # Deal LAMA (sebelum split ini, termasuk 18 yg ditambal retroaktif) masih strategy=
+            # 'brkX2' polos + kolom entry_mode -- tetap ikut kehitung lewat baris B (union), supaya
+            # statistik 2 kartu split ini LENGKAP lintas era, bukan cuma dari tanggal split dst.
+            # strategy='brkX2' polos sendiri (tanpa suffix) TETAP jalan spt dulu, gabungan semua.
+            elif strategy in ('brkX2_closed', 'brkX2_intrabar'):
+                want_mode = 'closed' if strategy == 'brkX2_closed' else 'intrabar'
+                closed = [r for r in closed
+                          if r.get('strategy') == strategy                                   # (A) baris baru
+                          or ((r.get('strategy') or 'brkX2') == 'brkX2'                       # (B) baris lama
+                              and r.get('entry_mode') == want_mode)]
             else:
                 closed = [r for r in closed if (r.get('strategy') or 'brkX2') == strategy]
         if since_open_wib:
@@ -2855,6 +2886,15 @@ def strategy_recent_close_stats() -> dict:
         if p <= 0:
             continue
         strat = r.get('strategy') or 'brkX2'
+        # 09/10/2026: sama spt csv_progress() -- KeltnerBreak-12h dipecah 'brkX2_closed'/
+        # 'brkX2_intrabar' berdasar entry_mode. Baris tanpa entry_mode (blm tercatat) TIDAK ikut
+        # kehitung di salah satu (bukan ditebak) -- "kecepatan closing" utk 2 kartu split ini jadi
+        # murni dari trade yg entry_mode-nya sudah pasti diketahui.
+        if strat == 'brkX2':
+            mode = r.get('entry_mode')
+            if mode not in ('closed', 'intrabar'):
+                continue
+            strat = 'brkX2_' + mode
         ct_str = (r.get('close_time_wib') or '').strip()
         if not ct_str:
             continue
@@ -5774,7 +5814,7 @@ def execute_close_now(sym: str, reason: str, telegram_header: str = "CLOSE MANUA
                 'total_usd':     d.get('target_usd', ''),
             })
             remove_from_active_deals(sym)
-            if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
+            if strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
             if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof)
             if strat == 'akum_entry_a' and d.get('akum2'): record_akum2_close(sym, prof)
             log(f"[{log_tag}] {sym} @ {price_now:.6g} profit={prof:.2f}%")
@@ -6294,7 +6334,7 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     # 7-kondisi entry LAMA yang sudah dibuang, tidak ada basis skor yang setara utk formula
     # Keltner (1 syarat tunggal). Sama pola spt KeltnerBreak-12h shadow yg sudah terbukti
     # bagus TANPA add-fund.
-    elif strategy == 'brkX2':
+    elif strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar'):
         target  = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
         add_usd = 0
     # Decouple-4h LIVE (09/10/2026, Tahap 1/4): base_usd TETAP $50, TANPA add-fund/conviction-tier --
@@ -6907,7 +6947,9 @@ def hard_stop_pct(atr_pct: float, strategy=None):
 # semua terbukti merugikan total profit di backtest) -- JANGAN tambah ke BTC_DUMP_EXIT_PARAMS
 # tanpa backtest sendiri per strategi dulu.
 BTC_DUMP_EXIT_PARAMS = {
-    "brkX2":          (8, -2.0),    # KeltnerBreak-12h
+    "brkX2":          (8, -2.0),    # KeltnerBreak-12h (legacy, deal lama blm di-split)
+    "brkX2_closed":   (8, -2.0),    # 09/10/2026: sama persis param 'brkX2' -- split identitas, BUKAN formula baru
+    "brkX2_intrabar": (8, -2.0),
     "brkX2_4h":       (12, -1.5),   # window/ambang beda dari brkX2 -- lihat REMARK di atas
     "brkX2_crossema": (8, -2.0),
     "akum_entry_b":   (12, -1.5),   # Akumulasi Entry B saja -- akum_entry_a TIDAK (lihat REMARK)
@@ -7500,7 +7542,8 @@ def heartbeat_tick(status_line: str):
             f"\nKeltnerBreak-12h\n"
             f"{status_line}\n"
             f"{t3_str}\n"
-            f"\nSlot KeltnerBreak-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2}",
+            f"\nSlot KeltnerBreak-12h CC: {deal_count_by_strategy('brkX2_closed')}/{MAX_DEALS_BRKX2_CLOSED}"
+            f" | Intrabar: {deal_count_by_strategy('brkX2_intrabar')}/{MAX_DEALS_BRKX2_INTRABAR}",
         )
     heartbeat_last_sent    = now
     heartbeat_window_start = now_dt
@@ -7806,7 +7849,8 @@ def heartbeat_general_tick():
                      f"{_fmt_hsconfirm_status()}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
-    slot_line = (f"Slot KeltnerBreak-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2} | "
+    slot_line = (f"Slot KeltnerBreak-12h CC: {deal_count_by_strategy('brkX2_closed')}/{MAX_DEALS_BRKX2_CLOSED} | "
+                 f"Intrabar: {deal_count_by_strategy('brkX2_intrabar')}/{MAX_DEALS_BRKX2_INTRABAR} | "
                  f"Slot reversal-8h: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL}\n"
                  f"Slot brkX2-4h: {active_deal_count_4h()}/{STRAT4H_MAX_DEALS} | "
                  f"Slot crossema-4h: {n_cx}/{STRAT_CROSSEMA_MAX_DEALS} | "
@@ -8030,7 +8074,7 @@ def thread1_scan():
     # AI call tetap jalan penuh walau strategi di-disable, ketahuan pas biaya Anthropic tetap
     # jalan selama lockdown migrasi Sub Account biarpun semua strategi off. Cek di awal = 0 scan
     # & 0 AI call kalau disabled, bukan baru gagal di langkah terakhir.
-    if not is_strategy_enabled('brkX2'):
+    if not is_strategy_enabled('brkX2_closed'):
         return None
     log("[T1] Scan candle (TF tutup)...")
     # ambil ticker utk filter volume + daftar pair
@@ -8045,8 +8089,8 @@ def thread1_scan():
     universe = [p for p in pairs if volmap.get(p,0) >= MIN_VOLUME_USD]
 
     # slot brkX2 penuh ATAU total pool penuh? jangan cari sinyal
-    if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
-        log(f"[T1] Slot KeltnerBreak-12h penuh ({deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2}) "
+    if deal_count_by_strategy('brkX2_closed') >= MAX_DEALS_BRKX2_CLOSED:
+        log(f"[T1] Slot KeltnerBreak-12h penuh ({deal_count_by_strategy('brkX2_closed')}/{MAX_DEALS_BRKX2_CLOSED}) "
             f"atau total ({active_deal_count()}/{total_max_deals_all_strategies()}), tidak cari entry.")
         with active_deals_lock:
             syms = ", ".join(to_display_pair(s) for s in active_deals.keys()) or "-"
@@ -8199,7 +8243,7 @@ def thread1_scan():
         with active_deals_lock:
             if sym in active_deals:
                 continue  # sudah punya deal di pair ini
-        sisa = cooldown_remaining(sym) if is_cooldown_enabled('brkX2') else 0
+        sisa = cooldown_remaining(sym) if is_cooldown_enabled('brkX2_closed') else 0
         if sisa > 0:
             log(f"[T1] {sym} LOLOS 7/7 tapi masih cooldown internal (sisa {sisa/3600:.1f} jam) -> skip, tidak kirim sinyal.")
             cooldown_held.append((sym, sisa))
@@ -8223,7 +8267,7 @@ def thread1_scan():
                 _gap_bx12 = (signal_price / float(_ef_bx12) - 1) * 100
 
         # AI decision jika toggle "AI Call on Open" aktif utk strategi brkX2 (Strategy Control)
-        if is_ai_call_open_enabled('brkX2'):
+        if is_ai_call_open_enabled('brkX2_closed'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
             if _rsi_ai_val is not None: _ai_ind['rsi'] = f"{_rsi_ai_val:.1f}"
             if not ai_decision_open(sym, 'KeltnerBreak-12h', _ai_ind, active_deal_count(), notify=False):
@@ -8241,7 +8285,7 @@ def thread1_scan():
     if held_bx12:
         log(f"[T1] Babak 1 selesai: {len(held_bx12)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
         log_ai_babak1('KeltnerBreak-12h', [to_display_pair(s) for s in held_bx12.keys()], AI_BATCH_MAX_APPROVE)
-        batch_input_bx12 = [{'symbol': s, 'strategy': 'brkX2', 'score': v['score'], 'detail': v['detail']}
+        batch_input_bx12 = [{'symbol': s, 'strategy': 'brkX2_closed', 'score': v['score'], 'detail': v['detail']}
                              for s, v in held_bx12.items()]
         approved_bx12 = ai_decision_batch_rank(
             batch_input_bx12, strategy_label='KeltnerBreak-12h', max_approve=AI_BATCH_MAX_APPROVE,
@@ -8251,7 +8295,7 @@ def thread1_scan():
     opened_any = False
     for sym in approved_bx12:
         # berhenti kalau slot brkX2 ATAU total sudah penuh
-        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
+        if deal_count_by_strategy('brkX2_closed') >= MAX_DEALS_BRKX2_CLOSED:
             log(f"[T1] Slot brkX2/total penuh, sisa kandidat tidak dibuka.")
             break
         with active_deals_lock:
@@ -8260,7 +8304,7 @@ def thread1_scan():
         v = held_bx12[sym]
         signal_price = v['signal_price']; atrp = v['atrp']; score = v['score']
 
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2')
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2_closed')
         if ok:
             entry_price = get_price_now(sym)
             if entry_price <= 0:
@@ -8283,7 +8327,7 @@ def thread1_scan():
                 'entry_price': entry_price, 'peak': entry_price,
                 'signal_price': signal_price, 'atr_pct': atrp,
                 'opened_candle_ts': int(newest_ts), 'trailing_armed': False,
-                'strategy': 'brkX2', 'score': score, 'target_usd': target_usd,
+                'strategy': 'brkX2_closed', 'score': score, 'target_usd': target_usd,
                 'add_usd': add_usd, 'add_fund_sent': False,
                 **_open_fields,
             })
@@ -8305,7 +8349,7 @@ def thread1_scan():
                 'base_usd': target_usd,
                 'score': score,
                 'rsi_open': f"{_open_fields['rsi_open']:.1f}" if _open_fields.get('rsi_open') is not None else '',
-                'strategy': 'brkX2',
+                'strategy': 'brkX2_closed',
                 'entry_mode': 'closed',
             })
             # Simpan indikator saat open untuk perbandingan re-entry berikutnya
@@ -8370,7 +8414,7 @@ def thread1_scan():
             deal_log_write({
                 'timestamp_wib':    now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                 'event_type':       'OPEN',
-                'strategy':         'brkX2',
+                'strategy':         'brkX2_closed',
                 'symbol':           to_display_pair(sym),
                 'thread':           'T1',
                 'signal_price':     f"{_fmt_price(signal_price)}",
@@ -9184,7 +9228,7 @@ def thread2_monitor():
                 trail_reason = f"trailing (turun ke {_fmt_price(price)} dari puncak {_fmt_price(peak)}, dev {tdist}%)"
                 trail_grace_started = float(d.get('trail_htf_grace_started_at', 0) or 0)
                 trail_grace_age = time.time() - trail_grace_started if trail_grace_started > 0 else 0
-                grace_strategy = strat in ('brkX2', 'brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'reversal', 'trend_confirm_4h')
+                grace_strategy = strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'reversal', 'trend_confirm_4h')
                 if (grace_strategy and prof_from_entry > TRAIL_GRACE_MIN_PROFIT_PCT
                         and trail_grace_age < TRAIL_HTF_GRACE_SECONDS
                         and trailing_htf_is_healthy(sym)):
@@ -9567,7 +9611,7 @@ def thread2_monitor():
                     'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
                 })
                 remove_from_active_deals(sym)
-                if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
+                if strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
                 if strat == 'brkX2_4h' and trail_stop_triggered: record_trail_close(sym, price)
                 if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof_from_entry)
                 if strat == 'akum_entry_a' and d.get('akum2'): record_akum2_close(sym, prof_from_entry)
@@ -9754,7 +9798,8 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
     except: pass
 
     # Slot info
-    slot_12h = f"Slot KeltnerBreak-12h: {deal_count_by_strategy('brkX2')}/{MAX_DEALS_BRKX2}"
+    slot_12h = (f"Slot KeltnerBreak-12h CC: {deal_count_by_strategy('brkX2_closed')}/{MAX_DEALS_BRKX2_CLOSED}"
+                f" | Intrabar: {deal_count_by_strategy('brkX2_intrabar')}/{MAX_DEALS_BRKX2_INTRABAR}")
     slot_rev  = f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL}"
     slot_4h   = f"Slot 4h: {active_deal_count_4h()}/{STRAT4H_MAX_DEALS}"
     slot_cx   = f"Slot crossema: {sum(1 for d in active_deals.values() if d.get('strategy')=='brkX2_crossema')}/{STRAT_CROSSEMA_MAX_DEALS}"
@@ -9847,7 +9892,7 @@ def thread1c_scan_intrabar():
     global last_intrabar_candle_ts
     if not INTRABAR_ENABLED:
         return None
-    if not is_strategy_enabled('brkX2'):  # 11/09/2026, lihat catatan di thread1_scan()
+    if not is_strategy_enabled('brkX2_intrabar'):  # 11/09/2026, lihat catatan di thread1_scan()
         return None
     now_ms         = int(time.time() * 1000)
     sec12_ms       = SECONDS_PER_CANDLE * 1000
@@ -9860,7 +9905,7 @@ def thread1c_scan_intrabar():
         return None
     if candle_open_ms <= last_intrabar_candle_ts:
         return None
-    if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
+    if deal_count_by_strategy('brkX2_intrabar') >= MAX_DEALS_BRKX2_INTRABAR:
         return None
     log(f"[T1c] Intrabar scan ({elapsed_pct*100:.1f}% elapsed)...")
     pairs = get_usdt_spot_pairs()
@@ -9875,14 +9920,14 @@ def thread1c_scan_intrabar():
         return None
     held_bx12c = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
     for sym in universe:
-        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
+        if deal_count_by_strategy('brkX2_intrabar') >= MAX_DEALS_BRKX2_INTRABAR:
             break
         if len(held_bx12c) >= AI_BATCH_POOL_SIZE:
             log(f"[T1c] Kolam babak-1 penuh ({AI_BATCH_POOL_SIZE}), berhenti kumpulkan kandidat baru siklus ini.")
             break
         with active_deals_lock:
             if sym in active_deals: continue
-        if is_cooldown_enabled('brkX2') and cooldown_remaining(sym) > 0: continue
+        if is_cooldown_enabled('brkX2_intrabar') and cooldown_remaining(sym) > 0: continue
         if sizing_fail_remaining(sym) > 0: continue   # baru gagal sizing/open, jangan coba lagi dulu
         # Candle 12h TERAKHIR YANG SUDAH TUTUP -> level Keltner (EMA20+2xATR10,
         # kc_upper sudah dihitung di compute_indicators(), sama persis dgn check_entry()
@@ -9912,7 +9957,7 @@ def thread1c_scan_intrabar():
 
         _rsi_ai = r12.get('rsi') if 'rsi' in r12.index else None
         _rsi_ai_val = float(_rsi_ai) if _rsi_ai is not None and not pd.isna(_rsi_ai) else None
-        if is_ai_call_open_enabled('brkX2'):
+        if is_ai_call_open_enabled('brkX2_intrabar'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price)}
             if _rsi_ai_val is not None: _ai_ind['rsi'] = f"{_rsi_ai_val:.1f}"
             if not ai_decision_open(sym, 'KeltnerBreak-12h', _ai_ind, active_deal_count(), notify=False):
@@ -9934,7 +9979,7 @@ def thread1c_scan_intrabar():
     if held_bx12c:
         log(f"[T1c] Babak 1 selesai: {len(held_bx12c)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
         log_ai_babak1('KeltnerBreak-12h (intrabar)', [to_display_pair(s) for s in held_bx12c.keys()], AI_BATCH_MAX_APPROVE)
-        batch_input_bx12c = [{'symbol': s, 'strategy': 'brkX2', 'score': v['score'], 'detail': v['detail']}
+        batch_input_bx12c = [{'symbol': s, 'strategy': 'brkX2_intrabar', 'score': v['score'], 'detail': v['detail']}
                               for s, v in held_bx12c.items()]
         approved_bx12c = ai_decision_batch_rank(
             batch_input_bx12c, strategy_label='KeltnerBreak-12h', max_approve=AI_BATCH_MAX_APPROVE,
@@ -9942,7 +9987,7 @@ def thread1c_scan_intrabar():
         )
 
     for sym in approved_bx12c:
-        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
+        if deal_count_by_strategy('brkX2_intrabar') >= MAX_DEALS_BRKX2_INTRABAR:
             break
         with active_deals_lock:
             if sym in active_deals: continue
@@ -9950,7 +9995,7 @@ def thread1c_scan_intrabar():
         signal_price = v['signal_price']; atrp = v['atrp']; score = v['score']
         price_now = v['price_now']; r12 = v['r12']
 
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2')
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2_intrabar')
         if ok:
             entry_price = get_price_now(sym)
             if entry_price <= 0: entry_price = price_now
@@ -9960,7 +10005,7 @@ def thread1c_scan_intrabar():
                 'signal_price': signal_price, 'atr_pct': atrp,
                 'opened_candle_ts': int(candle_open_ms),
                 'trailing_armed': False,
-                'strategy': 'brkX2', 'score': score, 'target_usd': target_usd,
+                'strategy': 'brkX2_intrabar', 'score': score, 'target_usd': target_usd,
                 'add_usd': add_usd, 'add_fund_sent': False,
             })
             # 05/09/2026: csv_log_open() dipindah ke sini (lihat komentar panjang di
@@ -9976,7 +10021,7 @@ def thread1c_scan_intrabar():
                 'trail_dist_pct': f"{trailing_dist(atrp)}",
                 'base_usd':       target_usd,
                 'score':          score,
-                'strategy':       'brkX2',
+                'strategy':       'brkX2_intrabar',
                 'rsi_open':       f"{float(r12['rsi']):.1f}" if 'rsi' in r12.index and not pd.isna(r12.get('rsi')) else '',
                 'entry_mode':     'intrabar',
             })
@@ -10011,7 +10056,7 @@ def thread1c_scan_intrabar():
             deal_log_write({
                 'timestamp_wib':        now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                 'event_type':           'OPEN',
-                'strategy':             'brkX2',
+                'strategy':             'brkX2_intrabar',
                 'symbol':               to_display_pair(sym),
                 'thread':               'T1c',
                 'signal_price':         f"{_fmt_price(signal_price)}",
@@ -10056,7 +10101,7 @@ def thread1c_scan_intrabar_early():
     global last_intrabar_early_candle_ts
     if not INTRABAR_EARLY_ENABLED:
         return None
-    if not is_strategy_enabled('brkX2'):  # 11/09/2026, lihat catatan di thread1_scan()
+    if not is_strategy_enabled('brkX2_intrabar'):  # 11/09/2026, lihat catatan di thread1_scan()
         return None
     now_ms         = int(time.time() * 1000)
     sec12_ms       = SECONDS_PER_CANDLE * 1000
@@ -10072,7 +10117,7 @@ def thread1c_scan_intrabar_early():
     # Anti-double-entry: satu entry per candle per window
     if candle_open_ms <= last_intrabar_early_candle_ts:
         return None
-    if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
+    if deal_count_by_strategy('brkX2_intrabar') >= MAX_DEALS_BRKX2_INTRABAR:
         return None
 
     log(f"[T1c-E] Intrabar EARLY scan ({elapsed_pct*100:.1f}% elapsed)...")
@@ -10090,14 +10135,14 @@ def thread1c_scan_intrabar_early():
 
     held_bx12e = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
     for sym in universe:
-        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
+        if deal_count_by_strategy('brkX2_intrabar') >= MAX_DEALS_BRKX2_INTRABAR:
             break
         if len(held_bx12e) >= AI_BATCH_POOL_SIZE:
             log(f"[T1c-E] Kolam babak-1 penuh ({AI_BATCH_POOL_SIZE}), berhenti kumpulkan kandidat baru siklus ini.")
             break
         with active_deals_lock:
             if sym in active_deals: continue
-        if is_cooldown_enabled('brkX2') and cooldown_remaining(sym) > 0: continue
+        if is_cooldown_enabled('brkX2_intrabar') and cooldown_remaining(sym) > 0: continue
         if sizing_fail_remaining(sym) > 0: continue   # baru gagal sizing/open, jangan coba lagi dulu
 
         # Candle 12h TERAKHIR YANG SUDAH TUTUP -> level Keltner (EMA20+2xATR10),
@@ -10131,7 +10176,7 @@ def thread1c_scan_intrabar_early():
         signal_price = float(r12['close'])
         log(f"[T1c-E] SINYAL EARLY: {sym} elapsed={elapsed_pct*100:.1f}% price={price_now:.6g} skor={score}")
 
-        if is_ai_call_open_enabled('brkX2'):
+        if is_ai_call_open_enabled('brkX2_intrabar'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price), 'rsi': f"{rsi_now:.1f}"}
             if not ai_decision_open(sym, 'KeltnerBreak-12h', _ai_ind, active_deal_count(), notify=False):
                 log(f"[T1c-E] {sym} babak-1 di-skip oleh AI individual")
@@ -10152,7 +10197,7 @@ def thread1c_scan_intrabar_early():
     if held_bx12e:
         log(f"[T1c-E] Babak 1 selesai: {len(held_bx12e)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
         log_ai_babak1('KeltnerBreak-12h (intrabar EARLY)', [to_display_pair(s) for s in held_bx12e.keys()], AI_BATCH_MAX_APPROVE)
-        batch_input_bx12e = [{'symbol': s, 'strategy': 'brkX2', 'score': v['score'], 'detail': v['detail']}
+        batch_input_bx12e = [{'symbol': s, 'strategy': 'brkX2_intrabar', 'score': v['score'], 'detail': v['detail']}
                               for s, v in held_bx12e.items()]
         approved_bx12e = ai_decision_batch_rank(
             batch_input_bx12e, strategy_label='KeltnerBreak-12h', max_approve=AI_BATCH_MAX_APPROVE,
@@ -10160,7 +10205,7 @@ def thread1c_scan_intrabar_early():
         )
 
     for sym in approved_bx12e:
-        if deal_count_by_strategy('brkX2') >= MAX_DEALS_BRKX2:
+        if deal_count_by_strategy('brkX2_intrabar') >= MAX_DEALS_BRKX2_INTRABAR:
             break
         with active_deals_lock:
             if sym in active_deals: continue
@@ -10168,7 +10213,7 @@ def thread1c_scan_intrabar_early():
         signal_price = v['signal_price']; atrp = v['atrp']; score = v['score']
         price_now = v['price_now']; r12 = v['r12']
 
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2')
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2_intrabar')
         if ok:
             entry_price = get_price_now(sym)
             if entry_price <= 0: entry_price = price_now
@@ -10178,7 +10223,7 @@ def thread1c_scan_intrabar_early():
                 'signal_price': signal_price, 'atr_pct': atrp,
                 'opened_candle_ts': int(candle_open_ms),
                 'trailing_armed': False,
-                'strategy': 'brkX2', 'score': score, 'target_usd': target_usd,
+                'strategy': 'brkX2_intrabar', 'score': score, 'target_usd': target_usd,
                 'add_usd': add_usd, 'add_fund_sent': False,
             })
             # 05/09/2026 (permintaan Mas Budi, temuan DASH/ARB): jalur INTRABAR EARLY ini
@@ -10195,7 +10240,7 @@ def thread1c_scan_intrabar_early():
                 'trail_dist_pct': f"{trailing_dist(atrp)}",
                 'base_usd':       target_usd,
                 'score':          score,
-                'strategy':       'brkX2',
+                'strategy':       'brkX2_intrabar',
                 'rsi_open':       f"{float(r12['rsi']):.1f}" if 'rsi' in r12.index and not pd.isna(r12.get('rsi')) else '',
                 'entry_mode':     'intrabar',
             })
@@ -10230,7 +10275,7 @@ def thread1c_scan_intrabar_early():
             deal_log_write({
                 'timestamp_wib':        now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                 'event_type':           'OPEN',
-                'strategy':             'brkX2',
+                'strategy':             'brkX2_intrabar',
                 'symbol':               to_display_pair(sym),
                 'thread':               'T1c-E',
                 'signal_price':         f"{_fmt_price(signal_price)}",
@@ -12974,12 +13019,13 @@ function renderPerfChart(data) {
       }
       var RATE_UNIT_SHORT = {hari: 'D', minggu: 'W', bulan: 'M'};
       // 04/10/2026 (permintaan Mas Budi): mode sinyal open long per strategi, supaya selalu
-      // kelihatan di panel ini -- tidak semua strategi sama (KeltnerBreak-12h dual, brkX2-4h
-      // intrabar SAJA sejak redesain 03/10, TrenKonfirmasi-4h closed-candle SAJA by design
-      // -- intrabar sempat dicoba 22/09, dicabut 23/09, backtest ulang 04/10 tetap tidak
-      // nunjukkin keunggulan). Update manual kalau ada strategi yang mode-nya diubah lagi.
+      // kelihatan di panel ini -- tidak semua strategi sama (brkX2-4h intrabar SAJA sejak
+      // redesain 03/10, TrenKonfirmasi-4h closed-candle SAJA by design -- intrabar sempat
+      // dicoba 22/09, dicabut 23/09, backtest ulang 04/10 tetap tidak nunjukkin keunggulan).
+      // 09/10/2026: KeltnerBreak-12h ('brkX2') DIHAPUS dari sini -- sudah jadi 2 baris sendiri
+      // (brkX2_closed/brkX2_intrabar), label "CC"/"Intrabar" sudah eksplisit di nama baris,
+      // tidak perlu subtitle lagi. Update manual kalau ada strategi yang mode-nya diubah lagi.
       var ENTRY_MODE_LABEL = {
-        brkX2: 'Closed-candle + Intrabar',
         brkX2_4h: 'Intrabar saja',
         trend_confirm_4h: 'Closed-candle saja',
       };
@@ -13883,7 +13929,9 @@ refreshQscalpSignals();
 // Terminate strategi baru ke depan: CUKUP tambah 1 baris di get_terminated_strategies() (Python),
 // TIDAK perlu edit JS ini lagi.
 var SC_LABELS = {
-    brkX2: 'KeltnerBreak-12h',
+    brkX2: 'KeltnerBreak-12h (legacy)',
+    brkX2_closed: 'KeltnerBreak-12h CC',
+    brkX2_intrabar: 'KeltnerBreak-12h Intrabar',
     reversal: 'Reversal-8h',
     brkX2_4h: 'brkX2-4h',
     brkX2_crossema: 'CrossEMA-4h',
@@ -14558,7 +14606,9 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
     <select id="ct-filter-strat" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua strategi</option>
-        <option value="brkX2">KeltnerBreak-12h</option>
+        <option value="brkX2">KeltnerBreak-12h (legacy)</option>
+        <option value="brkX2_closed">KeltnerBreak-12h CC</option>
+        <option value="brkX2_intrabar">KeltnerBreak-12h Intrabar</option>
         <option value="brkX2_4h">brkX2-4h</option>
         <option value="reversal">Reversal-8h</option>
         <option value="hunting_4h">Hunting-4h</option>
@@ -18399,6 +18449,11 @@ def _shadow_hsconfirm_spawn(symbol: str, deal: dict) -> None:
     catat posisi PAPER dgn entry SAMA PERSIS (harga fill, ATR%), dipantau mekanisme exit BARU.
     Posisi real sama sekali tidak tersentuh/tidak tahu posisi paper ini ada."""
     strat = deal.get('strategy')
+    # 09/10/2026: KeltnerBreak-12h dipecah 'brkX2_closed'/'brkX2_intrabar' -- trial HSCONFIRM ini
+    # TIDAK dipecah ikut (soal mekanisme exit, bukan soal jalur entry), tetap SATU kolam 'brkX2'
+    # spy sampel trial yg sedang berjalan tidak terfragmentasi jadi 2 lebih kecil.
+    if strat in ('brkX2_closed', 'brkX2_intrabar'):
+        strat = 'brkX2'
     if strat not in ('brkX2', 'trend_confirm_4h'):
         return
     entry_price = deal.get('entry_price', 0) or 0
@@ -21992,7 +22047,7 @@ def run_web_dashboard():
                           strategy=strat, base_usd=total_usd)
             tp_tier_clear(sym)
             remove_from_active_deals(sym)
-            if strat in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
+            if strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
                 record_closed(sym)
             log(f"[RECONCILE] {sym} dibersihkan dari active_deals + dicatat ke Closed Trades (harga estimasi {price}, profit {prof_pct:+.2f}%)")
             send_telegram(
@@ -22901,7 +22956,8 @@ def run_web_dashboard():
             limit, tinggal panggil lagi utk melengkapi sisanya).
             """
             STRAT_INTERVAL = {
-                'brkX2': '12h', 'brkX2_4h': '4h', 'reversal': '8h',
+                'brkX2': '12h', 'brkX2_closed': '12h', 'brkX2_intrabar': '12h',
+                'brkX2_4h': '4h', 'reversal': '8h',
                 'hunting_4h': '4h', 'brkX2_crossema': '4h',
                 'akum_entry_a': '4h', 'akum_entry_b': '4h',
                 'trend_confirm_4h': '4h',
@@ -23438,7 +23494,7 @@ def run_web_dashboard():
                     csv_log_close(symbol, now_wib().strftime('%Y-%m-%d %H:%M:%S'), wh_price, wh_prof_pct,
                                   "close via TradingView webhook", strategy=strategy, base_usd=wh_total_usd)
                     remove_from_active_deals(symbol)
-                    if strategy in ('brkX2', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
+                    if strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
                         record_closed(symbol)
                     send_telegram(
                         f"{strategy} | CLOSE LONG (TradingView webhook)\n"
@@ -24055,7 +24111,11 @@ def run_web_dashboard():
         def api_strategy_performance():
             """Ringkasan total% forward-test kumulatif per strategi, utk bar chart Monitor tab."""
             defs = [
-                ("brkX2", "KeltnerBreak-12h"),  # 04/10/2026: KeltnerBreak-12h diganti formula Keltner, nama disamakan
+                # 09/10/2026 (permintaan Mas Budi): KeltnerBreak-12h dipecah 2 baris independen --
+                # csv_progress()/strategy_recent_close_stats() union otomatis deal baru (strategy=
+                # 'brkX2_closed'/'brkX2_intrabar' langsung) + deal lama (strategy='brkX2' + entry_mode).
+                ("brkX2_closed", "KeltnerBreak-12h CC"),
+                ("brkX2_intrabar", "KeltnerBreak-12h Intrabar"),
                 ("reversal", "Reversal-8h"),
                 ("brkX2_4h", "brkX2-4h"),
                 ("brkX2_crossema", "CrossEMA-4h"),
@@ -25434,7 +25494,7 @@ def grade_kelayakan_line(symbol: str, strategy: str):
     akum_entry_a/akum_entry_b) atau data gagal diambil -- fail-open, TIDAK menghalangi keputusan AI."""
     if strategy == 'trend_confirm_4h':
         g = grade_kelayakan_trend_confirm_4h(symbol)
-    elif strategy == 'brkX2':
+    elif strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar'):
         g = grade_kelayakan_brkx2_12h(symbol)
     elif strategy == 'brkX2_4h':
         g = grade_kelayakan_brkx2_4h(symbol)
@@ -26231,7 +26291,7 @@ if __name__ == '__main__':
     log(f"  Exit             : trailing adaptif (arm +{TRAIL_ARM_PCT}%), batas {MAX_HOLD_DAYS} candle 12h (2.5 hari)")
     log(f"  Trailing FAKTOR  : {TRAILING_FAKTOR*100:.0f}% (jarak trailing = tabel ATR% x {TRAILING_FAKTOR})")
     log(f"  Base order       : ${BASE_ORDER_VOLUME} | Max deal total: {total_max_deals_all_strategies()}")
-    log(f"  Slot per strategi: brkX2={MAX_DEALS_BRKX2}, reversal={MAX_DEALS_REVERSAL}, 4h={STRAT4H_MAX_DEALS}")
+    log(f"  Slot per strategi: brkX2_closed={MAX_DEALS_BRKX2_CLOSED}, brkX2_intrabar={MAX_DEALS_BRKX2_INTRABAR}, reversal={MAX_DEALS_REVERSAL}, 4h={STRAT4H_MAX_DEALS}")
     log(f"  Bot 3Commas      : brkX2 #{COMMAS_BOT_ID} | reversal #{COMMAS_BOT_ID_REVERSAL} | 4h #{COMMAS_BOT_ID_4H}")
     log(f"  Filter choppy    : {'ON' if CHOPPY_FILTER_ENABLED else 'OFF'} (body/range < {CHOPPY_BODY_RANGE_MIN} avg {CHOPPY_LOOKBACK_CANDLES} candle -> exclude)")
     log(f"  MACD filter      : {'ON' if MACD_FILTER_ENABLED else 'OFF'} (MACD histogram > 0)")
