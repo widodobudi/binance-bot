@@ -7707,12 +7707,8 @@ def heartbeat_general_tick():
                      f"    {_fmt_shadow('conf3_stochrsibb', SHADOW_CONF3_TARGET)}\n"
                      f"    {_fmt_shadow('dipbuy_universe', SHADOW_DIPBUY_UNIVERSE_TARGET)}\n"
                      f"    {_fmt_shadow('dipbuy_bluechip', SHADOW_DIPBUY_BC_TARGET)}\n"
-                     f"    {_fmt_shadow('squized_4h', SHADOW_SQUIZED_TARGET)}\n"
                      f"    {_fmt_shadow('decouple_4h', SHADOW_DECOUPLE_TARGET)}\n"
-                     f"    {_fmt_shadow('rangebreak_4h', SHADOW_RANGEBREAK_TARGET)}\n"
                      f"    {_fmt_shadow('trendsurge_4h', SHADOW_TRENDSURGE_TARGET)}\n"
-                     f"    {_fmt_shadow('ichibreak_4h', SHADOW_ICHIBREAK_TARGET)}\n"
-                     f"    {_fmt_shadow('psarflip_4h', SHADOW_PSARFLIP_TARGET)}\n"
                      f"    {_fmt_shadow('keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET, label='keltnerbreak_12h-shadow (RETIRED, formula sudah live)')}\n"
                      f"    {_fmt_shadow('oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)}\n"
                      f"    {_fmt_shadow('rvolbreak_1h', SHADOW_RVOLBREAK_TARGET)}\n"
@@ -16417,12 +16413,8 @@ def _load_shadow_fwdtest() -> dict:
                "conf3_stochrsibb": {"open": [], "closed": []},
                "dipbuy_universe": {"open": [], "closed": []},
                "dipbuy_bluechip": {"open": [], "closed": []},
-               "squized_4h": {"open": [], "closed": []},
                "decouple_4h": {"open": [], "closed": []},
-               "rangebreak_4h": {"open": [], "closed": []},
                "trendsurge_4h": {"open": [], "closed": []},
-               "ichibreak_4h": {"open": [], "closed": []},
-               "psarflip_4h": {"open": [], "closed": []},
                "keltnerbreak_12h": {"open": [], "closed": []},
                "oscconfluence_4h": {"open": [], "closed": []},
                "rvolbreak_1h": {"open": [], "closed": []}}
@@ -17078,23 +17070,19 @@ def _shadow_dipbuy_bc_check_exits(data: dict) -> None:
 # (lihat Range Accumulation: gagal di exit trailing MAUPUN TP/SL tetap -- bukan soal exit,
 # entry-nya sendiri yg tidak ada edge; beda dgn 4 strategi di bawah ini yg memang lolos dgn
 # exit trailing).
-SHADOW_SQUIZED_TARGET     = 20
 SHADOW_DECOUPLE_TARGET    = 20
-SHADOW_RANGEBREAK_TARGET  = 20
 SHADOW_TRENDSURGE_TARGET  = 20
 SHADOW_NEWSTRAT_MIN_VOL_USD      = 1_000_000   # sama ambang conf3/akuma
 SHADOW_NEWSTRAT_MAX_HOLD_CANDLES = 20          # sama persis yg dibacktest (robust di 10-40, lihat riset)
 
 # Parameter sinyal -- SAMA PERSIS angka yg divalidasi backtest (scratchpad sesi ini:
 # bbsqueeze_sim.py / newideas_sim.py / newideas2_sim.py).
+# 09/10/2026: squized_4h & rangebreak_4h diterminate (permintaan Mas Budi, hasil shadow negatif:
+# squized -24.8%, rangebreak -33.2%). SQUIZED_BB_LOOKBACK DIPERTAHANKAN -- dipakai sbg konstanta
+# buffer panjang data fetch bersama (get_ohlcv_4h limit) oleh strategi lain di _shadow_newstrat_scan_entries.
 SQUIZED_BB_LOOKBACK   = 100
-SQUIZED_BB_PCTILE     = 20     # lebar band masuk 20% tersempit dlm 100 candle
-SQUIZED_RECENT_N      = 3      # squeeze terjadi dlm 3 candle terakhir
-SQUIZED_RVOL_MIN      = 2.0
-SQUIZED_ATR_MIN       = 3.0
 DECOUPLE_LOOKBACK     = 20
 DECOUPLE_REL_MIN_PCT  = 5.0    # keunggulan vs BTC >=5 poin persentase, DAN baru saja crossing
-RANGEBREAK_DONCHIAN_N = 50
 TRENDSURGE_ADX_TH     = 25.0
 
 # oscconfluence_4h (03/10/2026, permintaan Mas Budi -- diulang & DIPAKSA setelah sempat
@@ -17111,14 +17099,6 @@ OSC_RSI_TH   = 30.0
 OSC_CCI_TH   = -100.0
 OSC_WILLR_TH = -80.0
 OSC_BBPCTB_TH = 0.0
-
-# ichiBreak-4h & pSARFlip-4h (02/10/2026, ronde riset ke-2 sesi ini -- 4 ide lain dicoba
-# bareng: F/G ini LOLOS vs baseline acak di TRAIN *dan* TEST, H (MACD hist accel) GAGAL di
-# TRAIN (p=0,51, pola overfit-ke-test spt Multi-TF Alignment dulu), I (VWAP reclaim) GAGAL
-# di TEST (p=0,25, edge pudar di luar sample) -- H & I sengaja TIDAK dimasukkan.
-# Scratchpad: newideas3_sim.py / newideas3_random_baseline.py.
-SHADOW_ICHIBREAK_TARGET  = 20
-SHADOW_PSARFLIP_TARGET   = 20
 
 # KeltnerBreak-12h (02/10/2026, permintaan Mas Budi: strategi pengganti KeltnerBreak-12h -- TF 12h
 # SAMA spt KeltnerBreak-12h, formula beda total: close breakout FRESH di atas Keltner Channel (EMA20 +
@@ -17387,22 +17367,14 @@ def _shadow_newstrat_compute(df):
     up = bb[[x for x in bb.columns if x.startswith('BBU')][0]]
     lo = bb[[x for x in bb.columns if x.startswith('BBL')][0]]
     mid = bb[[x for x in bb.columns if x.startswith('BBM')][0]]
-    df['bb_upper'] = up
     df['bb_width_pct'] = (up - lo) / mid * 100
-    df['bbw_pctile'] = df['bb_width_pct'].rolling(SQUIZED_BB_LOOKBACK).rank(pct=True) * 100
     df['atr_pct'] = _pta.atr(h, l, c, length=14) / c * 100
     df['vol_ma20'] = df['vol'].rolling(20).mean()
     df['rvol'] = df['vol'] / df['vol_ma20']
-    df['donchian_high'] = h.rolling(RANGEBREAK_DONCHIAN_N).max().shift(1)
     adx_df = _pta.adx(h, l, c, length=14)
     df['adx'] = adx_df[[x for x in adx_df.columns if x.startswith('ADX_')][0]]
     df['plus_di'] = adx_df[[x for x in adx_df.columns if x.startswith('DMP_')][0]]
     df['minus_di'] = adx_df[[x for x in adx_df.columns if x.startswith('DMN_')][0]]
-    ich_a, _ich_b = _pta.ichimoku(h, l, c)
-    df['cloud_top'] = ich_a[['ISA_9', 'ISB_26']].max(axis=1)
-    psar = _pta.psar(h, l, c)
-    df['psar_r'] = psar['PSARr_0.02_0.2']   # 1 di candle reversal
-    df['psar_l'] = psar['PSARl_0.02_0.2']   # ada nilai (bukan NaN) kalau skrg bullish
     stoch = _pta.stoch(h, l, c)
     df['stoch_k'] = stoch[[x for x in stoch.columns if x.startswith('STOCHk')][0]]
     df['rsi'] = _pta.rsi(c, length=14)
@@ -17431,12 +17403,8 @@ def _shadow_newstrat_open_one(data: dict, combo: str, target: int, sym: str, ent
 def _shadow_newstrat_scan_entries(data: dict) -> None:
     """Scan universe SEKALI, cek ke-4 kondisi sekaligus per symbol (hemat API vs 4 scan
     terpisah). Entry = candle 4h TERTUTUP terakhir, sama persis gaya conf3/akuma."""
-    combos_active = [cb for cb, tg in [('squized_4h', SHADOW_SQUIZED_TARGET),
-                                        ('decouple_4h', SHADOW_DECOUPLE_TARGET),
-                                        ('rangebreak_4h', SHADOW_RANGEBREAK_TARGET),
+    combos_active = [cb for cb, tg in [('decouple_4h', SHADOW_DECOUPLE_TARGET),
                                         ('trendsurge_4h', SHADOW_TRENDSURGE_TARGET),
-                                        ('ichibreak_4h', SHADOW_ICHIBREAK_TARGET),
-                                        ('psarflip_4h', SHADOW_PSARFLIP_TARGET),
                                         ('oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)]
                      if len(data[cb]['closed']) < tg and len(data[cb]['open']) < SHADOW_MAX_OPEN_PER_COMBO]
     if not combos_active:
@@ -17485,16 +17453,6 @@ def _shadow_newstrat_scan_entries(data: dict) -> None:
             entry_price = float(r['close']); atr_now = float(r['atr_pct'])
             sig_ts = int(df['ts'].iloc[i])
 
-            if 'squized_4h' in combos_active and len(data['squized_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
-                was_squeeze = any((df['bbw_pctile'].iloc[i - k] <= SQUIZED_BB_PCTILE) for k in range(SQUIZED_RECENT_N)
-                                   if i - k >= 0 and not pd.isna(df['bbw_pctile'].iloc[i - k]))
-                breakout = entry_price > float(r['bb_upper']) if not pd.isna(r['bb_upper']) else False
-                rvol_ok = (not pd.isna(r['rvol'])) and r['rvol'] >= SQUIZED_RVOL_MIN
-                if was_squeeze and breakout and rvol_ok and atr_now >= SQUIZED_ATR_MIN:
-                    _shadow_newstrat_open_one(data, 'squized_4h', SHADOW_SQUIZED_TARGET, sym,
-                                               entry_price, atr_now, sig_ts,
-                                               f" | RVOL {r['rvol']:.2f}x ATR% {atr_now:.2f}")
-
             if 'decouple_4h' in combos_active and btc_ret20 is not None \
                and len(data['decouple_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
                 cc = df['close'].values
@@ -17508,13 +17466,6 @@ def _shadow_newstrat_scan_entries(data: dict) -> None:
                                                    entry_price, atr_now, sig_ts,
                                                    f" | unggul {rel_now:+.1f}pp vs BTC")
 
-            if 'rangebreak_4h' in combos_active and len(data['rangebreak_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
-                dh = r['donchian_high']
-                if not pd.isna(dh) and entry_price > dh:
-                    _shadow_newstrat_open_one(data, 'rangebreak_4h', SHADOW_RANGEBREAK_TARGET, sym,
-                                               entry_price, atr_now, sig_ts,
-                                               f" | tembus HH{RANGEBREAK_DONCHIAN_N} {_fmt_price(dh)}")
-
             if 'trendsurge_4h' in combos_active and len(data['trendsurge_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
                 adx_now = r['adx']; pdi = r['plus_di']; mdi = r['minus_di']
                 adx_prev = df['adx'].iloc[i - 1] if i >= 1 else float('nan')
@@ -17523,25 +17474,6 @@ def _shadow_newstrat_scan_entries(data: dict) -> None:
                         _shadow_newstrat_open_one(data, 'trendsurge_4h', SHADOW_TRENDSURGE_TARGET, sym,
                                                    entry_price, atr_now, sig_ts,
                                                    f" | ADX {adx_now:.1f} (fresh, +DI>-DI)")
-
-            if 'ichibreak_4h' in combos_active and len(data['ichibreak_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
-                cloud_top = r['cloud_top']
-                cloud_top_prev = df['cloud_top'].iloc[i - 1] if i >= 1 else float('nan')
-                close_prev = df['close'].iloc[i - 1] if i >= 1 else float('nan')
-                if not any(pd.isna(x) for x in [cloud_top, cloud_top_prev, close_prev]):
-                    above_now = entry_price > cloud_top
-                    above_prev = close_prev > cloud_top_prev
-                    if above_now and not above_prev:
-                        _shadow_newstrat_open_one(data, 'ichibreak_4h', SHADOW_ICHIBREAK_TARGET, sym,
-                                                   entry_price, atr_now, sig_ts,
-                                                   f" | tembus cloud {_fmt_price(cloud_top)}")
-
-            if 'psarflip_4h' in combos_active and len(data['psarflip_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
-                psar_r_now = r['psar_r']; psar_l_now = r['psar_l']
-                if (not pd.isna(psar_r_now)) and psar_r_now == 1 and (not pd.isna(psar_l_now)):
-                    _shadow_newstrat_open_one(data, 'psarflip_4h', SHADOW_PSARFLIP_TARGET, sym,
-                                               entry_price, atr_now, sig_ts,
-                                               f" | SAR flip bullish @ {_fmt_price(psar_l_now)}")
 
             if 'oscconfluence_4h' in combos_active and len(data['oscconfluence_4h']['open']) < SHADOW_MAX_OPEN_PER_COMBO:
                 # Formula PERSIS oscconfluence_sim.py (script backtest asli, bukan tafsiran
@@ -17635,12 +17567,8 @@ def thread_shadow_fwdtest_scan() -> None:
             _shadow_conf3_check_exits(data)
             _shadow_dipbuy_universe_check_exits(data)
             _shadow_dipbuy_bc_check_exits(data)
-            _shadow_newstrat_check_exits(data, 'squized_4h', SHADOW_SQUIZED_TARGET)
             _shadow_newstrat_check_exits(data, 'decouple_4h', SHADOW_DECOUPLE_TARGET)
-            _shadow_newstrat_check_exits(data, 'rangebreak_4h', SHADOW_RANGEBREAK_TARGET)
             _shadow_newstrat_check_exits(data, 'trendsurge_4h', SHADOW_TRENDSURGE_TARGET)
-            _shadow_newstrat_check_exits(data, 'ichibreak_4h', SHADOW_ICHIBREAK_TARGET)
-            _shadow_newstrat_check_exits(data, 'psarflip_4h', SHADOW_PSARFLIP_TARGET)
             _shadow_newstrat_check_exits(data, 'oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)
             _shadow_keltnerbreak_check_exits(data)
             _shadow_rvolbreak_check_exits(data)
