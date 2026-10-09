@@ -2313,15 +2313,7 @@ CSV_FIELDS = [
     # 21/09/2026 (permintaan Mas Budi): entry_price/exit_price sekarang = harga FILL sebenarnya (buy/sell), supaya cocok
     # dgn profit_pct. Harga ticker lama disimpan di 2 kolom ini (DITAMBAH DI UJUNG agar pembaca berbasis posisi kolom
     # tidak bergeser). Baris lama: kosong (entry_price/exit_price lama = ticker). slip_pct TETAP dihitung dari ticker.
-    'entry_ticker','exit_ticker',
-    # 09/10/2026 (permintaan Mas Budi): 'closed' atau 'intrabar' -- cuma diisi utk KeltnerBreak-12h
-    # (strategy='brkX2') sejauh ini, supaya kartu ringkasan "KeltnerBreak-12h" bisa dipecah jadi 2
-    # (lihat renderCtSummary() di dashboard) -- closed-candle (thread1_scan/T1) vs intrabar
-    # gabungan (thread1c_scan_intrabar/T1c + thread1c_scan_intrabar_early/T1c-E, dua jendela
-    # waktu beda tapi sama-sama cek harga LIVE mid-candle, bukan candle tertutup). Baris lama
-    # (sebelum field ini ada) & strategi lain: kosong -- DITAMBAH DI UJUNG, sama alasannya dgn
-    # entry_ticker/exit_ticker di atas.
-    'entry_mode'
+    'entry_ticker','exit_ticker'
 ]
 
 # 20/09/2026 (permintaan Mas Budi): penanda timeline histori pencatatan hard-stop/timeout-rugi
@@ -8306,7 +8298,6 @@ def thread1_scan():
                 'score': score,
                 'rsi_open': f"{_open_fields['rsi_open']:.1f}" if _open_fields.get('rsi_open') is not None else '',
                 'strategy': 'brkX2',
-                'entry_mode': 'closed',
             })
             # Simpan indikator saat open untuk perbandingan re-entry berikutnya
             try:
@@ -9978,7 +9969,6 @@ def thread1c_scan_intrabar():
                 'score':          score,
                 'strategy':       'brkX2',
                 'rsi_open':       f"{float(r12['rsi']):.1f}" if 'rsi' in r12.index and not pd.isna(r12.get('rsi')) else '',
-                'entry_mode':     'intrabar',
             })
             addfund_txt = f" (+add ${add_usd} delay 15s)" if add_usd > 0 else ""
             send_telegram(
@@ -10197,7 +10187,6 @@ def thread1c_scan_intrabar_early():
                 'score':          score,
                 'strategy':       'brkX2',
                 'rsi_open':       f"{float(r12['rsi']):.1f}" if 'rsi' in r12.index and not pd.isna(r12.get('rsi')) else '',
-                'entry_mode':     'intrabar',
             })
             addfund_txt = f" (+add ${add_usd} delay 15s)" if add_usd > 0 else ""
             send_telegram(
@@ -14705,17 +14694,9 @@ function renderCtSummary(rows) {
     if (!el) return;
     if (!rows.length) { el.innerHTML = ''; return; }
     var strat_map = {brkX2:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h'};
-    // 09/10/2026 (permintaan Mas Budi): KeltnerBreak-12h (strategy='brkX2') dipecah jadi 2 kartu
-    // -- closed-candle vs intrabar (T1c + T1c-E digabung, sama-sama cek harga live mid-candle,
-    // cuma beda jendela waktu) -- pakai field entry_mode yang BARU ditambahkan 09/10/2026, jadi
-    // trade LAMA (sebelum field ini ada) entry_mode-nya kosong, masuk bucket "entry mode blm tercatat".
-    var entry_mode_label = {closed: ' (closed-candle)', intrabar: ' (intrabar)'};
     var groups = {};
     rows.forEach(function(r) {
         var key = r.strategy || 'brkX2';
-        if (key === 'brkX2') {
-            key = r.entry_mode ? ('brkX2__' + r.entry_mode) : 'brkX2__unknown';
-        }
         if (!groups[key]) groups[key] = {n:0, wins:0, pnlPct:0, pnlUsd:0};
         var g = groups[key];
         var pct = parseFloat(r.profit_pct||0), usd = parseFloat(r.profit_usd||0);
@@ -14728,15 +14709,8 @@ function renderCtSummary(rows) {
         var g = groups[key];
         var wr = (g.wins / g.n * 100).toFixed(0);
         var clr = g.pnlUsd >= 0 ? 'var(--green)' : 'var(--red)';
-        var label;
-        if (key.indexOf('brkX2__') === 0) {
-            var mode = key.slice(7);
-            label = 'KeltnerBreak-12h' + (entry_mode_label[mode] || ' (entry mode blm tercatat)');
-        } else {
-            label = strat_map[key] || key;
-        }
         return '<span style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:3px 8px">' +
-            '<b>' + label + '</b>: ' + g.n + ' trade, WR ' + wr + '%, ' +
+            '<b>' + (strat_map[key]||key) + '</b>: ' + g.n + ' trade, WR ' + wr + '%, ' +
             '<span style="color:' + clr + '">' + (g.pnlUsd>=0?'+':'') + g.pnlUsd.toFixed(2) + ' USD (' + (g.pnlPct>=0?'+':'') + g.pnlPct.toFixed(1) + '%)</span></span>';
     }).join('');
 }
@@ -24277,7 +24251,6 @@ def run_web_dashboard():
                         "reason_category": categorize_exit_reason(r.get('exit_reason','')),
                         "duration":     dur,
                         "rsi_open":     r.get('rsi_open',''),
-                        "entry_mode":   r.get('entry_mode',''),
                     })
                 total = wins + losses
                 wr = round(wins / total * 100, 1) if total else 0
