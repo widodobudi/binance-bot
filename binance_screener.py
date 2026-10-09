@@ -1312,6 +1312,10 @@ STRATEGY_CONFIG_DEFAULTS = {
     "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
     "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
     "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 2, "close_sell_pct": 100},
+    # 09/10/2026 (Tahap 1/4, permintaan Mas Budi): decouple_4h naik dari shadow ke live, lulus
+    # target 24/20 (18W/6L, +56.9%). max_deals di sini cuma utk tampilan dashboard -- enforcement
+    # sungguhan tetap pakai konstanta DECOUPLE_4H_MAX_DEALS di thread_decouple_scan().
+    "decouple_4h":   {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
 }
 # 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
 # default TRUE di semua strategi (kecuali qscalp_3m, sama seperti ai_call_open -- desain rule-based
@@ -6223,6 +6227,12 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     elif strategy == 'brkX2':
         target  = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
         add_usd = 0
+    # Decouple-4h LIVE (09/10/2026, Tahap 1/4): base_usd TETAP $50, TANPA add-fund/conviction-tier --
+    # sama pola brkX2 (KeltnerBreak-12h), skor sinyal (score_to_target_usd) tidak relevan utk formula
+    # 1-syarat-tunggal strategi ini.
+    elif strategy == 'decouple_4h':
+        target  = float(_cfg_base if _cfg_base else 50.0)
+        add_usd = 0
     # brkX2_4h di Binance direct: pakai base_usd dari Strategy Control, KECUALI tier
     # conviction (ATR%+Volume tinggi bersamaan di candle sinyal, lihat BRKX2_4H_CONVICTION_*)
     elif strategy == 'brkX2_4h' and USE_BINANCE_DIRECT:
@@ -7707,7 +7717,7 @@ def heartbeat_general_tick():
                      f"    {_fmt_shadow('conf3_stochrsibb', SHADOW_CONF3_TARGET)}\n"
                      f"    {_fmt_shadow('dipbuy_universe', SHADOW_DIPBUY_UNIVERSE_TARGET)}\n"
                      f"    {_fmt_shadow('dipbuy_bluechip', SHADOW_DIPBUY_BC_TARGET)}\n"
-                     f"    {_fmt_shadow('decouple_4h', SHADOW_DECOUPLE_TARGET)}\n"
+                     f"    {_fmt_shadow('decouple_4h', SHADOW_DECOUPLE_TARGET, label='decouple_4h-shadow (RETIRED, formula sudah live)')}\n"
                      f"    {_fmt_shadow('trendsurge_4h', SHADOW_TRENDSURGE_TARGET)}\n"
                      f"    {_fmt_shadow('keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET, label='keltnerbreak_12h-shadow (RETIRED, formula sudah live)')}\n"
                      f"    {_fmt_shadow('oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)}\n"
@@ -9130,6 +9140,9 @@ def thread2_monitor():
         elif d.get('strategy','brkX2') == 'trend_confirm_4h':
             hold_limit_sec = TRENDCONFIRM_MAX_HOLD_CANDLES * STRAT4H_SECONDS
             hold_label = f"batas {TRENDCONFIRM_MAX_HOLD_CANDLES} candle 4h (trendconfirm)"
+        elif d.get('strategy','brkX2') == 'decouple_4h':
+            hold_limit_sec = DECOUPLE_4H_MAX_HOLD_CANDLES * STRAT4H_SECONDS
+            hold_label = f"batas {DECOUPLE_4H_MAX_HOLD_CANDLES} candle 4h (decouple)"
         elif d.get('strategy','brkX2') == 'qscalp_3m':
             hold_limit_sec = QSCALP_LIVE_TIMEOUT_CANDLES * 180
             hold_label = f"batas {QSCALP_LIVE_TIMEOUT_CANDLES} candle 3m (qscalp)"
@@ -9250,6 +9263,7 @@ def thread2_monitor():
                 else STRAT4H_MAX_HOLD_CANDLES if d.get('strategy') == 'brkX2_4h'
                 else HUNTING_MAX_HOLD_CANDLES if d.get('strategy') in ('brkX2_crossema', 'hunting_4h')
                 else TRENDCONFIRM_MAX_HOLD_CANDLES if d.get('strategy') == 'trend_confirm_4h'
+                else DECOUPLE_4H_MAX_HOLD_CANDLES if d.get('strategy') == 'decouple_4h'
                 else d.get('timeout_candles', AKUM_ENTRY_TIMEOUT) if d.get('strategy','') in ('akum_entry_a','akum_entry_b')
                 else MAX_HOLD_DAYS
             )
@@ -13772,7 +13786,8 @@ var SC_LABELS = {
     akum_entry_b: 'Akum-4h Entry B',
     hunting_4h: 'Hunting-4h',
     trend_confirm_4h: 'TrendConfirm-4h',
-    qscalp_3m: 'QScalp-3m'
+    qscalp_3m: 'QScalp-3m',
+    decouple_4h: 'Decouple-4h'
 };
 // 24/09/2026 (permintaan Mas Budi): Entry A & Entry B sekarang baris terpisah supaya base_usd
 // masing-masing kelihatan & bisa diedit sendiri-sendiri (base_usd MEMANG sudah independen di
@@ -14429,6 +14444,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="akumulasi">Akumulasi-4h</option>
         <option value="trend_confirm_4h">TrenKonfirmasi-4h</option>
         <option value="qscalp_3m">QScalp-3m</option>
+        <option value="decouple_4h">Decouple-4h</option>
         <option value="__exclude_hardstop__">Semua strategi, exclude hardstop volatilitas</option>
       </select>
     <select id="ct-filter-pair" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
@@ -17094,6 +17110,18 @@ DECOUPLE_LOOKBACK     = 20
 DECOUPLE_REL_MIN_PCT  = 5.0    # keunggulan vs BTC >=5 poin persentase, DAN baru saja crossing
 TRENDSURGE_ADX_TH     = 25.0
 
+# ── Decouple-4h LIVE (09/10/2026, Tahap 1/4 -- permintaan Mas Budi): lulus target shadow
+# 24/20 (18W/6L, +56.9%) 09/10/2026. Sinyal & exit IDENTIK dengan versi shadow di atas
+# (trailing produksi asli, bukan TP/SL tetap) -- cuma sekarang kirim order Binance sungguhan
+# lewat open_deal_with_sizing()/thread2_monitor(), bukan dicatat ke file paper. Modal $50 tetap
+# tanpa add-fund (base_usd dari Strategy Control), 2 slot, lewat AI konfirmasi (2 babak, sama
+# pola brkX2-4h/TrenKonfirmasi-4h). DECOUPLE_4H_ENABLED = kill-switch kode (perlu redeploy),
+# beda dari toggle runtime is_strategy_enabled('decouple_4h') di Strategy Control.
+DECOUPLE_4H_ENABLED       = True
+DECOUPLE_4H_SCAN_INTERVAL = 600     # detik, sama seperti TrenKonfirmasi-4h
+DECOUPLE_4H_MAX_DEALS     = 2
+DECOUPLE_4H_MAX_HOLD_CANDLES = SHADOW_NEWSTRAT_MAX_HOLD_CANDLES   # 20 candle 4h, sama persis dibacktest
+
 # oscconfluence_4h (03/10/2026, permintaan Mas Budi -- diulang & DIPAKSA setelah sempat
 # dibatalkan 1 jam sebelumnya di sesi yang sama: backtest oscconfluence_sim.py, n=11.063,
 # 170 koin, WR 77,5%, avg +0,98% vs baseline acak avg +0,56% -- TRAIN diff +0,17pp p=0,094
@@ -17412,8 +17440,11 @@ def _shadow_newstrat_open_one(data: dict, combo: str, target: int, sym: str, ent
 def _shadow_newstrat_scan_entries(data: dict) -> None:
     """Scan universe SEKALI, cek ke-4 kondisi sekaligus per symbol (hemat API vs 4 scan
     terpisah). Entry = candle 4h TERTUTUP terakhir, sama persis gaya conf3/akuma."""
-    combos_active = [cb for cb, tg in [('decouple_4h', SHADOW_DECOUPLE_TARGET),
-                                        ('trendsurge_4h', SHADOW_TRENDSURGE_TARGET),
+    # 09/10/2026: decouple_4h RETIRED dari shadow -- lulus target (24/20, +56.9%), formula sudah
+    # LIVE (lihat thread_decouple_scan()). Posisi paper lama tetap diselesaikan oleh
+    # _shadow_newstrat_check_exits(data,'decouple_4h',...) di thread_shadow_fwdtest_scan(), cuma
+    # tidak buka posisi paper baru lagi -- pola sama persis retirement keltnerbreak_12h 03/10/2026.
+    combos_active = [cb for cb, tg in [('trendsurge_4h', SHADOW_TRENDSURGE_TARGET),
                                         ('oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)]
                      if len(data[cb]['closed']) < tg and len(data[cb]['open']) < SHADOW_MAX_OPEN_PER_COMBO]
     if not combos_active:
@@ -17566,6 +17597,175 @@ def _shadow_newstrat_check_exits(data: dict, combo: str, target: int) -> None:
             pos['peak_price'] = peak; pos['armed'] = armed
             still_open.append(pos)
     data[combo]['open'] = still_open
+
+
+def thread_decouple_scan() -> None:
+    """Scan sinyal Decouple-4h LIVE (09/10/2026, Tahap 1/4). Sinyal IDENTIK dengan bagian
+    decouple_4h di _shadow_newstrat_scan_entries() (return 20-candle koin unggul >=
+    DECOUPLE_REL_MIN_PCT poin persentase vs BTC, DAN baru saja crossing ambang itu) --
+    bedanya di sini AI konfirmasi 2 babak (sama pola brkX2-4h/TrenKonfirmasi-4h) lalu
+    open_deal_with_sizing() benar2 kirim order, bukan dicatat ke data paper."""
+    if not DECOUPLE_4H_ENABLED: return
+    if not is_strategy_enabled('decouple_4h'): return
+
+    if is_daily_loss_limit_breached():
+        log(f"[T_DECOUPLE] Scan di-skip -- batas rugi harian tersulut")
+        return
+
+    n_active = deal_count_by_strategy('decouple_4h')
+    if n_active >= DECOUPLE_4H_MAX_DEALS: return
+
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST]
+    except Exception as e:
+        log(f"WARN [T_DECOUPLE] gagal ambil universe: {e}")
+        return
+
+    try:
+        btc_df = get_ohlcv_4h('BTCUSDT', limit=SQUIZED_BB_LOOKBACK + 50)
+        if btc_df is not None and len(btc_df) and btc_df['ct'].iloc[-1] >= int(time.time() * 1000):
+            btc_df = btc_df.iloc[:-1]
+        if btc_df is None or len(btc_df) <= DECOUPLE_LOOKBACK + 1:
+            log(f"[T_DECOUPLE] Data BTC kurang, skip siklus ini")
+            return
+        bc = btc_df['close'].values
+        btc_ret20 = bc[-1] / bc[-1 - DECOUPLE_LOOKBACK] - 1
+        btc_ret20_prev = bc[-2] / bc[-2 - DECOUPLE_LOOKBACK] - 1
+    except Exception as e:
+        log(f"WARN [T_DECOUPLE] gagal ambil BTC: {e}")
+        return
+
+    with active_deals_lock:
+        existing = set(active_deals.keys())
+
+    import pandas_ta as _pta_dc
+    candidates = []
+    for sym in universe:
+        if sym in existing: continue
+        # 09/10/2026: TIDAK exclude bStock di sini (beda dari trend_confirm_4h) -- shadow yg
+        # dibacktest/di-paper-test juga tidak exclude bStock, dan open_deal_with_sizing() sudah
+        # otomatis membatasi bStock hanya boleh open saat NYSE buka (guard global semua strategi),
+        # jadi exclusion tambahan di sini cuma akan menyimpang dari yg sudah terbukti di shadow.
+        if is_cooldown_enabled('decouple_4h') and cooldown_remaining(sym) > 0: continue
+        if sizing_fail_remaining(sym) > 0: continue
+        try:
+            df = get_ohlcv_4h(sym, limit=SQUIZED_BB_LOOKBACK + 50)
+            if df is None or len(df) < SQUIZED_BB_LOOKBACK + 25: continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) <= DECOUPLE_LOOKBACK + 1: continue
+            cc = df['close'].values
+            coin_ret20 = cc[-1] / cc[-1 - DECOUPLE_LOOKBACK] - 1
+            coin_ret20_prev = cc[-2] / cc[-2 - DECOUPLE_LOOKBACK] - 1
+            rel_now = (coin_ret20 - btc_ret20) * 100
+            rel_prev = (coin_ret20_prev - btc_ret20_prev) * 100
+            if not (rel_now >= DECOUPLE_REL_MIN_PCT and rel_prev < DECOUPLE_REL_MIN_PCT):
+                continue
+            atrp_series = _pta_dc.atr(df['high'], df['low'], df['close'], length=14) / df['close'] * 100
+            atr_now = float(atrp_series.iloc[-1])
+            if pd.isna(atr_now) or atr_now <= 0: continue
+            candidates.append((sym, float(cc[-1]), atr_now, rel_now))
+        except Exception as e:
+            log(f"  [T_DECOUPLE] error {sym}: {e}")
+
+    if not candidates:
+        return
+    candidates.sort(key=lambda x: x[3], reverse=True)
+    log(f"[T_DECOUPLE] {len(candidates)} kandidat. Buka deal terbaik (slot {n_active}/{DECOUPLE_4H_MAX_DEALS})...")
+
+    # ============ BABAK 1: AI individual per-kandidat (notify=False) ============
+    held = {}
+    for sym, signal_price, atr_now, rel_now in candidates:
+        with active_deals_lock:
+            if sym in active_deals: continue
+        if is_ai_call_open_enabled('decouple_4h'):
+            _ai_ind = {'atr_pct': f"{atr_now:.2f}%", 'signal_price': _fmt_price(signal_price),
+                       'unggul_vs_btc': f"{rel_now:+.1f}pp"}
+            if not ai_decision_open(sym, 'Decouple-4h', _ai_ind, deal_count_by_strategy('decouple_4h'), notify=False):
+                log(f"[T_DECOUPLE] {sym} babak-1 di-skip oleh AI individual")
+                continue
+        held[sym] = {'signal_price': signal_price, 'atr_now': atr_now, 'rel_now': rel_now}
+
+    if not held:
+        return
+
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+    log(f"[T_DECOUPLE] Babak 1 selesai: {len(held)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+    log_ai_babak1('Decouple-4h', [to_display_pair(s) for s in held.keys()], AI_BATCH_MAX_APPROVE)
+    batch_input = [{'symbol': s, 'strategy': 'decouple_4h', 'score': 1,
+                     'detail': {'atr_pct': v['atr_now'], 'unggul_vs_btc': v['rel_now']}}
+                    for s, v in held.items()]
+    approved = ai_decision_batch_rank(
+        batch_input, strategy_label='Decouple-4h', max_approve=AI_BATCH_MAX_APPROVE,
+        criteria_note="Kriteria: besarnya keunggulan return 20-candle vs BTC, ATR%",
+    )
+
+    for sym in approved:
+        n_active = deal_count_by_strategy('decouple_4h')
+        if n_active >= DECOUPLE_4H_MAX_DEALS: break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        v = held[sym]
+        signal_price = v['signal_price']; atr_now = v['atr_now']; rel_now = v['rel_now']
+
+        # 09/10/2026: TIDAK ada re-check harga/level sebelum beli di sini (beda dari brkX2-4h,
+        # yg mengecek level breakout spesifik) -- syarat decouple_4h ("unggul X poin persen vs
+        # BTC dalam 20 candle") tidak batal karena harga bergerak sedikit sejak sinyal, dan
+        # shadow yg dibacktest juga tidak punya pengecekan ini. Harga eksekusi riil tetap dari
+        # fill order (fill_price di bawah), bukan signal_price yg sudah agak basi.
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='decouple_4h')
+        if not ok: continue
+
+        try:
+            ticker_now = _binance_get("/api/v3/ticker/price", {"symbol": sym})
+            fill_price = float(ticker_now["price"]) if ticker_now else signal_price
+        except Exception:
+            fill_price = signal_price
+
+        now_ms = int(time.time() * 1000)
+        candle_open_ms = (now_ms // (STRAT4H_SECONDS * 1000)) * (STRAT4H_SECONDS * 1000)
+        add_to_active_deals(sym, {
+            "strategy":          "decouple_4h",
+            "entry_price":       fill_price,
+            "signal_price":      signal_price,
+            "atr_pct":           atr_now,
+            "target_usd":        target_usd,
+            "add_usd":           add_usd,
+            "opened_ts":         time.time(),
+            "opened_candle_ts":  candle_open_ms,
+            "tf":                STRAT4H_TIMEFRAME,
+        })
+        n_active += 1
+        slip_pct = (fill_price / signal_price - 1) * 100 if signal_price > 0 else 0
+        send_telegram(
+            f"Decouple-4h | OPEN LONG\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Pair  : {to_display_pair(sym)}\n"
+            f"Harga entry (pasar): {_fmt_price(fill_price)}\n"
+            f"Harga sinyal (4h): {_fmt_price(signal_price)}\n"
+            f"Selisih (slippage): {slip_pct:+.2f}%\n"
+            f"ATR%  : {atr_now:.2f}  |  Unggul vs BTC: {rel_now:+.1f}pp\n"
+            f"Modal: ${target_usd:.0f}" + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else ""),
+            parse_mode=None
+        )
+        log(f"[T_DECOUPLE] OPEN {sym} @ {fill_price:.8g} (sinyal {signal_price:.8g}, ATR%={atr_now:.2f}, unggul {rel_now:+.1f}pp)")
+
+
+def run_thread_decouple() -> None:
+    """Thread T_DECOUPLE: scan Decouple-4h tiap DECOUPLE_4H_SCAN_INTERVAL detik."""
+    while True:
+        try:
+            thread_decouple_scan()
+        except Exception as e:
+            log(f"WARN T_DECOUPLE error: {e}")
+        time.sleep(DECOUPLE_4H_SCAN_INTERVAL)
 
 
 def thread_shadow_fwdtest_scan() -> None:
@@ -25465,6 +25665,10 @@ if __name__ == '__main__':
     if TRENDCONFIRM_ENABLED:
         t_tc = threading.Thread(target=run_thread_trendconfirm, daemon=True, name="T-TrendConfirm")
         threads.append(t_tc)
+        n_threads += 1
+    if DECOUPLE_4H_ENABLED:
+        t_dc = threading.Thread(target=run_thread_decouple, daemon=True, name="T-Decouple")
+        threads.append(t_dc)
         n_threads += 1
     if STRAT_AKUM_ENABLED:
         t_akum = threading.Thread(target=run_thread_akum, daemon=True, name="T-Akum")
