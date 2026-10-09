@@ -1318,6 +1318,9 @@ STRATEGY_CONFIG_DEFAULTS = {
     "decouple_4h":   {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     # 09/10/2026 (Tahap 2/4): rvolbreak_1h naik dari shadow ke live, lulus target 24/20 (15W/9L, +61.8%).
     "rvolbreak_1h":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    # 09/10/2026 (Tahap 3/4): dipbuy_universe naik dari shadow ke live, lulus target 50/50 (43W/7L,
+    # +85.5%) -- exit DIGANTI ke trailing (lihat REMARK DIPBUY_UNIVERSE_* di sekitar baris 16424).
+    "dipbuy_universe": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
 }
 # 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
 # default TRUE di semua strategi (kecuali qscalp_3m, sama seperti ai_call_open -- desain rule-based
@@ -6240,6 +6243,10 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     elif strategy == 'rvolbreak_1h':
         target  = float(_cfg_base if _cfg_base else 50.0)
         add_usd = 0
+    # Dip-Buy Universe LIVE (09/10/2026, Tahap 3/4): sama pola decouple_4h/rvolbreak_1h.
+    elif strategy == 'dipbuy_universe':
+        target  = float(_cfg_base if _cfg_base else 50.0)
+        add_usd = 0
     # brkX2_4h di Binance direct: pakai base_usd dari Strategy Control, KECUALI tier
     # conviction (ATR%+Volume tinggi bersamaan di candle sinyal, lihat BRKX2_4H_CONVICTION_*)
     elif strategy == 'brkX2_4h' and USE_BINANCE_DIRECT:
@@ -7722,7 +7729,7 @@ def heartbeat_general_tick():
                      f"  - qscalp_3m  : {_fmt_hunting_live(prog_qscalp)}\n"
                      f"  - Shadow (paper, bukan live):\n"
                      f"    {_fmt_shadow('conf3_stochrsibb', SHADOW_CONF3_TARGET)}\n"
-                     f"    {_fmt_shadow('dipbuy_universe', SHADOW_DIPBUY_UNIVERSE_TARGET)}\n"
+                     f"    {_fmt_shadow('dipbuy_universe', SHADOW_DIPBUY_UNIVERSE_TARGET, label='dipbuy_universe-shadow (RETIRED, formula sudah live dgn exit trailing)')}\n"
                      f"    {_fmt_shadow('dipbuy_bluechip', SHADOW_DIPBUY_BC_TARGET)}\n"
                      f"    {_fmt_shadow('decouple_4h', SHADOW_DECOUPLE_TARGET, label='decouple_4h-shadow (RETIRED, formula sudah live)')}\n"
                      f"    {_fmt_shadow('trendsurge_4h', SHADOW_TRENDSURGE_TARGET)}\n"
@@ -9153,6 +9160,9 @@ def thread2_monitor():
         elif d.get('strategy','brkX2') == 'rvolbreak_1h':
             hold_limit_sec = RVOLBREAK_1H_MAX_HOLD_CANDLES * STRAT1H_SECONDS
             hold_label = f"batas {RVOLBREAK_1H_MAX_HOLD_CANDLES} candle 1h (rvolbreak)"
+        elif d.get('strategy','brkX2') == 'dipbuy_universe':
+            hold_limit_sec = DIPBUY_UNIVERSE_MAX_HOLD_CANDLES * STRAT4H_SECONDS
+            hold_label = f"batas {DIPBUY_UNIVERSE_MAX_HOLD_CANDLES} candle 4h (dipbuy)"
         elif d.get('strategy','brkX2') == 'qscalp_3m':
             hold_limit_sec = QSCALP_LIVE_TIMEOUT_CANDLES * 180
             hold_label = f"batas {QSCALP_LIVE_TIMEOUT_CANDLES} candle 3m (qscalp)"
@@ -9275,6 +9285,7 @@ def thread2_monitor():
                 else TRENDCONFIRM_MAX_HOLD_CANDLES if d.get('strategy') == 'trend_confirm_4h'
                 else DECOUPLE_4H_MAX_HOLD_CANDLES if d.get('strategy') == 'decouple_4h'
                 else RVOLBREAK_1H_MAX_HOLD_CANDLES if d.get('strategy') == 'rvolbreak_1h'
+                else DIPBUY_UNIVERSE_MAX_HOLD_CANDLES if d.get('strategy') == 'dipbuy_universe'
                 else d.get('timeout_candles', AKUM_ENTRY_TIMEOUT) if d.get('strategy','') in ('akum_entry_a','akum_entry_b')
                 else MAX_HOLD_DAYS
             )
@@ -13799,7 +13810,8 @@ var SC_LABELS = {
     trend_confirm_4h: 'TrendConfirm-4h',
     qscalp_3m: 'QScalp-3m',
     decouple_4h: 'Decouple-4h',
-    rvolbreak_1h: 'RVOLBreak-1h'
+    rvolbreak_1h: 'RVOLBreak-1h',
+    dipbuy_universe: 'Dip-Buy Universe'
 };
 // 24/09/2026 (permintaan Mas Budi): Entry A & Entry B sekarang baris terpisah supaya base_usd
 // masing-masing kelihatan & bisa diedit sendiri-sendiri (base_usd MEMANG sudah independen di
@@ -14458,6 +14470,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="qscalp_3m">QScalp-3m</option>
         <option value="decouple_4h">Decouple-4h</option>
         <option value="rvolbreak_1h">RVOLBreak-1h</option>
+        <option value="dipbuy_universe">Dip-Buy Universe</option>
         <option value="__exclude_hardstop__">Semua strategi, exclude hardstop volatilitas</option>
       </select>
     <select id="ct-filter-pair" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
@@ -16421,6 +16434,21 @@ SHADOW_DIPBUY_UNIVERSE_MAX_HOLD_CANDLES = 6  # 24h di TF 4h, sama window yg dite
 SHADOW_DIPBUY_UNIVERSE_MIN_VOL_USD  = 500_000  # lebih longgar dari strategi lain -- kandidat dip
                                        # ekstrem sudah jarang muncul, jangan dipersempit lagi
 
+# ── Dip-Buy Universe LIVE (09/10/2026, Tahap 3/4 -- permintaan Mas Budi): lulus target shadow
+# 50/50 (43W/7L, +85.5%) 09/10/2026. BEDA dari Tahap 1-2: exit DIGANTI dari TP/SL tetap (shadow
+# di atas) ke trailing produksi standar (hard_stop_pct/get_arm_pct/trailing_dist_progressive) --
+# backtest 160 pair (btcdump_sweep.py sesi ini, 09/10/2026) menunjukkan TP+4%/SL-15% RUGI (-$28
+# total/88 trade) karena memotong bounce yg rata-rata lanjut jauh lebih tinggi, sementara trailing
+# untung +$349, maxDD -$12, win 80%. Karena exit-nya beda, timeout JUGA ikut angka yg dibacktest
+# bareng trailing itu (15 candle 4h = 60j), BUKAN SHADOW_DIPBUY_UNIVERSE_MAX_HOLD_CANDLES (6
+# candle/24j, didesain utk TP/SL tetap yg lama). Entry sinyal TIDAK berubah (chg_4h 1 candle <=
+# SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN). ATR% (dibutuhkan trailing, shadow lama tidak pernah hitung
+# ini krn TP/SL tetap tidak perlu) dihitung baru di thread_dipbuy_universe_scan().
+DIPBUY_UNIVERSE_ENABLED       = True
+DIPBUY_UNIVERSE_SCAN_INTERVAL = 600     # detik, sama seperti strategi 4h lain
+DIPBUY_UNIVERSE_MAX_DEALS     = 2
+DIPBUY_UNIVERSE_MAX_HOLD_CANDLES = 15   # 60 jam -- sama persis yg dibacktest BARENG trailing, beda dari shadow (6)
+
 # ── Shadow "dipbuy_bluechip" (16/09/2026, permintaan Mas Budi): varian dipbuy_universe TAPI
 # dibatasi ke ~30 coin blue-chip mapan (rekam jejak panjang, market cap besar) --
 # backtest_dipbuy_bluechip.py (scratchpad sesi ini) menunjukkan hasilnya JAUH lebih
@@ -17937,6 +17965,154 @@ def run_thread_rvolbreak() -> None:
         time.sleep(RVOLBREAK_1H_SCAN_INTERVAL)
 
 
+def thread_dipbuy_universe_scan() -> None:
+    """Scan sinyal Dip-Buy Universe LIVE (09/10/2026, Tahap 3/4). Sinyal IDENTIK dengan
+    _shadow_dipbuy_universe_try_open() (1 candle 4h TERTUTUP turun <= SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN,
+    exclude bStock & LUNA, volume >= SHADOW_DIPBUY_UNIVERSE_MIN_VOL_USD) -- BEDA dari shadow di
+    exit (trailing, bukan TP/SL tetap, lihat REMARK di konstanta DIPBUY_UNIVERSE_*), AI konfirmasi
+    2 babak, dan open_deal_with_sizing() benar2 kirim order."""
+    if not DIPBUY_UNIVERSE_ENABLED: return
+    if not is_strategy_enabled('dipbuy_universe'): return
+
+    if is_daily_loss_limit_breached():
+        log(f"[T_DIPBUY] Scan di-skip -- batas rugi harian tersulut")
+        return
+
+    n_active = deal_count_by_strategy('dipbuy_universe')
+    if n_active >= DIPBUY_UNIVERSE_MAX_DEALS: return
+
+    with active_deals_lock:
+        existing = set(active_deals.keys())
+
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs
+                    if p not in BACKTEST_SYMBOL_EXCLUDE
+                    and not is_bstock_symbol(p)
+                    and volmap.get(p, 0) >= SHADOW_DIPBUY_UNIVERSE_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST and p not in existing]
+    except Exception as e:
+        log(f"WARN [T_DIPBUY] gagal ambil universe: {e}")
+        return
+
+    import pandas_ta as _pta_db
+    candidates = []
+    for sym in universe:
+        if is_cooldown_enabled('dipbuy_universe') and cooldown_remaining(sym) > 0: continue
+        if sizing_fail_remaining(sym) > 0: continue
+        try:
+            # limit lebih panjang dari shadow (10) -- ATR(14) butuh histori lebih, trailing baru
+            # di Tahap ini, shadow lama tidak pernah hitung ATR krn TP/SL-nya tetap.
+            df = get_ohlcv_4h(sym, limit=40)
+            if df is None or len(df) < 20: continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) < 16: continue
+            close_now, close_prev = float(df['close'].iloc[-1]), float(df['close'].iloc[-2])
+            if close_prev <= 0: continue
+            chg_4h = (close_now / close_prev - 1) * 100
+            if chg_4h > SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN: continue
+            atrp_series = _pta_db.atr(df['high'], df['low'], df['close'], length=14) / df['close'] * 100
+            atr_now = float(atrp_series.iloc[-1])
+            if pd.isna(atr_now) or atr_now <= 0: continue
+            candidates.append((sym, close_now, atr_now, chg_4h))
+        except Exception as e:
+            log(f"  [T_DIPBUY] error {sym}: {e}")
+
+    if not candidates:
+        return
+    candidates.sort(key=lambda x: x[3])   # chg_4h paling negatif (dip terdalam) dulu
+    log(f"[T_DIPBUY] {len(candidates)} kandidat. Buka deal terbaik (slot {n_active}/{DIPBUY_UNIVERSE_MAX_DEALS})...")
+
+    # ============ BABAK 1: AI individual per-kandidat (notify=False) ============
+    held = {}
+    for sym, signal_price, atr_now, chg_4h in candidates:
+        with active_deals_lock:
+            if sym in active_deals: continue
+        if is_ai_call_open_enabled('dipbuy_universe'):
+            _ai_ind = {'atr_pct': f"{atr_now:.2f}%", 'signal_price': _fmt_price(signal_price),
+                       'drop_4h': f"{chg_4h:+.2f}%"}
+            if not ai_decision_open(sym, 'Dip-Buy Universe', _ai_ind, deal_count_by_strategy('dipbuy_universe'), notify=False):
+                log(f"[T_DIPBUY] {sym} babak-1 di-skip oleh AI individual")
+                continue
+        held[sym] = {'signal_price': signal_price, 'atr_now': atr_now, 'chg_4h': chg_4h}
+
+    if not held:
+        return
+
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+    log(f"[T_DIPBUY] Babak 1 selesai: {len(held)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+    log_ai_babak1('Dip-Buy Universe', [to_display_pair(s) for s in held.keys()], AI_BATCH_MAX_APPROVE)
+    batch_input = [{'symbol': s, 'strategy': 'dipbuy_universe', 'score': 1,
+                     'detail': {'atr_pct': v['atr_now'], 'drop_4h': v['chg_4h']}}
+                    for s, v in held.items()]
+    approved = ai_decision_batch_rank(
+        batch_input, strategy_label='Dip-Buy Universe', max_approve=AI_BATCH_MAX_APPROVE,
+        criteria_note="Kriteria: besarnya drop 1 candle (semakin dalam, semakin kuat kandidat bounce), ATR%",
+    )
+
+    for sym in approved:
+        n_active = deal_count_by_strategy('dipbuy_universe')
+        if n_active >= DIPBUY_UNIVERSE_MAX_DEALS: break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        v = held[sym]
+        signal_price = v['signal_price']; atr_now = v['atr_now']; chg_4h = v['chg_4h']
+
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='dipbuy_universe')
+        if not ok: continue
+
+        try:
+            ticker_now = _binance_get("/api/v3/ticker/price", {"symbol": sym})
+            fill_price = float(ticker_now["price"]) if ticker_now else signal_price
+        except Exception:
+            fill_price = signal_price
+
+        now_ms = int(time.time() * 1000)
+        candle_open_ms = (now_ms // (STRAT4H_SECONDS * 1000)) * (STRAT4H_SECONDS * 1000)
+        add_to_active_deals(sym, {
+            "strategy":          "dipbuy_universe",
+            "entry_price":       fill_price,
+            "signal_price":      signal_price,
+            "atr_pct":           atr_now,
+            "target_usd":        target_usd,
+            "add_usd":           add_usd,
+            "opened_ts":         time.time(),
+            "opened_candle_ts":  candle_open_ms,
+            "tf":                STRAT4H_TIMEFRAME,
+        })
+        n_active += 1
+        slip_pct = (fill_price / signal_price - 1) * 100 if signal_price > 0 else 0
+        send_telegram(
+            f"Dip-Buy Universe | OPEN LONG\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Pair  : {to_display_pair(sym)}\n"
+            f"Harga entry (pasar): {_fmt_price(fill_price)}\n"
+            f"Harga sinyal (4h): {_fmt_price(signal_price)}\n"
+            f"Selisih (slippage): {slip_pct:+.2f}%\n"
+            f"ATR%  : {atr_now:.2f}  |  Drop 1 candle 4h: {chg_4h:+.2f}%\n"
+            f"Exit: trailing standar (BUKAN TP/SL tetap spt shadow lama)\n"
+            f"Modal: ${target_usd:.0f}" + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else ""),
+            parse_mode=None
+        )
+        log(f"[T_DIPBUY] OPEN {sym} @ {fill_price:.8g} (sinyal {signal_price:.8g}, ATR%={atr_now:.2f}, drop4h {chg_4h:+.2f}%)")
+
+
+def run_thread_dipbuy_universe() -> None:
+    """Thread T_DIPBUY: scan Dip-Buy Universe tiap DIPBUY_UNIVERSE_SCAN_INTERVAL detik."""
+    while True:
+        try:
+            thread_dipbuy_universe_scan()
+        except Exception as e:
+            log(f"WARN T_DIPBUY error: {e}")
+        time.sleep(DIPBUY_UNIVERSE_SCAN_INTERVAL)
+
+
 def thread_shadow_fwdtest_scan() -> None:
     with _shadow_fwdtest_lock:
         data = _load_shadow_fwdtest()
@@ -17954,8 +18130,13 @@ def thread_shadow_fwdtest_scan() -> None:
                 _shadow_akuma_try_open(data)
             if len(data['conf3_stochrsibb']['closed']) < SHADOW_CONF3_TARGET:
                 _shadow_conf3_try_open(data)
-            if len(data['dipbuy_universe']['closed']) < SHADOW_DIPBUY_UNIVERSE_TARGET:
-                _shadow_dipbuy_universe_try_open(data)
+            # dipbuy_universe DIPENSIUNKAN 09/10/2026 (Tahap 3/4, permintaan Mas Budi): lulus
+            # target 50/50 (+85.5%), formula sekarang LIVE (lihat thread_dipbuy_universe_scan()) --
+            # TAPI exit-nya DIGANTI ke trailing (lihat REMARK di konstanta DIPBUY_UNIVERSE_*), jadi
+            # bukan graduasi langsung spt decouple_4h/rvolbreak_1h. Posisi paper lama (TP/SL
+            # tetap) tetap dipantau normal lewat _shadow_dipbuy_universe_check_exits().
+            # if len(data['dipbuy_universe']['closed']) < SHADOW_DIPBUY_UNIVERSE_TARGET:
+            #     _shadow_dipbuy_universe_try_open(data)
             if len(data['dipbuy_bluechip']['closed']) < SHADOW_DIPBUY_BC_TARGET:
                 _shadow_dipbuy_bc_try_open(data)
             _shadow_newstrat_scan_entries(data)
@@ -25846,6 +26027,10 @@ if __name__ == '__main__':
     if RVOLBREAK_1H_ENABLED:
         t_rv = threading.Thread(target=run_thread_rvolbreak, daemon=True, name="T-RVOLBreak")
         threads.append(t_rv)
+        n_threads += 1
+    if DIPBUY_UNIVERSE_ENABLED:
+        t_db = threading.Thread(target=run_thread_dipbuy_universe, daemon=True, name="T-DipBuy")
+        threads.append(t_db)
         n_threads += 1
     if STRAT_AKUM_ENABLED:
         t_akum = threading.Thread(target=run_thread_akum, daemon=True, name="T-Akum")
