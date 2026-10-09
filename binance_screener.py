@@ -343,7 +343,10 @@ MAX_DEALS_REVERSAL      = 2      # slot reversal (bot 16921019) — set Max acti
 # jalan dulu beberapa hari/minggu, kumpulkan data riil frekuensi+ukuran rata-rata, BARU hitung
 # ulang worst-case exposure dan revisit angka ini. Lihat juga project_addfund_breakout_capacity_review
 # di memori Claude.
-GLOBAL_MAX_ACTIVE_DEALS = 4        # jumlah deal aktif gabungan semua strategi
+# 09/10/2026 (permintaan Mas Budi): hold di atas DICABUT -- GLOBAL_MAX_ACTIVE_DEALS bukan lagi
+# konstanta statis di sini, sekarang setting runtime tersimpan (sama persis pola daily_loss_limit_usd,
+# file sama -- lihat global_max_active_deals()/save_global_max_active_deals() di dekat
+# daily_loss_limit_usd), editable dari Strategy Control. Default tetap 4 kalau file setting belum ada.
 # 24/09/2026 (review base order #3, permintaan Mas Budi): diturunkan 150 -> 100. Modal saat itu
 # $178.79, jadi $150 = 84% modal boleh nyangkut bersamaan, reserve cuma ~$29. Hard-stop historis
 # per strategi ada di kisaran 10-13% (WIF -11.18%, STG -10.11%, dst, bukan hipotetis) -- kalau
@@ -1933,8 +1936,16 @@ daily_loss_limit_usd: float = 18.0   # default direvisi 25/09/2026 (dulu $15.0 s
 # Angka $40 adalah default awal, bisa disesuaikan. 0 = mati.
 WEEKLY_LOSS_LIMIT_USD: float = 40.0
 
+# 09/10/2026 (permintaan Mas Budi): GLOBAL_MAX_ACTIVE_DEALS (batas jumlah deal aktif GABUNGAN
+# semua strategi, lihat REMARK sejarahnya di dekat deklarasi lama ~baris 333) dicabut dari
+# konstanta statis -- sekarang setting runtime tersimpan di FILE YANG SAMA dgn daily_loss_limit_usd
+# (daily_loss_limit_config.json), bukan file terpisah, krn keduanya sama-sama ditampilkan &
+# diedit bersebelahan di Strategy Control. Default 4 kalau file/key belum ada (sama spt nilai
+# lama yg dihardcode). TIDAK ikut rumus global_max_exposure_usd() -- dua pengaturan independen.
+_global_max_active_deals: int = 4
+
 def load_daily_loss_limit():
-    global daily_loss_limit_usd
+    global daily_loss_limit_usd, _global_max_active_deals
     if not os.path.exists(DAILY_LOSS_LIMIT_FILE):
         return
     try:
@@ -1950,21 +1961,41 @@ def load_daily_loss_limit():
                 daily_loss_limit_usd = float(data["limit_usd"])
             else:
                 daily_loss_limit_usd = 6.0
-        log(f"   Loaded daily_loss_limit_usd: ${daily_loss_limit_usd}")
+            if "max_active_deals" in data:
+                _global_max_active_deals = max(0, int(data["max_active_deals"]))
+        log(f"   Loaded daily_loss_limit_usd: ${daily_loss_limit_usd}, max_active_deals: {_global_max_active_deals}")
     except Exception as e:
         log(f"WARN gagal baca daily_loss_limit_config.json: {e}")
+
+def _write_global_risk_config():
+    """Tulis KEDUA setting (limit_usd + max_active_deals) sekaligus tiap kali salah satu
+    disimpan -- supaya yang satu tidak menimpa/menghilangkan yang lain di file yg sama."""
+    try:
+        with open(DAILY_LOSS_LIMIT_FILE, 'w') as f:
+            json.dump({"limit_usd": daily_loss_limit_usd,
+                       "max_active_deals": _global_max_active_deals}, f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan daily_loss_limit_config.json: {e}")
 
 def save_daily_loss_limit(usd: float) -> float:
     global daily_loss_limit_usd
     usd = max(0.0, float(usd))
     with daily_loss_limit_lock:
         daily_loss_limit_usd = usd
-    try:
-        with open(DAILY_LOSS_LIMIT_FILE, 'w') as f:
-            json.dump({"limit_usd": usd}, f, indent=2)
-    except Exception as e:
-        log(f"WARN gagal simpan daily_loss_limit_config.json: {e}")
+        _write_global_risk_config()
     return usd
+
+def global_max_active_deals() -> int:
+    with daily_loss_limit_lock:
+        return _global_max_active_deals
+
+def save_global_max_active_deals(n: int) -> int:
+    global _global_max_active_deals
+    n = max(0, int(n))
+    with daily_loss_limit_lock:
+        _global_max_active_deals = n
+        _write_global_risk_config()
+    return n
 
 def get_today_pnl_usd() -> float:
     """Realized P&L (trade CLOSED hari ini, WIB) + unrealized P&L (U/PNL semua deal aktif)."""
@@ -2056,7 +2087,7 @@ def get_daily_loss_status() -> dict:
     return {"pnl_usd": pnl_usd, "pnl_pct": pnl_pct, "capital_usd": cap,
             "limit_usd": limit_usd, "breached": breached,
             "global_max_exposure_usd": global_max_exposure_usd(),
-            "global_max_active_deals": GLOBAL_MAX_ACTIVE_DEALS}
+            "global_max_active_deals": global_max_active_deals()}
 
 def is_daily_loss_limit_breached() -> bool:
     """09/09/2026 (permintaan Mas Budi, keluhan notif "Batas Rugi Harian Tersulut" bertubi-tubi):
@@ -7412,8 +7443,9 @@ def global_deal_limits_ok(planned_usd: float = 0.0) -> tuple:
     planned_usd = perkiraan modal deal yang mau dibuka, ikut dihitung supaya tidak baru lolos
     pas mepet lalu langsung kelewat begitu deal ini kebuka. Return (ok: bool, reason: str)."""
     n = active_deal_count()
-    if n >= GLOBAL_MAX_ACTIVE_DEALS:
-        return False, f"batas jumlah deal gabungan tercapai ({n}/{GLOBAL_MAX_ACTIVE_DEALS})"
+    deal_cap = global_max_active_deals()
+    if n >= deal_cap:
+        return False, f"batas jumlah deal gabungan tercapai ({n}/{deal_cap})"
     exposure = total_active_exposure_usd()
     exposure_cap = global_max_exposure_usd()
     if exposure + planned_usd > exposure_cap:
@@ -11955,9 +11987,10 @@ def _try_swap_hunting_slot(incoming_symbol: str) -> bool:
     n_after_swap        = active_deal_count() - 1 + 1        # -1 (swap_sym keluar) +1 (incoming masuk) = tetap
     exposure_after_swap  = total_active_exposure_usd() - swap_deal_usd + incoming_base_usd
     exposure_cap = global_max_exposure_usd()
-    if n_after_swap > GLOBAL_MAX_ACTIVE_DEALS or exposure_after_swap > exposure_cap:
+    deal_cap = global_max_active_deals()
+    if n_after_swap > deal_cap or exposure_after_swap > exposure_cap:
         log(f"[HUNT-SWAP] {incoming_symbol}: batal swap -- closing {swap_sym} lalu buka {incoming_symbol} "
-            f"tetap melanggar batas global (n={n_after_swap}/{GLOBAL_MAX_ACTIVE_DEALS}, "
+            f"tetap melanggar batas global (n={n_after_swap}/{deal_cap}, "
             f"exposure=${exposure_after_swap:.0f}/${exposure_cap:.0f})")
         return False
 
@@ -12760,10 +12793,12 @@ document.addEventListener('DOMContentLoaded', function() {
             <span>Batas Eksposur Gabungan:</span>
             <b id="dll-exposure-cap" style="color:var(--text)">-</b>
         </span>
-        <span style="display:flex;align-items:center;gap:6px;color:var(--muted)" title="Jumlah maksimum deal aktif gabungan SEMUA strategi bersamaan. Read-only -- ditahan tetap sejak 26/09/2026 sampai ada data riil add-fund-on-breakout (belum direvisit).">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--muted)" title="Jumlah maksimum deal aktif gabungan SEMUA strategi bersamaan (lapisan tambahan di atas Max Deals per-strategi) -- independen dari Batas Eksposur Gabungan, tidak ikut rumus apa pun. Hold 26/09/2026 'jangan naikkan tanpa data riil' dicabut 09/10/2026, sekarang editable.">
             <span>Max Deal Gabungan:</span>
-            <b id="dll-active-cap" style="color:var(--text)">-</b>
-        </span>
+            <input type="number" id="dll-active-cap-input" min="0" step="1" value="4" style="width:55px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px">
+        </label>
+        <button type="button" onclick="event.stopPropagation();saveGlobalMaxActiveDeals()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
+        <span id="dll-active-cap-status" style="color:var(--muted)"></span>
     </div>
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
     <table style="width:100%;min-width:760px;border-collapse:collapse;font-size:11px" id="sc-table">
@@ -14100,8 +14135,8 @@ function loadDailyLossLimit() {
         }
         var expCap = document.getElementById('dll-exposure-cap');
         if (expCap && d.global_max_exposure_usd !== undefined) expCap.textContent = '$' + d.global_max_exposure_usd.toFixed(0);
-        var dealCap = document.getElementById('dll-active-cap');
-        if (dealCap && d.global_max_active_deals !== undefined) dealCap.textContent = d.global_max_active_deals;
+        var dealCapInput = document.getElementById('dll-active-cap-input');
+        if (dealCapInput && document.activeElement !== dealCapInput && d.global_max_active_deals !== undefined) dealCapInput.value = d.global_max_active_deals;
     }).catch(function(){});
 }
 function saveDailyLossLimit() {
@@ -14110,6 +14145,17 @@ function saveDailyLossLimit() {
     fetch('/api/daily_loss_limit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({limit_usd:v})})
         .then(function(r){ return r.json(); }).then(function(d){
             if (!d.ok) { alert('Error: ' + d.error); return; }
+            loadDailyLossLimit();
+        });
+}
+function saveGlobalMaxActiveDeals() {
+    var v = parseInt(document.getElementById('dll-active-cap-input').value, 10);
+    if (isNaN(v) || v < 0) { alert('Isi angka Max Deal Gabungan yang valid.'); return; }
+    var status = document.getElementById('dll-active-cap-status');
+    fetch('/api/daily_loss_limit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({max_active_deals:v})})
+        .then(function(r){ return r.json(); }).then(function(d){
+            if (!d.ok) { alert('Error: ' + d.error); return; }
+            if (status) { status.textContent = 'Tersimpan.'; setTimeout(function(){ status.textContent=''; }, 3000); }
             loadDailyLossLimit();
         });
 }
@@ -24272,15 +24318,27 @@ def run_web_dashboard():
         @app.route("/api/daily_loss_limit", methods=["GET", "POST"])
         def api_daily_loss_limit():
             """GET: status batas rugi harian (limit $ tetap sejak 17/09/2026, P&L hari ini,
-            tersulut atau tidak). POST: {limit_usd: 6.0} -- update angka batasnya."""
+            tersulut atau tidak) + 2 batas global gabungan (global_max_exposure_usd turunan
+            otomatis dari limit_usd, global_max_active_deals setting independen).
+            POST: {limit_usd: 6.0} dan/atau {max_active_deals: 4} -- dua field independen,
+            kirim salah satu atau keduanya sekaligus."""
             try:
                 if request.method == "POST":
                     payload = request.get_json(force=True, silent=True) or {}
-                    try:
-                        usd = float(payload.get("limit_usd", daily_loss_limit_usd))
-                    except (TypeError, ValueError):
-                        return jsonify({"ok": False, "error": "limit_usd tidak valid"}), 400
-                    save_daily_loss_limit(usd)
+                    if "limit_usd" in payload:
+                        try:
+                            usd = float(payload["limit_usd"])
+                        except (TypeError, ValueError):
+                            return jsonify({"ok": False, "error": "limit_usd tidak valid"}), 400
+                        save_daily_loss_limit(usd)
+                    if "max_active_deals" in payload:
+                        try:
+                            n = int(payload["max_active_deals"])
+                        except (TypeError, ValueError):
+                            return jsonify({"ok": False, "error": "max_active_deals tidak valid"}), 400
+                        if n < 0:
+                            return jsonify({"ok": False, "error": "max_active_deals tidak boleh negatif"}), 400
+                        save_global_max_active_deals(n)
                 status = get_daily_loss_status()
                 return jsonify({"ok": True, **status})
             except Exception as error:
