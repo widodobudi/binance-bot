@@ -17835,6 +17835,25 @@ def thread_decouple_scan() -> None:
         })
         n_active += 1
         slip_pct = (fill_price / signal_price - 1) * 100 if signal_price > 0 else 0
+        # 09/10/2026 (permintaan Mas Budi, ditemukan lewat CYBERUSDT yg tampil "OPENED: -" di
+        # Closed Trades): csv_log_open() SEMPAT TIDAK dipanggil sejak strategi ini live (beda
+        # dari trend_confirm_4h/brkX2-4h dkk yg selalu panggil ini) -- akibatnya csv_log_close()
+        # nanti TIDAK ketemu baris OPEN utk di-lengkapi, jadi bikin baris CLOSED baru dgn
+        # open_time_wib KOSONG, DAN entry_price/signal_price keliru ikut keisi harga EXIT (lihat
+        # fallback di csv_log_close() baris ~2383) -- bukan cuma kolom OPENED/RSI@Open yg kosong,
+        # entry_price yg tampil pun SALAH. rsi_open sengaja TETAP kosong -- sinyal decouple_4h
+        # (selisih return 20-candle vs BTC) memang tidak memakai RSI sama sekali.
+        csv_log_open({
+            'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+            'symbol':         to_display_pair(sym),
+            'signal_price':   f"{_fmt_price(signal_price)}",
+            'entry_price':    f"{_fmt_price(fill_price)}",
+            'slip_pct':       f"{slip_pct:+.2f}",
+            'atr_pct':        f"{atr_now:.2f}",
+            'base_usd':       target_usd,
+            'strategy':       'decouple_4h',
+            'rsi_open':       '',
+        })
         send_telegram(
             f"Decouple-4h | OPEN LONG\n"
             f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
@@ -17982,6 +18001,20 @@ def thread_rvolbreak_scan() -> None:
         })
         n_active += 1
         slip_pct = (fill_price / signal_price - 1) * 100 if signal_price > 0 else 0
+        # 09/10/2026: sama spt decouple_4h -- csv_log_open() TIDAK dipanggil sejak live, lihat
+        # REMARK lengkap di thread_decouple_scan(). rsi_open sengaja kosong (sinyal RVOLBreak-1h
+        # tidak memakai RSI).
+        csv_log_open({
+            'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+            'symbol':         to_display_pair(sym),
+            'signal_price':   f"{_fmt_price(signal_price)}",
+            'entry_price':    f"{_fmt_price(fill_price)}",
+            'slip_pct':       f"{slip_pct:+.2f}",
+            'atr_pct':        f"{atr_now:.2f}",
+            'base_usd':       target_usd,
+            'strategy':       'rvolbreak_1h',
+            'rsi_open':       '',
+        })
         send_telegram(
             f"RVOLBreak-1h | OPEN LONG\n"
             f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
@@ -18129,6 +18162,20 @@ def thread_dipbuy_universe_scan() -> None:
         })
         n_active += 1
         slip_pct = (fill_price / signal_price - 1) * 100 if signal_price > 0 else 0
+        # 09/10/2026: sama spt decouple_4h -- csv_log_open() TIDAK dipanggil sejak live, lihat
+        # REMARK lengkap di thread_decouple_scan(). rsi_open sengaja kosong (sinyal dipbuy_universe
+        # tidak memakai RSI).
+        csv_log_open({
+            'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+            'symbol':         to_display_pair(sym),
+            'signal_price':   f"{_fmt_price(signal_price)}",
+            'entry_price':    f"{_fmt_price(fill_price)}",
+            'slip_pct':       f"{slip_pct:+.2f}",
+            'atr_pct':        f"{atr_now:.2f}",
+            'base_usd':       target_usd,
+            'strategy':       'dipbuy_universe',
+            'rsi_open':       '',
+        })
         send_telegram(
             f"Dip-Buy Universe | OPEN LONG\n"
             f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
@@ -22823,6 +22870,79 @@ def run_web_dashboard():
                 return jsonify({"ok": True, "filled": filled, "skipped": skipped,
                                  "errors": errors, "skip_reasons": skip_reasons,
                                  "total_rows": len(rows)})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)})
+
+        @app.route("/admin/backfill_decouple_open", methods=["POST"])
+        def admin_backfill_decouple_open():
+            """One-off (09/10/2026, permintaan Mas Budi): decouple_4h TIDAK memanggil
+            csv_log_open() sejak live hari ini (lihat REMARK lengkap di thread_decouple_scan())
+            -- 2 deal yang sudah terjadi sebelum fix kena dampaknya, ditambal di sini pakai angka
+            ASLI dari Railway deploy log (bukan tebakan):
+            - BATUSDT: masih OPEN (dibuka 14:18:06 WIB), belum ada baris CSV sama sekali -- insert
+              baris OPEN baru.
+            - CYBERUSDT: sudah CLOSED, baris CLOSED-nya sudah ada tapi open_time_wib kosong DAN
+              entry_price/signal_price salah ikut keisi harga EXIT (bug fallback csv_log_close()
+              saat tidak ketemu baris OPEN, lihat baris ~2383) -- diperbaiki di tempat, close_time_
+              wib/exit_price/profit_pct/exit_reason yg SUDAH BENAR tidak disentuh.
+            Idempotent -- baris yg open_time_wib-nya sudah terisi dilewati, aman dipanggil ulang."""
+            FIXES = {
+                "BATUSDT": {
+                    "open_time_wib": "2026-10-09 14:18:06", "signal_price": "0.1068",
+                    "entry_price": "0.1149", "slip_pct": "+7.58", "atr_pct": "4.31",
+                    "base_usd": "49.98", "insert_if_missing": True,
+                },
+                "CYBERUSDT": {
+                    "open_time_wib": "2026-10-09 17:33:28", "signal_price": "0.334",
+                    "entry_price": "0.347000", "slip_pct": "+3.89", "atr_pct": "4.22",
+                    "insert_if_missing": False,
+                },
+            }
+            try:
+                with trades_csv_lock:
+                    if not os.path.exists(TRADES_CSV):
+                        return jsonify({"ok": False, "error": "CSV tidak ditemukan"})
+                    with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                        rows = list(csv.DictReader(f))
+                    result = {}
+                    for sym_raw, fix in FIXES.items():
+                        sym_disp = to_display_pair(sym_raw)
+                        target = None
+                        for r in rows:
+                            if to_display_pair(r.get('symbol', '')) == sym_disp and r.get('strategy') == 'decouple_4h':
+                                target = r; break
+                        if target is not None:
+                            if str(target.get('open_time_wib', '')).strip():
+                                result[sym_raw] = 'skip -- open_time_wib sudah terisi'
+                                continue
+                            target['open_time_wib'] = fix['open_time_wib']
+                            target['signal_price']  = fix['signal_price']
+                            target['entry_price']   = fix['entry_price']
+                            target['slip_pct']      = fix['slip_pct']
+                            target['atr_pct']       = fix['atr_pct']
+                            result[sym_raw] = 'patched existing row'
+                        elif fix.get('insert_if_missing'):
+                            new_row = {k: '' for k in CSV_FIELDS}
+                            new_row['open_time_wib'] = fix['open_time_wib']
+                            new_row['symbol']        = sym_disp
+                            new_row['signal_price']  = fix['signal_price']
+                            new_row['entry_price']   = fix['entry_price']
+                            new_row['slip_pct']      = fix['slip_pct']
+                            new_row['atr_pct']       = fix['atr_pct']
+                            new_row['base_usd']      = fix.get('base_usd', '')
+                            new_row['strategy']      = 'decouple_4h'
+                            new_row['status']        = 'OPEN'
+                            rows.append(new_row)
+                            result[sym_raw] = 'inserted new OPEN row'
+                        else:
+                            result[sym_raw] = 'skip -- row not found, insert not requested'
+                    with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
+                        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+                        w.writeheader()
+                        w.writerows(rows)
+                log(f"[ADMIN] backfill_decouple_open: {result}")
+                sync_trades_csv_to_drive()
+                return jsonify({"ok": True, "result": result})
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)})
 
