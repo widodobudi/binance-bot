@@ -24127,6 +24127,15 @@ def run_web_dashboard():
                 ("akum_entry_b", "Akum-4h Entry B"),
                 ("trend_confirm_4h", "TrenKonfirmasi-4h"),
                 ("qscalp_3m", "QScalp-3m"),
+                # 10/10/2026 (ketahuan lewat pertanyaan Mas Budi): decouple_4h/rvolbreak_1h/
+                # dipbuy_universe sudah LIVE (order Binance asli) tapi dari awal lupa ditambahkan
+                # ke daftar ini -- csv_progress() sudah baca strategy key-nya dgn benar (tidak perlu
+                # cabang khusus, lihat fallback generik di csv_progress()), cuma baris panel-nya
+                # yang belum pernah ada. Entry-nya closed-candle saja (tidak ada varian intrabar),
+                # jadi 1 baris per strategi, bukan split spt KeltnerBreak-12h.
+                ("decouple_4h", "Decouple-4h"),
+                ("rvolbreak_1h", "RVOLBreak-1h"),
+                ("dipbuy_universe", "Dip-Buy Universe"),
             ]
             # 26/09/2026 (permintaan Mas Budi): "kecepatan closing" PROFIT POSITIF -- tier
             # adaptif hari/minggu/bulan (lihat strategy_recent_close_stats()) + interval rata2
