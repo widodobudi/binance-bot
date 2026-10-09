@@ -352,7 +352,6 @@ GLOBAL_MAX_ACTIVE_DEALS = 4        # jumlah deal aktif gabungan semua strategi
 # tidak bisa hentikan deal yg sedang jalan kena hard-stop). Di $100 (56% modal), worst-case serentak
 # turun ke ~$11 (di bawah batas harian) dan reserve naik jadi ~$79. Bukan trade-level backtest --
 # ini portofolio brake, bukan sinyal entry/exit, jadi dasarnya analisis risiko bukan sweep hasil.
-GLOBAL_MAX_EXPOSURE_USD = 145.0    # total $ eksposur riil semua deal aktif (dari modal ~$259.01)
 # 25/09/2026 (permintaan Mas Budi): 100 -> 110, mengikuti Batas Rugi Harian 15 -> 18 (lihat
 # migrasi daily_loss_limit_usd_18_20260925 di apply_one_time_config_migrations()). Rumus & rasio
 # reserve SAMA seperti sebelumnya (worst-case serentak ~73% dari batas harian): 110 x worst-case
@@ -371,6 +370,28 @@ GLOBAL_MAX_EXPOSURE_USD = 145.0    # total $ eksposur riil semua deal aktif (dar
 # Batas Rugi Harian $18 (buffer ~$0.45, sengaja mepet -- Mas Budi pilih opsi "agresif" dari
 # 3 opsi yg ditawarkan, bukan opsi konservatif $120/rekomendasi $130). Batas atas matematis
 # tanpa buffer sama sekali = $18/12.1% = ~$148.8, jadi $145 masih sedikit di bawah itu.
+# 09/10/2026 (permintaan Mas Budi, ditanyakan lewat robot-trading-app): GLOBAL_MAX_EXPOSURE_USD
+# BUKAN konstanta statis lagi -- diturunkan OTOMATIS dari daily_loss_limit_usd (Batas Rugi
+# Harian, bisa diubah real-time dari Strategy Control web), supaya tidak perlu hardcode+redeploy
+# manual tiap kali limit berubah (riwayat sebelumnya: $100->$110->$145, tiga kali edit kode).
+# Rasio "agresif" 97,47% di bawah dikunci PERMANEN dari pilihan Mas Budi 27/09/2026 (dari 3 opsi
+# $120/$130/$145 yg ditawarkan saat limit $18 -- $145/$148,76=0,9747). Diverifikasi (py -c):
+# pada daily_loss_limit_usd=$18 (nilai saat formula ini ditulis), formula ini menghasilkan $145
+# PERSIS -- deploy ini TIDAK mengubah nilai efektif cap hari ini, cuma mengubah $145 dari angka
+# statis jadi hasil hitungan live yg ikut berubah kalau Batas Rugi Harian diubah nanti. Dibulatkan
+# ke kelipatan $5 terdekat (permintaan Mas Budi) spy selalu angka bulat spt riwayat manual di atas.
+GLOBAL_EXPOSURE_WORST_CASE_HARDSTOP_PCT = 12.1   # tier Ekstrem ATR, non-TrenKonfirmasi (basis sejak 19/09)
+GLOBAL_EXPOSURE_AGGRESSIVE_RATIO = 0.9747222222222223   # = $145 / ($18/12.1%), dikunci 09/10/2026
+
+
+def global_max_exposure_usd() -> float:
+    """Eksposur $ gabungan maks (gerbang global_deal_limits_ok() & swap guard HUNT-SWAP),
+    DITURUNKAN OTOMATIS dari Batas Rugi Harian saat ini -- lihat REMARK lengkap di atas
+    (riwayat $100/$110/$145 dan rasio "agresif" 97,47% yg dikunci 09/10/2026)."""
+    with daily_loss_limit_lock:
+        limit_usd = daily_loss_limit_usd
+    raw = limit_usd / (GLOBAL_EXPOSURE_WORST_CASE_HARDSTOP_PCT / 100) * GLOBAL_EXPOSURE_AGGRESSIVE_RATIO
+    return round(raw / 5) * 5
 # 23/09/2026 (permintaan Mas Budi, insiden GRT/USDT -- AI approve OPEN tapi ditolak diam2 oleh
 # batas eksposur gabungan, tidak ada notif sama sekali sebelum ini): cooldown notif Telegram
 # PER (symbol, strategy) -- bukan global -- supaya 1 simbol yg baru kena notif tidak menahan
@@ -2022,7 +2043,10 @@ def get_total_capital_usd() -> float:
 def get_daily_loss_status() -> dict:
     """Ringkasan buat dashboard: pnl hari ini ($, %), limit ($ tetap sejak 17/09/2026),
     apakah tersulut. pnl_pct/capital_usd tetap dihitung & dikembalikan (informasi konteks
-    di dashboard), TAPI keputusan breach sekarang murni dari pnl_usd vs limit_usd."""
+    di dashboard), TAPI keputusan breach sekarang murni dari pnl_usd vs limit_usd.
+    09/10/2026: juga kembalikan global_max_exposure_usd (turunan otomatis dari limit_usd,
+    read-only di Strategy Control) dan global_max_active_deals (konstanta tetap, read-only,
+    masih ditahan 26/09 sampai ada data riil)."""
     cap = get_total_capital_usd()
     pnl_usd = get_today_pnl_usd()
     pnl_pct = (pnl_usd / cap * 100) if cap > 0 else 0.0
@@ -2030,7 +2054,9 @@ def get_daily_loss_status() -> dict:
         limit_usd = daily_loss_limit_usd
     breached = limit_usd > 0 and pnl_usd <= -abs(limit_usd)
     return {"pnl_usd": pnl_usd, "pnl_pct": pnl_pct, "capital_usd": cap,
-            "limit_usd": limit_usd, "breached": breached}
+            "limit_usd": limit_usd, "breached": breached,
+            "global_max_exposure_usd": global_max_exposure_usd(),
+            "global_max_active_deals": GLOBAL_MAX_ACTIVE_DEALS}
 
 def is_daily_loss_limit_breached() -> bool:
     """09/09/2026 (permintaan Mas Budi, keluhan notif "Batas Rugi Harian Tersulut" bertubi-tubi):
@@ -7389,9 +7415,10 @@ def global_deal_limits_ok(planned_usd: float = 0.0) -> tuple:
     if n >= GLOBAL_MAX_ACTIVE_DEALS:
         return False, f"batas jumlah deal gabungan tercapai ({n}/{GLOBAL_MAX_ACTIVE_DEALS})"
     exposure = total_active_exposure_usd()
-    if exposure + planned_usd > GLOBAL_MAX_EXPOSURE_USD:
+    exposure_cap = global_max_exposure_usd()
+    if exposure + planned_usd > exposure_cap:
         return False, (f"batas eksposur $ gabungan tercapai (terpakai ${exposure:.0f} + "
-                        f"rencana ${planned_usd:.0f} > ${GLOBAL_MAX_EXPOSURE_USD:.0f})")
+                        f"rencana ${planned_usd:.0f} > ${exposure_cap:.0f})")
     return True, ""
 
 def heartbeat_tick(status_line: str):
@@ -11927,10 +11954,11 @@ def _try_swap_hunting_slot(incoming_symbol: str) -> bool:
     incoming_base_usd = get_strategy_base_usd("hunting_4h")
     n_after_swap        = active_deal_count() - 1 + 1        # -1 (swap_sym keluar) +1 (incoming masuk) = tetap
     exposure_after_swap  = total_active_exposure_usd() - swap_deal_usd + incoming_base_usd
-    if n_after_swap > GLOBAL_MAX_ACTIVE_DEALS or exposure_after_swap > GLOBAL_MAX_EXPOSURE_USD:
+    exposure_cap = global_max_exposure_usd()
+    if n_after_swap > GLOBAL_MAX_ACTIVE_DEALS or exposure_after_swap > exposure_cap:
         log(f"[HUNT-SWAP] {incoming_symbol}: batal swap -- closing {swap_sym} lalu buka {incoming_symbol} "
             f"tetap melanggar batas global (n={n_after_swap}/{GLOBAL_MAX_ACTIVE_DEALS}, "
-            f"exposure=${exposure_after_swap:.0f}/${GLOBAL_MAX_EXPOSURE_USD:.0f})")
+            f"exposure=${exposure_after_swap:.0f}/${exposure_cap:.0f})")
         return False
 
     log(f"[HUNT-SWAP] {incoming_symbol}: swap slot — close {swap_sym} (armed, profit +{swap_pct:.2f}%) → buka untuk {incoming_symbol}")
@@ -12727,6 +12755,15 @@ document.addEventListener('DOMContentLoaded', function() {
         </label>
         <button type="button" onclick="event.stopPropagation();saveDailyLossLimit()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
         <span id="dll-status" style="color:var(--muted)">Memuat...</span>
+        <span style="color:var(--border)">|</span>
+        <span style="display:flex;align-items:center;gap:6px;color:var(--muted)" title="Batas $ eksposur gabungan SEMUA strategi (lapisan tambahan di atas Max Deals per-strategi). Read-only -- diturunkan OTOMATIS dari Batas Rugi Harian x rasio 'agresif' 97,47% (dikunci 09/10/2026, dibulatkan ke kelipatan $5), BUKAN field terpisah. Naik/turun otomatis kalau Batas Rugi Harian di atas diubah.">
+            <span>Batas Eksposur Gabungan:</span>
+            <b id="dll-exposure-cap" style="color:var(--text)">-</b>
+        </span>
+        <span style="display:flex;align-items:center;gap:6px;color:var(--muted)" title="Jumlah maksimum deal aktif gabungan SEMUA strategi bersamaan. Read-only -- ditahan tetap sejak 26/09/2026 sampai ada data riil add-fund-on-breakout (belum direvisit).">
+            <span>Max Deal Gabungan:</span>
+            <b id="dll-active-cap" style="color:var(--text)">-</b>
+        </span>
     </div>
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
     <table style="width:100%;min-width:760px;border-collapse:collapse;font-size:11px" id="sc-table">
@@ -14061,6 +14098,10 @@ function loadDailyLossLimit() {
             status.innerHTML = 'P&amp;L hari ini: <b style="color:' + pnlColor + '">' + (d.pnl_usd>=0?'+':'') + d.pnl_usd.toFixed(2) + ' USD (' + (d.pnl_pct>=0?'+':'') + d.pnl_pct.toFixed(2) + '%)</b> dari modal $' + d.capital_usd.toFixed(2) +
                 (d.breached ? ' <b style="color:var(--red)">— TERSULUT, open deal baru sedang diblokir</b>' : ' — normal');
         }
+        var expCap = document.getElementById('dll-exposure-cap');
+        if (expCap && d.global_max_exposure_usd !== undefined) expCap.textContent = '$' + d.global_max_exposure_usd.toFixed(0);
+        var dealCap = document.getElementById('dll-active-cap');
+        if (dealCap && d.global_max_active_deals !== undefined) dealCap.textContent = d.global_max_active_deals;
     }).catch(function(){});
 }
 function saveDailyLossLimit() {
