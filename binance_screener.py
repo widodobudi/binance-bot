@@ -17762,7 +17762,13 @@ def thread_decouple_scan() -> None:
             atrp_series = _pta_dc.atr(df['high'], df['low'], df['close'], length=14) / df['close'] * 100
             atr_now = float(atrp_series.iloc[-1])
             if pd.isna(atr_now) or atr_now <= 0: continue
-            candidates.append((sym, float(cc[-1]), atr_now, rel_now))
+            # 09/10/2026 (permintaan Mas Budi, JANGAN DIBANTAH): RSI(14) dicatat INFO-ONLY di
+            # rsi_open -- TIDAK dipakai sama sekali utk open/add-fund/trailing/close decouple_4h
+            # (sinyalnya murni selisih return 20-candle vs BTC), murni supaya kolom RSI@Open di
+            # Closed Trades tidak kosong lagi.
+            _rsi_series = _pta_dc.rsi(df['close'], length=14)
+            rsi_now = float(_rsi_series.iloc[-1]) if not pd.isna(_rsi_series.iloc[-1]) else None
+            candidates.append((sym, float(cc[-1]), atr_now, rel_now, rsi_now))
         except Exception as e:
             log(f"  [T_DECOUPLE] error {sym}: {e}")
 
@@ -17773,7 +17779,7 @@ def thread_decouple_scan() -> None:
 
     # ============ BABAK 1: AI individual per-kandidat (notify=False) ============
     held = {}
-    for sym, signal_price, atr_now, rel_now in candidates:
+    for sym, signal_price, atr_now, rel_now, rsi_now in candidates:
         with active_deals_lock:
             if sym in active_deals: continue
         if is_ai_call_open_enabled('decouple_4h'):
@@ -17782,7 +17788,7 @@ def thread_decouple_scan() -> None:
             if not ai_decision_open(sym, 'Decouple-4h', _ai_ind, deal_count_by_strategy('decouple_4h'), notify=False):
                 log(f"[T_DECOUPLE] {sym} babak-1 di-skip oleh AI individual")
                 continue
-        held[sym] = {'signal_price': signal_price, 'atr_now': atr_now, 'rel_now': rel_now}
+        held[sym] = {'signal_price': signal_price, 'atr_now': atr_now, 'rel_now': rel_now, 'rsi_now': rsi_now}
 
     if not held:
         return
@@ -17804,7 +17810,7 @@ def thread_decouple_scan() -> None:
         with active_deals_lock:
             if sym in active_deals: continue
         v = held[sym]
-        signal_price = v['signal_price']; atr_now = v['atr_now']; rel_now = v['rel_now']
+        signal_price = v['signal_price']; atr_now = v['atr_now']; rel_now = v['rel_now']; rsi_now = v['rsi_now']
 
         # 09/10/2026: TIDAK ada re-check harga/level sebelum beli di sini (beda dari brkX2-4h,
         # yg mengecek level breakout spesifik) -- syarat decouple_4h ("unggul X poin persen vs
@@ -17841,8 +17847,8 @@ def thread_decouple_scan() -> None:
         # nanti TIDAK ketemu baris OPEN utk di-lengkapi, jadi bikin baris CLOSED baru dgn
         # open_time_wib KOSONG, DAN entry_price/signal_price keliru ikut keisi harga EXIT (lihat
         # fallback di csv_log_close() baris ~2383) -- bukan cuma kolom OPENED/RSI@Open yg kosong,
-        # entry_price yg tampil pun SALAH. rsi_open sengaja TETAP kosong -- sinyal decouple_4h
-        # (selisih return 20-candle vs BTC) memang tidak memakai RSI sama sekali.
+        # entry_price yg tampil pun SALAH. rsi_open diisi INFO-ONLY (lihat REMARK di candidate
+        # loop) -- bukan dipakai utk keputusan apa pun, cuma supaya kolom RSI@Open tidak kosong.
         csv_log_open({
             'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
             'symbol':         to_display_pair(sym),
@@ -17852,7 +17858,7 @@ def thread_decouple_scan() -> None:
             'atr_pct':        f"{atr_now:.2f}",
             'base_usd':       target_usd,
             'strategy':       'decouple_4h',
-            'rsi_open':       '',
+            'rsi_open':       f"{rsi_now:.1f}" if rsi_now is not None else '',
         })
         send_telegram(
             f"Decouple-4h | OPEN LONG\n"
@@ -17910,6 +17916,7 @@ def thread_rvolbreak_scan() -> None:
     with active_deals_lock:
         existing = set(active_deals.keys())
 
+    import pandas_ta as _pta_rv
     candidates = []
     for sym in universe:
         if sym in existing: continue
@@ -17930,7 +17937,13 @@ def thread_rvolbreak_scan() -> None:
                 continue
             if not (close_now > dh and rvol_now >= RVOLBREAK_RVOL_MIN):
                 continue
-            candidates.append((sym, close_now, float(atr_now), float(rvol_now)))
+            # 09/10/2026 (permintaan Mas Budi, JANGAN DIBANTAH): RSI(14) dicatat INFO-ONLY di
+            # rsi_open -- TIDAK dipakai utk open/add-fund/trailing/close rvolbreak_1h (sinyalnya
+            # murni Donchian breakout + RVOL), murni supaya kolom RSI@Open di Closed Trades tidak
+            # kosong.
+            _rsi_series = _pta_rv.rsi(df['close'], length=14)
+            rsi_now = float(_rsi_series.iloc[i]) if not pd.isna(_rsi_series.iloc[i]) else None
+            candidates.append((sym, close_now, float(atr_now), float(rvol_now), rsi_now))
         except Exception as e:
             log(f"  [T_RVOLBREAK] error {sym}: {e}")
 
@@ -17941,7 +17954,7 @@ def thread_rvolbreak_scan() -> None:
 
     # ============ BABAK 1: AI individual per-kandidat (notify=False) ============
     held = {}
-    for sym, signal_price, atr_now, rvol_now in candidates:
+    for sym, signal_price, atr_now, rvol_now, rsi_now in candidates:
         with active_deals_lock:
             if sym in active_deals: continue
         if is_ai_call_open_enabled('rvolbreak_1h'):
@@ -17950,7 +17963,7 @@ def thread_rvolbreak_scan() -> None:
             if not ai_decision_open(sym, 'RVOLBreak-1h', _ai_ind, deal_count_by_strategy('rvolbreak_1h'), notify=False):
                 log(f"[T_RVOLBREAK] {sym} babak-1 di-skip oleh AI individual")
                 continue
-        held[sym] = {'signal_price': signal_price, 'atr_now': atr_now, 'rvol_now': rvol_now}
+        held[sym] = {'signal_price': signal_price, 'atr_now': atr_now, 'rvol_now': rvol_now, 'rsi_now': rsi_now}
 
     if not held:
         return
@@ -17972,7 +17985,7 @@ def thread_rvolbreak_scan() -> None:
         with active_deals_lock:
             if sym in active_deals: continue
         v = held[sym]
-        signal_price = v['signal_price']; atr_now = v['atr_now']; rvol_now = v['rvol_now']
+        signal_price = v['signal_price']; atr_now = v['atr_now']; rvol_now = v['rvol_now']; rsi_now = v['rsi_now']
 
         # Sama spt Decouple-4h (Tahap 1): tidak ada re-check level/harga sebelum beli di sini --
         # shadow yg dibacktest juga tidak punya pengecekan ini, dan harga eksekusi riil tetap
@@ -18002,8 +18015,8 @@ def thread_rvolbreak_scan() -> None:
         n_active += 1
         slip_pct = (fill_price / signal_price - 1) * 100 if signal_price > 0 else 0
         # 09/10/2026: sama spt decouple_4h -- csv_log_open() TIDAK dipanggil sejak live, lihat
-        # REMARK lengkap di thread_decouple_scan(). rsi_open sengaja kosong (sinyal RVOLBreak-1h
-        # tidak memakai RSI).
+        # REMARK lengkap di thread_decouple_scan(). rsi_open diisi INFO-ONLY (lihat REMARK di
+        # candidate loop) -- bukan dipakai utk keputusan apa pun.
         csv_log_open({
             'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
             'symbol':         to_display_pair(sym),
@@ -18013,7 +18026,7 @@ def thread_rvolbreak_scan() -> None:
             'atr_pct':        f"{atr_now:.2f}",
             'base_usd':       target_usd,
             'strategy':       'rvolbreak_1h',
-            'rsi_open':       '',
+            'rsi_open':       f"{rsi_now:.1f}" if rsi_now is not None else '',
         })
         send_telegram(
             f"RVOLBreak-1h | OPEN LONG\n"
@@ -18094,7 +18107,12 @@ def thread_dipbuy_universe_scan() -> None:
             atrp_series = _pta_db.atr(df['high'], df['low'], df['close'], length=14) / df['close'] * 100
             atr_now = float(atrp_series.iloc[-1])
             if pd.isna(atr_now) or atr_now <= 0: continue
-            candidates.append((sym, close_now, atr_now, chg_4h))
+            # 09/10/2026 (permintaan Mas Budi, JANGAN DIBANTAH): RSI(14) dicatat INFO-ONLY di
+            # rsi_open -- TIDAK dipakai utk open/add-fund/trailing/close dipbuy_universe (sinyalnya
+            # murni % drop 1 candle 4h), murni supaya kolom RSI@Open di Closed Trades tidak kosong.
+            _rsi_series = _pta_db.rsi(df['close'], length=14)
+            rsi_now = float(_rsi_series.iloc[-1]) if not pd.isna(_rsi_series.iloc[-1]) else None
+            candidates.append((sym, close_now, atr_now, chg_4h, rsi_now))
         except Exception as e:
             log(f"  [T_DIPBUY] error {sym}: {e}")
 
@@ -18105,7 +18123,7 @@ def thread_dipbuy_universe_scan() -> None:
 
     # ============ BABAK 1: AI individual per-kandidat (notify=False) ============
     held = {}
-    for sym, signal_price, atr_now, chg_4h in candidates:
+    for sym, signal_price, atr_now, chg_4h, rsi_now in candidates:
         with active_deals_lock:
             if sym in active_deals: continue
         if is_ai_call_open_enabled('dipbuy_universe'):
@@ -18114,7 +18132,7 @@ def thread_dipbuy_universe_scan() -> None:
             if not ai_decision_open(sym, 'Dip-Buy Universe', _ai_ind, deal_count_by_strategy('dipbuy_universe'), notify=False):
                 log(f"[T_DIPBUY] {sym} babak-1 di-skip oleh AI individual")
                 continue
-        held[sym] = {'signal_price': signal_price, 'atr_now': atr_now, 'chg_4h': chg_4h}
+        held[sym] = {'signal_price': signal_price, 'atr_now': atr_now, 'chg_4h': chg_4h, 'rsi_now': rsi_now}
 
     if not held:
         return
@@ -18136,7 +18154,7 @@ def thread_dipbuy_universe_scan() -> None:
         with active_deals_lock:
             if sym in active_deals: continue
         v = held[sym]
-        signal_price = v['signal_price']; atr_now = v['atr_now']; chg_4h = v['chg_4h']
+        signal_price = v['signal_price']; atr_now = v['atr_now']; chg_4h = v['chg_4h']; rsi_now = v['rsi_now']
 
         ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='dipbuy_universe')
         if not ok: continue
@@ -18163,8 +18181,8 @@ def thread_dipbuy_universe_scan() -> None:
         n_active += 1
         slip_pct = (fill_price / signal_price - 1) * 100 if signal_price > 0 else 0
         # 09/10/2026: sama spt decouple_4h -- csv_log_open() TIDAK dipanggil sejak live, lihat
-        # REMARK lengkap di thread_decouple_scan(). rsi_open sengaja kosong (sinyal dipbuy_universe
-        # tidak memakai RSI).
+        # REMARK lengkap di thread_decouple_scan(). rsi_open diisi INFO-ONLY (lihat REMARK di
+        # candidate loop) -- bukan dipakai utk keputusan apa pun.
         csv_log_open({
             'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
             'symbol':         to_display_pair(sym),
@@ -18174,7 +18192,7 @@ def thread_dipbuy_universe_scan() -> None:
             'atr_pct':        f"{atr_now:.2f}",
             'base_usd':       target_usd,
             'strategy':       'dipbuy_universe',
-            'rsi_open':       '',
+            'rsi_open':       f"{rsi_now:.1f}" if rsi_now is not None else '',
         })
         send_telegram(
             f"Dip-Buy Universe | OPEN LONG\n"
@@ -22815,6 +22833,11 @@ def run_web_dashboard():
                 'hunting_4h': '4h', 'brkX2_crossema': '4h',
                 'akum_entry_a': '4h', 'akum_entry_b': '4h',
                 'trend_confirm_4h': '4h',
+                # 09/10/2026 (permintaan Mas Budi, JANGAN DIBANTAH): decouple_4h/rvolbreak_1h/
+                # dipbuy_universe TIDAK pakai RSI dlm sinyalnya sama sekali, tapi rsi_open tetap
+                # mau ditampilkan INFO-ONLY -- ditambahkan ke sini supaya baris yg open_time_wib-nya
+                # sudah benar (lihat /admin/backfill_decouple_open) ikut kebagian rekonstruksi RSI.
+                'decouple_4h': '4h', 'rvolbreak_1h': '1h', 'dipbuy_universe': '4h',
             }
             filled, skipped, errors = 0, 0, 0
             skip_reasons = {}
