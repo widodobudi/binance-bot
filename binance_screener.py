@@ -14775,6 +14775,7 @@ function renderCtSummary(rows) {
     });
     el.innerHTML = Object.keys(groups).sort().map(function(key) {
         var g = groups[key];
+        var loss = g.n - g.wins;
         var wr = (g.wins / g.n * 100).toFixed(0);
         var clr = g.pnlUsd >= 0 ? 'var(--green)' : 'var(--red)';
         var label;
@@ -14785,7 +14786,7 @@ function renderCtSummary(rows) {
             label = strat_map[key] || key;
         }
         return '<span style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:3px 8px">' +
-            '<b>' + label + '</b>: ' + g.n + ' trade, WR ' + wr + '%, ' +
+            '<b>' + label + '</b>: ' + g.n + ' trade, WR ' + wr + '% (' + g.wins + 'W/' + loss + 'L), ' +
             '<span style="color:' + clr + '">' + (g.pnlUsd>=0?'+':'') + g.pnlUsd.toFixed(2) + ' USD (' + (g.pnlPct>=0?'+':'') + g.pnlPct.toFixed(1) + '%)</span></span>';
     }).join('');
 }
