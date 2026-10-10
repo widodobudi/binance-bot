@@ -2850,15 +2850,17 @@ def csv_progress(strategy: str = None, offset: int = 0, until: int = None, since
             if strategy == 'akumulasi':
                 closed = [r for r in closed if r.get('strategy') in ('akum_entry_a', 'akum_entry_b')]
             # 09/10/2026 (permintaan Mas Budi): KeltnerBreak-12h sempat dipecah 2 strategi INDEPENDEN
-            # ('brkX2_closed'/'brkX2_intrabar'). 10/10/2026: DIGABUNG BALIK dgn key BARU
-            # 'brkX2_12h_closed' (bukan reuse key lama -- lihat REMARK STRATEGY_CONFIG_DEFAULTS) --
-            # query 'brkX2_12h_closed' mencakup SEMUA baris: deal baru (strategy='brkX2_12h_closed')
-            # + deal era split lama (strategy='brkX2_closed' ATAU 'brkX2_intrabar'), semuanya bagian
-            # identitas "KeltnerBreak-12h" yg sama. TIDAK termasuk arsip legacy 'brkX2' polos
-            # (strategi terpisah sendiri, label dashboard "brkx2-12h" -- diquery sendiri via
-            # strategy='brkX2', TIDAK ikut digabung ke sini).
+            # ('brkX2_closed'/'brkX2_intrabar') HANYA SATU HARI (09-10/10/2026) sebelum DIGABUNG
+            # BALIK 10/10/2026 dgn key BARU 'brkX2_12h_closed'. Krn split cuma 1 hari, MAYORITAS
+            # histori KeltnerBreak-12h masih tercatat strategy='brkX2' polos (era SEBELUM split) --
+            # query 'brkX2_12h_closed' WAJIB ikut menyertakan itu juga, SUPAYA "KeltnerBreak-12h"
+            # di dashboard benar2 total histori lengkap (balik seperti sebelum split, ketahuan
+            # lewat laporan Mas Budi: panel performa sempat kosong krn baris 'brkX2' legacy
+            # ketinggalan dari union ini). 'brkX2' TETAP strategi Strategy-Control terpisah
+            # ("brkx2-12h", tidak buka deal baru lagi) -- pemisahan itu HANYA berlaku di level
+            # kontrol/kapasitas, BUKAN di level pelaporan/histori performa.
             elif strategy == 'brkX2_12h_closed':
-                closed = [r for r in closed if r.get('strategy') in ('brkX2_12h_closed', 'brkX2_closed', 'brkX2_intrabar')]
+                closed = [r for r in closed if r.get('strategy') in ('brkX2_12h_closed', 'brkX2_closed', 'brkX2_intrabar') or (r.get('strategy') or 'brkX2') == 'brkX2']
             else:
                 closed = [r for r in closed if (r.get('strategy') or 'brkX2') == strategy]
         if since_open_wib:
@@ -2950,11 +2952,11 @@ def strategy_recent_close_stats() -> dict:
             continue
         strat = r.get('strategy') or 'brkX2'
         # 10/10/2026: KeltnerBreak-12h digabung balik dgn key BARU 'brkX2_12h_closed' (sama spt
-        # csv_progress()) -- baris era split 09/10-10/10/2026 (strategy='brkX2_closed' ATAU
-        # 'brkX2_intrabar') dilebur ke bucket 'brkX2_12h_closed' yg sekarang mewakili identitas
-        # gabungan "KeltnerBreak-12h". Legacy 'brkX2' polos TETAP bucket sendiri (strategi terpisah
-        # "brkx2-12h"), TIDAK ikut dilebur.
-        if strat in ('brkX2_closed', 'brkX2_intrabar'):
+        # csv_progress()) -- baris era split 1-hari (strategy='brkX2_closed'/'brkX2_intrabar') DAN
+        # mayoritas histori SEBELUM split (strategy='brkX2' polos) dilebur SEMUA ke bucket
+        # 'brkX2_12h_closed' yg sekarang mewakili identitas gabungan "KeltnerBreak-12h" -- supaya
+        # "kecepatan closing" terhitung dari TOTAL histori, bukan cuma 1 hari era split.
+        if strat in ('brkX2_closed', 'brkX2_intrabar', 'brkX2'):
             strat = 'brkX2_12h_closed'
         ct_str = (r.get('close_time_wib') or '').strip()
         if not ct_str:
@@ -14846,9 +14848,6 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
     <select id="ct-filter-strat" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua strategi</option>
         <option value="brkX2_12h_closed">KeltnerBreak-12h</option>
-        <option value="brkX2">brkx2-12h</option>
-        <option value="brkX2_closed">KeltnerBreak-12h CC (arsip)</option>
-        <option value="brkX2_intrabar">KeltnerBreak-12h Intrabar (arsip)</option>
         <option value="brkX2_4h">brkX2-4h</option>
         <option value="reversal">Reversal-8h</option>
         <option value="hunting_4h">Hunting-4h</option>
@@ -14994,18 +14993,17 @@ function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
     if (!el) return;
     if (!rows.length) { el.innerHTML = ''; return; }
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',dipbuy_universe:'Dip-Buy Universe',qscalp_3m:'QScalp-3m'};
-    // 09/10/2026 (permintaan Mas Budi): KeltnerBreak-12h (strategy='brkX2') dipecah jadi 2 kartu
-    // -- closed-candle vs intrabar (T1c + T1c-E digabung, sama-sama cek harga live mid-candle,
-    // cuma beda jendela waktu) -- pakai field entry_mode yang BARU ditambahkan 09/10/2026, jadi
-    // trade LAMA (sebelum field ini ada) entry_mode-nya kosong, masuk bucket "entry mode blm tercatat".
-    var entry_mode_label = {closed: ' (closed-candle)', intrabar: ' (intrabar)'};
+    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',dipbuy_universe:'Dip-Buy Universe',qscalp_3m:'QScalp-3m'};
+    // 10/10/2026 (permintaan Mas Budi): KeltnerBreak-12h digabung BALIK jadi SATU kartu lagi (balik
+    // seperti sebelum 09/10/2026) -- raw strategy value 'brkX2' (legacy, sebelum split 1-hari),
+    // 'brkX2_closed'/'brkX2_intrabar' (era split), DAN 'brkX2_12h_closed' (key baru skrg) SEMUA
+    // dilebur jadi satu group 'brkX2_12h_closed' -> label "KeltnerBreak-12h" tunggal, TIDAK dipecah
+    // lagi per entry_mode/era (dulu sempat dipecah 2-4 kartu, dicabut krn bikin histori terfragmentasi).
+    var KELTNER12H_FOLD = {brkX2: true, brkX2_closed: true, brkX2_intrabar: true, brkX2_12h_closed: true};
     var groups = {};
     rows.forEach(function(r) {
         var key = r.strategy || 'brkX2';
-        if (key === 'brkX2') {
-            key = r.entry_mode ? ('brkX2__' + r.entry_mode) : 'brkX2__unknown';
-        }
+        if (KELTNER12H_FOLD[key]) key = 'brkX2_12h_closed';
         if (!groups[key]) groups[key] = {n:0, wins:0, pnlPct:0, pnlUsd:0};
         var g = groups[key];
         var pct = parseFloat(r.profit_pct||0), usd = parseFloat(r.profit_usd||0);
@@ -15019,13 +15017,7 @@ function renderCtSummary(rows) {
         var loss = g.n - g.wins;
         var wr = (g.wins / g.n * 100).toFixed(0);
         var clr = g.pnlUsd >= 0 ? 'var(--green)' : 'var(--red)';
-        var label;
-        if (key.indexOf('brkX2__') === 0) {
-            var mode = key.slice(7);
-            label = 'KeltnerBreak-12h' + (entry_mode_label[mode] || ' (entry mode blm tercatat)');
-        } else {
-            label = strat_map[key] || key;
-        }
+        var label = strat_map[key] || key;
         return '<span style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:3px 8px">' +
             '<b>' + label + '</b>: ' + g.n + ' trade, WR ' + wr + '% (' + g.wins + 'W/' + loss + 'L), ' +
             '<span style="color:' + clr + '">' + (g.pnlUsd>=0?'+':'') + g.pnlUsd.toFixed(2) + ' USD (' + (g.pnlPct>=0?'+':'') + g.pnlPct.toFixed(1) + '%)</span></span>';
@@ -24457,6 +24449,14 @@ def run_web_dashboard():
                 if strategy_filter:
                     if strategy_filter == 'akumulasi':
                         rows = [r for r in rows if (r.get('strategy') or 'brkX2') in ('akum_entry_a', 'akum_entry_b')]
+                    elif strategy_filter == 'brkX2_12h_closed':
+                        # 10/10/2026: KeltnerBreak-12h digabung balik -- filter "KeltnerBreak-12h" di
+                        # dashboard mencakup SEMUA era: deal baru (brkX2_12h_closed), era split 1-hari
+                        # (brkX2_closed/brkX2_intrabar), DAN mayoritas histori lama (strategy='brkX2'
+                        # polos, dari SEBELUM split 09/10/2026) -- supaya total histori lengkap, bukan
+                        # cuma 1 hari terakhir. 'brkX2' tetap row Strategy-Control terpisah ("brkx2-12h",
+                        # tidak buka deal baru), tapi utk PELAPORAN/HISTORI tetap dihitung di sini.
+                        rows = [r for r in rows if (r.get('strategy') or 'brkX2') in ('brkX2_12h_closed', 'brkX2_closed', 'brkX2_intrabar', 'brkX2')]
                     else:
                         rows = [r for r in rows if (r.get('strategy') or 'brkX2') == strategy_filter]
                     offset = phase_offsets.get(strategy_filter, 0)
