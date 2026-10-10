@@ -1352,19 +1352,20 @@ STRATEGY_CONFIG_DEFAULTS = {
     # kompatibilitas deal LAMA sebelum split 09/10/2026 -- TIDAK ADA kode baru yg membuka deal baru
     # dgn key itu, dan TIDAK ikut digabung ke 'brkX2_12h_closed' (tetap strategi arsip sendiri).
     # 10/10/2026 (Gate0, permintaan Mas Budi): 'btc_gate_enabled' -- toggle "Pakai Syarat BTC" di
-    # Strategy Control, TAHAP 1 SAJA (murni UI+penyimpanan config, BELUM disambungkan ke logic
-    # entry manapun -- lihat is_strategy_enabled() dkk, belum ada yg membaca field ini). Cuma
-    # ditambahkan utk 4 strategi yg backtest Gate0-nya (175 pair, 2022-2026, 4 poin diuji)
-    # terbukti terbantu: brkX2_12h_closed/decouple_4h/trend_confirm_4h/qscalp_3m (qscalp_3m juga
-    # dapat 'btc_gate_elapsed_pct', satu2nya yg rumusnya punya parameter elapsed-time). Strategi
-    # lain SENGAJA TIDAK diberi field ini -- baik yg sudah diuji & terbukti TIDAK membantu
+    # Strategy Control. AKTIF (Tahap 2, sama hari) -- lihat is_btc_gate_enabled()/
+    # keltner12h_btc_gate_ok()/decouple4h_btc_gate_ok()/trendconfirm4h_btc_gate_ok()/
+    # qscalp_btc_gate_ok() dekat get_ohlcv_htf(), dipanggil masing2 di awal thread1_scan()/
+    # thread_decouple_scan()/thread_trendconfirm_scan()/thread_qscalp_scan(). Cuma ditambahkan
+    # utk 4 strategi yg backtest Gate0-nya (175 pair, 2022-2026, 4 poin diuji) terbukti terbantu:
+    # brkX2_12h_closed/decouple_4h/trend_confirm_4h/qscalp_3m (qscalp_3m juga dapat
+    # 'btc_gate_elapsed_pct', satu2nya yg rumusnya punya parameter elapsed-time). Strategi lain
+    # SENGAJA TIDAK diberi field ini -- baik yg sudah diuji & terbukti TIDAK membantu
     # (brkX2_4h/dipbuy_universe/rvolbreak_1h) maupun yg belum pernah diuji sama sekali -- lihat
     # SC_BTC_GATE_HELPED/SC_BTC_GATE_TOOLTIP di dash.js utk daftar lengkap & alasan per-strategi.
-    # PENTING (Tahap 2, belum diimplementasikan): krn KeltnerBreak-12h sekarang 2 jalur entry dlm 1
-    # identitas, 'btc_gate_enabled' HANYA boleh berlaku utk jalur closed-candle (T1) -- bukti
-    # backtest-nya spesifik utk itu, TIDAK berlaku utk jalur intrabar (T1c/T1c-E). Tahap 2 nanti
-    # WAJIB cek entry_mode/jalur yg sedang terjadi sebelum menerapkan gate ini, jangan asal baca
-    # flag ini sbg berlaku ke SEMUA entry strategi ini.
+    # PENTING: krn KeltnerBreak-12h sekarang 2 jalur entry dlm 1 identitas, keltner12h_btc_gate_ok()
+    # HANYA dipanggil di thread1_scan() (closed-candle/T1) -- bukti backtest-nya spesifik utk itu,
+    # TIDAK dipanggil sama sekali di thread1c_scan_intrabar()/thread1c_scan_intrabar_early()
+    # (jalur intrabar, sengaja tidak digeneralisir tanpa uji sendiri).
     "brkX2_12h_closed":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 75, "btc_gate_enabled": True},
     "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 75},
     "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
@@ -1388,7 +1389,7 @@ STRATEGY_CONFIG_DEFAULTS = {
     # elapsed-time (tunggu candle 3m BTCUSDT closed sampai sekian % sebelum gendut-check dianggap
     # valid). Default 100 (candle HARUS closed penuh) -- SATU2NYA nilai yg terbukti backtest
     # 10/10/2026 (n=1.010, WR+4,43pp/avg+0,063pp); nilai 33%/67% hasilnya acak, jangan dipakai
-    # tanpa data baru. Field ini jg TAHAP 1 SAJA, belum dibaca logic entry manapun.
+    # tanpa data baru. Dibaca live di qscalp_btc_gate_ok() (Tahap 2, thread_qscalp_scan()).
     "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 2, "close_sell_pct": 100, "btc_gate_enabled": True, "btc_gate_elapsed_pct": 100},
     # 09/10/2026 (Tahap 1/4, permintaan Mas Budi): decouple_4h naik dari shadow ke live, lulus
     # target 24/20 (18W/6L, +56.9%). max_deals di sini cuma utk tampilan dashboard -- enforcement
@@ -1657,6 +1658,26 @@ def is_cooldown_enabled(strategy: str) -> bool:
     Uncheck di dashboard kalau mau matikan proteksi ini per strategi (mis. testing)."""
     cfg = load_strategy_config()
     return cfg.get(strategy, {}).get("cooldown_enabled", True)
+
+def is_btc_gate_enabled(strategy: str) -> bool:
+    """Gate0 Tahap 2 (10/10/2026, permintaan Mas Budi): toggle "Pakai Syarat BTC" di Strategy
+    Control. Default True (checked) -- HANYA berlaku utk 4 strategi yg backtest Gate0-nya (175
+    pair + ~1 tahun data 1-menit, 2022-2026) terbukti terbantu: brkX2_12h_closed (KHUSUS jalur
+    closed-candle T1, lihat REMARK di thread1_scan() -- TIDAK dipanggil sama sekali di
+    thread1c_scan_intrabar()/thread1c_scan_intrabar_early()), decouple_4h, trend_confirm_4h,
+    qscalp_3m. Uncheck dari dashboard kalau mau matikan sementara tanpa redeploy."""
+    cfg = load_strategy_config()
+    return cfg.get(strategy, {}).get("btc_gate_enabled", True)
+
+def get_btc_gate_elapsed_pct(strategy: str) -> float:
+    """Dipakai HANYA oleh qscalp_3m (satu2nya strategi yg rumus Gate0-nya punya parameter
+    elapsed-time) -- lihat kolom input "elapsed %" di Strategy Control. Default 100 (satu2nya
+    nilai yg terbukti backtest 10/10/2026)."""
+    cfg = load_strategy_config()
+    try:
+        return float(cfg.get(strategy, {}).get("btc_gate_elapsed_pct", 100))
+    except (TypeError, ValueError):
+        return 100.0
 
 def is_ai_call_open_enabled(strategy: str) -> bool:
     """Default FALSE: kalau True, tiap kandidat OPEN yang sudah lolos semua filter rule-based
@@ -7183,6 +7204,121 @@ def get_ohlcv_htf(symbol: str, interval: str = "3d", limit: int = 120):
         log(f"  [HTF] parse error {symbol} {interval}: {e}")
         return None
 
+# ───────────────── Gate0 Tahap 2 (10/10/2026, permintaan Mas Budi) ─────────────────
+# Syarat kondisi BTCUSDT sebelum entry, HANYA utk 4 strategi yg backtest Gate0 (175 pair +
+# ~1 tahun data 1-menit, 2022-2026, 4 poin diuji) terbukti terbantu. Toggle di Strategy Control
+# ("Pakai Syarat BTC"), default checked -- lihat is_btc_gate_enabled()/get_btc_gate_elapsed_pct()
+# di atas. SEMUA fungsi di bawah FAIL-OPEN (anggap lolos/True) kalau data BTC gagal diambil --
+# gate ini TIDAK BOLEH jadi titik gagal yang memblokir entry krn masalah jaringan sesaat.
+_btc_htf_bullish_cache = {}   # key: htf_interval -> {"ts": float, "bullish": bool|None}
+BTC_GATE_HTF_CACHE_TTL = 300  # detik, sama pola spt fitur alert BTC-HTF yg sempat ada (dicabut)
+
+def btc_htf_closed_bullish(htf_interval: str):
+    """True/False = warna candle HTF BTCUSDT TERTUTUP terakhir (close>open / close<=open).
+    None = gagal fetch DAN belum ada cache -- caller WAJIB fail-open (anggap lolos), bukan blokir."""
+    now = time.time()
+    slot = _btc_htf_bullish_cache.setdefault(htf_interval, {"ts": 0.0, "bullish": None})
+    if slot["bullish"] is not None and (now - slot["ts"]) < BTC_GATE_HTF_CACHE_TTL:
+        return slot["bullish"]
+    try:
+        df = get_ohlcv_htf("BTCUSDT", interval=htf_interval, limit=15)
+        if df is None or len(df) < 2:
+            return slot["bullish"]
+        if int(df["ct"].iloc[-1]) >= int(time.time() * 1000):
+            df = df.iloc[:-1]
+        if len(df) < 1:
+            return slot["bullish"]
+        last = df.iloc[-1]
+        bullish = bool(float(last["close"]) > float(last["open"]))
+        slot["ts"] = now
+        slot["bullish"] = bullish
+        return bullish
+    except Exception as e:
+        log(f"  [BTC-GATE] error {htf_interval}: {e}")
+        return slot["bullish"]
+
+def keltner12h_btc_gate_ok() -> bool:
+    """KeltnerBreak-12h, KHUSUS jalur closed-candle (T1) -- lihat thread1_scan(). TIDAK dipanggil
+    dari thread1c_scan_intrabar()/thread1c_scan_intrabar_early() SAMA SEKALI (bukti backtest
+    Gate0 cuma berlaku utk closed-candle, lihat REMARK is_btc_gate_enabled()).
+    Syarat: BTCUSDT HTF 1D DAN 3D, candle tertutup terakhir keduanya hijau (AND, versi ketat)."""
+    if not is_btc_gate_enabled('brkX2_12h_closed'):
+        return True
+    b1d = btc_htf_closed_bullish('1d')
+    b3d = btc_htf_closed_bullish('3d')
+    if b1d is None or b3d is None:
+        return True  # fail-open, data belum ada
+    return b1d and b3d
+
+def decouple4h_btc_gate_ok() -> bool:
+    """Syarat: BTCUSDT HTF 12H DAN 1D, cukup SALAH SATU candle tertutup terakhir hijau
+    (OR, versi longgar -- backtest 10/10/2026: hampir semua manfaat AND sudah didapat di OR,
+    filtering jauh lebih ringan)."""
+    if not is_btc_gate_enabled('decouple_4h'):
+        return True
+    b12h = btc_htf_closed_bullish('12h')
+    b1d = btc_htf_closed_bullish('1d')
+    if b12h is None and b1d is None:
+        return True  # fail-open, dua2nya gagal
+    return bool(b12h) or bool(b1d)
+
+def trendconfirm4h_btc_gate_ok() -> bool:
+    """Syarat: BTCUSDT HTF 12H DAN 1D, candle tertutup terakhir keduanya hijau (AND, versi ketat
+    -- satu2nya varian yg punya bukti backtest utk strategi ini, varian OR nyaris tidak ada efek)."""
+    if not is_btc_gate_enabled('trend_confirm_4h'):
+        return True
+    b12h = btc_htf_closed_bullish('12h')
+    b1d = btc_htf_closed_bullish('1d')
+    if b12h is None or b1d is None:
+        return True  # fail-open
+    return b12h and b1d
+
+QSCALP_BTC_GATE_GENDUT_PCT = 0.10  # FIXED (bukan field dashboard), satu2nya nilai terbukti backtest
+
+def qscalp_btc_gate_ok() -> bool:
+    """Syarat: tunggu candle 3 menit BTCUSDT (TF native QScalp-3m sendiri, BUKAN HTF) sampai
+    elapsed >= get_btc_gate_elapsed_pct('qscalp_3m')% (default 100 = tunggu candle itu BENAR2
+    closed), DAN BTC-nya sudah naik >= QSCALP_BTC_GATE_GENDUT_PCT di candle itu. Default 100%
+    -> pakai candle 3m BTC TERAKHIR YANG SUDAH CLOSED (sama gaya check_qscalp_signal() baca candle
+    sinyal sendiri). Elapsed < 100% (belum tervalidasi, tapi dibuat bisa jalan kalau Mas Budi
+    coba ubah) -> pakai candle 3m BTC yg SEDANG berjalan, baru dicek begitu elapsed-nya cukup."""
+    if not is_btc_gate_enabled('qscalp_3m'):
+        return True
+    elapsed_threshold = get_btc_gate_elapsed_pct('qscalp_3m')
+    try:
+        if elapsed_threshold >= 100:
+            df = get_ohlcv('BTCUSDT', interval='3m', limit=3)
+            if df is None or len(df) < 2:
+                return True  # fail-open
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) < 1:
+                return True
+            row = df.iloc[-1]
+            open_price = float(row['open']); close_price = float(row['close'])
+        else:
+            now_ms = int(time.time() * 1000)
+            candle_dur_ms = 3 * 60 * 1000
+            candle_open_ms = (now_ms // candle_dur_ms) * candle_dur_ms
+            elapsed_pct = (now_ms - candle_open_ms) / candle_dur_ms * 100
+            if elapsed_pct < elapsed_threshold:
+                return False  # belum cukup lama candle BTC saat ini berjalan
+            df = get_ohlcv('BTCUSDT', interval='3m', limit=2)
+            if df is None or len(df) < 1:
+                return True  # fail-open
+            row = df.iloc[-1]
+            open_price = float(row['open'])
+            close_price = get_price_now('BTCUSDT')
+            if close_price <= 0:
+                return True  # fail-open
+        if open_price <= 0:
+            return True  # fail-open
+        gendut_pct = (close_price - open_price) / open_price * 100
+        return gendut_pct >= QSCALP_BTC_GATE_GENDUT_PCT
+    except Exception as e:
+        log(f"WARN qscalp_btc_gate_ok: {e}")
+        return True  # fail-open
+
 def get_pct_vs_ema200_1d(symbol: str):
     """Return (pct_vs_ema200_1d: float, ema200_1d: float) atau (None, None) kalau histori 1D
     kurang dari 200 candle. Dipakai baik utk logging (log_oac) maupun gate wajib
@@ -8138,6 +8274,12 @@ def thread1_scan():
     if BTC_FILTER_ENABLED and not btc_filter_ok():
         log("[T1] Filter BTC: kondisi tidak lolos, scan dibatalkan.")
         return "Filter BTC aktif & tidak lolos — scan dibatalkan periode ini."
+
+    # Gate0 Tahap 2 (10/10/2026): syarat BTCUSDT HTF 1D+3D hijau -- KHUSUS jalur closed-candle
+    # ini (T1). TIDAK dipanggil di thread1c_scan_intrabar()/thread1c_scan_intrabar_early().
+    if not keltner12h_btc_gate_ok():
+        log("[T1] Gate0: syarat BTC (HTF 1D+3D hijau) belum lolos, scan dibatalkan periode ini.")
+        return "Gate0 BTC aktif & tidak lolos — scan dibatalkan periode ini."
 
     candidates = []
     near_miss = []   # (n_pass, sym, fails) untuk heartbeat kandidat terdekat
@@ -11530,6 +11672,11 @@ def thread_trendconfirm_scan():
     n_active = deal_count_by_strategy('trend_confirm_4h')
     if n_active >= TRENDCONFIRM_MAX_DEALS: return
 
+    # Gate0 Tahap 2 (10/10/2026): syarat BTCUSDT HTF 12H DAN 1D keduanya hijau.
+    if not trendconfirm4h_btc_gate_ok():
+        log(f"[T_TRENDCONFIRM] Gate0: syarat BTC (HTF 12H+1D) belum lolos, scan dibatalkan periode ini.")
+        return
+
     now_ms = int(time.time() * 1000)
     sec4h  = STRAT4H_SECONDS
     candle_open_ms = (now_ms // (sec4h * 1000)) * (sec4h * 1000)
@@ -12899,7 +13046,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <th style="text-align:left;padding:5px 8px">Strategi</th>
           <th style="text-align:center;padding:5px 8px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini">Max Deals</th>
           <th style="text-align:center;padding:5px 8px">Izinkan Open Long</th>
-          <th style="text-align:center;padding:5px 8px">Pakai Syarat BTC<br><span style="font-size:9px;font-weight:normal">TAHAP 1: belum aktif</span></th>
+          <th style="text-align:center;padding:5px 8px">Pakai Syarat BTC<br><span style="font-size:9px;font-weight:normal">aktif (Gate0)</span></th>
           <th style="text-align:center;padding:5px 8px">AI Call<br><span style="font-size:9px;font-weight:normal">open / close</span></th>
           <th style="text-align:center;padding:5px 8px">Gunakan Setting Modal</th>
           <th style="text-align:center;padding:5px 8px">Base Order (USDT)</th>
@@ -14015,17 +14162,17 @@ var SC_NO_AI = {qscalp_3m: true};  // strategi full rule-based, checkbox AI-call
 // 04/10/2026: 'qscalp_3m' dikeluarkan juga -- diresume (validasi ulang #21/21 lolos kuat kedua
 // periode), sama pola dgn reversal. Centang "Izinkan Open Long" sekarang bisa diklik Mas Budi.
 var SC_PAUSED_LOCKED = {brkX2_crossema: true};
-// 10/10/2026 (Gate0, permintaan Mas Budi): kolom "Pakai Syarat BTC" -- TAHAP 1 SAJA (UI + simpan
-// config doang, BELUM disambungkan ke logic entry manapun -- lihat REMARK di STRATEGY_CONFIG_DEFAULTS
-// Python). SC_BTC_GATE_HELPED = strategi yg backtest Gate0 (175 pair cache_1h + ~1 tahun data
-// 1-menit, 2022-2026, 4 poin diuji: gendut-ratio BTC+elapsed-time, 2-HTF-bullish, pola candlestick,
-// 7 strategi diuji lengkap) TERBUKTI terbantu. PENTING: 'brkX2_12h_closed' (KeltnerBreak-12h, key
-// gabungan baru 10/10/2026) BUKAN 'brkX2' (legacy, "brkx2-12h") -- backtest pakai keltner_candidates.pkl
-// yg dikonfirmasi PURE closed-candle (entry=close candle, bukan level breakout intrabar), jadi
-// bukti ini HANYA berlaku utk jalur closed-candle (T1), TIDAK utk jalur intrabar (T1c/T1c-E) yg
-// sekarang berbagi identitas yg sama (lihat kasus brkX2_4h yg sempat 2x salah gara2 soal timing
-// intrabar serupa -- tidak aman digeneralisir tanpa uji sendiri). Tahap 2 nanti WAJIB cek
-// entry_mode sebelum menerapkan gate ini, jangan asal berlaku ke SEMUA entry strategi ini.
+// 10/10/2026 (Gate0, permintaan Mas Budi): kolom "Pakai Syarat BTC" -- AKTIF (Tahap 2, sama hari,
+// lihat REMARK di STRATEGY_CONFIG_DEFAULTS Python + keltner12h_btc_gate_ok() dkk dekat
+// get_ohlcv_htf()). SC_BTC_GATE_HELPED = strategi yg backtest Gate0 (175 pair cache_1h + ~1 tahun
+// data 1-menit, 2022-2026, 4 poin diuji: gendut-ratio BTC+elapsed-time, 2-HTF-bullish, pola
+// candlestick, 7 strategi diuji lengkap) TERBUKTI terbantu. PENTING: 'brkX2_12h_closed'
+// (KeltnerBreak-12h, key gabungan baru 10/10/2026) BUKAN 'brkX2' (legacy, "brkx2-12h") -- backtest
+// pakai keltner_candidates.pkl yg dikonfirmasi PURE closed-candle (entry=close candle, bukan level
+// breakout intrabar), jadi bukti ini HANYA berlaku utk jalur closed-candle (T1) -- gate-nya CUMA
+// dipanggil di thread1_scan(), TIDAK PERNAH di thread1c_scan_intrabar()/thread1c_scan_intrabar_early()
+// (jalur intrabar, lihat kasus brkX2_4h yg sempat 2x salah gara2 soal timing intrabar serupa --
+// tidak aman digeneralisir tanpa uji sendiri).
 var SC_BTC_GATE_HELPED = {brkX2_12h_closed: true, decouple_4h: true, trend_confirm_4h: true, qscalp_3m: true};
 var SC_BTC_GATE_ELAPSED = {qscalp_3m: true};  // satu2nya yg rumusnya punya parameter elapsed %
 var SC_BTC_GATE_TOOLTIP = {
@@ -17910,6 +18057,11 @@ def thread_decouple_scan() -> None:
     n_active = deal_count_by_strategy('decouple_4h')
     if n_active >= DECOUPLE_4H_MAX_DEALS: return
 
+    # Gate0 Tahap 2 (10/10/2026): syarat BTCUSDT HTF 12H ATAU 1D hijau (minimal salah satu).
+    if not decouple4h_btc_gate_ok():
+        log(f"[T_DECOUPLE] Gate0: syarat BTC (HTF 12H/1D) belum lolos, scan dibatalkan periode ini.")
+        return
+
     try:
         pairs = get_usdt_spot_pairs()
         ticker = get_ticker_24h()
@@ -21622,6 +21774,11 @@ def thread_qscalp_scan():
     lolos (tidak ada babak-2 AI-batch)."""
     global _qscalp_scan_ts
     if not is_strategy_enabled('qscalp_3m'):
+        return
+    # Gate0 Tahap 2 (10/10/2026): syarat candle 3m BTCUSDT (TF native, bukan HTF) sudah
+    # naik >=0,10% -- default nunggu candle-nya benar2 closed (elapsed=100%, lihat qscalp_btc_gate_ok()).
+    if not qscalp_btc_gate_ok():
+        log(f"[T_QSCALP] Gate0: syarat BTC (gendut 3m) belum lolos, scan dibatalkan periode ini.")
         return
     try:
         ticker = get_ticker_24h()
