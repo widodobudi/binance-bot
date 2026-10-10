@@ -7017,6 +7017,12 @@ def get_btc_chg_pct(window_hours: int):
 #     3 strategi ini -- kalau ya, naikkan status ke "terbukti" sama spt KeltnerBreak-12h.
 BTC_HTF_ALERT_PROVEN_STRATEGIES = ('brkX2', 'brkX2_closed', 'brkX2_intrabar')
 BTC_HTF_ALERT_TRACKING_STRATEGIES = ('decouple_4h', 'rvolbreak_1h', 'dipbuy_universe')
+# 10/10/2026 (permintaan Mas Budi): HTF yg dipakai utk badge ALERT ini -- SAMA (4h) utk SEMUA
+# 4 strategi sejauh ini (backtest 3 HTF 4h/6h/8h cuma dilakukan menyeluruh utk KeltnerBreak-12h,
+# hasilnya 4h yg dipilih; 3 strategi "tracking" ikut HTF yg sama demi konsistensi, BELUM ada
+# backtest terpisah per-strategi). Satu konstanta -- kalau nanti dibedakan per-strategi, ganti
+# jadi dict {strategy: interval} di sini, tinggal 1 tempat.
+BTC_HTF_ALERT_INTERVAL = "4h"
 _btc_htf_bearish_cache = {}   # key: htf_interval -> {"ts": float, "bearish": bool|None}
 BTC_HTF_ALERT_CACHE_TTL = 300
 
@@ -13226,18 +13232,18 @@ refreshShadowChart();
         <td style="white-space:nowrap;text-align:center">
           {% if d.get("btc_htf_role") == "proven" %}
             {% if d.get("btc_htf_bearish_now") == true %}
-            <div title="BTC HTF (candle 4h) TERTUTUP terakhir MERAH. Terbukti backtest KeltnerBreak-12h (175 pair, 2022-2026, n=6.137 sinyal): rata-rata hasil saat kondisi ini +0,91% vs +1,14% saat BTC hijau (selisih +0,23pp -- edge nyata tapi sedang, BUKAN sinyal pasti rugi)." style="background:#4a1518;color:#f85149;border-radius:4px;padding:3px 6px;font-size:10px;font-weight:600;cursor:help;white-space:normal">&#9888; BTC Lemah</div>
+            <div title="BTC HTF (candle {{ d.get('btc_htf_interval','4h') }}) TERTUTUP terakhir MERAH. Terbukti backtest KeltnerBreak-12h (175 pair, 2022-2026, n=6.137 sinyal): rata-rata hasil saat kondisi ini +0,91% vs +1,14% saat BTC hijau (selisih +0,23pp -- edge nyata tapi sedang, BUKAN sinyal pasti rugi)." style="background:#4a1518;color:#f85149;border-radius:4px;padding:3px 6px;font-size:10px;font-weight:600;cursor:help;white-space:normal">&#9888; BTC Lemah (HTF {{ d.get("btc_htf_interval","4h") }})</div>
             {% elif d.get("btc_htf_bearish_now") == false %}
-            <div title="BTC HTF (candle 4h) TERTUTUP terakhir HIJAU -- kondisi favorable menurut backtest KeltnerBreak-12h." style="background:#132e1a;color:#3fb950;border-radius:4px;padding:3px 6px;font-size:10px;cursor:help">BTC OK</div>
+            <div title="BTC HTF (candle {{ d.get('btc_htf_interval','4h') }}) TERTUTUP terakhir HIJAU -- kondisi favorable menurut backtest KeltnerBreak-12h." style="background:#132e1a;color:#3fb950;border-radius:4px;padding:3px 6px;font-size:10px;cursor:help">BTC OK (HTF {{ d.get("btc_htf_interval","4h") }})</div>
             {% else %}
             <div style="color:var(--muted);font-size:10px">?</div>
             {% endif %}
             <button type="button" onclick="rowCloseDeal('{{ sym }}')" style="width:100%;margin-top:3px;background:var(--red);color:#fff;border:none;border-radius:4px;padding:3px 6px;font-size:9px;cursor:pointer;font-family:var(--font)">Quick Exit</button>
           {% elif d.get("btc_htf_role") == "tracking" %}
             {% if d.get("btc_htf_bearish_now") == true %}
-            <div title="BTC HTF (candle 4h) TERTUTUP terakhir MERAH. BELUM TERBUKTI utk strategi ini -- sedang dikumpulkan data forward-test, jangan dianggap sinyal pasti (lihat REMARK is_btc_htf_bearish() di kode)." style="background:var(--surface);color:var(--muted);border:1px dashed var(--border);border-radius:4px;padding:3px 6px;font-size:10px;cursor:help;white-space:normal">Memantau (merah)</div>
+            <div title="BTC HTF (candle {{ d.get('btc_htf_interval','4h') }}) TERTUTUP terakhir MERAH. BELUM TERBUKTI utk strategi ini -- sedang dikumpulkan data forward-test, jangan dianggap sinyal pasti (lihat REMARK is_btc_htf_bearish() di kode)." style="background:var(--surface);color:var(--muted);border:1px dashed var(--border);border-radius:4px;padding:3px 6px;font-size:10px;cursor:help;white-space:normal">Memantau (merah, HTF {{ d.get("btc_htf_interval","4h") }})</div>
             {% elif d.get("btc_htf_bearish_now") == false %}
-            <div title="BTC HTF (candle 4h) TERTUTUP terakhir HIJAU. BELUM TERBUKTI utk strategi ini -- sedang dikumpulkan data forward-test." style="background:var(--surface);color:var(--muted);border:1px dashed var(--border);border-radius:4px;padding:3px 6px;font-size:10px;cursor:help;white-space:normal">Memantau (hijau)</div>
+            <div title="BTC HTF (candle {{ d.get('btc_htf_interval','4h') }}) TERTUTUP terakhir HIJAU. BELUM TERBUKTI utk strategi ini -- sedang dikumpulkan data forward-test." style="background:var(--surface);color:var(--muted);border:1px dashed var(--border);border-radius:4px;padding:3px 6px;font-size:10px;cursor:help;white-space:normal">Memantau (hijau, HTF {{ d.get("btc_htf_interval","4h") }})</div>
             {% else %}
             <div style="color:var(--muted);font-size:10px">?</div>
             {% endif %}
@@ -21803,12 +21809,13 @@ def run_web_dashboard():
                 # lain (badge netral, belum terbukti, cuma dicatat), None = strategi lain (tidak
                 # ditampilkan sama sekali).
                 _strat = dd.get("strategy", "")
+                dd["btc_htf_interval"] = BTC_HTF_ALERT_INTERVAL
                 if _strat in BTC_HTF_ALERT_PROVEN_STRATEGIES:
                     dd["btc_htf_role"] = "proven"
-                    dd["btc_htf_bearish_now"] = is_btc_htf_bearish("4h")
+                    dd["btc_htf_bearish_now"] = is_btc_htf_bearish(BTC_HTF_ALERT_INTERVAL)
                 elif _strat in BTC_HTF_ALERT_TRACKING_STRATEGIES:
                     dd["btc_htf_role"] = "tracking"
-                    dd["btc_htf_bearish_now"] = is_btc_htf_bearish("4h")
+                    dd["btc_htf_bearish_now"] = is_btc_htf_bearish(BTC_HTF_ALERT_INTERVAL)
                 else:
                     dd["btc_htf_role"] = None
                     dd["btc_htf_bearish_now"] = None
