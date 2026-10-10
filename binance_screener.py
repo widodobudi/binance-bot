@@ -7028,7 +7028,10 @@ def is_btc_htf_bearish(htf_interval: str = "4h"):
     if slot["bearish"] is not None and (now - slot["ts"]) < BTC_HTF_ALERT_CACHE_TTL:
         return slot["bearish"]
     try:
-        df = get_ohlcv_htf("BTCUSDT", interval=htf_interval, limit=3)
+        # limit=15 (bukan 3) -- get_ohlcv_htf() sendiri punya syarat internal minimal 10 candle
+        # dlm respons (len(raw)<10: return None), limit kecil bikin selalu ditolak diam2 (ketahuan
+        # 10/10/2026 lewat badge '?' yg nyala terus di Active Deals).
+        df = get_ohlcv_htf("BTCUSDT", interval=htf_interval, limit=15)
         if df is None or len(df) < 2:
             return slot["bearish"]
         if int(df["ct"].iloc[-1]) >= int(time.time() * 1000):
@@ -13238,7 +13241,7 @@ refreshShadowChart();
             {% else %}
             <div style="color:var(--muted);font-size:10px">?</div>
             {% endif %}
-            <button type="button" onclick="rowCloseDeal('{{ sym }}')" style="width:100%;margin-top:3px;background:var(--red);color:#fff;border:none;border-radius:4px;padding:3px 6px;font-size:9px;cursor:pointer;font-family:var(--font)">Quick Exit</button>
+            <button type="button" disabled title="Tombol ini baru aktif kalau sinyal BTC-HTF sudah terbukti utk strategi ini (saat ini baru KeltnerBreak-12h) -- hindari aksi tergesa dari alert yg belum tervalidasi." style="width:100%;margin-top:3px;background:var(--surface);color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:9px;cursor:not-allowed;font-family:var(--font)">Quick Exit</button>
           {% else %}
             <span style="color:var(--muted)">-</span>
           {% endif %}
