@@ -2895,7 +2895,7 @@ def csv_progress(strategy: str = None, offset: int = 0, until: int = None, since
 def csv_progress_active() -> dict:
     """Gabungkan hanya trade fase aktif yang dipakai heartbeat Telegram."""
     parts = (
-        csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET),
+        csv_progress('brkX2_12h_closed', offset=FWDTEST_BRKX2_PHASE_OFFSET),
         csv_progress('reversal'),
         csv_progress('brkX2_4h'),
         csv_progress('brkX2_crossema'),
@@ -3009,11 +3009,16 @@ def strategy_phase_breakdown() -> dict:
     Return {strategy_key: [ {label,n,win,loss,total_pct,target}, ... ]}."""
     out = {}
     try:
-        out['brkX2'] = [
-            _phase_entry('LIVE', csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)),
+        # 10/10/2026: key diganti 'brkX2' -> 'brkX2_12h_closed' (KeltnerBreak-12h digabung balik,
+        # baris utama di /api/strategy_performance sekarang lookup phases.get('brkX2_12h_closed')
+        # -- key lama 'brkX2' di sini bikin lookup selalu kosong, panah expand hilang dari
+        # dashboard). csv_progress('brkX2_12h_closed', ...) sudah union semua era (lihat REMARK
+        # di csv_progress()), jadi angka "LIVE" di sini konsisten dgn baris utamanya.
+        out['brkX2_12h_closed'] = [
+            _phase_entry('LIVE', csv_progress('brkX2_12h_closed', offset=FWDTEST_BRKX2_PHASE_OFFSET)),
         ]
     except Exception as e:
-        log(f"   [PHASE] gagal hitung brkX2: {e}")
+        log(f"   [PHASE] gagal hitung brkX2_12h_closed: {e}")
     try:
         out['reversal'] = [
             _phase_entry('LIVE', csv_progress('reversal')),
@@ -7974,7 +7979,7 @@ def heartbeat_general_tick():
         tag = " TERCAPAI!" if n >= target else ""
         return f"{disp}: #{n}/{target} ({win}W/{loss}L, {total_pct:+.1f}%){tag}{extra}"
     prog_all  = csv_progress_active()
-    prog_brk  = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)
+    prog_brk  = csv_progress('brkX2_12h_closed', offset=FWDTEST_BRKX2_PHASE_OFFSET)
     prog_rev  = csv_progress('reversal')
     prog_4h   = csv_progress('brkX2_4h')
     prog_cx   = csv_progress('brkX2_crossema')
@@ -9000,8 +9005,8 @@ def thread2_monitor():
         add_fund_sent = d.get('add_fund_sent', False)
         # brkX2 (12h): recompute add_usd pakai tier sizing TERKINI (bukan nilai lama saat open),
         # supaya perubahan score_to_target_usd langsung berlaku ke deal yg belum add-fund.
-        if d.get('strategy', 'brkX2') == 'brkX2' and not add_fund_sent and 'score' in d:
-            _cur_base     = get_strategy_base_usd('brkX2')
+        if d.get('strategy', 'brkX2') in ('brkX2', 'brkX2_12h_closed') and not add_fund_sent and 'score' in d:
+            _cur_base     = get_strategy_base_usd(d.get('strategy', 'brkX2'))
             _fresh_target = max(score_to_target_usd(d.get('score', 0)), _cur_base)
             _fresh_add    = max(0, _fresh_target - _cur_base)
             if _fresh_add != add_usd:
@@ -9812,7 +9817,7 @@ def thread2_monitor():
                     tgt = QSCALP_FWDTEST_TARGET
                 else:
                     tgt = FWDTEST_TARGET_BRKX2
-                pstrat = csv_progress(strat, offset=FWDTEST_BRKX2_PHASE_OFFSET if strat=='brkX2' else (HUNTING_FWDTEST_PHASE_OFFSET if strat=='hunting_4h' else 0))
+                pstrat = csv_progress(strat, offset=FWDTEST_BRKX2_PHASE_OFFSET if strat in ('brkX2', 'brkX2_12h_closed') else (HUNTING_FWDTEST_PHASE_OFFSET if strat=='hunting_4h' else 0))
                 if pstrat and pstrat['n']>0:
                     done_n = pstrat['n']; wl = f"{pstrat['win']}W/{pstrat['loss']}L"
                     status = "TERCAPAI - waktunya evaluasi!" if done_n>=tgt else f"menuju {tgt}"
@@ -9941,7 +9946,7 @@ def _send_unified_heartbeat(status_12h, status_rev, status_4h, near_4h):
         return f"LIVE: {p['n']} closed ({p['win']}W/{p['loss']}L, total {p['total_pct']:+.1f}%)"
 
     prog_all  = csv_progress_active()
-    prog_brk  = csv_progress('brkX2', offset=FWDTEST_BRKX2_PHASE_OFFSET)
+    prog_brk  = csv_progress('brkX2_12h_closed', offset=FWDTEST_BRKX2_PHASE_OFFSET)
     prog_rev  = csv_progress('reversal')
     prog_4h   = csv_progress('brkX2_4h')
     prog_cx   = csv_progress('brkX2_crossema')
@@ -24444,6 +24449,7 @@ def run_web_dashboard():
                                     rows.append(r)
                 phase_offsets = {
                     'brkX2': FWDTEST_BRKX2_PHASE_OFFSET,
+                    'brkX2_12h_closed': FWDTEST_BRKX2_PHASE_OFFSET,
                     'hunting_4h': HUNTING_FWDTEST_PHASE_OFFSET,
                 }
                 if strategy_filter:
@@ -26525,7 +26531,7 @@ if __name__ == '__main__':
                 with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as _f:
                     _all_closed = [r for r in csv.DictReader(_f) if r.get('status') == 'CLOSED']
             _akum_rows = [r for r in _all_closed if r.get('strategy') in ('akum_entry_a', 'akum_entry_b')]
-            _brk_rows  = [r for r in _all_closed if (r.get('strategy') or 'brkX2') == 'brkX2']
+            _brk_rows  = [r for r in _all_closed if (r.get('strategy') or 'brkX2') in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed')]
             log(f"  Histori CLOSED Akumulasi-4h: {len(_akum_rows)} deal")
             for _r in _akum_rows:
                 log(f"    - {_r.get('symbol','?')} ({_r.get('strategy','?')}) "
