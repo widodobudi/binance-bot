@@ -1336,7 +1336,16 @@ STRATEGY_CONFIG_DEFAULTS = {
     # sejak split ini. max_deals dipecah 1/1 (dari 2 gabungan sebelumnya) SENGAJA supaya deploy
     # ini TIDAK diam-diam menaikkan kapasitas total -- Mas Budi yg akan atur ulang sendiri dari
     # Strategy Control kalau mau beda.
-    "brkX2_closed":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 1, "close_sell_pct": 75},
+    # 10/10/2026 (Gate0, permintaan Mas Budi): 'btc_gate_enabled' -- toggle "Pakai Syarat BTC" di
+    # Strategy Control, TAHAP 1 SAJA (murni UI+penyimpanan config, BELUM disambungkan ke logic
+    # entry manapun -- lihat is_strategy_enabled() dkk, belum ada yg membaca field ini). Cuma
+    # ditambahkan utk 4 strategi yg backtest Gate0-nya (175 pair, 2022-2026, 4 poin diuji)
+    # terbukti terbantu: brkX2_closed/decouple_4h/trend_confirm_4h/qscalp_3m (qscalp_3m juga
+    # dapat 'btc_gate_elapsed_pct', satu2nya yg rumusnya punya parameter elapsed-time). Strategi
+    # lain SENGAJA TIDAK diberi field ini -- baik yg sudah diuji & terbukti TIDAK membantu
+    # (brkX2_4h/dipbuy_universe/rvolbreak_1h) maupun yg belum pernah diuji sama sekali -- lihat
+    # SC_BTC_GATE_HELPED/SC_BTC_GATE_TOOLTIP di dash.js utk daftar lengkap & alasan per-strategi.
+    "brkX2_closed":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 1, "close_sell_pct": 75, "btc_gate_enabled": True},
     "brkX2_intrabar":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 1, "close_sell_pct": 75},
     "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 75},
     "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
@@ -1355,12 +1364,17 @@ STRATEGY_CONFIG_DEFAULTS = {
     # -> get_strategy_base_usd(strategy) pakai key asli tiap entry).
     "akum_entry_b":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
     "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
-    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
-    "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 2, "close_sell_pct": 100},
+    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
+    # qscalp_3m: 'btc_gate_elapsed_pct' -- satu2nya strategi yg rumus Gate0-nya punya parameter
+    # elapsed-time (tunggu candle 3m BTCUSDT closed sampai sekian % sebelum gendut-check dianggap
+    # valid). Default 100 (candle HARUS closed penuh) -- SATU2NYA nilai yg terbukti backtest
+    # 10/10/2026 (n=1.010, WR+4,43pp/avg+0,063pp); nilai 33%/67% hasilnya acak, jangan dipakai
+    # tanpa data baru. Field ini jg TAHAP 1 SAJA, belum dibaca logic entry manapun.
+    "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 2, "close_sell_pct": 100, "btc_gate_enabled": True, "btc_gate_elapsed_pct": 100},
     # 09/10/2026 (Tahap 1/4, permintaan Mas Budi): decouple_4h naik dari shadow ke live, lulus
     # target 24/20 (18W/6L, +56.9%). max_deals di sini cuma utk tampilan dashboard -- enforcement
     # sungguhan tetap pakai konstanta DECOUPLE_4H_MAX_DEALS di thread_decouple_scan().
-    "decouple_4h":   {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    "decouple_4h":   {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100, "btc_gate_enabled": True},
     # 09/10/2026 (Tahap 2/4): rvolbreak_1h naik dari shadow ke live, lulus target 24/20 (15W/9L, +61.8%).
     "rvolbreak_1h":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     # 09/10/2026 (Tahap 3/4): dipbuy_universe naik dari shadow ke live, lulus target 50/50 (43W/7L,
@@ -12874,6 +12888,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <th style="text-align:left;padding:5px 8px">Strategi</th>
           <th style="text-align:center;padding:5px 8px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini">Max Deals</th>
           <th style="text-align:center;padding:5px 8px">Izinkan Open Long</th>
+          <th style="text-align:center;padding:5px 8px">Pakai Syarat BTC<br><span style="font-size:9px;font-weight:normal">TAHAP 1: belum aktif</span></th>
           <th style="text-align:center;padding:5px 8px">AI Call<br><span style="font-size:9px;font-weight:normal">open / close</span></th>
           <th style="text-align:center;padding:5px 8px">Gunakan Setting Modal</th>
           <th style="text-align:center;padding:5px 8px">Base Order (USDT)</th>
@@ -12882,7 +12897,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <th style="text-align:center;padding:5px 8px">Cooldown Re-entry</th>
                     <th style="text-align:center;padding:5px 8px">Action</th>
         </tr></thead>
-                <tbody id="sc-body"><tr><td colspan="10" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
+                <tbody id="sc-body"><tr><td colspan="11" style="color:var(--muted);padding:8px">Loading...</td></tr></tbody>
     </table>
     </div>
     </div>
@@ -13988,6 +14003,48 @@ var SC_NO_AI = {qscalp_3m: true};  // strategi full rule-based, checkbox AI-call
 // 04/10/2026: 'qscalp_3m' dikeluarkan juga -- diresume (validasi ulang #21/21 lolos kuat kedua
 // periode), sama pola dgn reversal. Centang "Izinkan Open Long" sekarang bisa diklik Mas Budi.
 var SC_PAUSED_LOCKED = {brkX2_crossema: true};
+// 10/10/2026 (Gate0, permintaan Mas Budi): kolom "Pakai Syarat BTC" -- TAHAP 1 SAJA (UI + simpan
+// config doang, BELUM disambungkan ke logic entry manapun -- lihat REMARK di STRATEGY_CONFIG_DEFAULTS
+// Python). SC_BTC_GATE_HELPED = strategi yg backtest Gate0 (175 pair cache_1h + ~1 tahun data
+// 1-menit, 2022-2026, 4 poin diuji: gendut-ratio BTC+elapsed-time, 2-HTF-bullish, pola candlestick,
+// 7 strategi diuji lengkap) TERBUKTI terbantu. PENTING: 'brkX2_closed' (KeltnerBreak-12h CC) BUKAN
+// 'brkX2' (legacy) atau 'brkX2_intrabar' -- backtest pakai keltner_candidates.pkl yg dikonfirmasi
+// PURE closed-candle (entry=close candle, bukan level breakout intrabar), jadi bukti ini HANYA
+// berlaku utk brkX2_closed (lihat kasus brkX2_4h yg sempat 2x salah gara2 soal timing intrabar
+// serupa -- tidak aman digeneralisir ke varian intrabar tanpa uji sendiri).
+var SC_BTC_GATE_HELPED = {brkX2_closed: true, decouple_4h: true, trend_confirm_4h: true, qscalp_3m: true};
+var SC_BTC_GATE_ELAPSED = {qscalp_3m: true};  // satu2nya yg rumusnya punya parameter elapsed %
+var SC_BTC_GATE_TOOLTIP = {
+    brkX2_closed: 'Syarat: BTCUSDT pada HTF 1D DAN 3D, candle TERTUTUP terakhir keduanya harus hijau. Backtest 10/10/2026: dari 100 kesempatan histori, 56 tetap lolos; win-rate naik +2,5pp, rata-rata profit/trade naik +0,17pp. Bukti paling kuat & konsisten dari 7 strategi yang diuji.',
+    decouple_4h: 'Syarat: BTCUSDT pada HTF 12H DAN 1D, cukup SALAH SATU candle tertutup terakhir hijau. Backtest 10/10/2026: dari 100 kesempatan, 74 tetap lolos; rata-rata profit/trade naik +0,05pp.',
+    trend_confirm_4h: 'Syarat: BTCUSDT pada HTF 12H DAN 1D, candle tertutup terakhir keduanya harus hijau. Backtest 10/10/2026: dari 100 kesempatan, 39 tetap lolos; rata-rata profit/trade naik +0,14pp. Satu-satunya uji yang menunjukkan bukti untuk strategi ini.',
+    qscalp_3m: 'Syarat: tunggu candle BTCUSDT 3 menit (TF strategi ini sendiri) closed sampai persentase di kolom sebelah, DAN BTC-nya harus naik minimal 0,10% di candle itu. Backtest 10/10/2026 (elapsed=100%): dari 100 kesempatan, 36 tetap lolos; rata-rata profit/trade naik +0,06pp (kenaikan relatif terbesar dari 7 strategi, tapi datanya paling sedikit).'
+};
+var SC_BTC_GATE_TOOLTIP_OFF_TESTED = {
+    brkX2_4h: 'Sudah diuji 10/10/2026 (2x, sempat ketemu bug lookahead lalu diperbaiki) -- hasilnya TIDAK membantu, nyaris tidak ada beda / cenderung menurunkan hasil. Tidak direkomendasikan.',
+    dipbuy_universe: 'Sudah diuji 10/10/2026 -- hasilnya JUSTRU BERLAWANAN: strategi ini malah lebih bagus saat BTC SEDANG TURUN, bukan naik (masuk akal, ini strategi beli-saat-dip). Tidak direkomendasikan.',
+    rvolbreak_1h: 'Sudah diuji 10/10/2026 -- hasilnya TIDAK membantu, rata-rata profit/trade cenderung turun meski win-rate naik tipis. Tidak direkomendasikan. (Data BTC menit cuma meng-cover 35% kandidat yang diuji.)'
+};
+var SC_BTC_GATE_TOOLTIP_UNTESTED_SPECIFIC = {
+    brkX2: 'Varian "legacy" sudah tidak buka deal baru sama sekali (cuma arsip deal lama) -- tidak relevan diuji.',
+    brkX2_intrabar: 'Belum diuji terpisah -- backtest Gate0 cuma mencakup varian closed-candle (KeltnerBreak-12h CC). Entry intrabar punya timing berbeda, tidak aman diasumsikan sama tanpa uji sendiri.'
+};
+var SC_BTC_GATE_TOOLTIP_UNTESTED = 'Belum pernah diuji -- backtest Gate0 10/10/2026 cuma mencakup 7 strategi (KeltnerBreak-12h CC, decouple_4h, dipbuy_universe, trend_confirm_4h, qscalp_3m, rvolbreak_1h, brkX2-4h). Strategi ini belum ada datanya sama sekali.';
+function btcGateCellHtml(k, cfg) {
+    if (SC_BTC_GATE_HELPED[k]) {
+        var checked = cfg.btc_gate_enabled !== false;
+        var tip = (SC_BTC_GATE_TOOLTIP[k] || '').replace(/"/g, '&quot;');
+        var html = '<label style="display:flex;align-items:center;gap:4px;justify-content:center;cursor:pointer" title="' + tip + '"><input type="checkbox" id="sc-btcgate-' + k + '" ' + (checked ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></label>';
+        if (SC_BTC_GATE_ELAPSED[k]) {
+            var ep = (cfg.btc_gate_elapsed_pct === undefined || cfg.btc_gate_elapsed_pct === null) ? 100 : cfg.btc_gate_elapsed_pct;
+            html += '<input type="number" id="sc-btcgate-elapsed-' + k + '" value="' + ep + '" min="0" max="100" step="1" title="Elapsed % (default 100 -- satu2nya nilai yang terbukti backtest)" style="width:48px;margin-top:3px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:10px">';
+        }
+        return '<td style="text-align:center;padding:5px 8px">' + html + '</td>';
+    }
+    var reason = SC_BTC_GATE_TOOLTIP_OFF_TESTED[k] || SC_BTC_GATE_TOOLTIP_UNTESTED_SPECIFIC[k] || SC_BTC_GATE_TOOLTIP_UNTESTED;
+    var tip2 = reason.replace(/"/g, '&quot;');
+    return '<td style="text-align:center;padding:5px 8px;opacity:0.35" title="' + tip2 + '"><input type="checkbox" disabled style="width:16px;height:16px;cursor:not-allowed"></td>';
+}
 var _scData = {};
 
 function buildStrategySelect() {
@@ -14033,7 +14090,7 @@ function loadStrategyConfig() {
             var tbody = document.getElementById('sc-body');
             if (!tbody) return;
             if (!keys.length || !Object.keys(d || {}).length) {
-                tbody.innerHTML = '<tr><td colspan="10" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="11" style="color:var(--red);padding:8px">Error: data kosong</td></tr>';
                 return;
             }
             for (var i = 0; i < keys.length; i++) {
@@ -14060,6 +14117,7 @@ function loadStrategyConfig() {
                     + '<td style="padding:5px 8px;font-weight:600">' + (SC_LABELS[k] || k) + '</td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-maxdeals-' + k + '" value="' + (cfg.max_deals || 2) + '" min="1" step="1" style="width:50px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-run-' + k + '" ' + (strategyEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
+                    + btcGateCellHtml(k, cfg)
                     + (SC_NO_AI[k]
                         ? '<td style="text-align:center;padding:5px 8px"><span style="color:var(--muted);font-size:10px;font-style:italic" title="Strategi full rule-based, tidak pernah memanggil AI sama sekali (desain permanen)">N/A</span></td>'
                         : '<td style="text-align:center;padding:3px 8px">'
@@ -14098,7 +14156,7 @@ function loadStrategyConfig() {
         .catch(function(e) {
             var tbody = document.getElementById('sc-body');
             if (tbody) {
-                tbody.innerHTML = '<tr><td colspan="10" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="11" style="color:var(--red);padding:8px">Error fetch: ' + e + '</td></tr>';
             }
         });
 }
@@ -14136,6 +14194,15 @@ function saveStrategyConfig(button) {
     };
     if (SC_HAS_ADDFUND[key]) {
         data[key].add_usd = parseFloat(addEl ? addEl.value : 0) || 0;
+    }
+    if (SC_BTC_GATE_HELPED[key]) {
+        var btcGateEl = document.getElementById('sc-btcgate-' + key);
+        data[key].btc_gate_enabled = btcGateEl ? btcGateEl.checked : true;
+        if (SC_BTC_GATE_ELAPSED[key]) {
+            var elapsedEl = document.getElementById('sc-btcgate-elapsed-' + key);
+            var ep = elapsedEl ? parseFloat(elapsedEl.value) : 100;
+            data[key].btc_gate_elapsed_pct = (ep >= 0 && ep <= 100) ? ep : 100;
+        }
     }
     var sellPctEl = document.getElementById('sc-sellpct-' + key);
     if (sellPctEl) {
