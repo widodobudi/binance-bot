@@ -24663,9 +24663,20 @@ def run_web_dashboard():
                     if offset:
                         rows = rows[offset:]
                 else:
+                    # 11/10/2026 (bug ketahuan dari laporan Mas Budi -- CFX/USDT close KeltnerBreak-12h
+                    # hilang dari "Semua strategi" meski sudah di-reload): SEBELUMNYA baris dikelompokkan
+                    # per `strategy` MENTAH, lalu offset 15 (FWDTEST_BRKX2_PHASE_OFFSET) diterapkan
+                    # PER KEY MENTAH masing2 -- key baru 'brkX2_12h_closed' (sejak merge 10/10/2026)
+                    # baru punya segelintir baris, di bawah 15, jadi SEMUA baris dgn key itu hilang
+                    # (strategy_rows[15:] dari list <15 elemen = kosong). Cabang filter EKSPLISIT
+                    # (strategy=brkX2_12h_closed, baris ~24652 di atas) sudah benar: union 4 key DULU,
+                    # baru potong 15 dari gabungan -- cabang "Semua strategi" ini sekarang disamakan,
+                    # fold ke key gabungan SEBELUM grouping, supaya offset diterapkan 1x ke gabungan.
                     rows_by_strategy = {}
                     for row in rows:
                         key = row.get('strategy') or 'brkX2'
+                        if key in ('brkX2', 'brkX2_closed', 'brkX2_intrabar'):
+                            key = 'brkX2_12h_closed'
                         rows_by_strategy.setdefault(key, []).append(row)
                     rows = []
                     for key, strategy_rows in rows_by_strategy.items():
