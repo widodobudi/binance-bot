@@ -4375,34 +4375,6 @@ def pop_recent_sell_fill(symbol: str, max_age: float = 120.0) -> float:
     return rec['proceeds'] / rec['qty']
 
 
-# 11/10/2026 (permintaan Mas Budi): tiap close UNTUNG (SEMUA strategi), bagian untungnya saja
-# (bukan modal) langsung dikonversi ke FDUSD -- parkir di Sub Account yang sama (tempat bot
-# trading), TIDAK melibatkan Master Account/withdrawal sama sekali, cuma spot market buy biasa
-# pair FDUSDUSDT (cakupan permission "Enable Spot & Margin & Stock Trading" yg key ini sudah
-# punya). $5 = minNotional KERAS pair FDUSDUSDT di Binance (dicek langsung via exchangeInfo
-# 11/10/2026, bukan angka sembarangan) -- order di bawah itu DITOLAK Binance, bukan cuma soal
-# boros fee. Sama konvensi dgn EARN_PARTIAL_MIN_RESIDUAL_USD/TP_TIER_MIN_NOTIONAL_USD di atas.
-FDUSD_CONVERT_MIN_USD = 5.0
-
-def convert_profit_to_fdusd(profit_usd: float, context: str = "") -> dict:
-    """Market-buy FDUSDUSDT senilai profit_usd. Non-blocking by design: dipanggil SETELAH close
-    deal selesai dicatat, kegagalan di sini TIDAK membatalkan/mengganggu close itu sendiri --
-    kalau gagal, profit cuma tetap mengendap sbg USDT seperti sebelum fitur ini ada.
-    Return {"ok": bool, "qty": float, "cost_usdt": float, "reason": str (kalau gagal)}."""
-    if not USE_BINANCE_DIRECT:
-        return {"ok": False, "reason": "not_binance_direct", "qty": 0.0, "cost_usdt": 0.0}
-    if profit_usd < FDUSD_CONVERT_MIN_USD:
-        log(f"[FDUSD] convert dilewati ({context}): profit ${profit_usd:.2f} < minimum ${FDUSD_CONVERT_MIN_USD:.2f}")
-        return {"ok": False, "reason": "below_min", "qty": 0.0, "cost_usdt": 0.0}
-    try:
-        res = binance_buy_market("FDUSDUSDT", profit_usd)
-        log(f"[FDUSD] convert profit ({context}): ${profit_usd:.2f} USDT -> {res['qty']:.4f} FDUSD @ {res['price_avg']:.4f}")
-        return {"ok": True, "qty": res["qty"], "cost_usdt": res["cost_usdt"]}
-    except Exception as e:
-        log(f"WARN [FDUSD] convert profit ({context}, ${profit_usd:.2f}) gagal: {e}")
-        return {"ok": False, "reason": str(e), "qty": 0.0, "cost_usdt": 0.0}
-
-
 def load_auto_sell_config() -> dict:
     """Return {"assets": {ASSET: {"enabled":bool,"threshold_usdt":float}, ...}}.
     Migrasi otomatis dari format lama single-asset ({"enabled","asset","threshold_usdt"})
@@ -9902,18 +9874,6 @@ def thread2_monitor():
                 # Reuse variabel yang sama di sini, jangan hitung ulang.
                 _total_usd_cl = total_usd
                 _upnl_usd_cl  = round(prof_from_entry / 100 * _total_usd_cl, 2)
-                # 11/10/2026 (permintaan Mas Budi): close UNTUNG (semua strategi, bukan hold_no_sell
-                # krn di situ tidak ada jual beneran -> tidak ada USDT yg mendarat) -- bagian untung
-                # saja (BUKAN modal) langsung di-convert ke FDUSD, parkir di Sub Account yg sama.
-                # Non-blocking (lihat REMARK di convert_profit_to_fdusd()): gagal convert TIDAK
-                # mengganggu close ini, cuma tercatat di log + baris notifikasi di bawah.
-                _fdusd_line = ""
-                if not _hold_no_sell and _upnl_usd_cl > 0:
-                    _fdusd_res = convert_profit_to_fdusd(_upnl_usd_cl, context=f"{to_display_pair(sym)}/{strat}")
-                    if _fdusd_res["ok"]:
-                        _fdusd_line = f"\nProfit->FDUSD: {_fdusd_res['qty']:.2f} FDUSD (${_upnl_usd_cl:.2f})"
-                    elif _fdusd_res["reason"] not in ("below_min", "not_binance_direct"):
-                        _fdusd_line = f"\nProfit->FDUSD: GAGAL ({_fdusd_res['reason']})"
                 send_telegram(
                     f"{strat_label} | CLOSE LONG\n"
                     f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
@@ -9924,7 +9884,6 @@ def thread2_monitor():
                     f"Hold candles: {_hold_c}\n"
                     f"{_fmt_indicators_open_block(d)}"
                     f"{prog_close}"
-                    f"{_fdusd_line}"
                 )
                 # Notif timeline lengkap khusus hunting_4h
                 if strat == 'hunting_4h':
