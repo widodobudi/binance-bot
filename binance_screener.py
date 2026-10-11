@@ -8118,7 +8118,10 @@ def heartbeat_general_tick():
                      f"  - qscalp_3m  : {_fmt_hunting_live(prog_qscalp)}\n"
                      f"  - Shadow (paper, bukan live):\n"
                      f"    {_fmt_shadow('conf3_stochrsibb', SHADOW_CONF3_TARGET)}\n"
-                     f"    {_fmt_shadow('dipbuy_universe', SHADOW_DIPBUY_UNIVERSE_TARGET, label='dipbuy_universe-shadow (RETIRED, formula sudah live dgn exit trailing)', show_tercapai=False)}\n"
+                     # 11/10/2026 (permintaan Mas Budi): baris dipbuy_universe-shadow DIHAPUS dari
+                     # heartbeat -- formula-nya sudah live sejak 09/10/2026, baris ini cuma arsip
+                     # RETIRED. Data mentahnya (shadow_fwdtest.json) TIDAK disentuh, tetap tersedia
+                     # via /api/shadow_fwdtest_raw kalau suatu saat dibutuhkan lagi.
                      f"    {_fmt_shadow('dipbuy_bluechip', SHADOW_DIPBUY_BC_TARGET)}\n"
                      f"    {_fmt_shadow('decouple_4h', SHADOW_DECOUPLE_TARGET, label='decouple_4h-shadow (RETIRED, formula sudah live)')}\n"
                      f"    {_fmt_shadow('keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET, label='keltnerbreak_12h-shadow (RETIRED, formula sudah live)')}\n"
@@ -13413,7 +13416,11 @@ refreshPerfChart();
 var SHADOW_LABELS = {
   'akuma_all3': 'Akum all_three (ex-live)',
   'conf3_stochrsibb': 'Conf3 StochRSI+BB',
-  'dipbuy_universe': 'Dip-Buy Universe',
+  // 11/10/2026 (permintaan Mas Budi): dipbuy_universe DIHAPUS dari tampilan panel ini --
+  // formula-nya sudah live sejak 09/10/2026, baris ini cuma arsip RETIRED. Data mentahnya
+  // (shadow_fwdtest.json) TIDAK disentuh sama sekali -- endpoint /api/shadow_fwdtest_status
+  // tetap balikin datanya, cuma tidak lagi dirender di sini. Tetap tersedia via
+  // /api/shadow_fwdtest_raw kalau suatu saat dibutuhkan lagi sbg dokumentasi.
   'dipbuy_bluechip': 'Dip-Buy Bluechip'
 };
 function refreshShadowChart() {
