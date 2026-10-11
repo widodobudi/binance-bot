@@ -1035,6 +1035,9 @@ EXCLUDED_BASE_ASSETS = {
     # ── Komoditas (emas/perak) — bergerak ikut harga komoditas, bukan kripto ───
     'PAXG','XAUT','XAU','XAUM','KAU','TGOLD','XAGT','XAG','KAG',
 }
+# 11/10/2026 (permintaan Mas Budi): tolak base asset yang namanya mengandung karakter
+# Mandarin/CJK (contoh: "币安人生") -- coin receh/meme beraksara Cina. Dipakai di get_usdt_spot_pairs().
+_CJK_RE = re.compile(r'[一-鿿㐀-䶿]')
 
 # Fiat/stablecoin/komoditas di atas juga digabung ke SYMBOL_BLACKLIST (30/08/2026), BUKAN cuma dipakai
 # get_usdt_spot_pairs() -- soalnya sejumlah scan loop per-strategi (mis. CrossEMA-4h, brkX2-4h intrabar)
@@ -6619,6 +6622,16 @@ def get_usdt_spot_pairs():
             if s.get('quoteAsset')!='USDT': continue
             if s.get('status')!='TRADING': continue
             if s.get('baseAsset') in EXCLUDED_BASE_ASSETS: continue
+            # 11/10/2026 (permintaan Mas Budi, contoh: "币安人生"): tolak base asset yang
+            # mengandung karakter Mandarin/CJK (coin receh/meme yg namanya pakai aksara Cina).
+            # Base asset Mandarin tidak bisa di-hardcode ke EXCLUDED_BASE_ASSETS (baru ketahuan
+            # pas listing baru muncul di exchangeInfo) -- jadi sekalian masuk ke SYMBOL_BLACKLIST
+            # di sini (fungsi ini kepanggil tiap siklus scan oleh hampir semua strategi) biar ikut
+            # ke-block juga di loop2 strategi yg nggak lewat get_usdt_spot_pairs() (lihat REMARK
+            # 30/08/2026 di atas EXCLUDED_BASE_ASSETS soal pola yg sama utk EUR/USDT).
+            if _CJK_RE.search(s.get('baseAsset', '')):
+                SYMBOL_BLACKLIST.add(s['symbol'])
+                continue
             # Exclude tokenized stocks (bStocks Binance):
             # Hanya exclude kalau tidak punya permission SPOT sama sekali
             # bStocks yang punya SPOT diizinkan masuk universe — NYSE filter yang jaga di level eksekusi
