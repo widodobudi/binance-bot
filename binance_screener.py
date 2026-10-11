@@ -23609,15 +23609,17 @@ def run_web_dashboard():
             langsung spy kedua hasil beda sumber & tidak dobel kalau Master key belum di-set.
             Dipakai utk lihat pola nyata: di % profit berapa Mas Budi biasanya redeem Earn
             secara manual selama ini, utk kalibrasi ambang redeem otomatis fitur baru (bukan
-            nebak dari percakapan). Default 90 hari terakhir (gabung window 90-harian berulang,
-            krn Binance batasi max 3 bulan per window & histori bisa lebih lawas dari itu) --
-            ?days=30 bisa diubah manual."""
+            nebak dari percakapan). Default 90 hari terakhir (gabung window 80-harian berulang --
+            BUKAN 90, percobaan pertama pakai window persis 90 hari kena error -6021 "Query time
+            range too large" krn limit asli Binance ternyata lebih ketat dari dokumentasi "3
+            bulan"; 80 hari dipakai sbg margin aman, BELUM diverifikasi ulang ke Binance)
+            -- ?days=30 bisa diubah manual."""
             try:
                 days = int(request.args.get("days", "90"))
             except ValueError:
                 return jsonify({"ok": False, "error": "days tidak valid"}), 400
             now_ms = int(time.time() * 1000)
-            window_ms = 90 * 24 * 3600 * 1000
+            window_ms = 80 * 24 * 3600 * 1000
             oldest_ms = now_ms - days * 24 * 3600 * 1000
 
             def _fetch(api_key=None, api_secret=None):
