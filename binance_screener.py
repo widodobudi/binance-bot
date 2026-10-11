@@ -23609,30 +23609,30 @@ def run_web_dashboard():
             langsung spy kedua hasil beda sumber & tidak dobel kalau Master key belum di-set.
             Dipakai utk lihat pola nyata: di % profit berapa Mas Budi biasanya redeem Earn
             secara manual selama ini, utk kalibrasi ambang redeem otomatis fitur baru (bukan
-            nebak dari percakapan). Default 90 hari terakhir (gabung window 80-harian berulang --
-            BUKAN 90, percobaan pertama pakai window persis 90 hari kena error -6021 "Query time
-            range too large" krn limit asli Binance ternyata lebih ketat dari dokumentasi "3
-            bulan"; 80 hari dipakai sbg margin aman, BELUM diverifikasi ulang ke Binance)
-            -- ?days=30 bisa diubah manual."""
+            nebak dari percakapan).
+            STOP MENEBAK ANGKA HARI (2x percobaan sebelumnya -- window manual 90 hari lalu 80
+            hari, SAMA-SAMA kena -6021 "Query time range too large", limit asli Binance ternyata
+            jauh lebih ketat dari dokumentasi "3 bulan" dan belum jelas berapa persisnya).
+            Default SEKARANG: TIDAK kirim startTime/endTime SAMA SEKALI -> Binance otomatis
+            pakai default resminya sendiri (30 hari terakhir, dijamin valid krn itu perilaku
+            bawaan mereka, bukan angka hasil tebakan). ?days=N (opsional) kirim 1 window
+            startTime..endTime sepanjang N hari TERAKHIR -- kalau N besar & masih kena -6021,
+            itu infonya sendiri (artinya limit beneran di bawah N), bukan perlu paginasi rumit."""
             try:
-                days = int(request.args.get("days", "90"))
+                days = int(request.args.get("days", "0"))
             except ValueError:
                 return jsonify({"ok": False, "error": "days tidak valid"}), 400
-            now_ms = int(time.time() * 1000)
-            window_ms = 80 * 24 * 3600 * 1000
-            oldest_ms = now_ms - days * 24 * 3600 * 1000
 
             def _fetch(api_key=None, api_secret=None):
-                rows, end = [], now_ms
-                while end > oldest_ms:
-                    start = max(end - window_ms, oldest_ms)
-                    data = _binance_trading_request(
-                        "GET", "/sapi/v1/simple-earn/flexible/history/redemptionRecord",
-                        {"startTime": start, "endTime": end, "size": 100},
-                        api_key=api_key, api_secret=api_secret)
-                    rows.extend(data.get("rows", []) if isinstance(data, dict) else [])
-                    end = start
-                return rows
+                params = {"size": 100}
+                if days > 0:
+                    now_ms = int(time.time() * 1000)
+                    params["startTime"] = now_ms - days * 24 * 3600 * 1000
+                    params["endTime"] = now_ms
+                data = _binance_trading_request(
+                    "GET", "/sapi/v1/simple-earn/flexible/history/redemptionRecord",
+                    params, api_key=api_key, api_secret=api_secret)
+                return data.get("rows", []) if isinstance(data, dict) else []
 
             result = {}
             try:
@@ -23648,7 +23648,7 @@ def run_web_dashboard():
                     result["master_error"] = str(e)
             else:
                 result["master"] = "BINANCE_EARN_KEY belum di-set -- Earn history 'sub' di atas KEMUNGKINAN BESAR itu jugalah akun Earn yang sebenarnya dipakai"
-            return jsonify({"ok": True, "days": days, "result": result})
+            return jsonify({"ok": True, "days": days or "default Binance (30 hari)", "result": result})
 
         @app.route("/admin/test_balance", methods=["GET"])
         def admin_test_balance():
