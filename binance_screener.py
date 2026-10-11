@@ -14935,9 +14935,9 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
 <!-- ═══════════════ CLOSED TRADES ═══════════════ -->
 <div class="container dash-section-start" data-tab="history" style="margin-top:12px">
 <div class="card" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 22px;margin-top:0">
-    <div class="card-header" onclick="toggleCard(this)" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+    <div class="card-header" onclick="toggleCard(this)" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;margin-bottom:14px;gap:8px">
         <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">CLOSED TRADES <span class="card-toggle">&#9660;</span></h2>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;max-width:100%">
     <select id="ct-filter-strat" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua strategi</option>
         <option value="brkX2_12h_closed">KeltnerBreak-12h</option>
