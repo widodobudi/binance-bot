@@ -23537,6 +23537,21 @@ def run_web_dashboard():
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)})
 
+        @app.route("/admin/earn_product_info", methods=["GET"])
+        def admin_earn_product_info():
+            """11/10/2026 (permintaan Mas Budi): READ-ONLY, tidak ada pergerakan dana sama sekali
+            -- cuma panggil get_earn_flexible_product() biar bisa lihat angka minimum subscribe
+            Earn Flexible yg SEBENARNYA (butuh API key berotentikasi yg cuma ada di bot live,
+            tidak bisa dicek dari luar). Dipakai utk verifikasi park_profit_to_earn_usdt()
+            (default asset=USDT) tanpa perlu nunggu ada close beneran dulu.
+            ?asset=BTC untuk cek produk Earn Flexible asset lain."""
+            asset = request.args.get("asset", "USDT").upper()
+            try:
+                prod = get_earn_flexible_product(asset)
+                return jsonify({"ok": True, "asset": asset, "product": prod})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
+
         @app.route("/admin/test_balance", methods=["GET"])
         def admin_test_balance():
             """Test baca saldo via BINANCE_TRADING_KEY.
