@@ -2956,9 +2956,12 @@ def strategy_recent_close_stats() -> dict:
     dipakai utk tampilan sekunder "1x per ~Y hari/jam", info tambahan yg selalu bermakna
     apa pun frekuensinya, beda dari rate yg bisa kebulat ke 0 kalau jarang), dan (3) waktu
     closing profit-positif PALING BARU -- TANPA batas hari (tetap kelihatan "terakhir kapan"
-    meski sudah lebih dari 90 hari tidak ada yg profit, bukan kosong).
+    meski sudah lebih dari 90 hari tidak ada yg profit, bukan kosong), dan (4) simbol koin
+    dari closing profit-positif PALING BARU itu (11/10/2026, permintaan Mas Budi -- supaya
+    "X menit lalu" di panel Performance per Strategy tidak perlu dicocokkan manual ke tabel
+    Closed Trades, sumber kebingungan berulang).
     Return {strategy_key: {'rate': float, 'rate_unit': str|None, 'interval_days': float|None,
-    'last_win_close_wib': str|None}}."""
+    'last_win_close_wib': str|None, 'last_win_symbol': str|None}}."""
     result = {}
     try:
         if not os.path.exists(TRADES_CSV):
@@ -2995,12 +2998,13 @@ def strategy_recent_close_stats() -> dict:
             ct = datetime.strptime(ct_str, '%Y-%m-%d %H:%M:%S')
         except ValueError:
             continue
-        st = result.setdefault(strat, {'_counts': {w: 0 for w, _, _ in STRATEGY_CLOSE_FREQ_TIERS}, '_last': None})
+        st = result.setdefault(strat, {'_counts': {w: 0 for w, _, _ in STRATEGY_CLOSE_FREQ_TIERS}, '_last': None, '_last_symbol': None})
         for w, _, _ in STRATEGY_CLOSE_FREQ_TIERS:
             if ct >= cutoffs[w]:
                 st['_counts'][w] += 1
         if st['_last'] is None or ct > st['_last']:
             st['_last'] = ct
+            st['_last_symbol'] = r.get('symbol') or None
     for st in result.values():
         chosen = None
         for w, unit, days_per_unit in STRATEGY_CLOSE_FREQ_TIERS:
@@ -3018,8 +3022,10 @@ def strategy_recent_close_stats() -> dict:
             st['rate_unit'] = None
             st['interval_days'] = None
         st['last_win_close_wib'] = st['_last'].strftime('%Y-%m-%d %H:%M:%S') if st['_last'] else None
+        st['last_win_symbol'] = st['_last_symbol']
         del st['_counts']
         del st['_last']
+        del st['_last_symbol']
     return result
 
 
@@ -13306,8 +13312,20 @@ function renderPerfChart(data) {
           + (title ? ' title="' + title + '"' : '') + '>' + label + arrow + '</div>';
       }
       var isDefaultSort = perfSort.key === 'wl' && perfSort.dir === 'desc';
-      var sortBar = '<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:6px;font-size:10px;color:var(--muted)">Urut: <b style="color:var(--text)">'
-        + PERF_SORT_LABELS[perfSort.key] + (perfSort.dir === 'asc' ? ' &#9650;' : ' &#9660;') + '</b>'
+      // 11/10/2026 (permintaan Mas Budi): "Urut: X v" DULU cuma teks statis (bukan dropdown
+      // beneran) -- visualnya pakai panah v yang menipu (di dashboard ini panah v biasanya
+      // memang dropdown asli), jadi diklik tidak ngapa-ngapain. Diganti <select> SUNGGUHAN,
+      // onchange-nya reuse persis perfClickSort() yg sudah dipakai klik header kolom (supaya
+      // logika arah asc/desc & simpan cookie-nya konsisten, tidak duplikat). Panah arah jadi
+      // tombol terpisah yg bisa diklik (toggle asc/desc utk key yg lagi aktif). Tombol RESET
+      // di sebelahnya TIDAK diubah -- sudah berfungsi benar, tetap terintegrasi di baris yg sama.
+      var sortBar = '<div style="display:flex;justify-content:flex-end;align-items:center;gap:6px;margin-bottom:6px;font-size:10px;color:var(--muted)">Urut: '
+        + '<select onchange="perfClickSort(this.value)" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:10px;font-family:var(--font);cursor:pointer">'
+        + Object.keys(PERF_SORT_LABELS).map(function(k){
+            return '<option value="' + k + '"' + (perfSort.key === k ? ' selected' : '') + '>' + PERF_SORT_LABELS[k] + '</option>';
+          }).join('')
+        + '</select>'
+        + '<span onclick="perfClickSort(perfSort.key)" title="Balik arah urutan (naik/turun)" style="cursor:pointer;color:var(--text);padding:2px 4px">' + (perfSort.dir === 'asc' ? '&#9650;' : '&#9660;') + '</span>'
         + '<button type="button" onclick="perfResetSort()" title="Kembali ke urutan default: Menang/Kalah (proporsi menang, terbesar di atas)" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:var(--font);'
         + (isDefaultSort ? 'opacity:.5;' : '') + '">Reset</button></div>';
       var header = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">'
@@ -13398,6 +13416,7 @@ function renderPerfChart(data) {
           + '<div style="width:65px;flex-shrink:0" class="' + (r.total_pct > 0 ? 'profit-pos' : (r.total_pct < 0 ? 'profit-neg' : '')) + '">' + (r.total_pct >= 0 ? '+' : '') + r.total_pct + '%</div>'
           + '<div style="width:105px;flex-shrink:0;color:var(--muted)">' + closeCell + '</div>'
           + '<div style="width:110px;flex-shrink:0;color:var(--muted)" title="' + (r.last_win_close_wib || '-') + ' WIB">' + timeAgoWib(r.last_win_close_wib) + '</div>'
+          + '<div style="width:90px;flex-shrink:0;color:var(--text)">' + (r.last_win_symbol || '-') + '</div>'
           + '</div>'
           + phaseDetail;
       }).join("");
@@ -24646,12 +24665,14 @@ def run_web_dashboard():
                 p = csv_progress(key)
                 if p is None:
                     p = {"n": 0, "win": 0, "loss": 0, "total_pct": 0.0}
-                r = recent.get(key, {"rate": 0.0, "rate_unit": None, "interval_days": None, "last_win_close_wib": None})
+                r = recent.get(key, {"rate": 0.0, "rate_unit": None, "interval_days": None,
+                                     "last_win_close_wib": None, "last_win_symbol": None})
                 rows.append({"key": key, "label": label, "n": p["n"], "win": p["win"],
                              "loss": p["loss"], "total_pct": round(p["total_pct"], 2),
                              "close_rate": r["rate"], "close_rate_unit": r["rate_unit"],
                              "close_interval_days": r["interval_days"],
                              "last_win_close_wib": r["last_win_close_wib"],
+                             "last_win_symbol": r.get("last_win_symbol"),
                              "phases": phases.get(key, [])})
             rows.sort(key=lambda r: (r["win"] / r["n"]) if r["n"] > 0 else -1, reverse=True)
             return jsonify({"strategies": rows, "hidden_paused": hidden_paused_labels})
