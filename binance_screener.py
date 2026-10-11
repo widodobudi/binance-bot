@@ -2025,8 +2025,15 @@ WEEKLY_LOSS_LIMIT_USD: float = 40.0
 # lama yg dihardcode). TIDAK ikut rumus global_max_exposure_usd() -- dua pengaturan independen.
 _global_max_active_deals: int = 4
 
+# 11/10/2026 (permintaan Mas Budi): toggle GLOBAL (lintas semua strategi) untuk fitur
+# transfer_profit_to_master() -- checkbox baru di Strategy Control, antara baris Batas Rugi
+# Harian/Max Deal Gabungan dan tabel per-strategi. Default True (SAMA PERSIS perilaku sekarang,
+# jadi tidak ada perubahan apa pun sampai Mas Budi sendiri uncheck). Disimpan di file config
+# yang SAMA (daily_loss_limit_config.json) -- pola identik dgn max_active_deals di atas.
+_transfer_profit_to_master_enabled: bool = True
+
 def load_daily_loss_limit():
-    global daily_loss_limit_usd, _global_max_active_deals
+    global daily_loss_limit_usd, _global_max_active_deals, _transfer_profit_to_master_enabled
     if not os.path.exists(DAILY_LOSS_LIMIT_FILE):
         return
     try:
@@ -2044,17 +2051,22 @@ def load_daily_loss_limit():
                 daily_loss_limit_usd = 6.0
             if "max_active_deals" in data:
                 _global_max_active_deals = max(0, int(data["max_active_deals"]))
-        log(f"   Loaded daily_loss_limit_usd: ${daily_loss_limit_usd}, max_active_deals: {_global_max_active_deals}")
+            if "transfer_profit_to_master_enabled" in data:
+                _transfer_profit_to_master_enabled = bool(data["transfer_profit_to_master_enabled"])
+        log(f"   Loaded daily_loss_limit_usd: ${daily_loss_limit_usd}, max_active_deals: {_global_max_active_deals}, "
+            f"transfer_profit_to_master_enabled: {_transfer_profit_to_master_enabled}")
     except Exception as e:
         log(f"WARN gagal baca daily_loss_limit_config.json: {e}")
 
 def _write_global_risk_config():
-    """Tulis KEDUA setting (limit_usd + max_active_deals) sekaligus tiap kali salah satu
-    disimpan -- supaya yang satu tidak menimpa/menghilangkan yang lain di file yg sama."""
+    """Tulis SEMUA setting (limit_usd + max_active_deals + transfer_profit_to_master_enabled)
+    sekaligus tiap kali salah satu disimpan -- supaya yang satu tidak menimpa/menghilangkan
+    yang lain di file yg sama."""
     try:
         with open(DAILY_LOSS_LIMIT_FILE, 'w') as f:
             json.dump({"limit_usd": daily_loss_limit_usd,
-                       "max_active_deals": _global_max_active_deals}, f, indent=2)
+                       "max_active_deals": _global_max_active_deals,
+                       "transfer_profit_to_master_enabled": _transfer_profit_to_master_enabled}, f, indent=2)
     except Exception as e:
         log(f"WARN gagal simpan daily_loss_limit_config.json: {e}")
 
@@ -2077,6 +2089,18 @@ def save_global_max_active_deals(n: int) -> int:
         _global_max_active_deals = n
         _write_global_risk_config()
     return n
+
+def is_transfer_profit_to_master_enabled() -> bool:
+    with daily_loss_limit_lock:
+        return _transfer_profit_to_master_enabled
+
+def save_transfer_profit_to_master_enabled(enabled: bool) -> bool:
+    global _transfer_profit_to_master_enabled
+    enabled = bool(enabled)
+    with daily_loss_limit_lock:
+        _transfer_profit_to_master_enabled = enabled
+        _write_global_risk_config()
+    return enabled
 
 def get_today_pnl_usd() -> float:
     """Realized P&L (trade CLOSED hari ini, WIB) + unrealized P&L (U/PNL semua deal aktif)."""
@@ -2168,7 +2192,8 @@ def get_daily_loss_status() -> dict:
     return {"pnl_usd": pnl_usd, "pnl_pct": pnl_pct, "capital_usd": cap,
             "limit_usd": limit_usd, "breached": breached,
             "global_max_exposure_usd": global_max_exposure_usd(),
-            "global_max_active_deals": global_max_active_deals()}
+            "global_max_active_deals": global_max_active_deals(),
+            "transfer_profit_to_master_enabled": is_transfer_profit_to_master_enabled()}
 
 def is_daily_loss_limit_breached() -> bool:
     """09/09/2026 (permintaan Mas Budi, keluhan notif "Batas Rugi Harian Tersulut" bertubi-tubi):
@@ -4396,6 +4421,10 @@ def transfer_profit_to_master(profit_usd: float, context: str = "") -> dict:
     Return {"ok": bool, "qty": float, "reason": str (kalau ok=False)}."""
     if not USE_BINANCE_DIRECT or profit_usd <= 0:
         return {"ok": False, "reason": "skip", "qty": 0.0}
+    # 11/10/2026 (permintaan Mas Budi): toggle global di Strategy Control -- kalau dimatikan,
+    # profit TETAP sbg USDT di Spot Sub (perilaku sebelum fitur ini ada), tidak ada transfer.
+    if not is_transfer_profit_to_master_enabled():
+        return {"ok": False, "reason": "disabled", "qty": 0.0}
     if not binance_transfer_sub_to_master("USDT", profit_usd):
         log(f"WARN [EARN-PROFIT] {context}: transfer Sub->Master ${profit_usd:.2f} USDT gagal -> tetap USDT di Spot Sub")
         return {"ok": False, "reason": "transfer_fail", "qty": 0.0}
@@ -5948,7 +5977,7 @@ def execute_close_now(sym: str, reason: str, telegram_header: str = "CLOSE MANUA
                 _earn_res_m = transfer_profit_to_master(_profit_usd, context=f"{to_display_pair(sym)}/{strat} ({log_tag})")
                 if _earn_res_m["ok"]:
                     _earn_line_m = f"\nProfit->Master: ${_profit_usd:.2f}"
-                elif _earn_res_m["reason"] != "skip":
+                elif _earn_res_m["reason"] not in ("skip", "disabled"):
                     _earn_line_m = f"\nProfit->Master: GAGAL ({_earn_res_m['reason']})"
             send_telegram(
                 f"{telegram_header}\n"
@@ -9924,7 +9953,7 @@ def thread2_monitor():
                     _earn_res = transfer_profit_to_master(_upnl_usd_cl, context=f"{to_display_pair(sym)}/{strat}")
                     if _earn_res["ok"]:
                         _earn_line = f"\nProfit->Master: ${_upnl_usd_cl:.2f}"
-                    elif _earn_res["reason"] != "skip":
+                    elif _earn_res["reason"] not in ("skip", "disabled"):
                         _earn_line = f"\nProfit->Master: GAGAL ({_earn_res['reason']})"
                 send_telegram(
                     f"{strat_label} | CLOSE LONG\n"
@@ -12347,7 +12376,7 @@ def _try_swap_hunting_slot(incoming_symbol: str) -> bool:
         _earn_res_s = transfer_profit_to_master(_profit_usd_s, context=f"{to_display_pair(swap_sym)}/hunting_4h (SLOT-SWAP)")
         if _earn_res_s["ok"]:
             _earn_line_s = f"\nProfit->Master: ${_profit_usd_s:.2f}"
-        elif _earn_res_s["reason"] != "skip":
+        elif _earn_res_s["reason"] not in ("skip", "disabled"):
             _earn_line_s = f"\nProfit->Master: GAGAL ({_earn_res_s['reason']})"
     send_telegram(
         f"Hunting-4h | SLOT SWAP\n"
@@ -13135,6 +13164,13 @@ document.addEventListener('DOMContentLoaded', function() {
         <button type="button" onclick="event.stopPropagation();saveGlobalMaxActiveDeals()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
         <span id="dll-active-cap-status" style="color:var(--muted)"></span>
     </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border);font-size:11px">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--muted)" title="Kalau aktif: tiap deal close UNTUNG di strategi apa pun (Sub Account) otomatis mentransfer bagian untungnya saja (bukan modal) ke Master Account. Kalau dimatikan: profit tetap sebagai USDT biasa di Sub Account, tidak ada transfer sama sekali -- sama seperti sebelum fitur ini ada.">
+            <input type="checkbox" id="dll-transfer-profit-enabled" onclick="event.stopPropagation()" onchange="saveTransferProfitToMaster()" checked>
+            <span>Transfer Profit Closed-Deal ke Master Account</span>
+        </label>
+        <span id="dll-transfer-profit-status" style="color:var(--muted)"></span>
+    </div>
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
     <table style="width:100%;min-width:760px;border-collapse:collapse;font-size:11px" id="sc-table">
         <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
@@ -13146,7 +13182,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <th style="text-align:center;padding:5px 8px">Gunakan Setting Modal</th>
           <th style="text-align:center;padding:5px 8px">Base Order (USDT)</th>
           <th style="text-align:center;padding:5px 8px">Add Fund (USDT)</th>
-          <th style="text-align:center;padding:5px 8px" title="Persentase koin yang DIJUAL saat close yang UNTUNG. Sisanya disimpan di Simple Earn Flexible.">Jual saat Close Untung (%)</th>
+          <th style="text-align:center;padding:5px 8px" title="Persentase koin yang DIJUAL saat close yang UNTUNG. 11/10/2026: mekanisme 'sisanya ke Simple Earn Flexible' sudah dicabut dari semua strategi (termasuk KeltnerBreak-12h) -- sekarang semua strategi selalu 100% (jual penuh). Kolom ini dipertahankan utk kompatibilitas, tidak direkomendasikan diubah dari 100.">Jual saat Close Untung (%)</th>
           <th style="text-align:center;padding:5px 8px">Cooldown Re-entry</th>
                     <th style="text-align:center;padding:5px 8px">Action</th>
         </tr></thead>
@@ -14530,6 +14566,8 @@ function loadDailyLossLimit() {
         if (expCap && d.global_max_exposure_usd !== undefined) expCap.textContent = '$' + d.global_max_exposure_usd.toFixed(0);
         var dealCapInput = document.getElementById('dll-active-cap-input');
         if (dealCapInput && document.activeElement !== dealCapInput && d.global_max_active_deals !== undefined) dealCapInput.value = d.global_max_active_deals;
+        var transferCb = document.getElementById('dll-transfer-profit-enabled');
+        if (transferCb && document.activeElement !== transferCb && d.transfer_profit_to_master_enabled !== undefined) transferCb.checked = d.transfer_profit_to_master_enabled;
     }).catch(function(){});
 }
 function saveDailyLossLimit() {
@@ -14549,6 +14587,16 @@ function saveGlobalMaxActiveDeals() {
         .then(function(r){ return r.json(); }).then(function(d){
             if (!d.ok) { alert('Error: ' + d.error); return; }
             if (status) { status.textContent = 'Tersimpan.'; setTimeout(function(){ status.textContent=''; }, 3000); }
+            loadDailyLossLimit();
+        });
+}
+function saveTransferProfitToMaster() {
+    var checked = document.getElementById('dll-transfer-profit-enabled').checked;
+    var status = document.getElementById('dll-transfer-profit-status');
+    fetch('/api/daily_loss_limit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({transfer_profit_to_master_enabled:checked})})
+        .then(function(r){ return r.json(); }).then(function(d){
+            if (!d.ok) { alert('Error: ' + d.error); return; }
+            if (status) { status.textContent = checked ? 'Aktif.' : 'Dimatikan.'; setTimeout(function(){ status.textContent=''; }, 3000); }
             loadDailyLossLimit();
         });
 }
@@ -23922,7 +23970,7 @@ def run_web_dashboard():
                         _earn_res_w = transfer_profit_to_master(_profit_usd_w, context=f"{to_display_pair(symbol)}/{strategy} (WEBHOOK)")
                         if _earn_res_w["ok"]:
                             _earn_line_w = f"\nProfit->Master: ${_profit_usd_w:.2f}"
-                        elif _earn_res_w["reason"] != "skip":
+                        elif _earn_res_w["reason"] not in ("skip", "disabled"):
                             _earn_line_w = f"\nProfit->Master: GAGAL ({_earn_res_w['reason']})"
                     send_telegram(
                         f"{strategy} | CLOSE LONG (TradingView webhook)\n"
@@ -24931,8 +24979,9 @@ def run_web_dashboard():
             """GET: status batas rugi harian (limit $ tetap sejak 17/09/2026, P&L hari ini,
             tersulut atau tidak) + 2 batas global gabungan (global_max_exposure_usd turunan
             otomatis dari limit_usd, global_max_active_deals setting independen).
-            POST: {limit_usd: 6.0} dan/atau {max_active_deals: 4} -- dua field independen,
-            kirim salah satu atau keduanya sekaligus."""
+            POST: {limit_usd: 6.0} dan/atau {max_active_deals: 4} dan/atau
+            {transfer_profit_to_master_enabled: true/false} -- field independen,
+            kirim salah satu/sebagian/semuanya sekaligus."""
             try:
                 if request.method == "POST":
                     payload = request.get_json(force=True, silent=True) or {}
@@ -24950,6 +24999,8 @@ def run_web_dashboard():
                         if n < 0:
                             return jsonify({"ok": False, "error": "max_active_deals tidak boleh negatif"}), 400
                         save_global_max_active_deals(n)
+                    if "transfer_profit_to_master_enabled" in payload:
+                        save_transfer_profit_to_master_enabled(bool(payload["transfer_profit_to_master_enabled"]))
                 status = get_daily_loss_status()
                 return jsonify({"ok": True, **status})
             except Exception as error:
