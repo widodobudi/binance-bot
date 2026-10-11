@@ -3087,6 +3087,30 @@ def strategy_phase_breakdown() -> dict:
         ]
     except Exception as e:
         log(f"   [PHASE] gagal hitung qscalp_3m: {e}")
+    try:
+        # 11/10/2026 (laporan Mas Budi -- panah expand hilang utk 3 kartu ini): decouple_4h/
+        # rvolbreak_1h/dipbuy_universe naik live 09/10/2026 dan sudah ditambahkan ke daftar
+        # `defs` di /api/strategy_performance 10/10/2026 (lihat REMARK di sana), tapi
+        # TIDAK PERNAH ditambahkan ke sini -- phases.get(key, []) selalu balik [] -> JS
+        # (hasPhases = r.phases.length > 0) tidak pernah render panah. Sama pola persis 1
+        # fase "LIVE" spt trend_confirm_4h/qscalp_3m (belum pernah ganti formula/baseline).
+        out['decouple_4h'] = [
+            _phase_entry('LIVE', csv_progress('decouple_4h')),
+        ]
+    except Exception as e:
+        log(f"   [PHASE] gagal hitung decouple_4h: {e}")
+    try:
+        out['rvolbreak_1h'] = [
+            _phase_entry('LIVE', csv_progress('rvolbreak_1h')),
+        ]
+    except Exception as e:
+        log(f"   [PHASE] gagal hitung rvolbreak_1h: {e}")
+    try:
+        out['dipbuy_universe'] = [
+            _phase_entry('LIVE', csv_progress('dipbuy_universe')),
+        ]
+    except Exception as e:
+        log(f"   [PHASE] gagal hitung dipbuy_universe: {e}")
     return out
 
 
