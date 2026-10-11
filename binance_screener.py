@@ -23552,6 +23552,32 @@ def run_web_dashboard():
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)}), 500
 
+        @app.route("/admin/test_transfer_min", methods=["GET"])
+        def admin_test_transfer_min():
+            """11/10/2026 (permintaan Mas Budi): test SATU KALI, presisi -- dokumentasi resmi
+            POST /sapi/v1/sub-account/transfer/subToMaster TIDAK mendeklarasikan batas minimum
+            apa pun (beda dari filter NOTIONAL pair trading yg bisa dicek via exchangeInfo), jadi
+            satu2nya cara pasti adalah coba transfer kecil beneran & baca respons mentah Binance.
+            Default $0.01 USDT -- kalau BERHASIL, floor-nya pasti <= $0.01 (praktis tidak relevan
+            utk profit real manapun). Kalau DITOLAK, pesan error Binance biasanya SUDAH menyebut
+            angka minimum persis-nya, jadi 1x panggilan ini cukup, tidak perlu coba2 berulang.
+            Transfer SUNGGUHAN (Sub->Master, uang Mas Budi sendiri, tidak hilang) -- BUKAN
+            read-only spt /admin/earn_product_info. ?amount=0.01 bisa diubah manual."""
+            try:
+                amount = float(request.args.get("amount", "0.01"))
+            except ValueError:
+                return jsonify({"ok": False, "error": "amount tidak valid"}), 400
+            if amount <= 0:
+                return jsonify({"ok": False, "error": "amount harus > 0"}), 400
+            try:
+                data = _binance_trading_request("POST", "/sapi/v1/sub-account/transfer/subToMaster",
+                                                 {"asset": "USDT", "amount": f"{amount:.8f}"})
+                log(f"[TEST-TRANSFER] subToMaster {amount} USDT -> SUKSES: {data}")
+                return jsonify({"ok": True, "amount": amount, "response": data})
+            except Exception as e:
+                log(f"[TEST-TRANSFER] subToMaster {amount} USDT -> GAGAL: {e}")
+                return jsonify({"ok": False, "amount": amount, "error": str(e)})
+
         @app.route("/admin/test_balance", methods=["GET"])
         def admin_test_balance():
             """Test baca saldo via BINANCE_TRADING_KEY.
