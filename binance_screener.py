@@ -14335,7 +14335,7 @@ var SC_LABELS = {
     akum_entry_a: 'Akum-4h Entry A',
     akum_entry_b: 'Akum-4h Entry B',
     hunting_4h: 'Hunting-4h',
-    trend_confirm_4h: 'TrendConfirm-4h',
+    trend_confirm_4h: 'TrenKonfirmasi-4h',
     qscalp_3m: 'QScalp-3m',
     decouple_4h: 'Decouple-4h',
     rvolbreak_1h: 'RVOLBreak-1h',
