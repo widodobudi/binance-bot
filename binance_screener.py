@@ -248,6 +248,22 @@ BRKX2_4H_BE_TRIGGER_PCT = 1.0
 # 06/10/2026: impas +1% untuk TrenKonfirmasi-4h (tanpa faktor 0.8). 0 = mati. Hanya aktif setelah di-push.
 TC4H_BE_TRIGGER_PCT = 1.0
 BE_TRIGGER_BY_STRATEGY = {'brkX2_4h': BRKX2_4H_BE_TRIGGER_PCT, 'trend_confirm_4h': TC4H_BE_TRIGGER_PCT}
+# 11/10/2026 (permintaan Mas Budi): batas jual mekanisme impas ("entry +0.1%") SEBELUMNYA hardcode
+# `entry * 1.001` di thread2_monitor() -- ketahuan dari laporan Mas Budi, 9 deal TrenKonfirmasi-4h
+# yang "impas" SEMUA hasil akhirnya negatif (-0,10% s/d -0,66%), karena fee round-trip (0.2%,
+# FEE_ROUND_TRIP_PCT) + slippage order market (rata2 tambahan ~0,25%) SELALU lebih besar dari
+# buffer +0,1% itu. Dijadikan konstanta per-strategi di sini supaya bisa diubah tanpa cari-cari
+# hardcode lagi -- PER STRATEGI (bukan 1 angka dipakai bareng brkX2_4h) krn Mas Budi spesifik
+# minta soal TrenKonfirmasi-4h, brkX2_4h BELUM diminta diubah (tetap 0.1, perilaku lama).
+# trend_confirm_4h dinaikkan 0.1 -> 0.5 (11/10/2026) berdasar backtest 175 pasang 2022-2026,
+# 23.144 sinyal (metodologi diverifikasi cocok 99,93% dgn live_trendconfirm_4h_sim.pkl yg sudah
+# tervalidasi sebelumnya, exit be dimatikan): buffer 0.1 lama TERLALU KETAT -- begitu profit
+# sentuh +1%, noise kecil langsung memotong 62% dari SEMUA sinyal di level receh SEBELUM sempat
+# naik ke ambang arm trailing (1-3.5%), bikin WR seluruh strategi cuma 28.7%. Buffer 0.5: WR
+# seluruh strategi naik ke 90.7%, avg profit seluruh strategi +0.064% -> +0.274%. Angka 0.5
+# (bukan 0.2 yg teoretis sudah "impas 0%") dipilih dgn margin ekstra memperhitungkan slippage
+# order market nyata (~0.25% rata2 dari 9 data live) yg tidak tertangkap simulasi granularitas 1 jam.
+BE_EXIT_BUFFER_PCT_BY_STRATEGY = {'brkX2_4h': 0.1, 'trend_confirm_4h': 0.5}
 # TrenKonfirmasi-4h K1.5 + cap 10.8% (permintaan Mas Budi, prioritas: hard-stop lebih jarang & untung terjaga):
 # hard-stop 18.2% -> 14.0% dari trade, rugi terburuk -12.3% -> -11.0%, avg +1.80% -> +1.85% (2025+: 20.6% -> 16.2%,
 # +1.52% -> +1.53%). Stop per tier ATR: <1% 6.0%, <2% 8.25%, <4% 10.5%, >=4% 10.8% (cap). REMARK nilai lama (rollback):
@@ -9543,12 +9559,13 @@ def thread2_monitor():
                 _be_trig = BE_TRIGGER_BY_STRATEGY.get(strat, 0)
                 _be_active = (_be_trig > 0 and entry > 0 and peak >= entry * (1 + _be_trig / 100))
                 if _be_active:
-                    # impas: setelah pernah untung >= trigger, batas jual = entry +0.1% (bukan hard stop)
-                    if price <= entry * 1.001:
+                    # impas: setelah pernah untung >= trigger, batas jual = entry + buffer (bukan hard stop)
+                    _be_buf = BE_EXIT_BUFFER_PCT_BY_STRATEGY.get(strat, 0.1)
+                    if price <= entry * (1 + _be_buf / 100):
                         do_close = True
                         _be_forced_close = True
                         reason = (f"impas setelah untung +{_be_trig:g}%: price {_fmt_price(price)} "
-                                  f"turun ke harga beli (entry +0.1%)")
+                                  f"turun ke harga beli (entry +{_be_buf:g}%)")
                 elif price <= entry * (1 - _hs_pct / 100):
                     do_close = True
                     reason = (f"hard stop {_hs_pct:.2f}% flat (varian C ronde 1): price {_fmt_price(price)} turun "
