@@ -14485,7 +14485,7 @@ function loadStrategyConfig() {
                     addFundCell = '<td style="text-align:center;padding:5px 8px;color:var(--muted);white-space:nowrap">—</td>';
                 }
                 rows += '<tr data-strategy="' + k + '"' + (strategyEnabled ? '' : ' data-off="1"') + ' style="border-bottom:1px solid rgba(255,255,255,0.04)">'
-                    + '<td style="padding:5px 8px;font-weight:600">' + (SC_LABELS[k] || k) + '</td>'
+                    + '<td style="padding:5px 8px;font-weight:600;white-space:nowrap">' + (SC_LABELS[k] || k) + '</td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-maxdeals-' + k + '" value="' + (cfg.max_deals || 2) + '" min="1" step="1" style="width:50px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px" title="Jumlah maksimum deal aktif bersamaan untuk strategi ini"></td>'
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-run-' + k + '" ' + (strategyEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
                     + btcGateCellHtml(k, cfg)
