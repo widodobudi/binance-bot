@@ -23599,6 +23599,55 @@ def run_web_dashboard():
                 log(f"[TEST-TRANSFER] subToMaster {amount} USDT -> GAGAL: {e}")
                 return jsonify({"ok": False, "amount": amount, "error": str(e)})
 
+        @app.route("/admin/earn_redemption_history", methods=["GET"])
+        def admin_earn_redemption_history():
+            """11/10/2026 (permintaan Mas Budi): READ-ONLY, tidak ada pergerakan dana sama sekali
+            -- baca riwayat redeem Simple Earn Flexible (GET /sapi/v1/simple-earn/flexible/history/
+            redemptionRecord), dicek di DUA akun sekaligus (Mas Budi sendiri lupa redeem manual
+            dulu dilakukan di Master atau Sub) -- 'master' pakai BINANCE_EARN_KEY kalau sudah
+            di-set (fallback Sub kalau belum), 'sub' SELALU paksa pakai BINANCE_TRADING_KEY
+            langsung spy kedua hasil beda sumber & tidak dobel kalau Master key belum di-set.
+            Dipakai utk lihat pola nyata: di % profit berapa Mas Budi biasanya redeem Earn
+            secara manual selama ini, utk kalibrasi ambang redeem otomatis fitur baru (bukan
+            nebak dari percakapan). Default 90 hari terakhir (gabung window 90-harian berulang,
+            krn Binance batasi max 3 bulan per window & histori bisa lebih lawas dari itu) --
+            ?days=30 bisa diubah manual."""
+            try:
+                days = int(request.args.get("days", "90"))
+            except ValueError:
+                return jsonify({"ok": False, "error": "days tidak valid"}), 400
+            now_ms = int(time.time() * 1000)
+            window_ms = 90 * 24 * 3600 * 1000
+            oldest_ms = now_ms - days * 24 * 3600 * 1000
+
+            def _fetch(api_key=None, api_secret=None):
+                rows, end = [], now_ms
+                while end > oldest_ms:
+                    start = max(end - window_ms, oldest_ms)
+                    data = _binance_trading_request(
+                        "GET", "/sapi/v1/simple-earn/flexible/history/redemptionRecord",
+                        {"startTime": start, "endTime": end, "size": 100},
+                        api_key=api_key, api_secret=api_secret)
+                    rows.extend(data.get("rows", []) if isinstance(data, dict) else [])
+                    end = start
+                return rows
+
+            result = {}
+            try:
+                result["sub"] = _fetch()  # default = BINANCE_TRADING_KEY (Sub)
+            except Exception as e:
+                result["sub_error"] = str(e)
+            master_key = os.environ.get("BINANCE_EARN_KEY", "")
+            master_secret = os.environ.get("BINANCE_EARN_SECRET", "")
+            if master_key and master_secret:
+                try:
+                    result["master"] = _fetch(api_key=master_key, api_secret=master_secret)
+                except Exception as e:
+                    result["master_error"] = str(e)
+            else:
+                result["master"] = "BINANCE_EARN_KEY belum di-set -- Earn history 'sub' di atas KEMUNGKINAN BESAR itu jugalah akun Earn yang sebenarnya dipakai"
+            return jsonify({"ok": True, "days": days, "result": result})
+
         @app.route("/admin/test_balance", methods=["GET"])
         def admin_test_balance():
             """Test baca saldo via BINANCE_TRADING_KEY.
