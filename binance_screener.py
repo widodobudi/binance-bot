@@ -5108,9 +5108,14 @@ _master_usdt_balance_lock = threading.Lock()
 MASTER_USDT_BALANCE_CACHE_TTL = 20
 
 def get_master_usdt_balance() -> float:
-    """Saldo USDT Spot wallet Master Account saat ini (free + locked). Pakai BINANCE_EARN_KEY
-    (kredensial Master, sama yg dipakai fitur Earn lain) -- fallback ke BINANCE_TRADING_KEY
-    (Sub Account) kalau BINANCE_EARN_KEY belum di-set, SAMA pola fallback-nya _binance_earn_request().
+    """Saldo USDT Master Account saat ini: Spot (free+locked) + Simple Earn Flexible digabung.
+    Pakai BINANCE_EARN_KEY (kredensial Master, sama yg dipakai fitur Earn lain) -- fallback ke
+    BINANCE_TRADING_KEY (Sub Account) kalau BINANCE_EARN_KEY belum di-set, SAMA pola fallback-nya
+    _binance_earn_request(). 11/10/2026 (ketahuan dari laporan Mas Budi): SEBELUMNYA cuma baca
+    Spot, angkanya cuma recehan ($1.58) karena Binance Mas Budi sendiri punya "Auto-Subscribe"
+    aktif di akun -- begitu profit mendarat di Spot Master, Binance OTOMATIS menyapunya ke Earn
+    Flexible sebelum sempat kebaca lagi. Sekarang digabung supaya mencerminkan TOTAL sungguhan
+    (sama seperti "Est. Total Value" di app Binance), bukan cuma sisa yg belum tersapu.
     Return 0.0 kalau gagal (non-blocking, dashboard tinggal tampilkan '-' )."""
     with _master_usdt_balance_lock:
         if time.time() - _master_usdt_balance_cache["ts"] < MASTER_USDT_BALANCE_CACHE_TTL:
@@ -5120,11 +5125,13 @@ def get_master_usdt_balance() -> float:
         secret = os.environ.get("BINANCE_EARN_SECRET", "")
         kwargs = {"api_key": key, "api_secret": secret} if key and secret else {}
         data = _binance_trading_request("GET", "/api/v3/account", {}, **kwargs)
-        total = 0.0
+        spot_total = 0.0
         for item in data.get("balances", []):
             if str(item.get("asset", "")).upper() == "USDT":
-                total = float(item.get("free", 0)) + float(item.get("locked", 0))
+                spot_total = float(item.get("free", 0)) + float(item.get("locked", 0))
                 break
+        earn_total = sum(p["totalAmount"] for p in get_earn_flexible_usdt_positions())
+        total = spot_total + earn_total
         with _master_usdt_balance_lock:
             _master_usdt_balance_cache["ts"] = time.time()
             _master_usdt_balance_cache["value"] = total
@@ -13219,7 +13226,7 @@ document.addEventListener('DOMContentLoaded', function() {
         </label>
         <span id="dll-transfer-profit-status" style="color:var(--muted)"></span>
         <span style="color:var(--border)">|</span>
-        <span style="display:flex;align-items:center;gap:6px;color:var(--muted)" title="Saldo USDT Spot Master Account saat ini (live dari Binance, cache maksimal 20 detik). Naik/turun otomatis ikut transfer dari fitur ini maupun aktivitas manual Mas Budi sendiri (withdraw, dsb).">
+        <span style="display:flex;align-items:center;gap:6px;color:var(--muted)" title="Saldo USDT Master Account saat ini: Spot + Simple Earn Flexible digabung (live dari Binance, cache maksimal 20 detik) -- sama seperti &quot;Est. Total Value&quot; di app Binance. Naik/turun otomatis ikut transfer dari fitur ini, Auto-Subscribe Binance sendiri, maupun aktivitas manual Mas Budi (withdraw, dsb).">
             <span>Saldo USDT Master:</span>
             <b id="dll-master-usdt-balance" style="color:var(--text)">-</b>
         </span>
