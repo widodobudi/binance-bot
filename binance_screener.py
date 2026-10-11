@@ -1329,6 +1329,11 @@ STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # 20/09/2026 (permintaan Mas Budi): "close_sell_pct" = % koin yg DIJUAL saat close UNTUNG (sisa -> Simple Earn Flexible,
 # lihat close_deal_maybe_partial()). Tahap 1: HANYA brkX2 (KeltnerBreak-12h) = 75; strategi lain 100 (= jual semua, nonaktif);
 # QScalp-3m selalu 100 (dikunci di kode + dimmed di dashboard).
+# 11/10/2026 (permintaan Mas Budi): residu-koin-ke-Earn KeltnerBreak-12h DICABUT -- balik ke 100
+# (jual penuh) utk brkX2 & brkX2_12h_closed, SAMA spt semua strategi lain sekarang. Diganti rencana
+# baru yg lebih luas: profit (USDT, bukan residu koin) dari SEMUA strategi diparkir ke Simple Earn
+# Flexible USDT -- lihat park_profit_to_earn_usdt(), dipanggil terpisah di thread2_monitor(), TIDAK
+# lagi lewat close_sell_pct/close_deal_maybe_partial().
 STRATEGY_CONFIG_DEFAULTS = {
     # 09/10/2026 (permintaan Mas Budi): KeltnerBreak-12h sempat dipecah jadi 2 strategi INDEPENDEN
     # -- 'brkX2_closed' (closed-candle, thread1_scan/T1) dan 'brkX2_intrabar' (gabungan
@@ -1366,8 +1371,8 @@ STRATEGY_CONFIG_DEFAULTS = {
     # HANYA dipanggil di thread1_scan() (closed-candle/T1) -- bukti backtest-nya spesifik utk itu,
     # TIDAK dipanggil sama sekali di thread1c_scan_intrabar()/thread1c_scan_intrabar_early()
     # (jalur intrabar, sengaja tidak digeneralisir tanpa uji sendiri).
-    "brkX2_12h_closed":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 75, "btc_gate_enabled": True},
-    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 75},
+    "brkX2_12h_closed":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
+    "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 5, "close_sell_pct": 100},
     "brkX2_crossema":{"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
@@ -4373,6 +4378,45 @@ def pop_recent_sell_fill(symbol: str, max_age: float = 120.0) -> float:
     if not rec or rec['qty'] <= 0 or time.time() - rec['ts'] > max_age:
         return 0.0
     return rec['proceeds'] / rec['qty']
+
+
+def park_profit_to_earn_usdt(profit_usd: float, context: str = "") -> dict:
+    """11/10/2026 (permintaan Mas Budi): tiap close UNTUNG, lintas SEMUA strategi -- bagian
+    untungnya SAJA (bukan modal) dipindah Sub->Master lalu disubscribe ke Simple Earn Flexible
+    USDT. Gantikan 2 ide sebelumnya yg ditolak: (1) saldo "belum ter-convert" cuma dicatat di
+    JSON -- itu bukan proteksi apa2, USDT-nya tetap nangkring di pool modal umum & bisa tergerus
+    deal lain yg rugi; (2) convert spot ke FDUSD -- kena batas minNotional KERAS $5/order dari
+    Binance (dicek 11/10/2026, berlaku SAMA di semua pair stablecoin-USDT, bukan kekhususan
+    FDUSD). Earn Flexible USDT dipilih krn: (a) begitu disubscribe, saldo itu BENAR2 keluar dari
+    Spot trading (bukan sekadar angka), tidak bisa ikut tergerus modal deal lain; (b) minimum
+    subscribe-nya (prod['min'], dibaca live per-call, BUKAN hardcode) jauh di bawah $5 batas spot
+    tadi; (c) SELALU USDT -> tidak pernah kena masalah "koin ini gak ada produk Earn" spt residu
+    per-koin KeltnerBreak-12h dulu (sudah dicabut, lihat REMARK di STRATEGY_CONFIG_DEFAULTS).
+    Reuse PERSIS primitive binance_transfer_sub_to_master()/_earn_subscribe() yg sudah terbukti
+    jalan produksi sejak 20/09/2026 -- transfer internal Sub<->Master dicek 11/10/2026 TIDAK
+    kena fee (bukan transaksi blockchain, cuma pemindahan ledger internal Binance).
+    Non-blocking: gagal di sini TIDAK membatalkan/mengganggu close deal itu sendiri -- profit
+    cuma tetap mengendap sbg USDT di Spot kalau gagal di titik mana pun.
+    Return {"ok": bool, "qty": float, "reason": str (kalau gagal)}."""
+    if not USE_BINANCE_DIRECT or profit_usd <= 0:
+        return {"ok": False, "reason": "skip", "qty": 0.0}
+    prod = get_earn_flexible_product("USDT")
+    if not prod:
+        log(f"WARN [EARN-PROFIT] {context}: tidak ada produk Earn Flexible USDT yg bisa dibeli -> profit tetap USDT di Spot")
+        return {"ok": False, "reason": "no_product", "qty": 0.0}
+    if profit_usd < prod["min"]:
+        log(f"[EARN-PROFIT] {context}: profit ${profit_usd:.2f} < minimum subscribe ${prod['min']:.2f} -> tetap USDT di Spot")
+        return {"ok": False, "reason": "below_min", "qty": 0.0}
+    if not binance_transfer_sub_to_master("USDT", profit_usd):
+        log(f"WARN [EARN-PROFIT] {context}: transfer Sub->Master ${profit_usd:.2f} USDT gagal -> tetap USDT di Spot Sub")
+        return {"ok": False, "reason": "transfer_fail", "qty": 0.0}
+    time.sleep(2)  # jeda settle, sama pola spt close_deal_maybe_partial()
+    if not _earn_subscribe(prod["productId"], profit_usd):
+        log(f"WARN [EARN-PROFIT] {context}: subscribe gagal -- ${profit_usd:.2f} USDT SUDAH di Spot MASTER "
+            f"(bukan Sub lagi, transfer di atas sukses), dibiarkan apa adanya. Tangani manual.")
+        return {"ok": False, "reason": "subscribe_fail", "qty": 0.0}
+    log(f"[EARN-PROFIT] {context}: ${profit_usd:.2f} USDT berhasil diparkir ke Earn Flexible USDT (APR {prod['apr']*100:.2f}%)")
+    return {"ok": True, "qty": profit_usd}
 
 
 def load_auto_sell_config() -> dict:
@@ -9874,6 +9918,18 @@ def thread2_monitor():
                 # Reuse variabel yang sama di sini, jangan hitung ulang.
                 _total_usd_cl = total_usd
                 _upnl_usd_cl  = round(prof_from_entry / 100 * _total_usd_cl, 2)
+                # 11/10/2026 (permintaan Mas Budi): close UNTUNG (semua strategi, bukan hold_no_sell
+                # krn di situ tidak ada jual beneran -> tidak ada USDT yg mendarat) -- bagian untung
+                # saja (BUKAN modal) diparkir ke Simple Earn Flexible USDT via Sub->Master, lihat
+                # REMARK lengkap di park_profit_to_earn_usdt(). Non-blocking: gagal TIDAK mengganggu
+                # close ini, cuma tercatat di log + baris notifikasi di bawah.
+                _earn_line = ""
+                if not _hold_no_sell and _upnl_usd_cl > 0:
+                    _earn_res = park_profit_to_earn_usdt(_upnl_usd_cl, context=f"{to_display_pair(sym)}/{strat}")
+                    if _earn_res["ok"]:
+                        _earn_line = f"\nProfit->Earn USDT: ${_upnl_usd_cl:.2f}"
+                    elif _earn_res["reason"] not in ("skip", "below_min"):
+                        _earn_line = f"\nProfit->Earn USDT: GAGAL ({_earn_res['reason']})"
                 send_telegram(
                     f"{strat_label} | CLOSE LONG\n"
                     f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
@@ -9884,6 +9940,7 @@ def thread2_monitor():
                     f"Hold candles: {_hold_c}\n"
                     f"{_fmt_indicators_open_block(d)}"
                     f"{prog_close}"
+                    f"{_earn_line}"
                 )
                 # Notif timeline lengkap khusus hunting_4h
                 if strat == 'hunting_4h':
