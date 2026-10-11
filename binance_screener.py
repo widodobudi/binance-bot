@@ -4380,43 +4380,58 @@ def pop_recent_sell_fill(symbol: str, max_age: float = 120.0) -> float:
     return rec['proceeds'] / rec['qty']
 
 
+EARN_PROFIT_PENDING_FILE = os.path.join(DATA_DIR, "earn_profit_pending.json")
+_earn_profit_pending_lock = threading.Lock()
+
 def park_profit_to_earn_usdt(profit_usd: float, context: str = "") -> dict:
     """11/10/2026 (permintaan Mas Budi): tiap close UNTUNG, lintas SEMUA strategi -- bagian
-    untungnya SAJA (bukan modal) dipindah Sub->Master lalu disubscribe ke Simple Earn Flexible
-    USDT. Gantikan 2 ide sebelumnya yg ditolak: (1) saldo "belum ter-convert" cuma dicatat di
-    JSON -- itu bukan proteksi apa2, USDT-nya tetap nangkring di pool modal umum & bisa tergerus
-    deal lain yg rugi; (2) convert spot ke FDUSD -- kena batas minNotional KERAS $5/order dari
-    Binance (dicek 11/10/2026, berlaku SAMA di semua pair stablecoin-USDT, bukan kekhususan
-    FDUSD). Earn Flexible USDT dipilih krn: (a) begitu disubscribe, saldo itu BENAR2 keluar dari
-    Spot trading (bukan sekadar angka), tidak bisa ikut tergerus modal deal lain; (b) minimum
-    subscribe-nya (prod['min'], dibaca live per-call, BUKAN hardcode) jauh di bawah $5 batas spot
-    tadi; (c) SELALU USDT -> tidak pernah kena masalah "koin ini gak ada produk Earn" spt residu
-    per-koin KeltnerBreak-12h dulu (sudah dicabut, lihat REMARK di STRATEGY_CONFIG_DEFAULTS).
+    untungnya SAJA (bukan modal) SELALU dipindah Sub->Master (berapa pun kecilnya -- dicek
+    11/10/2026 via test transfer $0.01 sungguhan, endpoint subToMaster TIDAK punya batas
+    minimum yg relevan, lihat commit fc80ce6), lalu DIAKUMULASI di Master sampai totalnya
+    tembus minimum subscribe Earn Flexible USDT (prod['min'], dibaca live, BUKAN hardcode) --
+    begitu tembus, SELURUH akumulasi disubscribe sekaligus & counter direset.
+    Gantikan 2 ide sebelumnya yg ditolak: (1) saldo "belum ter-convert" cuma dicatat di JSON
+    TANPA transfer beneran -- itu bukan proteksi apa2, USDT-nya tetap nangkring di pool modal
+    Sub Account & bisa tergerus deal lain yg rugi; (2) convert spot ke FDUSD -- kena batas
+    minNotional KERAS $5/order Binance. Desain SEKARANG beda dari (1): transfer Sub->Master
+    terjadi SUNGGUHAN & SEGERA tiap close untung (uangnya BENAR2 sudah aman di Master, bukan
+    pembukuan) -- yang diakumulasi cuma status "sudah di Master, nunggu disubscribe", BUKAN
+    status "masih di Sub, nunggu ditransfer".
     Reuse PERSIS primitive binance_transfer_sub_to_master()/_earn_subscribe() yg sudah terbukti
-    jalan produksi sejak 20/09/2026 -- transfer internal Sub<->Master dicek 11/10/2026 TIDAK
-    kena fee (bukan transaksi blockchain, cuma pemindahan ledger internal Binance).
-    Non-blocking: gagal di sini TIDAK membatalkan/mengganggu close deal itu sendiri -- profit
-    cuma tetap mengendap sbg USDT di Spot kalau gagal di titik mana pun.
-    Return {"ok": bool, "qty": float, "reason": str (kalau gagal)}."""
+    jalan produksi sejak 20/09/2026.
+    Non-blocking: gagal TRANSFER (langkah plg awal) -- profit tetap mengendap sbg USDT di Spot
+    Sub, sama spt sebelum fitur ini ada. Gagal SUBSCRIBE (sesudah transfer sukses) -- USDT
+    TETAP di Spot Master (aman dari modal trading Sub), cuma belum menghasilkan yield, counter
+    akumulasi TETAP tersimpan utk dicoba lagi gabungan dgn profit berikutnya.
+    Return {"ok": bool (True asal TRANSFER sukses, independen dari subscribe), "qty": float,
+    "subscribed": bool, "pending_total": float, "reason": str (kalau ok=False)}."""
     if not USE_BINANCE_DIRECT or profit_usd <= 0:
-        return {"ok": False, "reason": "skip", "qty": 0.0}
-    prod = get_earn_flexible_product("USDT")
-    if not prod:
-        log(f"WARN [EARN-PROFIT] {context}: tidak ada produk Earn Flexible USDT yg bisa dibeli -> profit tetap USDT di Spot")
-        return {"ok": False, "reason": "no_product", "qty": 0.0}
-    if profit_usd < prod["min"]:
-        log(f"[EARN-PROFIT] {context}: profit ${profit_usd:.2f} < minimum subscribe ${prod['min']:.2f} -> tetap USDT di Spot")
-        return {"ok": False, "reason": "below_min", "qty": 0.0}
+        return {"ok": False, "reason": "skip", "qty": 0.0, "subscribed": False, "pending_total": 0.0}
     if not binance_transfer_sub_to_master("USDT", profit_usd):
         log(f"WARN [EARN-PROFIT] {context}: transfer Sub->Master ${profit_usd:.2f} USDT gagal -> tetap USDT di Spot Sub")
-        return {"ok": False, "reason": "transfer_fail", "qty": 0.0}
+        return {"ok": False, "reason": "transfer_fail", "qty": 0.0, "subscribed": False, "pending_total": 0.0}
+    with _earn_profit_pending_lock:
+        pend = _earn_json_load(EARN_PROFIT_PENDING_FILE, {"pending_usd": 0.0})
+        pend["pending_usd"] = float(pend.get("pending_usd", 0) or 0) + profit_usd
+        pending_total = pend["pending_usd"]
+        _earn_json_save(EARN_PROFIT_PENDING_FILE, pend)
+    log(f"[EARN-PROFIT] {context}: ${profit_usd:.2f} USDT ditransfer Sub->Master, akumulasi sekarang ${pending_total:.2f}")
+    prod = get_earn_flexible_product("USDT")
+    if not prod:
+        log(f"WARN [EARN-PROFIT] {context}: tidak ada produk Earn Flexible USDT yg bisa dibeli -- akumulasi ${pending_total:.2f} tetap USDT di Spot Master")
+        return {"ok": True, "qty": profit_usd, "subscribed": False, "pending_total": pending_total}
+    if pending_total < prod["min"]:
+        log(f"[EARN-PROFIT] {context}: akumulasi ${pending_total:.2f} < minimum subscribe ${prod['min']:.2f} -- nunggu profit berikutnya")
+        return {"ok": True, "qty": profit_usd, "subscribed": False, "pending_total": pending_total}
     time.sleep(2)  # jeda settle, sama pola spt close_deal_maybe_partial()
-    if not _earn_subscribe(prod["productId"], profit_usd):
-        log(f"WARN [EARN-PROFIT] {context}: subscribe gagal -- ${profit_usd:.2f} USDT SUDAH di Spot MASTER "
-            f"(bukan Sub lagi, transfer di atas sukses), dibiarkan apa adanya. Tangani manual.")
-        return {"ok": False, "reason": "subscribe_fail", "qty": 0.0}
-    log(f"[EARN-PROFIT] {context}: ${profit_usd:.2f} USDT berhasil diparkir ke Earn Flexible USDT (APR {prod['apr']*100:.2f}%)")
-    return {"ok": True, "qty": profit_usd}
+    if not _earn_subscribe(prod["productId"], pending_total):
+        log(f"WARN [EARN-PROFIT] {context}: subscribe ${pending_total:.2f} gagal -- TETAP di Spot Master (aman dari modal Sub), "
+            f"counter akumulasi dipertahankan utk dicoba lagi")
+        return {"ok": True, "qty": profit_usd, "subscribed": False, "pending_total": pending_total}
+    with _earn_profit_pending_lock:
+        _earn_json_save(EARN_PROFIT_PENDING_FILE, {"pending_usd": 0.0})
+    log(f"[EARN-PROFIT] {context}: akumulasi ${pending_total:.2f} USDT berhasil disubscribe ke Earn Flexible (APR {prod['apr']*100:.2f}%), counter direset")
+    return {"ok": True, "qty": profit_usd, "subscribed": True, "pending_total": 0.0}
 
 
 def load_auto_sell_config() -> dict:
@@ -5963,9 +5978,11 @@ def execute_close_now(sym: str, reason: str, telegram_header: str = "CLOSE MANUA
             _earn_line_m = ""
             if _profit_usd > 0:
                 _earn_res_m = park_profit_to_earn_usdt(_profit_usd, context=f"{to_display_pair(sym)}/{strat} ({log_tag})")
-                if _earn_res_m["ok"]:
-                    _earn_line_m = f"\nProfit->Earn USDT: ${_profit_usd:.2f}"
-                elif _earn_res_m["reason"] not in ("skip", "below_min"):
+                if _earn_res_m["ok"] and _earn_res_m["subscribed"]:
+                    _earn_line_m = f"\nProfit->Earn USDT: ${_profit_usd:.2f} (subscribe terpicu, total ${_earn_res_m['pending_total']:.2f})"
+                elif _earn_res_m["ok"]:
+                    _earn_line_m = f"\nProfit->Earn USDT: ${_profit_usd:.2f} (di Master, akumulasi ${_earn_res_m['pending_total']:.2f})"
+                elif _earn_res_m["reason"] != "skip":
                     _earn_line_m = f"\nProfit->Earn USDT: GAGAL ({_earn_res_m['reason']})"
             send_telegram(
                 f"{telegram_header}\n"
@@ -9939,9 +9956,11 @@ def thread2_monitor():
                 _earn_line = ""
                 if not _hold_no_sell and _upnl_usd_cl > 0:
                     _earn_res = park_profit_to_earn_usdt(_upnl_usd_cl, context=f"{to_display_pair(sym)}/{strat}")
-                    if _earn_res["ok"]:
-                        _earn_line = f"\nProfit->Earn USDT: ${_upnl_usd_cl:.2f}"
-                    elif _earn_res["reason"] not in ("skip", "below_min"):
+                    if _earn_res["ok"] and _earn_res["subscribed"]:
+                        _earn_line = f"\nProfit->Earn USDT: ${_upnl_usd_cl:.2f} (subscribe terpicu, total ${_earn_res['pending_total']:.2f})"
+                    elif _earn_res["ok"]:
+                        _earn_line = f"\nProfit->Earn USDT: ${_upnl_usd_cl:.2f} (di Master, akumulasi ${_earn_res['pending_total']:.2f})"
+                    elif _earn_res["reason"] != "skip":
                         _earn_line = f"\nProfit->Earn USDT: GAGAL ({_earn_res['reason']})"
                 send_telegram(
                     f"{strat_label} | CLOSE LONG\n"
@@ -12363,9 +12382,11 @@ def _try_swap_hunting_slot(incoming_symbol: str) -> bool:
     _profit_usd_s = swap_deal_usd * prof / 100
     if _profit_usd_s > 0:
         _earn_res_s = park_profit_to_earn_usdt(_profit_usd_s, context=f"{to_display_pair(swap_sym)}/hunting_4h (SLOT-SWAP)")
-        if _earn_res_s["ok"]:
-            _earn_line_s = f"\nProfit->Earn USDT: ${_profit_usd_s:.2f}"
-        elif _earn_res_s["reason"] not in ("skip", "below_min"):
+        if _earn_res_s["ok"] and _earn_res_s["subscribed"]:
+            _earn_line_s = f"\nProfit->Earn USDT: ${_profit_usd_s:.2f} (subscribe terpicu, total ${_earn_res_s['pending_total']:.2f})"
+        elif _earn_res_s["ok"]:
+            _earn_line_s = f"\nProfit->Earn USDT: ${_profit_usd_s:.2f} (di Master, akumulasi ${_earn_res_s['pending_total']:.2f})"
+        elif _earn_res_s["reason"] != "skip":
             _earn_line_s = f"\nProfit->Earn USDT: GAGAL ({_earn_res_s['reason']})"
     send_telegram(
         f"Hunting-4h | SLOT SWAP\n"
@@ -23885,9 +23906,11 @@ def run_web_dashboard():
                     _profit_usd_w = wh_total_usd * wh_prof_pct / 100
                     if _profit_usd_w > 0:
                         _earn_res_w = park_profit_to_earn_usdt(_profit_usd_w, context=f"{to_display_pair(symbol)}/{strategy} (WEBHOOK)")
-                        if _earn_res_w["ok"]:
-                            _earn_line_w = f"\nProfit->Earn USDT: ${_profit_usd_w:.2f}"
-                        elif _earn_res_w["reason"] not in ("skip", "below_min"):
+                        if _earn_res_w["ok"] and _earn_res_w["subscribed"]:
+                            _earn_line_w = f"\nProfit->Earn USDT: ${_profit_usd_w:.2f} (subscribe terpicu, total ${_earn_res_w['pending_total']:.2f})"
+                        elif _earn_res_w["ok"]:
+                            _earn_line_w = f"\nProfit->Earn USDT: ${_profit_usd_w:.2f} (di Master, akumulasi ${_earn_res_w['pending_total']:.2f})"
+                        elif _earn_res_w["reason"] != "skip":
                             _earn_line_w = f"\nProfit->Earn USDT: GAGAL ({_earn_res_w['reason']})"
                     send_telegram(
                         f"{strategy} | CLOSE LONG (TradingView webhook)\n"
