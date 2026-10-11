@@ -5955,12 +5955,25 @@ def execute_close_now(sym: str, reason: str, telegram_header: str = "CLOSE MANUA
             if strat == 'akum_entry_a' and d.get('akum2'): record_akum2_close(sym, prof)
             log(f"[{log_tag}] {sym} @ {price_now:.6g} profit={prof:.2f}%")
             _profit_usd = total_usd * prof / 100
+            # 11/10/2026 (permintaan Mas Budi): sama pola spt thread2_monitor() -- jalur close INI
+            # (dipakai /manual_close dashboard + ai_decision_capacity_swap()) sempat TIDAK ke-cover
+            # park_profit_to_earn_usdt() (ketahuan dari laporan Mas Budi, close manual NEO/USDT
+            # 11/10/2026 09:18 WIB, profit tidak pindah ke Earn). Ditambal supaya SEMUA jalur close
+            # untung -- otomatis maupun manual/AI-swap -- konsisten diparkir.
+            _earn_line_m = ""
+            if _profit_usd > 0:
+                _earn_res_m = park_profit_to_earn_usdt(_profit_usd, context=f"{to_display_pair(sym)}/{strat} ({log_tag})")
+                if _earn_res_m["ok"]:
+                    _earn_line_m = f"\nProfit->Earn USDT: ${_profit_usd:.2f}"
+                elif _earn_res_m["reason"] not in ("skip", "below_min"):
+                    _earn_line_m = f"\nProfit->Earn USDT: GAGAL ({_earn_res_m['reason']})"
             send_telegram(
                 f"{telegram_header}\n"
                 f"{ts} WIB\n"
                 f"Pair  : {to_display_pair(sym)}\n"
                 f"Exit  : {_fmt_price(price_now)} | Profit: {prof:+.2f}% (${_profit_usd:+.2f})\n"
                 f"Strategi: {strat}"
+                f"{_earn_line_m}"
             )
             return {"ok": True, "sym": sym, "price": price_now, "profit_pct": round(prof, 2)}
         else:
@@ -12343,12 +12356,24 @@ def _try_swap_hunting_slot(incoming_symbol: str) -> bool:
     csv_log_close(to_display_pair(swap_sym),
                   now_wib().strftime("%Y-%m-%d %H:%M:%S"),
                   price_now, round(prof, 2), reason)
+    # 11/10/2026 (permintaan Mas Budi): jalur close INI (slot swap Hunting-4h) sempat TIDAK
+    # ke-cover park_profit_to_earn_usdt() -- send_close_long() di sini jual beneran, bukan
+    # cuma bookkeeping, jadi harus ikut sama spt thread2_monitor()/execute_close_now().
+    _earn_line_s = ""
+    _profit_usd_s = swap_deal_usd * prof / 100
+    if _profit_usd_s > 0:
+        _earn_res_s = park_profit_to_earn_usdt(_profit_usd_s, context=f"{to_display_pair(swap_sym)}/hunting_4h (SLOT-SWAP)")
+        if _earn_res_s["ok"]:
+            _earn_line_s = f"\nProfit->Earn USDT: ${_profit_usd_s:.2f}"
+        elif _earn_res_s["reason"] not in ("skip", "below_min"):
+            _earn_line_s = f"\nProfit->Earn USDT: GAGAL ({_earn_res_s['reason']})"
     send_telegram(
         f"Hunting-4h | SLOT SWAP\n"
         f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
         f"Close : {to_display_pair(swap_sym)} @ {_fmt_price(price_now)}\n"
         f"Profit: {prof:+.2f}% (armed)\n"
         f"Alasan: buka slot untuk {to_display_pair(incoming_symbol)}"
+        f"{_earn_line_s}"
     )
     return True
 
@@ -23812,12 +23837,24 @@ def run_web_dashboard():
                     remove_from_active_deals(symbol)
                     if strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
                         record_closed(symbol)
+                    # 11/10/2026 (permintaan Mas Budi): jalur close INI (TradingView webhook) sempat
+                    # TIDAK ke-cover park_profit_to_earn_usdt() -- send_close_long() di atas jual
+                    # beneran, harus ikut sama spt jalur close lain.
+                    _earn_line_w = ""
+                    _profit_usd_w = wh_total_usd * wh_prof_pct / 100
+                    if _profit_usd_w > 0:
+                        _earn_res_w = park_profit_to_earn_usdt(_profit_usd_w, context=f"{to_display_pair(symbol)}/{strategy} (WEBHOOK)")
+                        if _earn_res_w["ok"]:
+                            _earn_line_w = f"\nProfit->Earn USDT: ${_profit_usd_w:.2f}"
+                        elif _earn_res_w["reason"] not in ("skip", "below_min"):
+                            _earn_line_w = f"\nProfit->Earn USDT: GAGAL ({_earn_res_w['reason']})"
                     send_telegram(
                         f"{strategy} | CLOSE LONG (TradingView webhook)\n"
                         f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                         f"Pair   : {to_display_pair(symbol)}\n"
                         f"Exit   : {_fmt_price(wh_price)}\n"
                         f"Profit : {wh_prof_pct:+.2f}%"
+                        f"{_earn_line_w}"
                     )
             if ok and action == "start_trailing":
                 with active_deals_lock:
