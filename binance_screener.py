@@ -8046,14 +8046,17 @@ def heartbeat_general_tick():
         if last_close and last_close.get('time'):
             base += f"\n    ↳ Last Close: {last_close.get('symbol','?')} {last_close.get('time','?')} WIB {last_close.get('profit_pct','?')}%"
         return base
-    def _fmt_shadow(key: str, target: int, label: str = None) -> str:
+    def _fmt_shadow(key: str, target: int, label: str = None, show_tercapai: bool = True) -> str:
         """13/09/2026: progress 2 shadow forward-test (paper, BUKAN CSV live) -- baca
         langsung dari shadow_fwdtest.json, bukan csv_progress(). Ringkas (1 baris per
         kombo, "(paper)" cuma disebut 1x di baris induk) -- versi awal kepanjangan sampai
         kebungkus 2 baris di Telegram, permintaan Mas Budi dipersingkat.
         label (opsional, 04/10/2026): override teks tampilan beda dari `key` -- dipakai utk
         keltnerbreak_12h supaya tidak ketukar nama dgn strategi live KeltnerBreak-12h (brkX2)
-        yang baru di-rename hari ini, lihat REMARK di _shadow_keltnerbreak_check_exits()."""
+        yang baru di-rename hari ini, lihat REMARK di _shadow_keltnerbreak_check_exits().
+        show_tercapai (opsional, 11/10/2026): False utk kombo yg SUDAH RETIRED (formula-nya
+        sudah live) -- tag "TERCAPAI!" di baris arsip menjebak (terbaca seolah kandidat BARU
+        siap dipromosikan, lihat laporan Mas Budi ttg dipbuy_universe-shadow)."""
         disp = label or key
         try:
             with _shadow_fwdtest_lock:
@@ -8069,7 +8072,7 @@ def heartbeat_general_tick():
         win = sum(1 for c in closed if c['pct'] > 0)
         loss = n - win
         total_pct = sum(c['pct'] for c in closed)
-        tag = " TERCAPAI!" if n >= target else ""
+        tag = " TERCAPAI!" if (n >= target and show_tercapai) else ""
         return f"{disp}: #{n}/{target} ({win}W/{loss}L, {total_pct:+.1f}%){tag}{extra}"
     prog_all  = csv_progress_active()
     prog_brk  = csv_progress('brkX2_12h_closed', offset=FWDTEST_BRKX2_PHASE_OFFSET)
@@ -8115,7 +8118,7 @@ def heartbeat_general_tick():
                      f"  - qscalp_3m  : {_fmt_hunting_live(prog_qscalp)}\n"
                      f"  - Shadow (paper, bukan live):\n"
                      f"    {_fmt_shadow('conf3_stochrsibb', SHADOW_CONF3_TARGET)}\n"
-                     f"    {_fmt_shadow('dipbuy_universe', SHADOW_DIPBUY_UNIVERSE_TARGET, label='dipbuy_universe-shadow (RETIRED, formula sudah live dgn exit trailing)')}\n"
+                     f"    {_fmt_shadow('dipbuy_universe', SHADOW_DIPBUY_UNIVERSE_TARGET, label='dipbuy_universe-shadow (RETIRED, formula sudah live dgn exit trailing)', show_tercapai=False)}\n"
                      f"    {_fmt_shadow('dipbuy_bluechip', SHADOW_DIPBUY_BC_TARGET)}\n"
                      f"    {_fmt_shadow('decouple_4h', SHADOW_DECOUPLE_TARGET, label='decouple_4h-shadow (RETIRED, formula sudah live)')}\n"
                      f"    {_fmt_shadow('keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET, label='keltnerbreak_12h-shadow (RETIRED, formula sudah live)')}\n"
@@ -13423,7 +13426,11 @@ function refreshShadowChart() {
       if (!keys.length) { el.innerHTML = "<em style='color:var(--muted);font-size:11px'>Belum ada data shadow.</em>"; return; }
       el.innerHTML = keys.map(function(k){
         var s = data[k];
-        var tag = (s.n_closed >= s.target) ? ' <span style="color:var(--green);font-weight:600">TERCAPAI!</span>' : '';
+        // 11/10/2026 (permintaan Mas Budi): dipbuy_universe-shadow sudah RETIRED (formula-nya
+        // sudah live sejak 09/10/2026 dgn exit trailing) -- baris ini cuma arsip referensi,
+        // "TERCAPAI!" di sini menjebak (terbaca seolah kandidat BARU siap dipromosikan).
+        // Kombo lain (masih aktif, belum ada keputusan live) tetap tampilkan tag seperti biasa.
+        var tag = (s.n_closed >= s.target && k !== 'dipbuy_universe') ? ' <span style="color:var(--green);font-weight:600">TERCAPAI!</span>' : '';
         var pfTxt = (s.pf === null || s.pf === undefined) ? '-' : s.pf;
         var openTxt = s.n_open ? (' | ' + s.n_open + ' open') : '';
         return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px">'
