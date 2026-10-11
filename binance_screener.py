@@ -13401,12 +13401,11 @@ function renderPerfChart(data) {
           + '</div>'
           + phaseDetail;
       }).join("");
-      // 29/09/2026: catatan kecil nama strategi yang di-pause & disembunyikan dari kartu ini
-      var hp = (data && data.hidden_paused) || [];
-      var hpNote = hp.length
-        ? '<div style="margin-top:8px;font-size:10px;color:var(--muted)">Disembunyikan (dipause): ' + hp.join(', ') + '</div>'
-        : '';
-      el.innerHTML = sortBar + header + body + hpNote;
+      // 29/09/2026: catatan kecil nama strategi yang di-pause & disembunyikan dari kartu ini.
+      // 11/10/2026 (permintaan Mas Budi): catatan ini DIHAPUS dari tampilan -- data `hidden_paused`
+      // dari /api/strategy_performance TETAP dikirim backend apa adanya (tidak disentuh), cuma
+      // tidak lagi dirender di sini.
+      el.innerHTML = sortBar + header + body;
 }
 setInterval(refreshPerfChart, 60000);
 refreshPerfChart();
