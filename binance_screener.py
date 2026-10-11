@@ -2193,7 +2193,8 @@ def get_daily_loss_status() -> dict:
             "limit_usd": limit_usd, "breached": breached,
             "global_max_exposure_usd": global_max_exposure_usd(),
             "global_max_active_deals": global_max_active_deals(),
-            "transfer_profit_to_master_enabled": is_transfer_profit_to_master_enabled()}
+            "transfer_profit_to_master_enabled": is_transfer_profit_to_master_enabled(),
+            "master_usdt_balance": get_master_usdt_balance()}
 
 def is_daily_loss_limit_breached() -> bool:
     """09/09/2026 (permintaan Mas Budi, keluhan notif "Batas Rugi Harian Tersulut" bertubi-tubi):
@@ -5096,6 +5097,41 @@ def get_usdt_balance() -> tuple:
     except Exception as e:
         log(f"WARN get_usdt_balance: {e}")
     return 0.0, 0.0
+
+# 11/10/2026 (permintaan Mas Budi): tampilkan saldo USDT Master Account saat ini di baris
+# checkbox "Transfer Profit Closed-Deal ke Master Account" (Strategy Control). Dashboard
+# polling endpoint ini tiap 30 detik (loadDailyLossLimit) -- cache 20 detik di sini supaya
+# beberapa tab/device yg polling bersamaan tidak masing2 panggil Binance sendiri2, tanpa
+# bikin angkanya terasa basi (selalu di bawah 1 siklus refresh dashboard).
+_master_usdt_balance_cache = {"ts": 0.0, "value": 0.0}
+_master_usdt_balance_lock = threading.Lock()
+MASTER_USDT_BALANCE_CACHE_TTL = 20
+
+def get_master_usdt_balance() -> float:
+    """Saldo USDT Spot wallet Master Account saat ini (free + locked). Pakai BINANCE_EARN_KEY
+    (kredensial Master, sama yg dipakai fitur Earn lain) -- fallback ke BINANCE_TRADING_KEY
+    (Sub Account) kalau BINANCE_EARN_KEY belum di-set, SAMA pola fallback-nya _binance_earn_request().
+    Return 0.0 kalau gagal (non-blocking, dashboard tinggal tampilkan '-' )."""
+    with _master_usdt_balance_lock:
+        if time.time() - _master_usdt_balance_cache["ts"] < MASTER_USDT_BALANCE_CACHE_TTL:
+            return _master_usdt_balance_cache["value"]
+    try:
+        key = os.environ.get("BINANCE_EARN_KEY", "")
+        secret = os.environ.get("BINANCE_EARN_SECRET", "")
+        kwargs = {"api_key": key, "api_secret": secret} if key and secret else {}
+        data = _binance_trading_request("GET", "/api/v3/account", {}, **kwargs)
+        total = 0.0
+        for item in data.get("balances", []):
+            if str(item.get("asset", "")).upper() == "USDT":
+                total = float(item.get("free", 0)) + float(item.get("locked", 0))
+                break
+        with _master_usdt_balance_lock:
+            _master_usdt_balance_cache["ts"] = time.time()
+            _master_usdt_balance_cache["value"] = total
+        return total
+    except Exception as e:
+        log(f"WARN get_master_usdt_balance: {e}")
+        return 0.0
 
 
 def get_earn_flexible_usdt_positions() -> list:
@@ -13182,6 +13218,11 @@ document.addEventListener('DOMContentLoaded', function() {
             <span>Transfer Profit Closed-Deal ke Master Account</span>
         </label>
         <span id="dll-transfer-profit-status" style="color:var(--muted)"></span>
+        <span style="color:var(--border)">|</span>
+        <span style="display:flex;align-items:center;gap:6px;color:var(--muted)" title="Saldo USDT Spot Master Account saat ini (live dari Binance, cache maksimal 20 detik). Naik/turun otomatis ikut transfer dari fitur ini maupun aktivitas manual Mas Budi sendiri (withdraw, dsb).">
+            <span>Saldo USDT Master:</span>
+            <b id="dll-master-usdt-balance" style="color:var(--text)">-</b>
+        </span>
     </div>
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
     <table style="width:100%;min-width:760px;border-collapse:collapse;font-size:11px" id="sc-table">
@@ -14600,6 +14641,8 @@ function loadDailyLossLimit() {
         if (dealCapInput && document.activeElement !== dealCapInput && d.global_max_active_deals !== undefined) dealCapInput.value = d.global_max_active_deals;
         var transferCb = document.getElementById('dll-transfer-profit-enabled');
         if (transferCb && document.activeElement !== transferCb && d.transfer_profit_to_master_enabled !== undefined) transferCb.checked = d.transfer_profit_to_master_enabled;
+        var masterBal = document.getElementById('dll-master-usdt-balance');
+        if (masterBal && d.master_usdt_balance !== undefined) masterBal.textContent = '$' + d.master_usdt_balance.toFixed(2);
     }).catch(function(){});
 }
 function saveDailyLossLimit() {
