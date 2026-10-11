@@ -4382,7 +4382,8 @@ def binance_sell_market(symbol: str, qty: float) -> dict:
     Auto fallback: kalau qty > balance aktual → jual semua yang ada (floor ke stepSize).
     """
     # Cek balance aktual dulu — jual maksimal yang ada
-    asset = symbol.replace("USDT", "")
+    asset   = symbol.replace("USDT", "")
+    balance = 0.0
     try:
         balance = binance_get_asset_qty(asset)
         if balance > 0 and qty > balance:
@@ -4404,6 +4405,19 @@ def binance_sell_market(symbol: str, qty: float) -> dict:
     proceeds  = sum(float(f["price"]) * float(f["qty"]) for f in fills) if fills else 0
     price_avg = proceeds / qty_exec if qty_exec > 0 else 0
     log(f"[BINANCE] SELL {symbol}: qty={qty_exec} avg={price_avg:.6f} proceeds={proceeds:.2f} USDT orderId={data.get('orderId')}")
+    # 12/10/2026 (permintaan Mas Budi, kasus CFX: stepSize=1, wallet 1299.699 -> cuma 1299
+    # terjual, sisa 0.699 nyangkut): kalau order INI dimaksudkan jual SEMUA saldo (qty yg
+    # diminta >= ~saldo wallet, bukan jual sebagian spt close_sell_pct/TP-tier) tapi pembulatan
+    # ke LOT_SIZE stepSize menyisakan pecahan yg tidak bisa dijual normal, sapu sisanya ke BNB
+    # lewat Binance dust-transfer API -- biar wallet bersih & reconcile berikutnya nggak salah
+    # dikira "selisih mencurigakan".
+    try:
+        if balance > 0 and qty >= balance * 0.99:
+            _leftover = balance - float(qty_str)
+            if _leftover > 0:
+                binance_dust_sweep(asset, _leftover)
+    except Exception as e:
+        log(f"WARN [DUST] sweep {asset} gagal: {e}")
     if proceeds > 0 and qty_exec > 0:
         with _binance_sell_fills_lock:
             rec = _binance_sell_fills.get(symbol)
@@ -4415,6 +4429,27 @@ def binance_sell_market(symbol: str, qty: float) -> dict:
             _binance_sell_fills[symbol] = rec
     return {"symbol": symbol, "orderId": data.get("orderId"),
             "qty": qty_exec, "price_avg": price_avg, "proceeds_usdt": proceeds}
+
+
+def binance_dust_sweep(asset: str, leftover_qty: float) -> bool:
+    """12/10/2026 (permintaan Mas Budi): convert sisa saldo `asset` yg terlalu kecil utk
+    dijual normal (di bawah 1 LOT_SIZE stepSize, mis. CFX/HOT yg stepSize-nya 1 -- bilangan
+    bulat) ke BNB lewat Binance dust-transfer API. Non-fatal kalau gagal/ditolak Binance
+    (nilainya kemungkinan terlalu receh utk dikonversi) -- cuma housekeeping, bukan dana besar."""
+    try:
+        data = _binance_trading_request("POST", "/sapi/v1/asset/dust", {"asset": [asset]})
+        results = data.get("transferResult", [])
+        if results:
+            r = results[0]
+            log(f"[DUST] Sweep {asset} (sisa {leftover_qty:.8f}) -> "
+                f"{r.get('transferedAmount', '?')} BNB (tranId {r.get('tranId')})")
+            return True
+        log(f"[DUST] Sweep {asset} (sisa {leftover_qty:.8f}): tidak ada hasil dari Binance "
+            f"(kemungkinan nilainya terlalu kecil utk dikonversi)")
+        return False
+    except Exception as e:
+        log(f"WARN [DUST] sweep {asset} gagal: {e}")
+        return False
 
 
 def clear_sell_fill(symbol: str):
