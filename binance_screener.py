@@ -15119,6 +15119,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
     <select id="ct-filter-time" onclick="event.stopPropagation()" onchange="onCtTimeFilterChange()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua waktu</option>
         <option value="today">Today</option>
+        <option value="yesterday">Yesterday</option>
         <option value="week">This week</option>
         <option value="month">This month</option>
         <option value="custom">Custom</option>
@@ -15353,6 +15354,11 @@ function ctTimeFilterRange() {
   var now = new Date();
   if (mode === 'today') {
     var s = _ctDateStr(now);
+    return {from: s, to: s};
+  }
+  if (mode === 'yesterday') {
+    var y = new Date(now); y.setDate(now.getDate() - 1);
+    var s = _ctDateStr(y);
     return {from: s, to: s};
   }
   if (mode === 'week') {
