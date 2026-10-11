@@ -1331,9 +1331,9 @@ STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # QScalp-3m selalu 100 (dikunci di kode + dimmed di dashboard).
 # 11/10/2026 (permintaan Mas Budi): residu-koin-ke-Earn KeltnerBreak-12h DICABUT -- balik ke 100
 # (jual penuh) utk brkX2 & brkX2_12h_closed, SAMA spt semua strategi lain sekarang. Diganti rencana
-# baru yg lebih luas: profit (USDT, bukan residu koin) dari SEMUA strategi diparkir ke Simple Earn
-# Flexible USDT -- lihat park_profit_to_earn_usdt(), dipanggil terpisah di thread2_monitor(), TIDAK
-# lagi lewat close_sell_pct/close_deal_maybe_partial().
+# baru yg lebih luas: profit (USDT, bukan residu koin) dari SEMUA strategi ditransfer ke Master --
+# lihat transfer_profit_to_master(), dipanggil terpisah di thread2_monitor(), TIDAK lagi lewat
+# close_sell_pct/close_deal_maybe_partial().
 STRATEGY_CONFIG_DEFAULTS = {
     # 09/10/2026 (permintaan Mas Budi): KeltnerBreak-12h sempat dipecah jadi 2 strategi INDEPENDEN
     # -- 'brkX2_closed' (closed-candle, thread1_scan/T1) dan 'brkX2_intrabar' (gabungan
@@ -4380,58 +4380,27 @@ def pop_recent_sell_fill(symbol: str, max_age: float = 120.0) -> float:
     return rec['proceeds'] / rec['qty']
 
 
-EARN_PROFIT_PENDING_FILE = os.path.join(DATA_DIR, "earn_profit_pending.json")
-_earn_profit_pending_lock = threading.Lock()
-
-def park_profit_to_earn_usdt(profit_usd: float, context: str = "") -> dict:
-    """11/10/2026 (permintaan Mas Budi): tiap close UNTUNG, lintas SEMUA strategi -- bagian
-    untungnya SAJA (bukan modal) SELALU dipindah Sub->Master (berapa pun kecilnya -- dicek
-    11/10/2026 via test transfer $0.01 sungguhan, endpoint subToMaster TIDAK punya batas
-    minimum yg relevan, lihat commit fc80ce6), lalu DIAKUMULASI di Master sampai totalnya
-    tembus minimum subscribe Earn Flexible USDT (prod['min'], dibaca live, BUKAN hardcode) --
-    begitu tembus, SELURUH akumulasi disubscribe sekaligus & counter direset.
-    Gantikan 2 ide sebelumnya yg ditolak: (1) saldo "belum ter-convert" cuma dicatat di JSON
-    TANPA transfer beneran -- itu bukan proteksi apa2, USDT-nya tetap nangkring di pool modal
-    Sub Account & bisa tergerus deal lain yg rugi; (2) convert spot ke FDUSD -- kena batas
-    minNotional KERAS $5/order Binance. Desain SEKARANG beda dari (1): transfer Sub->Master
-    terjadi SUNGGUHAN & SEGERA tiap close untung (uangnya BENAR2 sudah aman di Master, bukan
-    pembukuan) -- yang diakumulasi cuma status "sudah di Master, nunggu disubscribe", BUKAN
-    status "masih di Sub, nunggu ditransfer".
-    Reuse PERSIS primitive binance_transfer_sub_to_master()/_earn_subscribe() yg sudah terbukti
-    jalan produksi sejak 20/09/2026.
-    Non-blocking: gagal TRANSFER (langkah plg awal) -- profit tetap mengendap sbg USDT di Spot
-    Sub, sama spt sebelum fitur ini ada. Gagal SUBSCRIBE (sesudah transfer sukses) -- USDT
-    TETAP di Spot Master (aman dari modal trading Sub), cuma belum menghasilkan yield, counter
-    akumulasi TETAP tersimpan utk dicoba lagi gabungan dgn profit berikutnya.
-    Return {"ok": bool (True asal TRANSFER sukses, independen dari subscribe), "qty": float,
-    "subscribed": bool, "pending_total": float, "reason": str (kalau ok=False)}."""
+def transfer_profit_to_master(profit_usd: float, context: str = "") -> dict:
+    """11/10/2026 (permintaan Mas Budi, REVISI): tiap close UNTUNG, lintas SEMUA strategi --
+    bagian untungnya SAJA (bukan modal) dipindah Sub->Master, BERHENTI DI SITU SAJA -- TIDAK
+    lagi disubscribe ke Earn Flexible USDT dari fungsi ini (dicabut, nama fungsi direname dari
+    park_profit_to_earn_usdt() krn sudah tidak akurat). Alasan: rencana subscribe-ke-Earn
+    dipisah jadi "Fitur B" tersendiri (belum dibangun) yg mainnya bukan ke USDT tapi ke koin
+    yg sedang breakout dari konsolidasi + volume naik (reuse KeltnerBreak-12h/RVOLBreak-1h),
+    dgn redeem threshold dan mekanisme sendiri -- supaya tidak campur aduk dgn fungsi transfer
+    simpel ini. Dana yg terkumpul di Master (hasil fungsi ini) jadi SUMBER modal Fitur B nanti.
+    Berapa pun kecilnya profit_usd -- dicek 11/10/2026 via test transfer $0.01 sungguhan,
+    endpoint subToMaster TIDAK punya batas minimum yg relevan (lihat commit fc80ce6).
+    Non-blocking: gagal transfer -- profit tetap mengendap sbg USDT di Spot Sub, sama spt
+    sebelum fitur ini ada.
+    Return {"ok": bool, "qty": float, "reason": str (kalau ok=False)}."""
     if not USE_BINANCE_DIRECT or profit_usd <= 0:
-        return {"ok": False, "reason": "skip", "qty": 0.0, "subscribed": False, "pending_total": 0.0}
+        return {"ok": False, "reason": "skip", "qty": 0.0}
     if not binance_transfer_sub_to_master("USDT", profit_usd):
         log(f"WARN [EARN-PROFIT] {context}: transfer Sub->Master ${profit_usd:.2f} USDT gagal -> tetap USDT di Spot Sub")
-        return {"ok": False, "reason": "transfer_fail", "qty": 0.0, "subscribed": False, "pending_total": 0.0}
-    with _earn_profit_pending_lock:
-        pend = _earn_json_load(EARN_PROFIT_PENDING_FILE, {"pending_usd": 0.0})
-        pend["pending_usd"] = float(pend.get("pending_usd", 0) or 0) + profit_usd
-        pending_total = pend["pending_usd"]
-        _earn_json_save(EARN_PROFIT_PENDING_FILE, pend)
-    log(f"[EARN-PROFIT] {context}: ${profit_usd:.2f} USDT ditransfer Sub->Master, akumulasi sekarang ${pending_total:.2f}")
-    prod = get_earn_flexible_product("USDT")
-    if not prod:
-        log(f"WARN [EARN-PROFIT] {context}: tidak ada produk Earn Flexible USDT yg bisa dibeli -- akumulasi ${pending_total:.2f} tetap USDT di Spot Master")
-        return {"ok": True, "qty": profit_usd, "subscribed": False, "pending_total": pending_total}
-    if pending_total < prod["min"]:
-        log(f"[EARN-PROFIT] {context}: akumulasi ${pending_total:.2f} < minimum subscribe ${prod['min']:.2f} -- nunggu profit berikutnya")
-        return {"ok": True, "qty": profit_usd, "subscribed": False, "pending_total": pending_total}
-    time.sleep(2)  # jeda settle, sama pola spt close_deal_maybe_partial()
-    if not _earn_subscribe(prod["productId"], pending_total):
-        log(f"WARN [EARN-PROFIT] {context}: subscribe ${pending_total:.2f} gagal -- TETAP di Spot Master (aman dari modal Sub), "
-            f"counter akumulasi dipertahankan utk dicoba lagi")
-        return {"ok": True, "qty": profit_usd, "subscribed": False, "pending_total": pending_total}
-    with _earn_profit_pending_lock:
-        _earn_json_save(EARN_PROFIT_PENDING_FILE, {"pending_usd": 0.0})
-    log(f"[EARN-PROFIT] {context}: akumulasi ${pending_total:.2f} USDT berhasil disubscribe ke Earn Flexible (APR {prod['apr']*100:.2f}%), counter direset")
-    return {"ok": True, "qty": profit_usd, "subscribed": True, "pending_total": 0.0}
+        return {"ok": False, "reason": "transfer_fail", "qty": 0.0}
+    log(f"[EARN-PROFIT] {context}: ${profit_usd:.2f} USDT ditransfer Sub->Master")
+    return {"ok": True, "qty": profit_usd}
 
 
 def load_auto_sell_config() -> dict:
@@ -5971,19 +5940,16 @@ def execute_close_now(sym: str, reason: str, telegram_header: str = "CLOSE MANUA
             log(f"[{log_tag}] {sym} @ {price_now:.6g} profit={prof:.2f}%")
             _profit_usd = total_usd * prof / 100
             # 11/10/2026 (permintaan Mas Budi): sama pola spt thread2_monitor() -- jalur close INI
-            # (dipakai /manual_close dashboard + ai_decision_capacity_swap()) sempat TIDAK ke-cover
-            # park_profit_to_earn_usdt() (ketahuan dari laporan Mas Budi, close manual NEO/USDT
-            # 11/10/2026 09:18 WIB, profit tidak pindah ke Earn). Ditambal supaya SEMUA jalur close
-            # untung -- otomatis maupun manual/AI-swap -- konsisten diparkir.
+            # (dipakai /manual_close dashboard + ai_decision_capacity_swap()) ikut transfer profit
+            # ke Master. REVISI 11/10/2026: berhenti di transfer saja, TIDAK lagi subscribe ke Earn
+            # USDT (dicabut dari transfer_profit_to_master(), lihat REMARK di fungsinya).
             _earn_line_m = ""
             if _profit_usd > 0:
-                _earn_res_m = park_profit_to_earn_usdt(_profit_usd, context=f"{to_display_pair(sym)}/{strat} ({log_tag})")
-                if _earn_res_m["ok"] and _earn_res_m["subscribed"]:
-                    _earn_line_m = f"\nProfit->Earn USDT: ${_profit_usd:.2f} (subscribe terpicu, total ${_earn_res_m['pending_total']:.2f})"
-                elif _earn_res_m["ok"]:
-                    _earn_line_m = f"\nProfit->Earn USDT: ${_profit_usd:.2f} (di Master, akumulasi ${_earn_res_m['pending_total']:.2f})"
+                _earn_res_m = transfer_profit_to_master(_profit_usd, context=f"{to_display_pair(sym)}/{strat} ({log_tag})")
+                if _earn_res_m["ok"]:
+                    _earn_line_m = f"\nProfit->Master: ${_profit_usd:.2f}"
                 elif _earn_res_m["reason"] != "skip":
-                    _earn_line_m = f"\nProfit->Earn USDT: GAGAL ({_earn_res_m['reason']})"
+                    _earn_line_m = f"\nProfit->Master: GAGAL ({_earn_res_m['reason']})"
             send_telegram(
                 f"{telegram_header}\n"
                 f"{ts} WIB\n"
@@ -9950,18 +9916,16 @@ def thread2_monitor():
                 _upnl_usd_cl  = round(prof_from_entry / 100 * _total_usd_cl, 2)
                 # 11/10/2026 (permintaan Mas Budi): close UNTUNG (semua strategi, bukan hold_no_sell
                 # krn di situ tidak ada jual beneran -> tidak ada USDT yg mendarat) -- bagian untung
-                # saja (BUKAN modal) diparkir ke Simple Earn Flexible USDT via Sub->Master, lihat
-                # REMARK lengkap di park_profit_to_earn_usdt(). Non-blocking: gagal TIDAK mengganggu
-                # close ini, cuma tercatat di log + baris notifikasi di bawah.
+                # saja (BUKAN modal) ditransfer ke Master via transfer_profit_to_master(). REVISI
+                # 11/10/2026: berhenti di transfer saja, TIDAK lagi subscribe ke Earn USDT. Non-
+                # blocking: gagal TIDAK mengganggu close ini, cuma tercatat di log + notifikasi.
                 _earn_line = ""
                 if not _hold_no_sell and _upnl_usd_cl > 0:
-                    _earn_res = park_profit_to_earn_usdt(_upnl_usd_cl, context=f"{to_display_pair(sym)}/{strat}")
-                    if _earn_res["ok"] and _earn_res["subscribed"]:
-                        _earn_line = f"\nProfit->Earn USDT: ${_upnl_usd_cl:.2f} (subscribe terpicu, total ${_earn_res['pending_total']:.2f})"
-                    elif _earn_res["ok"]:
-                        _earn_line = f"\nProfit->Earn USDT: ${_upnl_usd_cl:.2f} (di Master, akumulasi ${_earn_res['pending_total']:.2f})"
+                    _earn_res = transfer_profit_to_master(_upnl_usd_cl, context=f"{to_display_pair(sym)}/{strat}")
+                    if _earn_res["ok"]:
+                        _earn_line = f"\nProfit->Master: ${_upnl_usd_cl:.2f}"
                     elif _earn_res["reason"] != "skip":
-                        _earn_line = f"\nProfit->Earn USDT: GAGAL ({_earn_res['reason']})"
+                        _earn_line = f"\nProfit->Master: GAGAL ({_earn_res['reason']})"
                 send_telegram(
                     f"{strat_label} | CLOSE LONG\n"
                     f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
@@ -12375,19 +12339,16 @@ def _try_swap_hunting_slot(incoming_symbol: str) -> bool:
     csv_log_close(to_display_pair(swap_sym),
                   now_wib().strftime("%Y-%m-%d %H:%M:%S"),
                   price_now, round(prof, 2), reason)
-    # 11/10/2026 (permintaan Mas Budi): jalur close INI (slot swap Hunting-4h) sempat TIDAK
-    # ke-cover park_profit_to_earn_usdt() -- send_close_long() di sini jual beneran, bukan
-    # cuma bookkeeping, jadi harus ikut sama spt thread2_monitor()/execute_close_now().
+    # 11/10/2026 (permintaan Mas Budi): jalur close INI (slot swap Hunting-4h) ikut transfer
+    # profit ke Master. REVISI 11/10/2026: berhenti di transfer saja, TIDAK lagi subscribe Earn.
     _earn_line_s = ""
     _profit_usd_s = swap_deal_usd * prof / 100
     if _profit_usd_s > 0:
-        _earn_res_s = park_profit_to_earn_usdt(_profit_usd_s, context=f"{to_display_pair(swap_sym)}/hunting_4h (SLOT-SWAP)")
-        if _earn_res_s["ok"] and _earn_res_s["subscribed"]:
-            _earn_line_s = f"\nProfit->Earn USDT: ${_profit_usd_s:.2f} (subscribe terpicu, total ${_earn_res_s['pending_total']:.2f})"
-        elif _earn_res_s["ok"]:
-            _earn_line_s = f"\nProfit->Earn USDT: ${_profit_usd_s:.2f} (di Master, akumulasi ${_earn_res_s['pending_total']:.2f})"
+        _earn_res_s = transfer_profit_to_master(_profit_usd_s, context=f"{to_display_pair(swap_sym)}/hunting_4h (SLOT-SWAP)")
+        if _earn_res_s["ok"]:
+            _earn_line_s = f"\nProfit->Master: ${_profit_usd_s:.2f}"
         elif _earn_res_s["reason"] != "skip":
-            _earn_line_s = f"\nProfit->Earn USDT: GAGAL ({_earn_res_s['reason']})"
+            _earn_line_s = f"\nProfit->Master: GAGAL ({_earn_res_s['reason']})"
     send_telegram(
         f"Hunting-4h | SLOT SWAP\n"
         f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
@@ -23563,7 +23524,9 @@ def run_web_dashboard():
             """11/10/2026 (permintaan Mas Budi): READ-ONLY, tidak ada pergerakan dana sama sekali
             -- cuma panggil get_earn_flexible_product() biar bisa lihat angka minimum subscribe
             Earn Flexible yg SEBENARNYA (butuh API key berotentikasi yg cuma ada di bot live,
-            tidak bisa dicek dari luar). Dipakai utk verifikasi park_profit_to_earn_usdt()
+            tidak bisa dicek dari luar). Dipakai utk riset angka minimum Earn per-koin (calon
+            "Fitur B" rotasi-Earn, belum dibangun) -- transfer_profit_to_master() SEKARANG tidak
+            lagi subscribe ke Earn sama sekali, endpoint ini masih dipakai utk riset itu saja.
             (default asset=USDT) tanpa perlu nunggu ada close beneran dulu.
             ?asset=BTC untuk cek produk Earn Flexible asset lain."""
             asset = request.args.get("asset", "USDT").upper()
@@ -23950,19 +23913,17 @@ def run_web_dashboard():
                     remove_from_active_deals(symbol)
                     if strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
                         record_closed(symbol)
-                    # 11/10/2026 (permintaan Mas Budi): jalur close INI (TradingView webhook) sempat
-                    # TIDAK ke-cover park_profit_to_earn_usdt() -- send_close_long() di atas jual
-                    # beneran, harus ikut sama spt jalur close lain.
+                    # 11/10/2026 (permintaan Mas Budi): jalur close INI (TradingView webhook) ikut
+                    # transfer profit ke Master. REVISI 11/10/2026: berhenti di transfer saja,
+                    # TIDAK lagi subscribe ke Earn USDT.
                     _earn_line_w = ""
                     _profit_usd_w = wh_total_usd * wh_prof_pct / 100
                     if _profit_usd_w > 0:
-                        _earn_res_w = park_profit_to_earn_usdt(_profit_usd_w, context=f"{to_display_pair(symbol)}/{strategy} (WEBHOOK)")
-                        if _earn_res_w["ok"] and _earn_res_w["subscribed"]:
-                            _earn_line_w = f"\nProfit->Earn USDT: ${_profit_usd_w:.2f} (subscribe terpicu, total ${_earn_res_w['pending_total']:.2f})"
-                        elif _earn_res_w["ok"]:
-                            _earn_line_w = f"\nProfit->Earn USDT: ${_profit_usd_w:.2f} (di Master, akumulasi ${_earn_res_w['pending_total']:.2f})"
+                        _earn_res_w = transfer_profit_to_master(_profit_usd_w, context=f"{to_display_pair(symbol)}/{strategy} (WEBHOOK)")
+                        if _earn_res_w["ok"]:
+                            _earn_line_w = f"\nProfit->Master: ${_profit_usd_w:.2f}"
                         elif _earn_res_w["reason"] != "skip":
-                            _earn_line_w = f"\nProfit->Earn USDT: GAGAL ({_earn_res_w['reason']})"
+                            _earn_line_w = f"\nProfit->Master: GAGAL ({_earn_res_w['reason']})"
                     send_telegram(
                         f"{strategy} | CLOSE LONG (TradingView webhook)\n"
                         f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
