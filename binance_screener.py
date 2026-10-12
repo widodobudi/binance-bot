@@ -263,7 +263,18 @@ BE_TRIGGER_BY_STRATEGY = {'brkX2_4h': BRKX2_4H_BE_TRIGGER_PCT, 'trend_confirm_4h
 # seluruh strategi naik ke 90.7%, avg profit seluruh strategi +0.064% -> +0.274%. Angka 0.5
 # (bukan 0.2 yg teoretis sudah "impas 0%") dipilih dgn margin ekstra memperhitungkan slippage
 # order market nyata (~0.25% rata2 dari 9 data live) yg tidak tertangkap simulasi granularitas 1 jam.
-BE_EXIT_BUFFER_PCT_BY_STRATEGY = {'brkX2_4h': 0.1, 'trend_confirm_4h': 0.5}
+# trend_confirm_4h dinaikkan LAGI 0.5 -> 0.99 (12/10/2026), backtest lanjutan kandidat 0.1-0.9+0.99
+# vs break-even dimatikan total (data sama, 23.144 sinyal): dari 0.1 s/d 0.99, avg profit naik TERUS
+# linear (+0.064% -> +0.108% -> ... -> +0.583%) TANPA kenaikan hard-stop rate sama sekali (tetap
+# 6.0% persis di semua titik) -- jadi menaikkan buffer selama masih < trigger 1.0% itu untung bersih,
+# tidak ada ongkos risiko tambahan. 0.99 dipilih (bukan dimatikan total/trigger dilepas) krn opsi
+# "disabled" avg lebih tinggi lagi (+0.709%) TAPI hard-stop rate naik 2x (6.0% -> 12.2%, WR turun
+# 90.7% -> 79.4%) -- ongkos risikonya baru muncul di titik itu. Kasus live METISUSDT (12/10, profit
+# -0.20%, overshoot krn harga jatuh ekstrem cepat 4 menit) dicek ulang: overshoot-nya sudah melewati
+# SEMUA level buffer yg diuji (harga jatuh ke persis entry sebelum sempat kecek bot), jadi hasilnya
+# akan sama buruknya di buffer berapa pun -- bukan argumen utk tetap di 0.5. Detail: scratchpad
+# tc4h_be_buffer_backtest2.py.
+BE_EXIT_BUFFER_PCT_BY_STRATEGY = {'brkX2_4h': 0.1, 'trend_confirm_4h': 0.99}
 # TrenKonfirmasi-4h K1.5 + cap 10.8% (permintaan Mas Budi, prioritas: hard-stop lebih jarang & untung terjaga):
 # hard-stop 18.2% -> 14.0% dari trade, rugi terburuk -12.3% -> -11.0%, avg +1.80% -> +1.85% (2025+: 20.6% -> 16.2%,
 # +1.52% -> +1.53%). Stop per tier ATR: <1% 6.0%, <2% 8.25%, <4% 10.5%, >=4% 10.8% (cap). REMARK nilai lama (rollback):
