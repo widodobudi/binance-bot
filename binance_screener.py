@@ -237,7 +237,8 @@ HARD_STOP_MULT_BY_STRATEGY = {
     # -- K makin tinggi makin untung (avg per-trade naik, hard-stop rate turun), K=1.3 titik
     # seimbang sebelum worst-case per-trade mulai memberat cepat. Decouple-4h avg +0.347%->+0.368%,
     # RVOLBreak-1h +0.766%->+0.796%, Dip-Buy Universe +3.127%->+3.443% (semua di K=1.1 vs K=1.3).
-    'decouple_4h': 1.3, 'rvolbreak_1h': 1.3, 'dipbuy_universe': 1.3,
+    'decouple_4h': 1.3, 'rvolbreak_1h': 1.3, 'dipbuy_universe': 1.3,   # rvolbreak_1h: LEGACY, lihat REMARK RVOLBREAK_8H_* -- hanya utk posisi lama yg masih terbuka
+    'rvolbreak_8h': 1.3,   # 12/10/2026: sama K dgn versi 1h yg digantikan (dipakai jg sbg asumsi K konstan di rvolbreak_tf_sweep.py)
 }
 # 06/10/2026 (permintaan Mas Budi): brkX2-4h, setelah posisi pernah untung >= BRKX2_4H_BE_TRIGGER_PCT,
 # batas jual dipindah ke harga beli (entry +0.1%). Setelah biaya 0.2%, hasil keluar sekitar -0.1%,
@@ -1431,7 +1432,14 @@ STRATEGY_CONFIG_DEFAULTS = {
     # sungguhan tetap pakai konstanta DECOUPLE_4H_MAX_DEALS di thread_decouple_scan().
     "decouple_4h":   {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100, "btc_gate_enabled": True},
     # 09/10/2026 (Tahap 2/4): rvolbreak_1h naik dari shadow ke live, lulus target 24/20 (15W/9L, +61.8%).
+    # 12/10/2026: DITERMINATE (lihat get_terminated_strategies()), diganti rvolbreak_8h di bawah --
+    # baris ini TETAP (bukan dihapus) krn posisi lama yg masih terbuka saat deploy ini masih baca
+    # close_sell_pct/cooldown_enabled dari sini sampai closed.
     "rvolbreak_1h":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    # 12/10/2026 (permintaan Mas Budi): pengganti langsung rvolbreak_1h (lihat REMARK RVOLBREAK_8H_*
+    # di sekitar baris 18095) -- langsung LIVE tanpa fase shadow krn formula & exit sudah
+    # tervalidasi penuh lewat sweep timeframe (rvolbreak_tf_sweep.py).
+    "rvolbreak_8h":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     # 09/10/2026 (Tahap 3/4): dipbuy_universe naik dari shadow ke live, lulus target 50/50 (43W/7L,
     # +85.5%) -- exit DIGANTI ke trailing (lihat REMARK DIPBUY_UNIVERSE_* di sekitar baris 16424).
     "dipbuy_universe": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
@@ -1676,6 +1684,7 @@ def get_terminated_strategies() -> set:
     di-terminate ke depannya CUKUP ditambahkan satu baris di dict ini, tidak perlu edit JS."""
     return {
         k for k, enabled in {
+            "rvolbreak_1h": False,   # 12/10/2026: diterminate penuh, diganti rvolbreak_8h (bukan _ENABLED flag -- konstanta lamanya sudah dihapus)
             "reversal": REVERSAL_ENABLED,
             "brkX2_crossema": STRAT_CROSSEMA_ENABLED,
             "akum_entry_a": STRAT_AKUM_ENABLED,
@@ -3238,6 +3247,15 @@ def strategy_phase_breakdown() -> dict:
         ]
     except Exception as e:
         log(f"   [PHASE] gagal hitung rvolbreak_1h: {e}")
+    try:
+        # 12/10/2026: rvolbreak_8h pengganti rvolbreak_1h (diterminate) -- baris terpisah,
+        # bukan digabung, krn histori closed-deal beda formula/timeframe entry (lihat REMARK
+        # RVOLBREAK_8H_* di sekitar baris 18095).
+        out['rvolbreak_8h'] = [
+            _phase_entry('LIVE', csv_progress('rvolbreak_8h')),
+        ]
+    except Exception as e:
+        log(f"   [PHASE] gagal hitung rvolbreak_8h: {e}")
     try:
         out['dipbuy_universe'] = [
             _phase_entry('LIVE', csv_progress('dipbuy_universe')),
@@ -9753,8 +9771,13 @@ def thread2_monitor():
             hold_limit_sec = DECOUPLE_4H_MAX_HOLD_CANDLES * STRAT4H_SECONDS
             hold_label = f"batas {DECOUPLE_4H_MAX_HOLD_CANDLES} candle 4h (decouple)"
         elif d.get('strategy','brkX2') == 'rvolbreak_1h':
+            # LEGACY -- rvolbreak_1h diterminate 12/10/2026, cabang ini hanya utk posisi lama yg
+            # masih terbuka saat deploy; hapus setelah posisi itu closed (lihat REMARK RVOLBREAK_8H_*).
             hold_limit_sec = RVOLBREAK_1H_MAX_HOLD_CANDLES * STRAT1H_SECONDS
             hold_label = f"batas {RVOLBREAK_1H_MAX_HOLD_CANDLES} candle 1h (rvolbreak)"
+        elif d.get('strategy','brkX2') == 'rvolbreak_8h':
+            hold_limit_sec = RVOLBREAK_8H_MAX_HOLD_CANDLES * RVOLBREAK_8H_SECONDS
+            hold_label = f"batas {RVOLBREAK_8H_MAX_HOLD_CANDLES} candle 8h (rvolbreak)"
         elif d.get('strategy','brkX2') == 'dipbuy_universe':
             hold_limit_sec = DIPBUY_UNIVERSE_MAX_HOLD_CANDLES * STRAT4H_SECONDS
             hold_label = f"batas {DIPBUY_UNIVERSE_MAX_HOLD_CANDLES} candle 4h (dipbuy)"
@@ -9880,6 +9903,7 @@ def thread2_monitor():
                 else TRENDCONFIRM_MAX_HOLD_CANDLES if d.get('strategy') == 'trend_confirm_4h'
                 else DECOUPLE_4H_MAX_HOLD_CANDLES if d.get('strategy') == 'decouple_4h'
                 else RVOLBREAK_1H_MAX_HOLD_CANDLES if d.get('strategy') == 'rvolbreak_1h'
+                else RVOLBREAK_8H_MAX_HOLD_CANDLES if d.get('strategy') == 'rvolbreak_8h'
                 else DIPBUY_UNIVERSE_MAX_HOLD_CANDLES if d.get('strategy') == 'dipbuy_universe'
                 else d.get('timeout_candles', AKUM_ENTRY_TIMEOUT) if d.get('strategy','') in ('akum_entry_a','akum_entry_b')
                 else MAX_HOLD_DAYS
@@ -14498,6 +14522,7 @@ var SC_LABELS = {
     qscalp_3m: 'QScalp-3m',
     decouple_4h: 'Decouple-4h',
     rvolbreak_1h: 'RVOLBreak-1h',
+    rvolbreak_8h: 'RVolBreak-8h',
     dipbuy_universe: 'Dip-Buy Universe'
 };
 // 24/09/2026 (permintaan Mas Budi): Entry A & Entry B sekarang baris terpisah supaya base_usd
@@ -15239,6 +15264,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="qscalp_3m">QScalp-3m</option>
         <option value="decouple_4h">Decouple-4h</option>
         <option value="rvolbreak_1h">RVOLBreak-1h</option>
+        <option value="rvolbreak_8h">RVolBreak-8h</option>
         <option value="dipbuy_universe">Dip-Buy Universe</option>
         <option value="__exclude_hardstop__">Semua strategi, exclude hardstop volatilitas</option>
       </select>
@@ -15315,7 +15341,7 @@ function sortClosedTrades(key) {
 
 function renderClosedTradesRows() {
     var rows = closedTradesRows.slice();
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',dipbuy_universe:'Dip-Buy Universe',qscalp_3m:'QScalp-3m'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',qscalp_3m:'QScalp-3m'};
     var searchBox = document.getElementById('ct-filter-search');
     var searchTerm = searchBox ? searchBox.value.trim().toUpperCase() : '';
     if (searchTerm) {
@@ -15376,7 +15402,7 @@ function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
     if (!el) return;
     if (!rows.length) { el.innerHTML = ''; return; }
-    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',dipbuy_universe:'Dip-Buy Universe',qscalp_3m:'QScalp-3m'};
+    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',qscalp_3m:'QScalp-3m'};
     // 10/10/2026 (permintaan Mas Budi): KeltnerBreak-12h digabung BALIK jadi SATU kartu lagi (balik
     // seperti sebelum 09/10/2026) -- raw strategy value 'brkX2' (legacy, sebelum split 1-hari),
     // 'brkX2_closed'/'brkX2_intrabar' (era split), DAN 'brkX2_12h_closed' (key baru skrg) SEMUA
@@ -15434,7 +15460,7 @@ function renderCtEquityCurve(rows) {
 function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',dipbuy_universe:'Dip-Buy Universe',qscalp_3m:'QScalp-3m'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',qscalp_3m:'QScalp-3m'};
     var headers = ['Pair','Strategi','Opened','Entry','Closed','Exit','RSI@Open','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
@@ -18098,23 +18124,40 @@ KELTNER_MULT    = 2.0
 # Backtest (rvolbreak_1h_sim.py, 175 koin 2022-2026, TF 1h native/tanpa resample): n=37.124,
 # 174 koin, WR 73,6%, avg +0,761%/trade. TRAIN diff +0,653pp p=0,00000, TEST diff +0,752pp
 # p=0,00000 -- LOLOS KUAT dua-duanya, stabil di SETIAP tahun 2022-2026 (avg +0,65% s/d
-# +0,89%, WR 72,5%-74,8%). Scratchpad: rvolbreak_1h_sim.py / rvolbreak_1h_random_baseline.py
-# / rvolbreak_1h_eval.py. Jalan paper dulu (target 20 closed trade), sama pola spt strategi
-# baru lain sebelum dipertimbangkan live.
+# +0,89%, WR 72,5%-74,8%). Naik live 09/10/2026 (lihat riwayat commit rvolbreak_1h).
+#
+# 12/10/2026 (permintaan Mas Budi): RVOLBreak-1h DITERMINATE PENUH -- live profit mayoritas
+# cuma +1,x% walau backtest average lebih besar (distribusi right-skew + sinyal 1h terlalu
+# noisy), ditelusuri lewat sweep 6 timeframe (rvolbreak_tf_sweep.py, 175 koin 2022-2026,
+# formula exit SAMA persis, cuma timeframe sinyal entry yang diubah): WR/avg-net naik
+# MONOTON tiap TF dinaikkan (1h: WR74,9%/+0,87% -> 4h: 81,5%/+3,00% -> 6h: 82,3%/+4,04% ->
+# 8h: 84,1%/+5,17% -> 12h: 84,3%/+6,86% -> 24h: 86,6%/+11,19%), tapi itu sebagian besar efek
+# modal ditahan lebih lama (hold proporsional 24 candle/TF), bukan sinyal makin bagus murni --
+# 8h dipilih sbg pengganti (RVolBreak-8h, di bawah) krn timeout turun ke 1,4% (dari 16,4% di
+# 1h) & WR/avg-net naik besar, tanpa modal nganggur separah 12h/24h (hold 8 hari, sinyal masih
+# cukup sering). Konstanta SHADOW_RVOLBREAK_*/RVOLBREAK_LOOKBACK/RVOLBREAK_RVOL_MIN TETAP
+# dipertahankan (dipakai ulang oleh RVolBreak-8h di bawah + _shadow_rvolbreak_check_exits()
+# masih perlu menuntaskan sisa posisi SHADOW lama) -- RVOLBREAK_1H_MAX_HOLD_CANDLES juga
+# TETAP (LEGACY, HANYA dipakai thread2_monitor() utk posisi LIVE 1h lama yg masih terbuka
+# saat commit ini di-deploy -- hapus baris itu setelah posisi itu closed, estimasi <24 jam).
 STRAT1H_SECONDS = 3600
 SHADOW_RVOLBREAK_TARGET = 20
 SHADOW_RVOLBREAK_MAX_HOLD_CANDLES = 24   # sama persis yg dibacktest (HOLD=24 candle 1h, ~1 hari)
 RVOLBREAK_LOOKBACK = 24
 RVOLBREAK_RVOL_MIN = 3.0
+RVOLBREAK_1H_MAX_HOLD_CANDLES = SHADOW_RVOLBREAK_MAX_HOLD_CANDLES   # LEGACY -- lihat REMARK di atas
 
-# ── RVOLBreak-1h LIVE (09/10/2026, Tahap 2/4 -- permintaan Mas Budi): lulus target shadow
-# 24/20 (15W/9L, +61.8%) 09/10/2026. Sinyal & exit IDENTIK dengan versi shadow di atas
-# (trailing produksi asli) -- cuma sekarang kirim order Binance sungguhan, sama pola persis
-# Tahap 1 (Decouple-4h). Modal $50 tetap tanpa add-fund, 2 slot, lewat AI konfirmasi.
-RVOLBREAK_1H_ENABLED       = True
-RVOLBREAK_1H_SCAN_INTERVAL = 300     # detik -- TF 1h, lebih cepat dari strategi 4h (sama alasan qscalp lebih cepat dari 4h)
-RVOLBREAK_1H_MAX_DEALS     = 2
-RVOLBREAK_1H_MAX_HOLD_CANDLES = SHADOW_RVOLBREAK_MAX_HOLD_CANDLES   # 24 candle 1h, sama persis dibacktest
+# ── RVolBreak-8h LIVE (12/10/2026, permintaan Mas Budi -- pengganti langsung RVOLBreak-1h,
+# TANPA fase shadow/paper krn formula & exit sudah tervalidasi penuh lewat sweep TF di atas,
+# cuma timeframe sinyal yang berubah). Donchian breakout 24-candle 8h (~8 hari) + RVOL>=3.0,
+# formula & parameter IDENTIK dgn versi 1h (RVOLBREAK_LOOKBACK/RVOLBREAK_RVOL_MIN di atas),
+# cuma candle-nya 8h native Binance (bukan resample). Modal $50 tetap tanpa add-fund, 2 slot,
+# lewat AI konfirmasi -- sama pola persis versi 1h yang digantikan.
+RVOLBREAK_8H_SECONDS          = 28800
+RVOLBREAK_8H_ENABLED          = True
+RVOLBREAK_8H_SCAN_INTERVAL    = 300     # detik -- sama dgn versi 1h lama (exit monitoring tetap presisi walau candle 8h)
+RVOLBREAK_8H_MAX_DEALS        = 2
+RVOLBREAK_8H_MAX_HOLD_CANDLES = 24      # 24 candle 8h = 8 hari, sama persis dibacktest (rvolbreak_tf_sweep.py)
 
 
 def _shadow_keltnerbreak_compute(df):
@@ -18231,8 +18274,11 @@ def _shadow_keltnerbreak_check_exits(data: dict) -> None:
     data[combo]['open'] = still_open
 
 
-def _shadow_rvolbreak_compute(df):
-    """Indikator RVOL Breakout-1h -- formula PERSIS rvolbreak_1h_sim.py."""
+def _rvolbreak8h_compute(df):
+    """Indikator RVOL Breakout -- formula PERSIS rvolbreak_1h_sim.py/rvolbreak_tf_sweep.py,
+    dipakai sekarang oleh RVolBreak-8h LIVE (dulu nama fungsi ini _shadow_rvolbreak_compute,
+    dipakai versi 1h yang sudah diterminate 12/10/2026 -- formula TF-agnostic, cuma di-reuse
+    utk candle TF baru, lihat REMARK konstanta di atas)."""
     import pandas_ta as _pta
     c, h, l, v = df['close'], df['high'], df['low'], df['vol']
     df['atr_pct'] = _pta.atr(h, l, c, length=14) / c * 100
@@ -18240,51 +18286,6 @@ def _shadow_rvolbreak_compute(df):
     df['vol_ma20'] = v.rolling(20).mean()
     df['rvol'] = v / df['vol_ma20']
     return df
-
-
-def _shadow_rvolbreak_scan_entries(data: dict) -> None:
-    """Scan universe candle 1h TERTUTUP terakhir, cari breakout Donchian 24-candle + RVOL>=3.0."""
-    if len(data['rvolbreak_1h']['closed']) >= SHADOW_RVOLBREAK_TARGET \
-       or len(data['rvolbreak_1h']['open']) >= SHADOW_MAX_OPEN_PER_COMBO:
-        return
-    try:
-        pairs = get_usdt_spot_pairs()
-        ticker = get_ticker_24h()
-        volmap = {}
-        for t in (ticker or []):
-            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
-            except Exception: pass
-        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
-                    and p not in SYMBOL_BLACKLIST]
-    except Exception as e:
-        log(f"WARN [SHADOW-RVOLBREAK] gagal ambil universe: {e}")
-        return
-
-    for sym in universe:
-        if len(data['rvolbreak_1h']['open']) >= SHADOW_MAX_OPEN_PER_COMBO:
-            break
-        try:
-            df = get_ohlcv(sym, interval="1h", limit=80)
-            if df is None or len(df) < 50:
-                continue
-            if df['ct'].iloc[-1] >= int(time.time() * 1000):
-                df = df.iloc[:-1]
-            if len(df) < 46:
-                continue
-            df = _shadow_rvolbreak_compute(df)
-            i = len(df) - 1
-            close_now = float(df['close'].iloc[i])
-            dh = df['donchian_high'].iloc[i]; rvol_now = df['rvol'].iloc[i]
-            atr_now = df['atr_pct'].iloc[i]
-            if any(pd.isna(x) for x in [dh, rvol_now, atr_now]) or atr_now <= 0:
-                continue
-            if close_now > dh and rvol_now >= RVOLBREAK_RVOL_MIN:
-                sig_ts = int(df['ts'].iloc[i]) if 'ts' in df.columns else int(df['ct'].iloc[i])
-                _shadow_newstrat_open_one(data, 'rvolbreak_1h', SHADOW_RVOLBREAK_TARGET, sym,
-                                           close_now, float(atr_now), sig_ts,
-                                           f" | tembus HH{RVOLBREAK_LOOKBACK} RVOL {rvol_now:.2f}x")
-        except Exception as e:
-            log(f"WARN [SHADOW-RVOLBREAK] {sym}: {e}")
 
 
 def _shadow_rvolbreak_check_exits(data: dict) -> None:
@@ -18730,21 +18731,21 @@ def run_thread_decouple() -> None:
         time.sleep(DECOUPLE_4H_SCAN_INTERVAL)
 
 
-def thread_rvolbreak_scan() -> None:
-    """Scan sinyal RVOLBreak-1h LIVE (09/10/2026, Tahap 2/4). Sinyal IDENTIK dengan
-    _shadow_rvolbreak_scan_entries() (close candle 1h TERTUTUP menembus FRESH di atas
-    Donchian high 24-candle DAN RVOL >= RVOLBREAK_RVOL_MIN) -- bedanya di sini AI konfirmasi
-    2 babak lalu open_deal_with_sizing() benar2 kirim order, sama pola persis Tahap 1
-    (Decouple-4h)."""
-    if not RVOLBREAK_1H_ENABLED: return
-    if not is_strategy_enabled('rvolbreak_1h'): return
+def thread_rvolbreak8h_scan() -> None:
+    """Scan sinyal RVolBreak-8h LIVE (12/10/2026, pengganti RVOLBreak-1h -- lihat REMARK
+    konstanta RVOLBREAK_8H_* di atas). Sinyal IDENTIK dgn versi 1h yg digantikan (close
+    candle 8h TERTUTUP menembus FRESH di atas Donchian high 24-candle DAN RVOL >=
+    RVOLBREAK_RVOL_MIN), cuma candle-nya 8h native Binance -- AI konfirmasi 2 babak lalu
+    open_deal_with_sizing() kirim order, sama pola persis versi sebelumnya."""
+    if not RVOLBREAK_8H_ENABLED: return
+    if not is_strategy_enabled('rvolbreak_8h'): return
 
     if is_daily_loss_limit_breached():
-        log(f"[T_RVOLBREAK] Scan di-skip -- batas rugi harian tersulut")
+        log(f"[T_RVOLBREAK8H] Scan di-skip -- batas rugi harian tersulut")
         return
 
-    n_active = deal_count_by_strategy('rvolbreak_1h')
-    if n_active >= RVOLBREAK_1H_MAX_DEALS: return
+    n_active = deal_count_by_strategy('rvolbreak_8h')
+    if n_active >= RVOLBREAK_8H_MAX_DEALS: return
 
     try:
         pairs = get_usdt_spot_pairs()
@@ -18756,7 +18757,7 @@ def thread_rvolbreak_scan() -> None:
         universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
                     and p not in SYMBOL_BLACKLIST]
     except Exception as e:
-        log(f"WARN [T_RVOLBREAK] gagal ambil universe: {e}")
+        log(f"WARN [T_RVOLBREAK8H] gagal ambil universe: {e}")
         return
 
     with active_deals_lock:
@@ -18766,15 +18767,15 @@ def thread_rvolbreak_scan() -> None:
     candidates = []
     for sym in universe:
         if sym in existing: continue
-        if is_cooldown_enabled('rvolbreak_1h') and cooldown_remaining(sym) > 0: continue
+        if is_cooldown_enabled('rvolbreak_8h') and cooldown_remaining(sym) > 0: continue
         if sizing_fail_remaining(sym) > 0: continue
         try:
-            df = get_ohlcv(sym, interval="1h", limit=80)
+            df = get_ohlcv(sym, interval="8h", limit=80)
             if df is None or len(df) < 50: continue
             if df['ct'].iloc[-1] >= int(time.time() * 1000):
                 df = df.iloc[:-1]
             if len(df) < 46: continue
-            df = _shadow_rvolbreak_compute(df)
+            df = _rvolbreak8h_compute(df)
             i = len(df) - 1
             close_now = float(df['close'].iloc[i])
             dh = df['donchian_high'].iloc[i]; rvol_now = df['rvol'].iloc[i]
@@ -18783,31 +18784,30 @@ def thread_rvolbreak_scan() -> None:
                 continue
             if not (close_now > dh and rvol_now >= RVOLBREAK_RVOL_MIN):
                 continue
-            # 09/10/2026 (permintaan Mas Budi, JANGAN DIBANTAH): RSI(14) dicatat INFO-ONLY di
-            # rsi_open -- TIDAK dipakai utk open/add-fund/trailing/close rvolbreak_1h (sinyalnya
-            # murni Donchian breakout + RVOL), murni supaya kolom RSI@Open di Closed Trades tidak
-            # kosong.
+            # RSI(14) dicatat INFO-ONLY di rsi_open -- TIDAK dipakai utk open/add-fund/
+            # trailing/close rvolbreak_8h (sinyalnya murni Donchian breakout + RVOL), sama
+            # pola persis versi 1h yg digantikan.
             _rsi_series = _pta_rv.rsi(df['close'], length=14)
             rsi_now = float(_rsi_series.iloc[i]) if not pd.isna(_rsi_series.iloc[i]) else None
             candidates.append((sym, close_now, float(atr_now), float(rvol_now), rsi_now))
         except Exception as e:
-            log(f"  [T_RVOLBREAK] error {sym}: {e}")
+            log(f"  [T_RVOLBREAK8H] error {sym}: {e}")
 
     if not candidates:
         return
     candidates.sort(key=lambda x: x[3], reverse=True)   # RVOL tertinggi dulu
-    log(f"[T_RVOLBREAK] {len(candidates)} kandidat. Buka deal terbaik (slot {n_active}/{RVOLBREAK_1H_MAX_DEALS})...")
+    log(f"[T_RVOLBREAK8H] {len(candidates)} kandidat. Buka deal terbaik (slot {n_active}/{RVOLBREAK_8H_MAX_DEALS})...")
 
     # ============ BABAK 1: AI individual per-kandidat (notify=False) ============
     held = {}
     for sym, signal_price, atr_now, rvol_now, rsi_now in candidates:
         with active_deals_lock:
             if sym in active_deals: continue
-        if is_ai_call_open_enabled('rvolbreak_1h'):
+        if is_ai_call_open_enabled('rvolbreak_8h'):
             _ai_ind = {'atr_pct': f"{atr_now:.2f}%", 'signal_price': _fmt_price(signal_price),
                        'rvol': f"{rvol_now:.2f}x"}
-            if not ai_decision_open(sym, 'RVOLBreak-1h', _ai_ind, deal_count_by_strategy('rvolbreak_1h'), notify=False):
-                log(f"[T_RVOLBREAK] {sym} babak-1 di-skip oleh AI individual")
+            if not ai_decision_open(sym, 'RVolBreak-8h', _ai_ind, deal_count_by_strategy('rvolbreak_8h'), notify=False):
+                log(f"[T_RVOLBREAK8H] {sym} babak-1 di-skip oleh AI individual")
                 continue
         held[sym] = {'signal_price': signal_price, 'atr_now': atr_now, 'rvol_now': rvol_now, 'rsi_now': rsi_now}
 
@@ -18815,28 +18815,28 @@ def thread_rvolbreak_scan() -> None:
         return
 
     # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
-    log(f"[T_RVOLBREAK] Babak 1 selesai: {len(held)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
-    log_ai_babak1('RVOLBreak-1h', [to_display_pair(s) for s in held.keys()], AI_BATCH_MAX_APPROVE)
-    batch_input = [{'symbol': s, 'strategy': 'rvolbreak_1h', 'score': 1,
+    log(f"[T_RVOLBREAK8H] Babak 1 selesai: {len(held)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+    log_ai_babak1('RVolBreak-8h', [to_display_pair(s) for s in held.keys()], AI_BATCH_MAX_APPROVE)
+    batch_input = [{'symbol': s, 'strategy': 'rvolbreak_8h', 'score': 1,
                      'detail': {'atr_pct': v['atr_now'], 'rvol': v['rvol_now']}}
                     for s, v in held.items()]
     approved = ai_decision_batch_rank(
-        batch_input, strategy_label='RVOLBreak-1h', max_approve=AI_BATCH_MAX_APPROVE,
+        batch_input, strategy_label='RVolBreak-8h', max_approve=AI_BATCH_MAX_APPROVE,
         criteria_note="Kriteria: besarnya RVOL (lonjakan volume), ATR%",
     )
 
     for sym in approved:
-        n_active = deal_count_by_strategy('rvolbreak_1h')
-        if n_active >= RVOLBREAK_1H_MAX_DEALS: break
+        n_active = deal_count_by_strategy('rvolbreak_8h')
+        if n_active >= RVOLBREAK_8H_MAX_DEALS: break
         with active_deals_lock:
             if sym in active_deals: continue
         v = held[sym]
         signal_price = v['signal_price']; atr_now = v['atr_now']; rvol_now = v['rvol_now']; rsi_now = v['rsi_now']
 
-        # Sama spt Decouple-4h (Tahap 1): tidak ada re-check level/harga sebelum beli di sini --
-        # shadow yg dibacktest juga tidak punya pengecekan ini, dan harga eksekusi riil tetap
-        # dari fill order (fill_price di bawah), bukan signal_price yg sudah agak basi.
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='rvolbreak_1h')
+        # Tidak ada re-check level/harga sebelum beli di sini -- backtest yg divalidasi juga
+        # tidak punya pengecekan ini, dan harga eksekusi riil tetap dari fill order (fill_price
+        # di bawah), bukan signal_price yg sudah agak basi.
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='rvolbreak_8h')
         if not ok: continue
 
         try:
@@ -18846,9 +18846,9 @@ def thread_rvolbreak_scan() -> None:
             fill_price = signal_price
 
         now_ms = int(time.time() * 1000)
-        candle_open_ms = (now_ms // (STRAT1H_SECONDS * 1000)) * (STRAT1H_SECONDS * 1000)
+        candle_open_ms = (now_ms // (RVOLBREAK_8H_SECONDS * 1000)) * (RVOLBREAK_8H_SECONDS * 1000)
         add_to_active_deals(sym, {
-            "strategy":          "rvolbreak_1h",
+            "strategy":          "rvolbreak_8h",
             "entry_price":       fill_price,
             "signal_price":      signal_price,
             "atr_pct":           atr_now,
@@ -18856,13 +18856,10 @@ def thread_rvolbreak_scan() -> None:
             "add_usd":           add_usd,
             "opened_ts":         time.time(),
             "opened_candle_ts":  candle_open_ms,
-            "tf":                "1h",
+            "tf":                "8h",
         })
         n_active += 1
         slip_pct = (fill_price / signal_price - 1) * 100 if signal_price > 0 else 0
-        # 09/10/2026: sama spt decouple_4h -- csv_log_open() TIDAK dipanggil sejak live, lihat
-        # REMARK lengkap di thread_decouple_scan(). rsi_open diisi INFO-ONLY (lihat REMARK di
-        # candidate loop) -- bukan dipakai utk keputusan apa pun.
         csv_log_open({
             'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
             'symbol':         to_display_pair(sym),
@@ -18871,31 +18868,31 @@ def thread_rvolbreak_scan() -> None:
             'slip_pct':       f"{slip_pct:+.2f}",
             'atr_pct':        f"{atr_now:.2f}",
             'base_usd':       target_usd,
-            'strategy':       'rvolbreak_1h',
+            'strategy':       'rvolbreak_8h',
             'rsi_open':       f"{rsi_now:.1f}" if rsi_now is not None else '',
         })
         send_telegram(
-            f"RVOLBreak-1h | OPEN LONG\n"
+            f"RVolBreak-8h | OPEN LONG\n"
             f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
             f"Pair  : {to_display_pair(sym)}\n"
             f"Harga entry (pasar): {_fmt_price(fill_price)}\n"
-            f"Harga sinyal (1h): {_fmt_price(signal_price)}\n"
+            f"Harga sinyal (8h): {_fmt_price(signal_price)}\n"
             f"Selisih (slippage): {slip_pct:+.2f}%\n"
             f"ATR%  : {atr_now:.2f}  |  RVOL: {rvol_now:.2f}x\n"
             f"Modal: ${target_usd:.0f}" + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else ""),
             parse_mode=None
         )
-        log(f"[T_RVOLBREAK] OPEN {sym} @ {fill_price:.8g} (sinyal {signal_price:.8g}, ATR%={atr_now:.2f}, RVOL={rvol_now:.2f}x)")
+        log(f"[T_RVOLBREAK8H] OPEN {sym} @ {fill_price:.8g} (sinyal {signal_price:.8g}, ATR%={atr_now:.2f}, RVOL={rvol_now:.2f}x)")
 
 
-def run_thread_rvolbreak() -> None:
-    """Thread T_RVOLBREAK: scan RVOLBreak-1h tiap RVOLBREAK_1H_SCAN_INTERVAL detik."""
+def run_thread_rvolbreak8h() -> None:
+    """Thread T_RVOLBreak8h: scan RVolBreak-8h tiap RVOLBREAK_8H_SCAN_INTERVAL detik."""
     while True:
         try:
-            thread_rvolbreak_scan()
+            thread_rvolbreak8h_scan()
         except Exception as e:
-            log(f"WARN T_RVOLBREAK error: {e}")
-        time.sleep(RVOLBREAK_1H_SCAN_INTERVAL)
+            log(f"WARN T_RVOLBREAK8H error: {e}")
+        time.sleep(RVOLBREAK_8H_SCAN_INTERVAL)
 
 
 def thread_dipbuy_universe_scan() -> None:
@@ -19096,11 +19093,11 @@ def thread_shadow_fwdtest_scan() -> None:
             # KeltnerBreak-12h (lihat check_entry(), commit 3c5c19d). Posisi yg masih OPEN tetap
             # dipantau normal lewat _shadow_newstrat_check_exits(), cuma TIDAK buka baru lagi.
             # _shadow_keltnerbreak_scan_entries(data)
-            # rvolbreak_1h DIPENSIUNKAN 09/10/2026 (Tahap 2/4, permintaan Mas Budi): lulus target
-            # 24/20 (+61.8%), formula sekarang LIVE (lihat thread_rvolbreak_scan()). Posisi paper
-            # lama tetap dipantau normal lewat _shadow_rvolbreak_check_exits(), cuma tidak buka
-            # posisi paper baru lagi -- pola sama persis retirement keltnerbreak_12h/decouple_4h.
-            # _shadow_rvolbreak_scan_entries(data)
+            # rvolbreak_1h (shadow) DIPENSIUNKAN 09/10/2026 lalu DITERMINATE PENUH 12/10/2026
+            # (diganti RVolBreak-8h, lihat REMARK konstanta RVOLBREAK_8H_* di atas) --
+            # _shadow_rvolbreak_scan_entries() SUDAH DIHAPUS (bukan cuma dikomentari lagi).
+            # _shadow_rvolbreak_check_exits() di atas TETAP dipanggil hanya utk menuntaskan sisa
+            # posisi SHADOW lama kalau ada (bukan posisi live) -- aman dihapus setelah kosong.
         except Exception as e:
             log(f"ERROR [SHADOW-FWDTEST] scan fatal: {e}")
         _save_shadow_fwdtest(data)
@@ -23693,7 +23690,7 @@ def run_web_dashboard():
                 # dipbuy_universe TIDAK pakai RSI dlm sinyalnya sama sekali, tapi rsi_open tetap
                 # mau ditampilkan INFO-ONLY -- ditambahkan ke sini supaya baris yg open_time_wib-nya
                 # sudah benar (lihat /admin/backfill_decouple_open) ikut kebagian rekonstruksi RSI.
-                'decouple_4h': '4h', 'rvolbreak_1h': '1h', 'dipbuy_universe': '4h',
+                'decouple_4h': '4h', 'rvolbreak_1h': '1h', 'rvolbreak_8h': '8h', 'dipbuy_universe': '4h',
             }
             filled, skipped, errors = 0, 0, 0
             skip_reasons = {}
@@ -24976,6 +24973,7 @@ def run_web_dashboard():
                 # jadi 1 baris per strategi, bukan split spt KeltnerBreak-12h.
                 ("decouple_4h", "Decouple-4h"),
                 ("rvolbreak_1h", "RVOLBreak-1h"),
+                ("rvolbreak_8h", "RVolBreak-8h"),
                 ("dipbuy_universe", "Dip-Buy Universe"),
             ]
             # 26/09/2026 (permintaan Mas Budi): "kecepatan closing" PROFIT POSITIF -- tier
@@ -27360,8 +27358,8 @@ if __name__ == '__main__':
         t_dc = threading.Thread(target=run_thread_decouple, daemon=True, name="T-Decouple")
         threads.append(t_dc)
         n_threads += 1
-    if RVOLBREAK_1H_ENABLED:
-        t_rv = threading.Thread(target=run_thread_rvolbreak, daemon=True, name="T-RVOLBreak")
+    if RVOLBREAK_8H_ENABLED:
+        t_rv = threading.Thread(target=run_thread_rvolbreak8h, daemon=True, name="T-RVolBreak8h")
         threads.append(t_rv)
         n_threads += 1
     if DIPBUY_UNIVERSE_ENABLED:
