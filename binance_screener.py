@@ -15715,10 +15715,11 @@ window.addEventListener('load', function(){ restoreCtFilters(); loadClosedTrades
                     <th style="padding:5px 6px">Jml Deal</th>
                     <th style="padding:5px 6px">Total Nilai Beli ($)</th>
                     <th style="padding:5px 6px">Total Nilai Jual ($)</th>
+                    <th style="padding:5px 6px">Profit ($)</th>
                     <th style="padding:5px 6px">Estimasi PPN ($)</th>
                     <th style="padding:5px 6px">Estimasi PPh Final ($)</th>
                 </tr></thead>
-                <tbody id="tax-recap-tbody"><tr><td colspan="6" style="padding:10px;color:var(--muted);text-align:center">Klik "Muat"</td></tr></tbody>
+                <tbody id="tax-recap-tbody"><tr><td colspan="7" style="padding:10px;color:var(--muted);text-align:center">Klik "Muat"</td></tr></tbody>
                 <tfoot id="tax-recap-tfoot"></tfoot>
             </table>
             </div>
@@ -15807,8 +15808,10 @@ function loadTaxRecap() {
         }
         window._taxRecapRows = d.rows;
         var fmt = function(v) { return '$' + Number(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); };
+        var fmtProfit = function(v) { return (v >= 0 ? '+' : '') + fmt(v); };
+        var profitColor = function(v) { return v >= 0 ? 'var(--green)' : 'var(--red)'; };
         if (!d.rows.length) {
-            tbody.innerHTML = '<tr><td colspan="6" style="padding:10px;color:var(--muted);text-align:center">Belum ada transaksi closed.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" style="padding:10px;color:var(--muted);text-align:center">Belum ada transaksi closed.</td></tr>';
             tfoot.innerHTML = '';
             status.textContent = '';
             return;
@@ -15819,6 +15822,7 @@ function loadTaxRecap() {
                 '<td style="padding:5px 6px">' + r.n_trades + '</td>' +
                 '<td style="padding:5px 6px">' + fmt(r.total_beli_usd) + '</td>' +
                 '<td style="padding:5px 6px">' + fmt(r.total_jual_usd) + '</td>' +
+                '<td style="padding:5px 6px;color:' + profitColor(r.profit_usd) + '">' + fmtProfit(r.profit_usd) + '</td>' +
                 '<td style="padding:5px 6px;color:#ffb400">' + fmt(r.ppn_estimasi_usd) + '</td>' +
                 '<td style="padding:5px 6px;color:#ffb400">' + fmt(r.pph_estimasi_usd) + '</td>' +
                 '</tr>';
@@ -15829,6 +15833,7 @@ function loadTaxRecap() {
             '<td style="padding:6px">' + t.n_trades + '</td>' +
             '<td style="padding:6px">' + fmt(t.total_beli_usd) + '</td>' +
             '<td style="padding:6px">' + fmt(t.total_jual_usd) + '</td>' +
+            '<td style="padding:6px;color:' + profitColor(t.profit_usd) + '">' + fmtProfit(t.profit_usd) + '</td>' +
             '<td style="padding:6px;color:#ffb400">' + fmt(t.ppn_estimasi_usd) + '</td>' +
             '<td style="padding:6px;color:#ffb400">' + fmt(t.pph_estimasi_usd) + '</td>' +
             '</tr>';
@@ -15842,10 +15847,10 @@ function loadTaxRecap() {
 function exportTaxRecapCsv() {
     var rows = window._taxRecapRows || [];
     if (!rows.length) { alert('Klik "Muat" dulu sebelum export.'); return; }
-    var headers = ['Bulan','Jumlah Deal','Total Nilai Beli (USD)','Total Nilai Jual (USD)','Estimasi PPN (USD)','Estimasi PPh Final (USD)'];
+    var headers = ['Bulan','Jumlah Deal','Total Nilai Beli (USD)','Total Nilai Jual (USD)','Profit (USD)','Estimasi PPN (USD)','Estimasi PPh Final (USD)'];
     var lines = [headers.join(',')];
     rows.forEach(function(r) {
-        lines.push([r.month, r.n_trades, r.total_beli_usd, r.total_jual_usd, r.ppn_estimasi_usd, r.pph_estimasi_usd].join(','));
+        lines.push([r.month, r.n_trades, r.total_beli_usd, r.total_jual_usd, r.profit_usd, r.ppn_estimasi_usd, r.pph_estimasi_usd].join(','));
     });
     var blob = new Blob([lines.join('\\n')], {type: 'text/csv;charset=utf-8;'});
     var url = URL.createObjectURL(blob);
@@ -25342,6 +25347,7 @@ def run_web_dashboard():
                         "month": month_key, "n_trades": m['n'],
                         "total_beli_usd": round(m['beli'], 2),
                         "total_jual_usd": round(m['jual'], 2),
+                        "profit_usd": round(m['jual'] - m['beli'], 2),
                         "ppn_estimasi_usd": round(m['beli'] * PPN_RATE, 2),
                         "pph_estimasi_usd": round(m['jual'] * PPH_RATE, 2),
                     })
@@ -25351,6 +25357,7 @@ def run_web_dashboard():
                     "n_trades": sum(m['n'] for m in by_month.values()),
                     "total_beli_usd": round(tot_beli, 2),
                     "total_jual_usd": round(tot_jual, 2),
+                    "profit_usd": round(tot_jual - tot_beli, 2),
                     "ppn_estimasi_usd": round(tot_beli * PPN_RATE, 2),
                     "pph_estimasi_usd": round(tot_jual * PPH_RATE, 2),
                 }
