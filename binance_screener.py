@@ -2397,6 +2397,72 @@ def trend_continuation_ok(symbol: str, current_price: float) -> bool:
     thresh = info.get('price', 0) * (1 + TREND_CONT_MARGIN_PCT / 100)
     return current_price >= thresh
 
+# 12/10/2026 (Fase 1 task #3/10, permintaan Mas Budi): reentry-on-impas utk TrenKonfirmasi-4h --
+# pola SAMA spt trend_continuation_ok() di atas (lolos cooldown kalau harga reclaim & sinyal
+# lolos ulang dari nol), tapi dipicu close IMPAS (bukan trailing), dan margin reclaim BERTINGKAT
+# per lompatan (makin sering kejadian di symbol yg sama, makin "susah dipercaya"), dibatasi
+# TC4H_REENTRY_MAX_HOPS lompatan per rantai. Dibuktikan via backtest (scratchpad
+# tc4h_reentry_on_impas_backtest.py, diaudit ulang 12/10/2026 stlh ketemu & diperbaiki bug
+# look-ahead di cek "sinyal lolos ulang"): rantai avg +1.05%/sinyal vs baseline +0.58% (tanpa
+# reentry), 86% kasus reentry lebih baik drpd baseline, mayoritas akhir rantai ditutup trailing
+# (bukan hard-stop) -- "bolak-balik" TERBUKTI bukan masalah nyata di data historis.
+TC4H_REENTRY_WINDOW_SECONDS = 12 * 3600    # sama dgn TREND_CONT_WINDOW_SECONDS brkX2_4h di atas
+TC4H_REENTRY_MARGIN_PCT     = [0.5, 1.0]   # margin reclaim lompatan ke-1, ke-2
+TC4H_REENTRY_MAX_HOPS       = 2
+TC4H_REENTRY_FILE = os.path.join(DATA_DIR, "tc4h_impas_reentry.json")
+tc4h_impas_reentry_info = {}   # symbol -> {'ts': epoch close, 'price': harga exit impas terakhir, 'next_hop': 1|2}
+tc4h_impas_reentry_lock = threading.Lock()
+
+def load_tc4h_impas_reentry():
+    global tc4h_impas_reentry_info
+    if not os.path.exists(TC4H_REENTRY_FILE):
+        return
+    try:
+        with open(TC4H_REENTRY_FILE, 'r') as f: data = json.load(f)
+        with tc4h_impas_reentry_lock:
+            tc4h_impas_reentry_info = data
+        log(f"   Loaded tc4h_impas_reentry_info: {len(tc4h_impas_reentry_info)} symbol.")
+    except Exception as e:
+        log(f"WARN gagal baca tc4h_impas_reentry.json: {e}")
+
+def save_tc4h_impas_reentry():
+    try:
+        with tc4h_impas_reentry_lock: data = dict(tc4h_impas_reentry_info)
+        with open(TC4H_REENTRY_FILE, 'w') as f: json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan tc4h_impas_reentry.json: {e}")
+
+def handle_tc4h_chain_close(symbol: str, exit_price: float, hop_used: int, was_impas: bool):
+    """Panggil di SETIAP close trend_confirm_4h. Kalau close ini impas DAN rantai belum capai
+    cap -> catat utk kesempatan reentry berikutnya (next_hop = hop_used+1). Selain itu (hard-stop/
+    trailing/timeout, ATAU sudah capai cap) -> bersihkan catatan, rantai berhenti, cooldown
+    normal berlaku lagi."""
+    next_hop = hop_used + 1
+    with tc4h_impas_reentry_lock:
+        if was_impas and next_hop <= TC4H_REENTRY_MAX_HOPS:
+            tc4h_impas_reentry_info[symbol] = {'ts': time.time(), 'price': exit_price, 'next_hop': next_hop}
+        else:
+            tc4h_impas_reentry_info.pop(symbol, None)
+    save_tc4h_impas_reentry()
+
+def tc4h_impas_reentry_check(symbol: str, current_price: float):
+    """Return hop (1 atau 2, dipakai sbg 'quick_reentry_hop' deal baru) kalau boleh reentry
+    (dlm window 12 jam, rantai blm capai cap, DAN current_price reclaim >= harga exit impas
+    terakhir + margin bertingkat), None kalau tidak."""
+    with tc4h_impas_reentry_lock:
+        info = tc4h_impas_reentry_info.get(symbol)
+    if not info:
+        return None
+    age = time.time() - info.get('ts', 0)
+    if age > TC4H_REENTRY_WINDOW_SECONDS:
+        return None
+    next_hop = info.get('next_hop', 1)
+    if next_hop < 1 or next_hop > TC4H_REENTRY_MAX_HOPS:
+        return None
+    margin = TC4H_REENTRY_MARGIN_PCT[next_hop - 1]
+    thresh = info.get('price', 0) * (1 + margin / 100)
+    return next_hop if current_price >= thresh else None
+
 # Forward-test terpisah khusus trade yang dibuka lewat Quick-Reentry (trend-
 # continuation bypass di atas) -- supaya nggak campur dgn hitungan brkX2-4h
 # biasa, dan biar kelihatan sendiri apakah mekanisme ini beneran net-positive
@@ -6078,6 +6144,12 @@ def execute_close_now(sym: str, reason: str, telegram_header: str = "CLOSE MANUA
             })
             remove_from_active_deals(sym)
             if strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
+            # 12/10/2026 (Fase 1 task #3/10, audit ulang): jalur close INI (manual_close dashboard
+            # + ai_decision_capacity_swap) tadinya TIDAK update status rantai reentry-on-impas --
+            # kalau deal yg lagi hop 1/2 ditutup lewat sini (bukan auto thread2_monitor), catatan
+            # rantai lama jadi nyangkut/stale. was_impas selalu False di sini (bukan close via
+            # mekanisme impas strategi -- close manual/paksa SELALU mengakhiri rantai).
+            if strat == 'trend_confirm_4h': handle_tc4h_chain_close(sym, price_now, d.get('quick_reentry_hop', 0), False)
             if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof)
             if strat == 'akum_entry_a' and d.get('akum2'): record_akum2_close(sym, prof)
             log(f"[{log_tag}] {sym} @ {price_now:.6g} profit={prof:.2f}%")
@@ -10024,6 +10096,7 @@ def thread2_monitor():
                 remove_from_active_deals(sym)
                 if strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
                 if strat == 'brkX2_4h' and trail_stop_triggered: record_trail_close(sym, price)
+                if strat == 'trend_confirm_4h': handle_tc4h_chain_close(sym, price, d.get('quick_reentry_hop', 0), _be_forced_close)
                 if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof_from_entry)
                 if strat == 'akum_entry_a' and d.get('akum2'): record_akum2_close(sym, prof_from_entry)
                 if _hold_no_sell:
@@ -12003,12 +12076,20 @@ def thread_trendconfirm_scan():
     # "OPEN" individual yg belum final (bisa saja dibuang di babak 2).
     pool = candidates[:TRENDCONFIRM_BATCH_POOL_SIZE]
     held = {}   # symbol -> (signal_price, atrp, score, detail, df, rsi_val)
+    held_reentry_hop = {}   # symbol -> 1|2, diisi kalau lolos lewat reentry-on-impas (Fase 1 task #3/10)
     for sym, signal_price, atrp, score, detail, df in pool:
         with active_deals_lock:
             if sym in active_deals: continue
         if is_cooldown_enabled('trend_confirm_4h') and cooldown_remaining(sym) > 0:
-            log(f"[T_TRENDCONFIRM] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
-            continue
+            _reentry_hop = tc4h_impas_reentry_check(sym, signal_price)
+            if _reentry_hop is not None:
+                held_reentry_hop[sym] = _reentry_hop
+                log(f"[T_TRENDCONFIRM] {sym} impas quick re-entry: cooldown {cooldown_remaining(sym)/3600:.1f}j "
+                    f"di-bypass (lompatan ke-{_reentry_hop}, price {_fmt_price(signal_price)} reclaim "
+                    f"margin +{TC4H_REENTRY_MARGIN_PCT[_reentry_hop-1]:g}%, sinyal lolos ulang)")
+            else:
+                log(f"[T_TRENDCONFIRM] {sym} cooldown {cooldown_remaining(sym)/3600:.1f}j — skip")
+                continue
         if sizing_fail_remaining(sym) > 0:
             log(f"[T_TRENDCONFIRM] {sym} baru gagal sizing/open (sisa {sizing_fail_remaining(sym)/60:.0f} menit) — skip, jangan coba lagi dulu.")
             continue
@@ -12089,6 +12170,7 @@ def thread_trendconfirm_scan():
             "add_usd":          add_usd,
             "tf":               TRENDCONFIRM_TIMEFRAME,
             "rsi_open":         float(rsi_val) if not pd.isna(rsi_val) else None,
+            "quick_reentry_hop": held_reentry_hop.get(sym, 0),
         })
         _trendconfirm_last_candle_ts[sym] = candle_open_ms
 
@@ -24125,6 +24207,11 @@ def run_web_dashboard():
                     remove_from_active_deals(symbol)
                     if strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
                         record_closed(symbol)
+                    # 12/10/2026 (Fase 1 task #3/10, audit ulang): jalur close INI jg perlu update
+                    # status rantai reentry-on-impas -- was_impas selalu False (close via webhook
+                    # bukan mekanisme impas strategi, selalu mengakhiri rantai).
+                    if strategy == 'trend_confirm_4h':
+                        handle_tc4h_chain_close(symbol, wh_price, deal.get('quick_reentry_hop', 0), False)
                     # 11/10/2026 (permintaan Mas Budi): jalur close INI (TradingView webhook) ikut
                     # transfer profit ke Master. REVISI 11/10/2026: berhenti di transfer saja,
                     # TIDAK lagi subscribe ke Earn USDT.
@@ -27056,6 +27143,7 @@ if __name__ == '__main__':
     load_scan_blockers()
     load_daily_loss_limit()
     load_trail_reentry()
+    load_tc4h_impas_reentry()
     load_quick_reentry_trades()
     load_akum2_trades()
     load_ai_provider_health()
