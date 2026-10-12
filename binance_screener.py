@@ -13295,6 +13295,7 @@ DASHBOARD_HTML = '''
   <button type="button" class="dash-tab-btn" data-tab="history" onclick="selectDashTab('history')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">HISTORY</button>
   <button type="button" class="dash-tab-btn" data-tab="control" onclick="selectDashTab('control')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">CONTROL</button>
   <button type="button" class="dash-tab-btn" data-tab="tools" onclick="selectDashTab('tools')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">TOOLS</button>
+  <button type="button" class="dash-tab-btn" data-tab="pajak" onclick="selectDashTab('pajak')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">PAJAK</button>
 </div>
 <script>
 function selectDashTab(tab) {
@@ -15684,6 +15685,46 @@ window.addEventListener('load', function(){ restoreCtFilters(); loadClosedTrades
         </div>
     </div>
 </div>
+<!-- ═══════════════ PAJAK (REKAP TRANSAKSI) ═══════════════ -->
+<div class="container dash-section-start" data-tab="pajak">
+    <div class="card">
+        <div class="card-header" onclick="toggleCard(this)"><h2>REKAP TRANSAKSI UTK PAJAK <span class="card-toggle">&#9660;</span></h2></div>
+        <div class="card-body" style="font-size:11px">
+            <div style="color:var(--muted);margin-bottom:10px;line-height:1.5">
+                Rekap SEMUA transaksi closed (beli & jual) per bulan, dari seluruh histori bot -- tidak ada yang
+                disembunyikan (beda dari panel History yang memang didesain utk review performa). Berguna sebagai
+                bahan lapor PPN/PPh aset kripto (PMK No. 68/PMK.03/2022).
+            </div>
+            <div style="background:rgba(255,180,0,.1);border:1px solid rgba(255,180,0,.4);border-radius:6px;padding:8px 10px;margin-bottom:10px;color:#ffb400">
+                <b>PENTING -- kolom PPN/PPh di bawah ini ESTIMASI, BUKAN angka final.</b> Dihitung pakai tarif
+                exchange yang TIDAK terdaftar resmi PFAK/OJK Indonesia (PPN 0,22% dari nilai beli, PPh Final 0,2%
+                dari nilai jual) -- karena bot ini trading langsung di Binance.com (global), bukan entitas
+                terdaftar Indonesia. Status regulasi bisa berubah (transisi Bappebti&rarr;OJK). Nilai dalam USD,
+                BELUM dikonversi ke IDR (kurs beda tiap hari transaksi). <b>Konfirmasikan ke konsultan pajak
+                sebelum dipakai untuk pelaporan resmi.</b>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+                <button type="button" onclick="loadTaxRecap()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">Muat</button>
+                <button type="button" onclick="exportTaxRecapCsv()" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 12px;font-size:11px;cursor:pointer">Export CSV</button>
+                <span id="tax-recap-status" style="color:var(--muted)"></span>
+            </div>
+            <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse">
+                <thead><tr style="text-align:right;color:var(--muted);border-bottom:1px solid var(--border)">
+                    <th style="padding:5px 6px;text-align:left">Bulan</th>
+                    <th style="padding:5px 6px">Jml Deal</th>
+                    <th style="padding:5px 6px">Total Nilai Beli ($)</th>
+                    <th style="padding:5px 6px">Total Nilai Jual ($)</th>
+                    <th style="padding:5px 6px">Estimasi PPN ($)</th>
+                    <th style="padding:5px 6px">Estimasi PPh Final ($)</th>
+                </tr></thead>
+                <tbody id="tax-recap-tbody"><tr><td colspan="6" style="padding:10px;color:var(--muted);text-align:center">Klik "Muat"</td></tr></tbody>
+                <tfoot id="tax-recap-tfoot"></tfoot>
+            </table>
+            </div>
+        </div>
+    </div>
+</div>
 <div class="container dash-section-start" data-tab="control" style="margin-top:12px">
     <div class="card">
         <div class="card-header" onclick="toggleCard(this)"><h2>BLOCK PAIRS <span class="card-toggle">&#9660;</span></h2></div>
@@ -15750,6 +15791,71 @@ function loadAiDecisionsLog() {
     }).catch(function(e) {
         status.textContent = 'Error: ' + e;
     });
+}
+
+window._taxRecapRows = [];
+function loadTaxRecap() {
+    var status = document.getElementById('tax-recap-status');
+    var tbody = document.getElementById('tax-recap-tbody');
+    var tfoot = document.getElementById('tax-recap-tfoot');
+    status.textContent = 'Memuat...';
+    fetch('/api/tax_recap').then(function(r){ return r.json(); }).then(function(d) {
+        if (!d.ok) {
+            status.textContent = 'Error: ' + (d.error || 'gagal memuat');
+            tbody.innerHTML = '';
+            return;
+        }
+        window._taxRecapRows = d.rows;
+        var fmt = function(v) { return '$' + Number(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); };
+        if (!d.rows.length) {
+            tbody.innerHTML = '<tr><td colspan="6" style="padding:10px;color:var(--muted);text-align:center">Belum ada transaksi closed.</td></tr>';
+            tfoot.innerHTML = '';
+            status.textContent = '';
+            return;
+        }
+        tbody.innerHTML = d.rows.map(function(r) {
+            return '<tr style="border-bottom:1px solid var(--border);text-align:right">' +
+                '<td style="padding:5px 6px;text-align:left">' + r.month + '</td>' +
+                '<td style="padding:5px 6px">' + r.n_trades + '</td>' +
+                '<td style="padding:5px 6px">' + fmt(r.total_beli_usd) + '</td>' +
+                '<td style="padding:5px 6px">' + fmt(r.total_jual_usd) + '</td>' +
+                '<td style="padding:5px 6px;color:#ffb400">' + fmt(r.ppn_estimasi_usd) + '</td>' +
+                '<td style="padding:5px 6px;color:#ffb400">' + fmt(r.pph_estimasi_usd) + '</td>' +
+                '</tr>';
+        }).join('');
+        var t = d.totals;
+        tfoot.innerHTML = '<tr style="text-align:right;font-weight:600;border-top:2px solid var(--border)">' +
+            '<td style="padding:6px">TOTAL</td>' +
+            '<td style="padding:6px">' + t.n_trades + '</td>' +
+            '<td style="padding:6px">' + fmt(t.total_beli_usd) + '</td>' +
+            '<td style="padding:6px">' + fmt(t.total_jual_usd) + '</td>' +
+            '<td style="padding:6px;color:#ffb400">' + fmt(t.ppn_estimasi_usd) + '</td>' +
+            '<td style="padding:6px;color:#ffb400">' + fmt(t.pph_estimasi_usd) + '</td>' +
+            '</tr>';
+        status.textContent = (d.skipped_rows ? d.skipped_rows + ' baris dilewati (data tidak lengkap). ' : '') +
+            'Tarif estimasi: PPN ' + d.ppn_rate_pct + '%, PPh Final ' + d.pph_rate_pct + '%.';
+    }).catch(function(e) {
+        status.textContent = 'Error: ' + e;
+    });
+}
+
+function exportTaxRecapCsv() {
+    var rows = window._taxRecapRows || [];
+    if (!rows.length) { alert('Klik "Muat" dulu sebelum export.'); return; }
+    var headers = ['Bulan','Jumlah Deal','Total Nilai Beli (USD)','Total Nilai Jual (USD)','Estimasi PPN (USD)','Estimasi PPh Final (USD)'];
+    var lines = [headers.join(',')];
+    rows.forEach(function(r) {
+        lines.push([r.month, r.n_trades, r.total_beli_usd, r.total_jual_usd, r.ppn_estimasi_usd, r.pph_estimasi_usd].join(','));
+    });
+    var blob = new Blob([lines.join('\\n')], {type: 'text/csv;charset=utf-8;'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'rekap_pajak_' + (new Date().toISOString().slice(0,10)) + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 
 function loadBlockedPairs() {
@@ -25187,6 +25293,71 @@ def run_web_dashboard():
                 })
             except Exception as e:
                 return jsonify({"trades": [], "stats": {}, "error": str(e)})
+
+        @app.route("/api/tax_recap")
+        def api_tax_recap():
+            """12/10/2026 (permintaan Mas Budi): rekap total nilai beli/jual per bulan dari
+            SEMUA transaksi CLOSED, bahan buat lapor pajak aset kripto (PPN/PPh, PMK No.
+            68/PMK.03/2022). SENGAJA BEDA dari /api/closed_trades: TIDAK ada phase_offset,
+            TIDAK sembunyikan hard-stop/paused/patched -- itu semua logika khusus REVIEW
+            PERFORMA, bukan rekap pajak. Di sini SETIAP transaksi uang asli (status CLOSED)
+            harus ikut terhitung, tanpa kecuali. Angka tetap USD (kurs IDR berubah tiap hari,
+            lebih aman dihitung Mas Budi/konsultan pajak pakai kurs yang sesuai tiap transaksi
+            drpd saya pakai 1 kurs tunggal yang pasti kurang akurat)."""
+            try:
+                rows = []
+                if os.path.exists(TRADES_CSV):
+                    with trades_csv_lock:
+                        with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                            for r in csv.DictReader(f):
+                                if r.get('status') == 'CLOSED':
+                                    rows.append(r)
+                by_month = {}
+                skipped = 0
+                for r in rows:
+                    ct = (r.get('close_time_wib') or '').strip()
+                    if len(ct) < 7:
+                        skipped += 1
+                        continue
+                    try:
+                        base_usd = float(r.get('base_usd') or 0)
+                        profit_pct = float(r.get('profit_pct') or 0)
+                    except (TypeError, ValueError):
+                        skipped += 1
+                        continue
+                    if base_usd <= 0:
+                        skipped += 1
+                        continue
+                    sell_usd = base_usd * (1 + profit_pct / 100)
+                    m = by_month.setdefault(ct[:7], {'n': 0, 'beli': 0.0, 'jual': 0.0})
+                    m['n'] += 1
+                    m['beli'] += base_usd
+                    m['jual'] += sell_usd
+                PPN_RATE = 0.0022   # 0.22% dari nilai beli -- tarif exchange TIDAK terdaftar PFAK/OJK
+                PPH_RATE = 0.002    # 0.2% dari nilai jual -- tarif exchange TIDAK terdaftar PFAK/OJK
+                out = []
+                for month_key in sorted(by_month.keys()):
+                    m = by_month[month_key]
+                    out.append({
+                        "month": month_key, "n_trades": m['n'],
+                        "total_beli_usd": round(m['beli'], 2),
+                        "total_jual_usd": round(m['jual'], 2),
+                        "ppn_estimasi_usd": round(m['beli'] * PPN_RATE, 2),
+                        "pph_estimasi_usd": round(m['jual'] * PPH_RATE, 2),
+                    })
+                tot_beli = sum(m['beli'] for m in by_month.values())
+                tot_jual = sum(m['jual'] for m in by_month.values())
+                totals = {
+                    "n_trades": sum(m['n'] for m in by_month.values()),
+                    "total_beli_usd": round(tot_beli, 2),
+                    "total_jual_usd": round(tot_jual, 2),
+                    "ppn_estimasi_usd": round(tot_beli * PPN_RATE, 2),
+                    "pph_estimasi_usd": round(tot_jual * PPH_RATE, 2),
+                }
+                return jsonify({"ok": True, "rows": out, "totals": totals, "skipped_rows": skipped,
+                                 "ppn_rate_pct": PPN_RATE * 100, "pph_rate_pct": PPH_RATE * 100})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
 
         @app.route("/api/scan_blockers")
         def api_scan_blockers():
