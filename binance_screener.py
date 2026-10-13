@@ -13304,6 +13304,7 @@ DASHBOARD_HTML = '''
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <!-- auto-refresh dikendalikan via JS -->
 <title>Bot Dashboard</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+CjxyZWN0IHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgcng9IjciIGZpbGw9IiMwZjExMTciLz4KPGxpbmUgeDE9IjkiIHkxPSI1IiB4Mj0iOSIgeTI9IjI3IiBzdHJva2U9IiMwMGM4OTYiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+CjxyZWN0IHg9IjYiIHk9IjEzIiB3aWR0aD0iNiIgaGVpZ2h0PSI5IiByeD0iMSIgZmlsbD0iIzAwYzg5NiIvPgo8bGluZSB4MT0iMjMiIHkxPSIzIiB4Mj0iMjMiIHkyPSIyOSIgc3Ryb2tlPSIjNGY5ZWZmIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8cmVjdCB4PSIyMCIgeT0iOCIgd2lkdGg9IjYiIGhlaWdodD0iMTQiIHJ4PSIxIiBmaWxsPSIjNGY5ZWZmIi8+Cjwvc3ZnPgo=">
 <style>
   :root{--bg:#0f1117;--surface:#1a1d2e;--border:#2a2d3e;--accent:#4f9eff;--green:#00c896;--red:#ff4f6a;--yellow:#ffb84f;--text:#e2e8f0;--muted:#8892a4;--font:'SF Mono','Fira Code',monospace}
   *{box-sizing:border-box;margin:0;padding:0}
