@@ -4299,6 +4299,32 @@ def send_email_open_long(subject: str, body: str):
     except Exception as e:
         log(f"WARN send_email: {e}")
 
+# 13/10/2026 (permintaan Mas Budi): notif email edge-triggered tiap kali status Gerbang BTC
+# (Gate0) salah satu dari 4 strategi yang punya gerbang (KeltnerBreak-12h/T1, TrenKonfirmasi-4h,
+# Decouple-4h, QScalp-3m) BERUBAH -- cuma pas transisi (terblok->lolos atau sebaliknya), BUKAN
+# tiap siklus scan (bisa tiap 3-10 menit, kebanjiran email). Cek PERTAMA sejak restart/deploy
+# TIDAK kirim notif (belum ada baseline buat dibandingkan) -- supaya tidak ada notif palsu tiap
+# kali ada deploy baru. State di memori saja (bukan file), reset tiap restart adalah perilaku
+# yang DISENGAJA (match poin di atas).
+_BTC_GATE_STATE = {}
+
+def _notify_btc_gate_transition(strategy_key: str, display_name: str, now_ok: bool, syarat_text: str):
+    prev = _BTC_GATE_STATE.get(strategy_key)
+    _BTC_GATE_STATE[strategy_key] = now_ok
+    if prev is None or prev == now_ok:
+        return
+    ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+    if now_ok:
+        subject = f"BTC Gate LOLOS lagi -- {display_name}"
+        body = (f"{display_name} sekarang BISA buka posisi baru lagi -- syarat BTC sudah "
+                f"terpenuhi.\nSyarat: {syarat_text}\nWaktu: {ts} WIB")
+    else:
+        subject = f"BTC Gate TERBLOKIR -- {display_name}"
+        body = (f"{display_name} TIDAK BISA buka posisi baru sampai syarat BTC terpenuhi lagi.\n"
+                f"Syarat: {syarat_text}\nWaktu: {ts} WIB")
+    send_email_open_long(subject, body)
+    log(f"[BTC-GATE-NOTIF] {display_name}: {'LOLOS' if now_ok else 'TERBLOKIR'} (email terkirim)")
+
 def get_binance_usdt_balance() -> float:
     """Baca saldo USDT free dari Binance API (read-only key). Return -1 jika gagal."""
     import hmac, hashlib, urllib.request as _ur, urllib.parse as _up, time as _time
@@ -8597,7 +8623,9 @@ def thread1_scan():
 
     # Gate0 Tahap 2 (10/10/2026): syarat BTCUSDT HTF 1D+3D hijau -- KHUSUS jalur closed-candle
     # ini (T1). TIDAK dipanggil di thread1c_scan_intrabar()/thread1c_scan_intrabar_early().
-    if not keltner12h_btc_gate_ok():
+    _kb12h_gate_ok = keltner12h_btc_gate_ok()
+    _notify_btc_gate_transition('brkX2_12h_closed', 'KeltnerBreak-12h', _kb12h_gate_ok, 'BTCUSDT HTF 1D DAN 3D candle tertutup terakhir keduanya hijau')
+    if not _kb12h_gate_ok:
         log("[T1] Gate0: syarat BTC (HTF 1D+3D hijau) belum lolos, scan dibatalkan periode ini.")
         return "Gate0 BTC aktif & tidak lolos — scan dibatalkan periode ini."
 
@@ -12014,7 +12042,9 @@ def thread_trendconfirm_scan():
     if n_active >= TRENDCONFIRM_MAX_DEALS: return
 
     # Gate0 Tahap 2 (10/10/2026): syarat BTCUSDT HTF 12H DAN 1D keduanya hijau.
-    if not trendconfirm4h_btc_gate_ok():
+    _tc4h_gate_ok = trendconfirm4h_btc_gate_ok()
+    _notify_btc_gate_transition('trend_confirm_4h', 'TrenKonfirmasi-4h', _tc4h_gate_ok, 'BTCUSDT HTF 12H DAN 1D candle tertutup terakhir keduanya hijau')
+    if not _tc4h_gate_ok:
         log(f"[T_TRENDCONFIRM] Gate0: syarat BTC (HTF 12H+1D) belum lolos, scan dibatalkan periode ini.")
         return
 
@@ -18549,7 +18579,9 @@ def thread_decouple_scan() -> None:
     if n_active >= DECOUPLE_4H_MAX_DEALS: return
 
     # Gate0 Tahap 2 (10/10/2026): syarat BTCUSDT HTF 12H ATAU 1D hijau (minimal salah satu).
-    if not decouple4h_btc_gate_ok():
+    _dc4h_gate_ok = decouple4h_btc_gate_ok()
+    _notify_btc_gate_transition('decouple_4h', 'Decouple-4h', _dc4h_gate_ok, 'BTCUSDT HTF 12H ATAU 1D candle tertutup terakhir, minimal salah satu hijau')
+    if not _dc4h_gate_ok:
         log(f"[T_DECOUPLE] Gate0: syarat BTC (HTF 12H/1D) belum lolos, scan dibatalkan periode ini.")
         return
 
@@ -22264,7 +22296,9 @@ def thread_qscalp_scan():
         return
     # Gate0 Tahap 2 (10/10/2026): syarat candle 3m BTCUSDT (TF native, bukan HTF) sudah
     # naik >=0,10% -- default nunggu candle-nya benar2 closed (elapsed=100%, lihat qscalp_btc_gate_ok()).
-    if not qscalp_btc_gate_ok():
+    _qs3m_gate_ok = qscalp_btc_gate_ok()
+    _notify_btc_gate_transition('qscalp_3m', 'QScalp-3m', _qs3m_gate_ok, f'candle 3 menit BTCUSDT terakhir naik >= {QSCALP_BTC_GATE_GENDUT_PCT}%')
+    if not _qs3m_gate_ok:
         log(f"[T_QSCALP] Gate0: syarat BTC (gendut 3m) belum lolos, scan dibatalkan periode ini.")
         return
     try:
