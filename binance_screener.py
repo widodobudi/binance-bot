@@ -7356,6 +7356,19 @@ BTC_DUMP_EXIT_PARAMS = {
     "brkX2_crossema": (8, -2.0),
     "akum_entry_b":   (12, -1.5),   # Akumulasi Entry B saja -- akum_entry_a TIDAK (lihat REMARK)
 }
+
+# 13/10/2026 (permintaan Mas Budi, kasus DYM/USDT -- manual exit krn nggak mau nunggu hard-stop
+# penuh sementara posisi floating rugi): exit dini kalau BELUM ARMED dan MASIH RUGI setelah N
+# candle sejak open, drpd nunggu hard-stop/timeout penuh. Backtest cache_1h 175 pair 2022-2026
+# (keltner12h_magic_dym_fixes.py) -- biaya ke total profit turun TAJAM makin lama N-nya: 1 candle
+# -14,9%, 2 candle -7,2%, 3 candle -2,1%, 4 candle <0,4% (titik paling murah yg masih kasih
+# proteksi nyata, dipilih). MAGIC/USDT (ATR Ekstrem, rugi dalam DI CANDLE PERTAMA) TIDAK
+# terlindungi mekanisme ini -- itu kasus beda (blokir-entry ATR tinggi sudah diuji & DITOLAK,
+# motong total profit 27% cuma utk hindari 13,7% sinyal -- JANGAN diterapkan tanpa data baru).
+# Strategi lain BELUM diuji -- jangan tambah tanpa backtest sendiri per strategi dulu.
+EARLY_CUT_CANDLES_BY_STRATEGY = {
+    "brkX2_12h_closed": 4,   # 4 candle 12h = 48 jam
+}
 _btc_dump_exit_cache = {}   # key: window_hours -> {"ts": float, "pct": float}
 BTC_DUMP_EXIT_CACHE_TTL = 300   # detik -- window 8-12 jam tidak butuh update tiap siklus T2 (~15-20 detik)
 
@@ -9731,6 +9744,15 @@ def thread2_monitor():
                     # SENGAJA TIDAK set hard_stop_triggered -- supaya _hold_no_sell (baris di bawah)
                     # TIDAK aktif utk exit ini: tujuannya keluar beneran dari market yg lagi turun,
                     # bukan menahan koin terus jatuh. Lihat REMARK BTC_DUMP_EXIT_* di atas.
+            if not do_close and (not armed) and strat in EARLY_CUT_CANDLES_BY_STRATEGY:
+                _ec_candles = EARLY_CUT_CANDLES_BY_STRATEGY[strat]
+                _ec_opened_ts = (d.get('opened_candle_ts', 0) or 0) / 1000.0
+                if _ec_opened_ts > 0 and (time.time() - _ec_opened_ts) >= _ec_candles * STRAT12H_SECONDS and price < entry:
+                    do_close = True
+                    reason = (f"exit dini (belum sempat untung setelah {_ec_candles} candle 12h = "
+                              f"{_ec_candles * 12}j, masih rugi): price {_fmt_price(price)} < entry {_fmt_price(entry)}")
+                    # SENGAJA TIDAK set hard_stop_triggered, pola sama spt BTC-dump di atas --
+                    # ini exit dini sukarela, bukan hard-stop volatilitas sungguhan.
             if not do_close:
                 _hs_label, _hs_base, _hs_pct = qscalp_hard_stop_pct() if strat == 'qscalp_3m' else hard_stop_pct(atrp, strat)
                 _be_trig = BE_TRIGGER_BY_STRATEGY.get(strat, 0)
