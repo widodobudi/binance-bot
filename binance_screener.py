@@ -13784,7 +13784,7 @@ refreshShadowChart();
       <tr data-performance="{{ d.get('performance_score', 0) }}" data-urgency="{{ d.get('urgency_sort', 3999) }}">
         <td class="sym {{ 'profit-pos' if d.get('upnl_usd',0) > 0 else 'profit-neg' }}">{{ sym.replace("USDT","/USDT") }}</td>
         <td style="white-space:nowrap">
-          {% set _sm = {"brkX2":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h"} %}
+          {% set _sm = {"brkX2":"brkx2-12h","brkX2_closed":"KeltnerBreak-12h CC (arsip)","brkX2_intrabar":"KeltnerBreak-12h Intrabar (arsip)","brkX2_12h_closed":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h","decouple_4h":"Decouple-4h","dipbuy_universe":"Dip-Buy Universe","qscalp_3m":"QScalp-3m","rvolbreak_8h":"RVolBreak-8h","rvolbreak_1h":"RVOLBreak-1h","hunting_4h":"Hunting-4h","akum_entry_a":"Akumulasi Entry A","akum_entry_b":"Akumulasi Entry B"} %}
           <div>{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</div>
           <div style="font-size:9px;color:var(--muted)">{{ d.get("opened_at","")[:16] if d.get("opened_at") else "-" }}</div>
         </td>
