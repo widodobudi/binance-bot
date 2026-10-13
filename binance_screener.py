@@ -13445,8 +13445,8 @@ document.addEventListener('DOMContentLoaded', function() {
         </span>
     </div>
     <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border);font-size:11px">
-        <span style="color:var(--muted)">Status Gerbang BTC (live):</span>
-        <span id="btc-gate-status-badges">Memuat...</span>
+        <span style="color:var(--muted);flex-shrink:0">Status Gerbang BTC (live):</span>
+        <span id="btc-gate-status-badges" style="display:flex;flex-wrap:wrap;gap:4px 14px;min-width:0">Memuat...</span>
     </div>
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
     <table style="width:100%;min-width:760px;border-collapse:collapse;font-size:11px" id="sc-table">
