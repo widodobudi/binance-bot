@@ -15443,9 +15443,14 @@ function renderCtSummary(rows) {
     // dilebur jadi satu group 'brkX2_12h_closed' -> label "KeltnerBreak-12h" tunggal, TIDAK dipecah
     // lagi per entry_mode/era (dulu sempat dipecah 2-4 kartu, dicabut krn bikin histori terfragmentasi).
     var KELTNER12H_FOLD = {brkX2: true, brkX2_closed: true, brkX2_intrabar: true, brkX2_12h_closed: true};
+    // 13/10/2026 (permintaan Mas Budi): rvolbreak_1h disembunyikan dari kartu ringkasan ini
+    // (data/CSV/log TETAP utuh, cuma kartunya nggak dirender di sini) -- strategi itu sudah
+    // diterminate penuh 12/10/2026, diganti rvolbreak_8h.
+    var CT_SUMMARY_HIDE = {rvolbreak_1h: true};
     var groups = {};
     rows.forEach(function(r) {
         var key = r.strategy || 'brkX2';
+        if (CT_SUMMARY_HIDE[key]) return;
         if (KELTNER12H_FOLD[key]) key = 'brkX2_12h_closed';
         if (!groups[key]) groups[key] = {n:0, wins:0, pnlPct:0, pnlUsd:0};
         var g = groups[key];
