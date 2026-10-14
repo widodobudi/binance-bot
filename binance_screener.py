@@ -13082,6 +13082,7 @@ _dashboard_state = {
         "Decouple-4h": [],
         "RVolBreak-8h": [],
         "Dip-Buy Universe": [],
+        "MomentumBreak-1h": [],
     },
     "last_scan": {},
 }
@@ -14553,54 +14554,6 @@ refreshHuntingSignals();
 </script>
 </div>
 {% endif %}
-
-<div class="container dash-section-start" data-tab="strategies">
-  <div class="section-title">⚡ MomentumBreak-1h</div>
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-header" onclick="toggleCard(this)">
-      <h2>MomentumBreak-1h <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Momentum breakout, full rule-based, TANPA AI | TF 1h | Slot 2</span></h2>
-      <span class="scan-time" id="mombreak-scan-time">Scan: —</span>
-    </div>
-    <div class="card-body">
-      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">
-        Entry (Combo E): vol&ge;4.0xMA20 + momentum&ge;2.5%/2candle + breakout HH15c + close&le;EMA9+3.0%.
-        Exit flat: arm 0.8% / trail 0.3% / stop 1.0% / timeout 15 candle (15 jam, TF 1h). Parameter tidak bisa diubah dari sini
-        (bukan filter opsional spt Hunting-4h) -- ganti lewat kode kalau perlu diubah.
-      </div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Slot: <b id="mombreak-slot" style="color:var(--text)">—</b></div>
-      <div id="mombreak-signals"><em style="color:var(--muted);font-size:11px">Belum ada sinyal.</em></div>
-    </div>
-  </div>
-</div>
-
-<script>
-function refreshMomentumBreakSignals() {
-  fetch("/api/mombreak_signals")
-    .then(function(r){ return r.json(); })
-    .then(function(data) {
-      var el = document.getElementById("mombreak-signals");
-      var ts = document.getElementById("mombreak-scan-time");
-      var slot = document.getElementById("mombreak-slot");
-      if (ts) ts.textContent = "Scan: " + (data.scan_ts || "—");
-      if (slot) slot.textContent = data.slot || "—";
-      if (!data.signals || !data.signals.length) {
-        el.innerHTML = "<em style='color:var(--muted);font-size:11px'>Belum ada sinyal.</em>";
-        return;
-      }
-      el.innerHTML = data.signals.map(function(s){
-        return '<div style="font-size:11px;padding:4px 0;border-bottom:1px solid var(--border)">'
-          + '<b>' + s.symbol + '</b>'
-          + ' &nbsp;close=<b>' + s.close + '</b>'
-          + ' &nbsp;momentum=<b style="color:#3fb950">' + (s.momentum_pct !== undefined ? s.momentum_pct.toFixed(2) : '—') + '%</b>'
-          + ' &nbsp;vol=<b>' + (s.vol_ratio !== undefined ? s.vol_ratio.toFixed(1) : '—') + 'xMA20</b>'
-          + '</div>';
-      }).join("");
-    })
-    .catch(function(){});
-}
-setInterval(refreshMomentumBreakSignals, 30000);
-refreshMomentumBreakSignals();
-</script>
 
 <script src="/dash.js?v=1786097338"></script>
 <script>
@@ -22236,9 +22189,6 @@ MOMBREAK_TERTIARY_ENABLED       = True
 MOMBREAK_TERTIARY_RSI_MAX       = 90.0
 MOMBREAK_TERTIARY_BB_MAX        = 1.0
 
-_mombreak_lock = threading.Lock()
-_mombreak_signals: list = []       # untuk dashboard (kandidat lolos scan terakhir)
-_mombreak_scan_ts = "-"
 _mombreak_last_candle_ts: dict = {}   # sym -> candle open ts (ms) sudah dientry, cegah dobel entry di candle yg sama
 
 
@@ -22411,11 +22361,49 @@ def open_mombreak_if_signal(sig: dict) -> bool:
     return True
 
 
+def mombreak_near_miss_detail(df):
+    """14/10/2026 (permintaan Mas Budi -- gabungkan MomentumBreak-1h ke tab "Kandidat Terdekat"
+    yang sama spt 6 strategi lain, bukan kartu sendiri lagi): evaluasi 5 syarat WAJIB
+    check_mombreak_signal() SATU-SATU (tidak short-circuit spt aslinya) -- read-only, TIDAK
+    memanggil/mempengaruhi check_mombreak_signal() ASLI sama sekali, pola sama spt
+    trendconfirm_near_miss_detail(). Return (n_pass, total, fails) atau None kalau data kurang.
+    Sinyal yg LOLOS PENUH (5/5) otomatis muncul di near-miss ini juga dgn n_pass=total --
+    jadi dropdown "sinyal yg lolos" lama (_mombreak_signals) sudah tidak perlu kartu terpisah."""
+    n = len(df)
+    if n < 40:
+        return None
+    close = df['close'].values.astype(float)
+    high = df['high'].values.astype(float)
+    open_ = df['open'].values.astype(float)
+    vol = df['vol'].values.astype(float)
+    i = n - 1
+    vol_ma20 = pd.Series(vol).rolling(20).mean().values
+    vm = vol_ma20[i]
+    if pd.isna(vm) or vm <= 0 or i < 2 or close[i - 2] <= 0:
+        return None
+    momentum_pct = (close[i] / close[i - 2] - 1) * 100
+    hh_prior = pd.Series(high).rolling(MOMBREAK_LIVE_BREAKOUT_LOOKBACK).max().shift(1).values
+    hh = hh_prior[i]
+    ema9 = pd.Series(close).ewm(span=MOMBREAK_EMA_FAST, adjust=False).mean().values
+    e9 = ema9[i]
+    if pd.isna(hh) or pd.isna(e9) or e9 <= 0:
+        return None
+    checks = [
+        (vol[i] >= MOMBREAK_LIVE_VOL_MULT * vm, f"vol < {MOMBREAK_LIVE_VOL_MULT:g}xMA20 ({vol[i]/vm:.2f}x)"),
+        (close[i] > open_[i], "candle belum hijau"),
+        (momentum_pct >= MOMBREAK_LIVE_MOMENTUM_PCT, f"momentum < {MOMBREAK_LIVE_MOMENTUM_PCT:g}% ({momentum_pct:+.2f}%)"),
+        (close[i] > hh, f"belum breakout HH{MOMBREAK_LIVE_BREAKOUT_LOOKBACK}c (close {close[i]:.6g} <= {hh:.6g})"),
+        (close[i] <= e9 * (1 + MOMBREAK_LIVE_ANTI_FOMO_PCT / 100), f"terlalu jauh di atas EMA9 (anti-FOMO, >+{MOMBREAK_LIVE_ANTI_FOMO_PCT:g}%)"),
+    ]
+    n_pass = sum(1 for ok, _ in checks if ok)
+    fails = [msg for ok, msg in checks if not ok]
+    return n_pass, len(checks), fails
+
+
 def thread_mombreak_scan():
     """Scan MomentumBreak-1h: universe = top MOMBREAK_UNIVERSE_SIZE pair TERLIKUID (sama spt backtest),
     cek candle 3m TERAKHIR tiap pair. Full rule-based, TANPA AI -- langsung eksekusi begitu
     lolos (tidak ada babak-2 AI-batch)."""
-    global _mombreak_scan_ts
     if not is_strategy_enabled('mombreak_1h'):
         return
     # Gate0 Tahap 2 (10/10/2026): syarat candle 1h BTCUSDT (TF native, bukan HTF) sudah
@@ -22441,6 +22429,7 @@ def thread_mombreak_scan():
         display = []
         blockers = {}
         scanned = 0
+        near_miss_mb = []   # 14/10/2026: gabung ke tab "Kandidat Terdekat" (lihat mombreak_near_miss_detail())
         for sym in pairs:
             scanned += 1
             try:
@@ -22458,6 +22447,11 @@ def thread_mombreak_scan():
                 if len(df) < 40:
                     count_blocker(blockers, "Data candle kurang", True)
                     continue
+                _nm = mombreak_near_miss_detail(df)
+                if _nm is not None:
+                    _n_pass, _n_total, _fails = _nm
+                    if _n_pass >= 3:   # >=60% syarat, konsisten spt ambang strategi lain (~50%)
+                        near_miss_mb.append((_n_pass, sym, _fails, _n_total))
                 sig = check_mombreak_signal(df, sym)
                 if sig is None:
                     count_blocker(blockers, "Syarat entry belum lolos", True)
@@ -22470,11 +22464,8 @@ def thread_mombreak_scan():
                 open_mombreak_if_signal(sig)
             except Exception as _qe:
                 pass
-        ts = now_wib().strftime("%d/%m/%Y %H:%M:%S")
-        with _mombreak_lock:
-            _mombreak_signals.clear()
-            _mombreak_signals.extend(display[:50])
-            _mombreak_scan_ts = ts
+        log_near_miss("MomentumBreak-1h", near_miss_mb, 5)
+        update_dashboard_near_miss("MomentumBreak-1h", near_miss_mb)   # ikut update last_scan
         record_scan_blockers("MomentumBreak-1h", scanned, len(display), blockers)
     except Exception as e:
         log(f"WARN [MOMBREAK] scan error: {e}")
@@ -22756,6 +22747,11 @@ def run_web_dashboard():
                 "Dip-Buy Universe": (
                     f"Scan sepanjang candle 4h, tidak dibatasi jendela waktu. Sinyal = turun "
                     f">= {abs(SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN):g}% dalam 1 candle 4h."
+                ),
+                "MomentumBreak-1h": (
+                    f"Scan tiap {MOMBREAK_SCAN_INTERVAL}s, candle 1h. Sinyal = vol>={MOMBREAK_LIVE_VOL_MULT:g}xMA20 + "
+                    f"momentum>={MOMBREAK_LIVE_MOMENTUM_PCT:g}%/2candle + breakout HH{MOMBREAK_LIVE_BREAKOUT_LOOKBACK}c "
+                    f"+ close<=EMA9+{MOMBREAK_LIVE_ANTI_FOMO_PCT:g}% (5 syarat)."
                 ),
                 "Hunting-4h": (
                     f"Scan Hunting terakhir: {_hunting_scan_ts}. "
@@ -25252,15 +25248,6 @@ def run_web_dashboard():
                              "phases": phases.get(key, [])})
             rows.sort(key=lambda r: (r["win"] / r["n"]) if r["n"] > 0 else -1, reverse=True)
             return jsonify({"strategies": rows, "hidden_paused": hidden_paused_labels})
-
-        @app.route("/api/mombreak_signals")
-        def api_mombreak_signals():
-            with _mombreak_lock:
-                return jsonify({
-                    "signals": list(_mombreak_signals),
-                    "scan_ts": _mombreak_scan_ts,
-                    "slot": f"{active_deal_count_mombreak()}/{MOMBREAK_MAX_DEALS}",
-                })
 
         def categorize_exit_reason(reason: str) -> str:
             """Kelompokkan exit_reason (teks bebas) jadi kategori tetap buat filter dashboard."""
