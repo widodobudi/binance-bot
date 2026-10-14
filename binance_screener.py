@@ -231,7 +231,15 @@ HARD_STOP_MULT = 1.1              # pengali (K) atas base hard-stop per tier ATR
 # Cap = batas atas hard-stop % dari entry (None = tanpa cap): rugi terburuk ~ cap + fee.
 HARD_STOP_MULT_BY_STRATEGY = {
     'brkX2': 1.1, 'brkX2_closed': 1.1, 'brkX2_intrabar': 1.1, 'brkX2_12h_closed': 1.1,   # 10/10/2026: brkX2_12h_closed = key gabungan baru KeltnerBreak-12h (closed+intrabar), K sama persis; 2 key lama dipertahankan utk deal lama
-    'reversal': 1.1, 'brkX2_4h': 0.88, 'brkX2_crossema': 1.1, 'hunting_4h': 1.1,   # 06/10/2026: brkX2_4h 1.1 x 0.8 = 0.88 (backtest 160 pair)
+    'reversal': 1.1, 'brkX2_4h': 0.30, 'brkX2_crossema': 1.1, 'hunting_4h': 1.1,   # 14/10/2026: 0.88 -> 0.30
+    # (permintaan Mas Budi, setelah AXL -8.53%/GNS -10.84% hard-stop dalam di hari yg sama).
+    # Backtest 177 pair cache_1h 2022-2026 (130.924 sinyal, 3x cross-check identik, data fresh
+    # termasuk AXL/GNS sendiri): sweep K 0.88/0.75/0.6/0.5/0.4/0.3 -- pola TIDAK monoton (sempat
+    # sedikit lebih jelek di 0.75-0.5), K=0.30 titik TERBAIK: total profit +4.33% vs K=0.88,
+    # rugi terburuk per trade mengecil dari -9.88% jadi -3.50%, TAPI win-rate turun 59.4% -> 52.1%
+    # (lebih sering kena hard-stop, tiap kejadian lebih dangkal). Gerbang BTC HTF (12H/1D, semua
+    # varian) juga diuji sama persis (3x cross-check) -- TIDAK membantu, konsisten dgn catatan lama
+    # 10/10/2026, jadi TIDAK dipasang.
     'trend_confirm_4h': 1.5,   # 20/09/2026: 1.1 -> 1.5 + cap 10.8% (backtest 42.133 sinyal 2022-2026, lihat di bawah)
     # 10/10/2026 (permintaan Mas Budi, backtest cache_1h 175 pair 2022-2026): ketiganya pola sama
     # -- K makin tinggi makin untung (avg per-trade naik, hard-stop rate turun), K=1.3 titik
