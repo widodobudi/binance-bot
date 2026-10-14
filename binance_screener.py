@@ -47,7 +47,7 @@ def _cci_fixed(high, low, close, length=14):
     dikurangi angka itu -> selalu jatuh sangat negatif, TIDAK PERNAH representasi
     overbought/oversold yang benar. Dikonfirmasi dgn hitung manual vs TradingView
     pada data real PENGUUSDT/PIXELUSDT (nilai pandas_ta -1354/-1459 vs rumus benar
-    ~61/~69). Titik pakai (semua strategi KECUALI QScalp-3m, yg tidak pakai CCI):
+    ~61/~69). Titik pakai (semua strategi KECUALI MomentumBreak-1h, yg tidak pakai CCI):
     compute_indicators (KeltnerBreak-12h), compute_indicators_reversal (Reversal-8h),
     compute_indicators_4h (brkX2-4h/CrossEMA-4h/Hunting-4h/Akumulasi-4h/TrenKonfirmasi-4h),
     _multi_ind_precompute (mesin riset), _tf_indicator_line_for_ai (konteks AI)."""
@@ -298,7 +298,7 @@ HOLD_NO_SELL_WARN_RATIO = 0.85    # checkbox "hold, jangan jual" muncul di 85% d
 # insiden WIF/USDT -- REVISI dari catatan v1 yg cuma pakai 6 sampel dari trades_forwardtest.csv,
 # yg TERNYATA bolong -- lihat catatan gap CSV sendiri "hold_no_sell TIDAK dicatat 05/09-19/09".
 # Sumber lengkap: open-arm-close.txt (log mentah). Hasil scan ulang: "hard stop volatilitas"
-# (varian ATR-tiered, BEDA dari "hard stop 2.00% flat" punya qscalp_3m) terjadi 15x, bukan 6x:
+# (varian ATR-tiered, BEDA dari "hard stop 2.00% flat" punya mombreak_1h) terjadi 15x, bukan 6x:
 # trend_confirm_4h=6 (BONK/SPCXB/IOTA/LSK/STG/WIF), reversal=3 (TLM x2/BICO), brkX2_crossema=3
 # (SCR/AVA/AXL), brkX2_4h=2 (TAO/TRUMP), brkX2=1 (HBAR). hunting_4h & akum_entry_a/b = 0.
 #
@@ -336,8 +336,8 @@ def _candle_seconds_for_strategy(strat: str) -> float:
         return REVERSAL_SECONDS_PER_CANDLE
     if strat in ('brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
         return STRAT4H_SECONDS
-    if strat == 'qscalp_3m':
-        return 180  # 3 menit
+    if strat == 'mombreak_1h':
+        return 3600  # 1 jam (diubah dari 180=3 menit, 14/10/2026 saat TF diganti)
     return SECONDS_PER_CANDLE  # brkX2 (12h), default
 
 BASE_ORDER_VOLUME       = 8    # diubah ke $8 (17/08/2026, saldo $85, agar semua strategi bisa open)
@@ -472,8 +472,8 @@ STRAT4H_ENTRY_MAX_PCT   = 60/240  # menit ke-60 dari 240 menit = 25% elapsed (di
 STRAT4H_FWDTEST_TARGET  = 30      # target forward-test fase 2 (fase 1 selesai: #15/7, 13W/1L +12.6%)
 STRAT4H_LIVE_BASELINE   = 30      # closed deals saat brkX2-4h TERCAPAI target fase 2 -> LIVE
 STRAT4H_PHASE2_TARGET   = 15      # target fase-2 (counter "2nd") setelah LIVE, 29/08/2026, samain hunting/reversal
-# ── QScalp-3m (live 12/09/2026, lihat konstanta lengkap dekat thread scan-nya) ─
-QSCALP_MAX_DEALS         = 2       # slot standalone, permintaan eksplisit Mas Budi -- TIDAK
+# ── MomentumBreak-1h (live 12/09/2026, lihat konstanta lengkap dekat thread scan-nya) ─
+MOMBREAK_MAX_DEALS         = 2       # slot standalone, permintaan eksplisit Mas Budi -- TIDAK
                                     # mengurangi slot strategi lain, jangan diubah tanpa diminta.
 # ── Hunting-4h ───────────────────────────────────────────────────────────────
 # TERMINATED 03/10/2026 (keputusan Mas Budi, audit #20/21 granularitas exit 1 jam, replikasi
@@ -1351,7 +1351,7 @@ STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # 19/09/2026 (review Base order #2, permintaan Mas Budi): base_usd brkX2/reversal/brkX2_4h/
 # trend_confirm_4h dinaikkan -- HANYA strategi dgan %profit kumulatif SUDAH besar & LIVE
 # terbukti (KeltnerBreak-12h +56.9%, reversal-8h +40.9%, brkX2-4h +53.8%, trend_confirm_4h +59.7%,
-# data dashboard 19/09/2026) yang dinaikkan; crossema/hunting/qscalp/akum %profit-nya belum
+# data dashboard 19/09/2026) yang dinaikkan; crossema/hunting/mombreak/akum %profit-nya belum
 # cukup besar jadi TIDAK diubah. REMARK nilai lama (sebelum kenaikan ini) untuk rollback:
 #   brkX2=12, reversal=15, brkX2_4h=15, trend_confirm_4h=30
 # 20/09/2026 (permintaan Mas Budi): reversal 90 -> 30 dan trend_confirm_4h 70 -> 30 (angka aman: satu
@@ -1359,7 +1359,7 @@ STRATEGY_CONFIG_FILE = os.path.join(DATA_DIR, "strategy_config.json")
 # penurunan ini (rollback): reversal=90, trend_confirm_4h=70.
 # 20/09/2026 (permintaan Mas Budi): "close_sell_pct" = % koin yg DIJUAL saat close UNTUNG (sisa -> Simple Earn Flexible,
 # lihat close_deal_maybe_partial()). Tahap 1: HANYA brkX2 (KeltnerBreak-12h) = 75; strategi lain 100 (= jual semua, nonaktif);
-# QScalp-3m selalu 100 (dikunci di kode + dimmed di dashboard).
+# MomentumBreak-1h selalu 100 (dikunci di kode + dimmed di dashboard).
 # 11/10/2026 (permintaan Mas Budi): residu-koin-ke-Earn KeltnerBreak-12h DICABUT -- balik ke 100
 # (jual penuh) utk brkX2 & brkX2_12h_closed, SAMA spt semua strategi lain sekarang. Diganti rencana
 # baru yg lebih luas: profit (USDT, bukan residu koin) dari SEMUA strategi ditransfer ke Master --
@@ -1390,10 +1390,10 @@ STRATEGY_CONFIG_DEFAULTS = {
     # 10/10/2026 (Gate0, permintaan Mas Budi): 'btc_gate_enabled' -- toggle "Pakai Syarat BTC" di
     # Strategy Control. AKTIF (Tahap 2, sama hari) -- lihat is_btc_gate_enabled()/
     # keltner12h_btc_gate_ok()/decouple4h_btc_gate_ok()/trendconfirm4h_btc_gate_ok()/
-    # qscalp_btc_gate_ok() dekat get_ohlcv_htf(), dipanggil masing2 di awal thread1_scan()/
-    # thread_decouple_scan()/thread_trendconfirm_scan()/thread_qscalp_scan(). Cuma ditambahkan
+    # mombreak_btc_gate_ok() dekat get_ohlcv_htf(), dipanggil masing2 di awal thread1_scan()/
+    # thread_decouple_scan()/thread_trendconfirm_scan()/thread_mombreak_scan(). Cuma ditambahkan
     # utk 4 strategi yg backtest Gate0-nya (175 pair, 2022-2026, 4 poin diuji) terbukti terbantu:
-    # brkX2_12h_closed/decouple_4h/trend_confirm_4h/qscalp_3m (qscalp_3m juga dapat
+    # brkX2_12h_closed/decouple_4h/trend_confirm_4h/mombreak_1h (mombreak_1h juga dapat
     # 'btc_gate_elapsed_pct', satu2nya yg rumusnya punya parameter elapsed-time). Strategi lain
     # SENGAJA TIDAK diberi field ini -- baik yg sudah diuji & terbukti TIDAK membantu
     # (brkX2_4h/dipbuy_universe/rvolbreak_1h) maupun yg belum pernah diuji sama sekali -- lihat
@@ -1421,12 +1421,12 @@ STRATEGY_CONFIG_DEFAULTS = {
     "akum_entry_b":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
     "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
     "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
-    # qscalp_3m: 'btc_gate_elapsed_pct' -- satu2nya strategi yg rumus Gate0-nya punya parameter
+    # mombreak_1h: 'btc_gate_elapsed_pct' -- satu2nya strategi yg rumus Gate0-nya punya parameter
     # elapsed-time (tunggu candle 3m BTCUSDT closed sampai sekian % sebelum gendut-check dianggap
     # valid). Default 100 (candle HARUS closed penuh) -- SATU2NYA nilai yg terbukti backtest
     # 10/10/2026 (n=1.010, WR+4,43pp/avg+0,063pp); nilai 33%/67% hasilnya acak, jangan dipakai
-    # tanpa data baru. Dibaca live di qscalp_btc_gate_ok() (Tahap 2, thread_qscalp_scan()).
-    "qscalp_3m":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 2, "close_sell_pct": 100, "btc_gate_enabled": True, "btc_gate_elapsed_pct": 100},
+    # tanpa data baru. Dibaca live di mombreak_btc_gate_ok() (Tahap 2, thread_mombreak_scan()).
+    "mombreak_1h":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 2, "close_sell_pct": 100, "btc_gate_enabled": True, "btc_gate_elapsed_pct": 100},
     # 09/10/2026 (Tahap 1/4, permintaan Mas Budi): decouple_4h naik dari shadow ke live, lulus
     # target 24/20 (18W/6L, +56.9%). max_deals di sini cuma utk tampilan dashboard -- enforcement
     # sungguhan tetap pakai konstanta DECOUPLE_4H_MAX_DEALS di thread_decouple_scan().
@@ -1445,7 +1445,7 @@ STRATEGY_CONFIG_DEFAULTS = {
     "dipbuy_universe": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
 }
 # 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
-# default TRUE di semua strategi (kecuali qscalp_3m, sama seperti ai_call_open -- desain rule-based
+# default TRUE di semua strategi (kecuali mombreak_1h, sama seperti ai_call_open -- desain rule-based
 # permanen). Ini jadi DEFAULT untuk toggle per-deal "AI Call" di Monitor (key 'ai_call', dibaca lewat
 # get_deal_override -- toggle per-deal itu TETAP bisa dipakai override manual utk 1 deal spesifik,
 # cuma sekarang defaultnya ikut setting strategi ini, bukan True hardcoded). Satu toggle 'ai_call'
@@ -1461,12 +1461,12 @@ STRATEGY_CONFIG_DEFAULTS = {
 # yg base_usd config-nya $60), akum_entry_a rata2 $100.14 (n=2, SALAH SATU YG TERBESAR, bukan
 # terkecil). Jadi TIDAK diterapkan -- kalau mau pangkas biaya AI per-strategi lagi ke depannya,
 # cek base_usd RIIL dari CSV dulu, jangan dari angka default di config ini.
-# qscalp_3m: ai_call_open=False PERMANEN secara desain (bukan cuma default) -- strategi ini
+# mombreak_1h: ai_call_open=False PERMANEN secara desain (bukan cuma default) -- strategi ini
 # full rule-based TANPA AI sama sekali (disepakati Mas Budi 12/09/2026, alasan: pump 3m
 # selesai dalam hitungan menit, latency AI bisa bikin kelewat entry/exit). Toggle
-# "sc-aicall-qscalp_3m" di dashboard TIDAK memanggil apa pun untuk strategi ini walau
-# di-centang -- lihat open_qscalp_if_signal() & thread2_monitor(), tidak ada satu pun
-# panggilan ai_decision_* di jalur qscalp_3m.
+# "sc-aicall-mombreak_1h" di dashboard TIDAK memanggil apa pun untuk strategi ini walau
+# di-centang -- lihat open_mombreak_if_signal() & thread2_monitor(), tidak ada satu pun
+# panggilan ai_decision_* di jalur mombreak_1h.
 # Nilai "max_deals" di atas SAMA PERSIS dengan default lama MAX_DEALS_BRKX2/MAX_DEALS_REVERSAL/
 # STRAT4H_MAX_DEALS/STRAT_CROSSEMA_MAX_DEALS/AKUM_ENTRY_MAX_DEALS/HUNTING_MAX_DEALS (31/08/2026,
 # permintaan user: bisa diatur lewat dashboard Strategy Control) -- lihat sync_max_deals_globals()
@@ -1521,7 +1521,7 @@ def apply_one_time_config_migrations():
     """Migrasi nilai strategy_config.json yang HARUS jalan SEKALI saja (ditandai di
     config_migrations_done.json), bukan tiap startup -- supaya setelah dieksekusi, Mas Budi
     tetap bebas mengubah nilainya lagi lewat dashboard tanpa ditimpa balik oleh kode.
-    19/09/2026 (review Base order #1, permintaan Mas Budi): QScalp-3m base_usd 25 -> 10
+    19/09/2026 (review Base order #1, permintaan Mas Budi): MomentumBreak-1h base_usd 25 -> 10
     (22 deal, win 59%, PnL cuma +$0.25, 5 hard-stop flat 2-3.3% -- belum ada edge; naikkan
     lagi setelah >=30 deal dgn PF>1.5).
     19/09/2026 (review Base order #2, permintaan Mas Budi): base_usd dinaikkan HANYA utk
@@ -1529,14 +1529,14 @@ def apply_one_time_config_migrations():
     trend_confirm_4h -- lihat REMARK nilai lama di STRATEGY_CONFIG_DEFAULTS). Batas Rugi
     Harian ikut dinaikkan $6->$15 di migrasi yang sama supaya sepadan (base order lebih
     besar berarti hard-stop tunggal juga lebih besar dalam $).
-    24/09/2026 (review Base order #3, permintaan Mas Budi): QScalp-3m & CrossEMA-4h base_usd
+    24/09/2026 (review Base order #3, permintaan Mas Budi): MomentumBreak-1h & CrossEMA-4h base_usd
     sempat naik ke $40 masing-masing (lewat dashboard, di luar proses review ini) TANPA memenuhi
-    syarat re-evaluasi yang sudah ditetapkan sendiri -- QScalp butuh >=30 deal PF>1.5 (window
+    syarat re-evaluasi yang sudah ditetapkan sendiri -- MomentumBreak butuh >=30 deal PF>1.5 (window
     20-24/09 aktualnya n=6, PF~0.96, rugi tipis), CrossEMA butuh >=15 deal baru pasca-gate 16/09
     (PF historisnya masih 0.64 per review #2). Diturunkan lagi ke nilai yang sudah pernah
     divalidasi/dikunci sebelumnya, BUKAN angka baru."""
     migrations = {
-        "qscalp_3m_base_usd_10_20260919":       ("qscalp_3m",        "base_usd", 10),
+        "mombreak_1h_base_usd_10_20260919":       ("mombreak_1h",        "base_usd", 10),
         "brkX2_base_usd_60_20260919":           ("brkX2",            "base_usd", 60),
         "reversal_base_usd_90_20260919":        ("reversal",         "base_usd", 90),
         "brkX2_4h_base_usd_50_20260919":        ("brkX2_4h",         "base_usd", 50),
@@ -1545,15 +1545,15 @@ def apply_one_time_config_migrations():
         "reversal_base_usd_30_20260920":        ("reversal",         "base_usd", 30),
         "trend_confirm_4h_base_usd_30_20260920":("trend_confirm_4h", "base_usd", 30),
         # 24/09/2026 (review Base order #3, permintaan Mas Budi): lihat docstring di atas.
-        "qscalp_3m_base_usd_10_20260924":       ("qscalp_3m",        "base_usd", 10),
+        "mombreak_1h_base_usd_10_20260924":       ("mombreak_1h",        "base_usd", 10),
         "brkX2_crossema_base_usd_20_20260924":  ("brkX2_crossema",   "base_usd", 20),
-        # 28/09/2026 (permintaan Mas Budi): PAUSE qscalp_3m & brkX2_crossema ("IZINKAN OPEN LONG" = OFF).
-        # Data gabungan CSV+log OAC: qscalp_3m 51 trade WR 57% rata2 -0.055% PF 0.93 (konfigurasi Combo E sejak
+        # 28/09/2026 (permintaan Mas Budi): PAUSE mombreak_1h & brkX2_crossema ("IZINKAN OPEN LONG" = OFF).
+        # Data gabungan CSV+log OAC: mombreak_1h 51 trade WR 57% rata2 -0.055% PF 0.93 (konfigurasi Combo E sejak
         # 19/09: 28 trade PF 0.71); brkX2_crossema 22 trade rata2 -0.41% PF 0.90 (3 hard-stop ~-10%). Belum
         # signifikan secara statistik (t -0.2 / -0.4) tapi tanpa edge. Sekali jalan: nyalakan lagi lewat
         # dashboard Strategy Control kapan saja, TIDAK ditimpa balik. Deal yang sedang terbuka tetap dipantau
         # thread2_monitor (T2 tidak membaca flag ini). REMARK nilai lama (rollback): strategy_enabled=True.
-        "qscalp_3m_paused_20260928":            ("qscalp_3m",        "strategy_enabled", False),
+        "mombreak_1h_paused_20260928":            ("mombreak_1h",        "strategy_enabled", False),
         "brkX2_crossema_paused_20260928":       ("brkX2_crossema",   "strategy_enabled", False),
         # 29/09/2026 (permintaan Mas Budi, setelah ringkasan data): PAUSE reversal (Reversal-8h) juga. Data gabungan CSV+OAC:
         # 13 trade (2/07-3/09), 10 menang / 3 kalah (semua hard-stop koin volatil: TLM -8.36, TLM -10.12, BICO -12.53),
@@ -1622,7 +1622,7 @@ def sync_max_deals_globals():
     ubah puluhan call-site sekaligus)."""
     global MAX_DEALS_BRKX2_CLOSED, MAX_DEALS_REVERSAL, STRAT4H_MAX_DEALS
     global STRAT_CROSSEMA_MAX_DEALS, HUNTING_MAX_DEALS, AKUM_ENTRY_MAX_DEALS
-    global TRENDCONFIRM_MAX_DEALS, QSCALP_MAX_DEALS
+    global TRENDCONFIRM_MAX_DEALS, MOMBREAK_MAX_DEALS
     try:
         cfg = load_strategy_config()
         MAX_DEALS_BRKX2_CLOSED   = int(cfg.get('brkX2_12h_closed', {}).get('max_deals', MAX_DEALS_BRKX2_CLOSED) or MAX_DEALS_BRKX2_CLOSED)
@@ -1632,12 +1632,12 @@ def sync_max_deals_globals():
         HUNTING_MAX_DEALS        = int(cfg.get('hunting_4h', {}).get('max_deals', HUNTING_MAX_DEALS) or HUNTING_MAX_DEALS)
         AKUM_ENTRY_MAX_DEALS     = int(cfg.get('akum_entry_a', {}).get('max_deals', AKUM_ENTRY_MAX_DEALS) or AKUM_ENTRY_MAX_DEALS)
         TRENDCONFIRM_MAX_DEALS   = int(cfg.get('trend_confirm_4h', {}).get('max_deals', TRENDCONFIRM_MAX_DEALS) or TRENDCONFIRM_MAX_DEALS)
-        QSCALP_MAX_DEALS         = int(cfg.get('qscalp_3m', {}).get('max_deals', QSCALP_MAX_DEALS) or QSCALP_MAX_DEALS)
+        MOMBREAK_MAX_DEALS         = int(cfg.get('mombreak_1h', {}).get('max_deals', MOMBREAK_MAX_DEALS) or MOMBREAK_MAX_DEALS)
         log(f"   Max deals per strategi: brkX2_closed(KeltnerBreak-12h gabungan)={MAX_DEALS_BRKX2_CLOSED} "
             f"reversal={MAX_DEALS_REVERSAL} "
             f"4h={STRAT4H_MAX_DEALS} crossema={STRAT_CROSSEMA_MAX_DEALS} "
             f"hunting={HUNTING_MAX_DEALS} akum={AKUM_ENTRY_MAX_DEALS} trendconfirm={TRENDCONFIRM_MAX_DEALS} "
-            f"qscalp={QSCALP_MAX_DEALS}")
+            f"mombreak={MOMBREAK_MAX_DEALS}")
     except Exception as e:
         log(f"WARN sync_max_deals_globals: {e}")
 
@@ -1646,13 +1646,13 @@ def total_max_deals_all_strategies() -> int:
     COMMAS_MAX_ACTIVE_DEALS yang lama & basi, lihat penjelasan di dekat definisinya)."""
     return (MAX_DEALS_BRKX2_CLOSED + MAX_DEALS_REVERSAL + STRAT4H_MAX_DEALS
             + STRAT_CROSSEMA_MAX_DEALS + HUNTING_MAX_DEALS + AKUM_ENTRY_MAX_DEALS
-            + QSCALP_MAX_DEALS)
+            + MOMBREAK_MAX_DEALS)
 
 # 28-29/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE dan SEMUA deal-nya disembunyikan dari tampilan dashboard default
 # (Closed Trades + kartu Performance per Strategi). Data tetap ada di CSV / counter fase / batas rugi harian; tampil lagi kalau
 # strategi dipilih eksplisit di filter Closed Trades atau ?show_paused=1. Satu sumber kebenaran utk kedua endpoint.
 PAUSED_HIDDEN_STRATEGIES = ('brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h')
-# 04/10/2026: 'qscalp_3m' DIKELUARKAN -- "Izinkan Open Long" di-unlock hari ini (fd0fe3d),
+# 04/10/2026: 'mombreak_1h' DIKELUARKAN -- "Izinkan Open Long" di-unlock hari ini (fd0fe3d),
 # strategi aktif live lagi (ada deal riil, IOTA/USDT 21:21 WIB), sama pola persis spt 'reversal'
 # 02/10/2026 di bawah -- daftar ini sempat tidak ikut di-sync saat unlock-nya dikerjakan.
 # 03/10/2026: 'hunting_4h' DITAMBAHKAN -- Hunting-4h di-TERMINATE (lihat REMARK di
@@ -1709,12 +1709,12 @@ def is_btc_gate_enabled(strategy: str) -> bool:
     pair + ~1 tahun data 1-menit, 2022-2026) terbukti terbantu: brkX2_12h_closed (KHUSUS jalur
     closed-candle T1, lihat REMARK di thread1_scan() -- TIDAK dipanggil sama sekali di
     thread1c_scan_intrabar()/thread1c_scan_intrabar_early()), decouple_4h, trend_confirm_4h,
-    qscalp_3m. Uncheck dari dashboard kalau mau matikan sementara tanpa redeploy."""
+    mombreak_1h. Uncheck dari dashboard kalau mau matikan sementara tanpa redeploy."""
     cfg = load_strategy_config()
     return cfg.get(strategy, {}).get("btc_gate_enabled", True)
 
 def get_btc_gate_elapsed_pct(strategy: str) -> float:
-    """Dipakai HANYA oleh qscalp_3m (satu2nya strategi yg rumus Gate0-nya punya parameter
+    """Dipakai HANYA oleh mombreak_1h (satu2nya strategi yg rumus Gate0-nya punya parameter
     elapsed-time) -- lihat kolom input "elapsed %" di Strategy Control. Default 100 (satu2nya
     nilai yg terbukti backtest 10/10/2026)."""
     cfg = load_strategy_config()
@@ -1733,7 +1733,7 @@ def is_ai_call_open_enabled(strategy: str) -> bool:
     return cfg.get(strategy, {}).get("ai_call_open", True)
 
 def is_ai_call_close_enabled(strategy: str) -> bool:
-    """Default TRUE di semua strategi kecuali qscalp_3m (26/09/2026, insiden JTO/USDT --
+    """Default TRUE di semua strategi kecuali mombreak_1h (26/09/2026, insiden JTO/USDT --
     lihat REMARK di STRATEGY_CONFIG_DEFAULTS). Ini jadi DEFAULT untuk toggle per-deal
     'ai_call' (get_deal_override(sym, 'ai_call', ...)) yang menggerbangi 3 keputusan AI
     sekaligus: ai_decision_armed, ai_decision_near_timeout, ai_decision_close -- toggle
@@ -2671,13 +2671,13 @@ def csv_log_close(symbol: str, close_time_wib: str, exit_price, profit_pct, exit
         log(f"   [CSV] gagal tulis CLOSE: {e}")
 
 
-def backfill_qscalp_rsi_once():
-    """Sekali jalan (marker di config_migrations_done.json): isi kolom rsi_open baris QScalp-3m LAMA yg kosong
-    (21/09/2026, permintaan Mas Budi -- RSI@Open QScalp dulu tidak pernah dicatat). RSI(14) dihitung ulang dari
+def backfill_mombreak_rsi_once():
+    """Sekali jalan (marker di config_migrations_done.json): isi kolom rsi_open baris MomentumBreak-1h LAMA yg kosong
+    (21/09/2026, permintaan Mas Budi -- RSI@Open MomentumBreak dulu tidak pernah dicatat). RSI(14) dihitung ulang dari
     candle 3m historis Binance (endTime = open_time - 1 detik, candle terakhir yg sudah tutup, sama seperti
     yg dipakai jalur live sekarang). Ini REKONSTRUKSI, bukan nilai live otentik. Marker baru dipasang kalau
     tidak ada error (kalau ada yg gagal, dicoba lagi di restart berikutnya; baris yg sudah terisi dilewati)."""
-    key = "csv_qscalp_rsi_backfill_20260921"
+    key = "csv_mombreak_rsi_backfill_20260921"
     try:
         done = {}
         if os.path.exists(CONFIG_MIGRATIONS_FILE):
@@ -2689,7 +2689,7 @@ def backfill_qscalp_rsi_once():
             with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
                 rows = list(csv.DictReader(f))
         todo = [(r.get('symbol', ''), r.get('open_time_wib', '')) for r in rows
-                if r.get('strategy') == 'qscalp_3m' and not str(r.get('rsi_open', '')).strip()
+                if r.get('strategy') == 'mombreak_1h' and not str(r.get('rsi_open', '')).strip()
                 and r.get('open_time_wib') and r.get('symbol')]
         vals, errors = {}, 0
         for sym_disp, open_wib in todo:
@@ -2720,7 +2720,7 @@ def backfill_qscalp_rsi_once():
                     rows = list(csv.DictReader(f))
                 for r in rows:
                     k = (r.get('symbol', ''), r.get('open_time_wib', ''))
-                    if r.get('strategy') == 'qscalp_3m' and not str(r.get('rsi_open', '')).strip() and k in vals:
+                    if r.get('strategy') == 'mombreak_1h' and not str(r.get('rsi_open', '')).strip() and k in vals:
                         r['rsi_open'] = vals[k]
                         filled += 1
                 if filled:
@@ -2734,10 +2734,10 @@ def backfill_qscalp_rsi_once():
             done[key] = {"applied_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "rows_filled": filled, "rows_todo": len(todo)}
             with open(CONFIG_MIGRATIONS_FILE, "w") as f:
                 json.dump(done, f, indent=2)
-        log(f"[MIGRASI] QScalp RSI@Open backfill: terisi {filled}/{len(todo)} baris, error {errors}"
+        log(f"[MIGRASI] MomentumBreak RSI@Open backfill: terisi {filled}/{len(todo)} baris, error {errors}"
             + ("" if errors == 0 else " (marker belum dipasang, dicoba lagi saat restart)"))
     except Exception as e:
-        log(f"WARN backfill_qscalp_rsi_once: {e}")
+        log(f"WARN backfill_mombreak_rsi_once: {e}")
 
 
 def migrate_csv_hold_remark_once():
@@ -3219,23 +3219,23 @@ def strategy_phase_breakdown() -> dict:
     except Exception as e:
         log(f"   [PHASE] gagal hitung trend_confirm_4h: {e}")
     try:
-        # 04/10/2026 (permintaan Mas Budi): sama pola spt trend_confirm_4h di atas -- qscalp_3m
+        # 04/10/2026 (permintaan Mas Budi): sama pola spt trend_confirm_4h di atas -- mombreak_1h
         # juga belum pernah masuk sini. Cuma 1 fase "LIVE" (bukan 2 fase) krn pause->resume
         # hari ini TIDAK ganti formula (sudah diverifikasi persis sama dgn versi sebelum pause,
         # lihat commit fd0fe3d) -- histori closed deal sebelum & sesudah pause tetap 1 populasi
         # yang sama, bukan 2 formula berbeda spt brkX2_4h/brkX2_crossema yg benar2 redesain.
-        out['qscalp_3m'] = [
-            _phase_entry('LIVE', csv_progress('qscalp_3m')),
+        out['mombreak_1h'] = [
+            _phase_entry('LIVE', csv_progress('mombreak_1h')),
         ]
     except Exception as e:
-        log(f"   [PHASE] gagal hitung qscalp_3m: {e}")
+        log(f"   [PHASE] gagal hitung mombreak_1h: {e}")
     try:
         # 11/10/2026 (laporan Mas Budi -- panah expand hilang utk 3 kartu ini): decouple_4h/
         # rvolbreak_1h/dipbuy_universe naik live 09/10/2026 dan sudah ditambahkan ke daftar
         # `defs` di /api/strategy_performance 10/10/2026 (lihat REMARK di sana), tapi
         # TIDAK PERNAH ditambahkan ke sini -- phases.get(key, []) selalu balik [] -> JS
         # (hasPhases = r.phases.length > 0) tidak pernah render panah. Sama pola persis 1
-        # fase "LIVE" spt trend_confirm_4h/qscalp_3m (belum pernah ganti formula/baseline).
+        # fase "LIVE" spt trend_confirm_4h/mombreak_1h (belum pernah ganti formula/baseline).
         out['decouple_4h'] = [
             _phase_entry('LIVE', csv_progress('decouple_4h')),
         ]
@@ -4208,7 +4208,7 @@ def add_to_active_deals(symbol: str, data: dict):
         # 21/09/2026: peak HARUS mulai dari harga fill, bukan dari ticker yang dibaca caller setelah order.
         # Sebelumnya entry ditimpa fill tapi peak tetap harga ticker; kalau ticker > fill (koin tipis, dampak order
         # sendiri) peak tampak +X% di atas entry -> trailing armed di siklus pertama padahal harga sudah di bawah
-        # entry, garis trailing di atas harga -> close rugi seketika (MARSCOIN QScalp 18/09: fill 0.1098, peak
+        # entry, garis trailing di atas harga -> close rugi seketika (MARSCOIN MomentumBreak 18/09: fill 0.1098, peak
         # ticker 0.1114, CLOSE 9 detik setelah beli -0.47%). Pola sama dgn bug add-fund.
         if _fill_price and _fill_price > 0:
             _old_peak = enriched.get('peak')
@@ -4301,7 +4301,7 @@ def send_email_open_long(subject: str, body: str):
 
 # 13/10/2026 (permintaan Mas Budi): notif email edge-triggered tiap kali status Gerbang BTC
 # (Gate0) salah satu dari 4 strategi yang punya gerbang (KeltnerBreak-12h/T1, TrenKonfirmasi-4h,
-# Decouple-4h, QScalp-3m) BERUBAH -- cuma pas transisi (terblok->lolos atau sebaliknya), BUKAN
+# Decouple-4h, MomentumBreak-1h) BERUBAH -- cuma pas transisi (terblok->lolos atau sebaliknya), BUKAN
 # tiap siklus scan (bisa tiap 3-10 menit, kebanjiran email). Cek PERTAMA sejak restart/deploy
 # TIDAK kirim notif (belum ada baseline buat dibandingkan) -- supaya tidak ada notif palsu tiap
 # kali ada deploy baru. State di memori saja (bukan file), reset tiap restart adalah perilaku
@@ -5859,7 +5859,7 @@ def send_open_long(symbol: str, strategy: str = 'brkX2') -> bool:
     """Buka long position. Kalau USE_BINANCE_DIRECT=True → langsung ke Binance market buy."""
     # 20/09/2026 (permintaan Mas Budi: BFUSD dkk / mata uang negara HARUS ditolak utk open deal):
     # gerbang TERAKHIR di titik masuk tunggal semua open live, terlepas strategi mana yg
-    # memanggil -- soalnya thread_qscalp_scan() dulu ambil top-liquid pair TANPA cek
+    # memanggil -- soalnya thread_mombreak_scan() dulu ambil top-liquid pair TANPA cek
     # SYMBOL_BLACKLIST (stablecoin/fiat justru paling likuid), jadi filter per-scan saja
     # tidak cukup. Pakai versi HARDCODED (fiat/stablecoin/komoditas), bukan Block Pairs user.
     if symbol in SYMBOL_BLACKLIST_HARDCODED:
@@ -5938,7 +5938,7 @@ def send_close_long(symbol: str, strategy: str = 'brkX2') -> bool:
 # STRATEGY_CONFIG_DEFAULTS): persentase koin yg DIJUAL saat close yg UNTUNG (profit bersih > 0). Sisanya disimpan
 # di Simple Earn Flexible. Aturan yg disepakati:
 #  - close RUGI / hard-stop / manual selalu 100% (hanya jalur close otomatis thread2 yg memakai fungsi ini);
-#  - QScalp-3m selalu 100% (dimmed di dashboard, dikunci di get_close_sell_pct());
+#  - MomentumBreak-1h selalu 100% (dimmed di dashboard, dikunci di get_close_sell_pct());
 #  - kalau koin tidak punya produk Earn Flexible yg bisa dibeli, sisa < EARN_PARTIAL_MIN_RESIDUAL_USD, atau
 #    sisa < minimum langganan produk -> jual 100% seperti biasa (tidak menyisakan koin menganggur di Spot);
 #  - kalau subscribe Earn GAGAL setelah jual sebagian -> sisa langsung dijual juga (tetap 100%).
@@ -5956,7 +5956,7 @@ _earn_lock = threading.Lock()
 
 def get_close_sell_pct(strategy: str) -> float:
     """% koin yg dijual saat close UNTUNG utk `strategy` (default 100 = jual semua, perilaku lama)."""
-    if strategy == 'qscalp_3m':
+    if strategy == 'mombreak_1h':
         return 100.0
     try:
         v = float(load_strategy_config().get(strategy, {}).get("close_sell_pct", 100))
@@ -6187,7 +6187,7 @@ def execute_close_now(sym: str, reason: str, telegram_header: str = "CLOSE MANUA
                 'total_usd':     d.get('target_usd', ''),
             })
             remove_from_active_deals(sym)
-            if strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
+            if strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'mombreak_1h'): record_closed(sym)
             # 12/10/2026 (Fase 1 task #3/10, audit ulang): jalur close INI (manual_close dashboard
             # + ai_decision_capacity_swap) tadinya TIDAK update status rantai reentry-on-impas --
             # kalau deal yg lagi hop 1/2 ditutup lewat sini (bukan auto thread2_monitor), catatan
@@ -6711,9 +6711,9 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     if strategy == 'hunting_4h':
         target  = float(_cfg_base if _cfg_base else HUNTING_ORDER_VOLUME)
         add_usd = 0
-    # QScalp-3m: base_usd dari Strategy Control (fallback $10), tanpa add fund -- scalp cepat,
+    # MomentumBreak-1h: base_usd dari Strategy Control (fallback $10), tanpa add fund -- scalp cepat,
     # tidak ada averaging-down (konsisten dgn exit flat % yg dites di backtest).
-    elif strategy == 'qscalp_3m':
+    elif strategy == 'mombreak_1h':
         target  = float(_cfg_base if _cfg_base else 10)
         add_usd = 0
     # Akumulasi pakai base_usd dari Strategy Control (fallback BASE_ORDER_VOLUME), tanpa add fund
@@ -7419,19 +7419,19 @@ def trailing_dist_progressive(atr_pct: float, current_profit_pct: float) -> floa
     return round(max(PROG_TRAIL_MIN, reduced), 4)
 
 
-# ── QScalp-3m exit wrapper (12/09/2026) ───────────────────────────────────────
+# ── MomentumBreak-1h exit wrapper (12/09/2026) ───────────────────────────────────────
 # Exit backtest-nya (3 ronde) pakai FLAT % (arm/trail/stop), BUKAN ATR-tiered spt 6 strategi
 # lain -- ATR-tiered TIDAK PERNAH dites utk TF 3m. Wrapper tipis ini dipakai di thread2_monitor
-# HANYA utk strat=='qscalp_3m', supaya hard_stop_pct()/get_arm_pct()/trailing_dist_progressive()
+# HANYA utk strat=='mombreak_1h', supaya hard_stop_pct()/get_arm_pct()/trailing_dist_progressive()
 # ASLI (dipakai 6 strategi lain) tetap 100% tidak tersentuh/tidak berubah perilakunya.
-def qscalp_hard_stop_pct():
-    return "QScalp-flat", QSCALP_LIVE_STOP_PCT, QSCALP_LIVE_STOP_PCT
+def mombreak_hard_stop_pct():
+    return "MomentumBreak-flat", MOMBREAK_LIVE_STOP_PCT, MOMBREAK_LIVE_STOP_PCT
 
-def qscalp_arm_pct() -> float:
-    return QSCALP_LIVE_ARM_PCT
+def mombreak_arm_pct() -> float:
+    return MOMBREAK_LIVE_ARM_PCT
 
-def qscalp_trail_pct() -> float:
-    return QSCALP_LIVE_TRAIL_PCT
+def mombreak_trail_pct() -> float:
+    return MOMBREAK_LIVE_TRAIL_PCT
 
 
 def compute_deal_urgency(sym: str, d: dict):
@@ -7626,21 +7626,25 @@ def trendconfirm4h_btc_gate_ok() -> bool:
         return True  # fail-open
     return b12h and b1d
 
-QSCALP_BTC_GATE_GENDUT_PCT = 0.10  # FIXED (bukan field dashboard), satu2nya nilai terbukti backtest
+MOMBREAK_BTC_GATE_GENDUT_PCT = 0.10  # FIXED (bukan field dashboard), satu2nya nilai terbukti backtest
 
-def qscalp_btc_gate_ok() -> bool:
-    """Syarat: tunggu candle 3 menit BTCUSDT (TF native QScalp-3m sendiri, BUKAN HTF) sampai
-    elapsed >= get_btc_gate_elapsed_pct('qscalp_3m')% (default 100 = tunggu candle itu BENAR2
-    closed), DAN BTC-nya sudah naik >= QSCALP_BTC_GATE_GENDUT_PCT di candle itu. Default 100%
-    -> pakai candle 3m BTC TERAKHIR YANG SUDAH CLOSED (sama gaya check_qscalp_signal() baca candle
+def mombreak_btc_gate_ok() -> bool:
+    """Syarat: tunggu candle 1 JAM BTCUSDT (TF native MomentumBreak-1h sendiri, BUKAN HTF) sampai
+    elapsed >= get_btc_gate_elapsed_pct('mombreak_1h')% (default 100 = tunggu candle itu BENAR2
+    closed), DAN BTC-nya sudah naik >= MOMBREAK_BTC_GATE_GENDUT_PCT di candle itu. Default 100%
+    -> pakai candle 1h BTC TERAKHIR YANG SUDAH CLOSED (sama gaya check_mombreak_signal() baca candle
     sinyal sendiri). Elapsed < 100% (belum tervalidasi, tapi dibuat bisa jalan kalau Mas Budi
-    coba ubah) -> pakai candle 3m BTC yg SEDANG berjalan, baru dicek begitu elapsed-nya cukup."""
-    if not is_btc_gate_enabled('qscalp_3m'):
+    coba ubah) -> pakai candle 1h BTC yg SEDANG berjalan, baru dicek begitu elapsed-nya cukup.
+    14/10/2026: diturunkan dari varian 3m (TF lama MomentumBreak-1h, sebelum ganti nama dari
+    QScalp-3m) -- MOMBREAK_BTC_GATE_GENDUT_PCT=0.10 BELUM diuji ulang utk candle 1 jam (dulu
+    divalidasi khusus candle 3 menit, gerak 0.10% di situ != gerak 0.10% di candle 1 jam yg
+    jauh lebih lambar). Dipertahankan apa adanya sbg titik awal, PERLU dibacktest ulang."""
+    if not is_btc_gate_enabled('mombreak_1h'):
         return True
-    elapsed_threshold = get_btc_gate_elapsed_pct('qscalp_3m')
+    elapsed_threshold = get_btc_gate_elapsed_pct('mombreak_1h')
     try:
         if elapsed_threshold >= 100:
-            df = get_ohlcv('BTCUSDT', interval='3m', limit=3)
+            df = get_ohlcv('BTCUSDT', interval='1h', limit=3)
             if df is None or len(df) < 2:
                 return True  # fail-open
             if df['ct'].iloc[-1] >= int(time.time() * 1000):
@@ -7651,12 +7655,12 @@ def qscalp_btc_gate_ok() -> bool:
             open_price = float(row['open']); close_price = float(row['close'])
         else:
             now_ms = int(time.time() * 1000)
-            candle_dur_ms = 3 * 60 * 1000
+            candle_dur_ms = 60 * 60 * 1000
             candle_open_ms = (now_ms // candle_dur_ms) * candle_dur_ms
             elapsed_pct = (now_ms - candle_open_ms) / candle_dur_ms * 100
             if elapsed_pct < elapsed_threshold:
                 return False  # belum cukup lama candle BTC saat ini berjalan
-            df = get_ohlcv('BTCUSDT', interval='3m', limit=2)
+            df = get_ohlcv('BTCUSDT', interval='1h', limit=2)
             if df is None or len(df) < 1:
                 return True  # fail-open
             row = df.iloc[-1]
@@ -7667,9 +7671,9 @@ def qscalp_btc_gate_ok() -> bool:
         if open_price <= 0:
             return True  # fail-open
         gendut_pct = (close_price - open_price) / open_price * 100
-        return gendut_pct >= QSCALP_BTC_GATE_GENDUT_PCT
+        return gendut_pct >= MOMBREAK_BTC_GATE_GENDUT_PCT
     except Exception as e:
-        log(f"WARN qscalp_btc_gate_ok: {e}")
+        log(f"WARN mombreak_btc_gate_ok: {e}")
         return True  # fail-open
 
 def get_pct_vs_ema200_1d(symbol: str):
@@ -7758,8 +7762,8 @@ def get_live_atr_pct(symbol: str, strategy: str, fallback: float) -> float:
     LIVE_ATR_CACHE_SECONDS supaya tidak fetch OHLCV tiap siklus monitor 15 detik
     (ATR sendiri cuma berubah berarti tiap candle closed, bukan tiap detik).
     Gagal fetch -> pakai fallback (biasanya snapshot ATR% saat OPEN)."""
-    if strategy == 'qscalp_3m':
-        # qscalp_3m pakai exit FLAT % (qscalp_arm_pct/qscalp_trail_pct/qscalp_hard_stop_pct),
+    if strategy == 'mombreak_1h':
+        # mombreak_1h pakai exit FLAT % (mombreak_arm_pct/mombreak_trail_pct/mombreak_hard_stop_pct),
         # tidak butuh ATR% live sama sekali -- skip fetch (hemat API call tiap siklus T2).
         return fallback
     now = time.time()
@@ -8349,14 +8353,14 @@ def heartbeat_general_tick():
     # baris "2nd"-nya dihapus dari laporan 03/10/2026 (permintaan Mas Budi); fase-3 tetap jalan.
     prog_cx3  = csv_progress('brkX2_crossema', offset=STRAT_CROSSEMA_STOCH_PATCH_BASELINE)
     # 17/09/2026 (permintaan Mas Budi, temuan bug): trend_confirm_4h (TrenKonfirmasi-4h) dan
-    # qscalp_3m TIDAK PERNAH ditambahkan ke ringkasan General ini sejak awal dibuat -- kedua
+    # mombreak_1h TIDAK PERNAH ditambahkan ke ringkasan General ini sejak awal dibuat -- kedua
     # strategi ini real & aktif live-trading (TrenKonfirmasi-4h bahkan sudah #15/15 fase
     # pertamanya, cuma angka target itu KEBETULAN nebeng FWDTEST_TARGET_BRKX2 lewat cabang
     # 'else' di thread2_monitor(), bukan target dedicated miliknya sendiri -- belum ada
     # TRENDCONFIRM_FWDTEST_TARGET/PHASE2 dst spt strategi lain, jadi baris di bawah ini BARU
     # baris ringkasan LIVE sederhana, BELUM ada breakdown fase-2/3 spt strategi lain).
     prog_trend  = csv_progress('trend_confirm_4h')
-    prog_qscalp = csv_progress('qscalp_3m')
+    prog_mombreak = csv_progress('mombreak_1h')
     if prog_all is None:
         prog_line = "Progress forward-test: 0 trade selesai (CSV belum ada)."
     else:
@@ -8368,7 +8372,7 @@ def heartbeat_general_tick():
                      f"  - trend_confirm_4h: {_fmt_hunting_live(prog_trend)}\n"
                      f"    trend_confirm_4h review hard-stop K1.5/cap10.8: {tc_hardstop_progress_line()}\n"
                      f"    jual-sebagian->Earn (KeltnerBreak-12h 75%): {earn_partial_progress_line()}\n"
-                     f"  - qscalp_3m  : {_fmt_hunting_live(prog_qscalp)}\n"
+                     f"  - mombreak_1h  : {_fmt_hunting_live(prog_mombreak)}\n"
                      f"  - Shadow (paper, bukan live):\n"
                      f"    {_fmt_shadow('conf3_stochrsibb', SHADOW_CONF3_TARGET)}\n"
                      # 11/10/2026 (permintaan Mas Budi): baris dipbuy_universe-shadow DIHAPUS dari
@@ -9552,8 +9556,8 @@ def thread2_monitor():
             # Trailing dist dengan factor variatif, ATR% live
             base_td = trailing_dist(live_atrp)
             tdist   = round(base_td * _factor, 4)
-        elif strat == 'qscalp_3m':
-            tdist = qscalp_trail_pct()  # flat %, bukan ATR-tiered -- lihat backtest 3 ronde
+        elif strat == 'mombreak_1h':
+            tdist = mombreak_trail_pct()  # flat %, bukan ATR-tiered -- lihat backtest 3 ronde
         else:
             tdist = trailing_dist_progressive(live_atrp, prof_peak)
         armed = d.get('trailing_armed', False)
@@ -9562,8 +9566,8 @@ def thread2_monitor():
         # snapshot ATR% saat entry — supaya reaktif ke perubahan volatilitas terkini)
         # — SKIP untuk akumulasi: exit via TP/SL/Timeout, bukan trailing
         _is_akum = strat in ('akum_entry_a', 'akum_entry_b')
-        _qscalp_arm = strat == 'qscalp_3m'
-        _cur_arm_pct = qscalp_arm_pct() if _qscalp_arm else get_arm_pct(live_atrp)
+        _mombreak_arm = strat == 'mombreak_1h'
+        _cur_arm_pct = mombreak_arm_pct() if _mombreak_arm else get_arm_pct(live_atrp)
         if (not armed) and (not _is_akum) and get_deal_override(sym, 'arm_trailing_enabled', True) and prof_peak >= _cur_arm_pct:
             # AI decision jika ai_call=True -- cooldown 10 menit (06/09/2026, pola sama persis dgn
             # fix ai_decision_close 03/09/2026): SEBELUMNYA ai_decision_armed() ditanya ULANG tiap
@@ -9624,8 +9628,8 @@ def thread2_monitor():
         # sudah dicapai tidak lagi cukup utk tier arm_pct yang berlaku sekarang — trailing ketat
         # yang di-set saat market tenang jadi nggak relevan lagi di kondisi volatil sekarang,
         # fallback ke hard stop saja sampai nanti profit cukup utk re-arm di tier baru.
-        if armed and not _is_akum and strat != 'qscalp_3m':
-            # qscalp_3m dikecualikan -- backtest-nya tidak pernah model un-arm (state machine
+        if armed and not _is_akum and strat != 'mombreak_1h':
+            # mombreak_1h dikecualikan -- backtest-nya tidak pernah model un-arm (state machine
             # sederhana: arm -> trail-stop atau timeout, sekali armed tetap armed), dan mekanisme
             # ini didesain utk ATR-tiered strategi 4h/8h, belum divalidasi utk TF 3m/flat-%.
             _armed_ref_atr = d.get('armed_live_atr', atrp)
@@ -9754,7 +9758,7 @@ def thread2_monitor():
                     # SENGAJA TIDAK set hard_stop_triggered, pola sama spt BTC-dump di atas --
                     # ini exit dini sukarela, bukan hard-stop volatilitas sungguhan.
             if not do_close:
-                _hs_label, _hs_base, _hs_pct = qscalp_hard_stop_pct() if strat == 'qscalp_3m' else hard_stop_pct(atrp, strat)
+                _hs_label, _hs_base, _hs_pct = mombreak_hard_stop_pct() if strat == 'mombreak_1h' else hard_stop_pct(atrp, strat)
                 _be_trig = BE_TRIGGER_BY_STRATEGY.get(strat, 0)
                 _be_active = (_be_trig > 0 and entry > 0 and peak >= entry * (1 + _be_trig / 100))
                 if _be_active:
@@ -9768,7 +9772,7 @@ def thread2_monitor():
                 elif price <= entry * (1 - _hs_pct / 100):
                     do_close = True
                     reason = (f"hard stop {_hs_pct:.2f}% flat (varian C ronde 1): price {_fmt_price(price)} turun "
-                              f">= {_hs_pct:.2f}% dari entry" if strat == 'qscalp_3m' else
+                              f">= {_hs_pct:.2f}% dari entry" if strat == 'mombreak_1h' else
                               f"hard stop volatilitas [{_hs_label}, ATR {atrp:.2f}%]: price {_fmt_price(price)} "
                               f"turun >= {_hs_pct:.2f}% dari entry (base {_hs_base:.1f}% x K{hard_stop_mult_for(strat):.2f}"
                               + (f", cap {HARD_STOP_CAP_PCT_BY_STRATEGY[strat]:g}%" if HARD_STOP_CAP_PCT_BY_STRATEGY.get(strat) else "") + ")")
@@ -9831,9 +9835,9 @@ def thread2_monitor():
         elif d.get('strategy','brkX2') == 'dipbuy_universe':
             hold_limit_sec = DIPBUY_UNIVERSE_MAX_HOLD_CANDLES * STRAT4H_SECONDS
             hold_label = f"batas {DIPBUY_UNIVERSE_MAX_HOLD_CANDLES} candle 4h (dipbuy)"
-        elif d.get('strategy','brkX2') == 'qscalp_3m':
-            hold_limit_sec = QSCALP_LIVE_TIMEOUT_CANDLES * 180
-            hold_label = f"batas {QSCALP_LIVE_TIMEOUT_CANDLES} candle 3m (qscalp)"
+        elif d.get('strategy','brkX2') == 'mombreak_1h':
+            hold_limit_sec = MOMBREAK_LIVE_TIMEOUT_CANDLES * 3600
+            hold_label = f"batas {MOMBREAK_LIVE_TIMEOUT_CANDLES} candle 1h (mombreak)"
         elif d.get('strategy','') in ('akum_entry_a', 'akum_entry_b'):
             timeout_c = d.get('timeout_candles', AKUM_ENTRY_TIMEOUT)
             hold_limit_sec = timeout_c * STRAT4H_SECONDS
@@ -10001,8 +10005,8 @@ def thread2_monitor():
             # maksa JUAL, tapi maksa deal-nya berhenti "digantung" AI tanpa batas berkali-kali).
             _ai_override_bypassed = False
             if do_close and not _is_akum:
-                if strat == 'qscalp_3m':
-                    _hs_label_c, _hs_base_c, _hs_pct_c = qscalp_hard_stop_pct()
+                if strat == 'mombreak_1h':
+                    _hs_label_c, _hs_base_c, _hs_pct_c = mombreak_hard_stop_pct()
                 else:
                     _hs_label_c, _hs_base_c, _hs_pct_c = hard_stop_pct(atrp, strat)
                 _absolute_ceiling_pct = _hs_pct_c + CLOSE_HARD_CEILING_EXTRA_PCT
@@ -10056,8 +10060,8 @@ def thread2_monitor():
                 strat_label = "Akumulasi-4h Entry B"
             elif strat == 'trend_confirm_4h':
                 strat_label = "TrenKonfirmasi-4h"
-            elif strat == 'qscalp_3m':
-                strat_label = "QScalp-3m"
+            elif strat == 'mombreak_1h':
+                strat_label = "MomentumBreak-1h"
             else:
                 strat_label = "Momentum brkX2 (12h)"
             # Hold-no-sell: kalau ini hard-stop, ATAU timeout ("batas N candle tercapai") sementara
@@ -10168,7 +10172,7 @@ def thread2_monitor():
                     'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
                 })
                 remove_from_active_deals(sym)
-                if strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'qscalp_3m'): record_closed(sym)
+                if strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'mombreak_1h'): record_closed(sym)
                 if strat == 'brkX2_4h' and trail_stop_triggered: record_trail_close(sym, price)
                 if strat == 'trend_confirm_4h': handle_tc4h_chain_close(sym, price, d.get('quick_reentry_hop', 0), _be_forced_close)
                 if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof_from_entry)
@@ -10184,8 +10188,8 @@ def thread2_monitor():
                     tgt = FWDTEST_TARGET_4H
                 elif strat == 'hunting_4h':
                     tgt = HUNTING_FWDTEST_TARGET
-                elif strat == 'qscalp_3m':
-                    tgt = QSCALP_FWDTEST_TARGET
+                elif strat == 'mombreak_1h':
+                    tgt = MOMBREAK_FWDTEST_TARGET
                 else:
                     tgt = FWDTEST_TARGET_BRKX2
                 pstrat = csv_progress(strat, offset=FWDTEST_BRKX2_PHASE_OFFSET if strat in ('brkX2', 'brkX2_12h_closed') else (HUNTING_FWDTEST_PHASE_OFFSET if strat=='hunting_4h' else 0))
@@ -13284,7 +13288,7 @@ def get_deal_override(sym: str, key: str, default: bool = True) -> bool:
     return load_deal_overrides().get(sym, {}).get(key, default)
 
 # ── Inline JS untuk dashboard (ASCII-only, served via /dash.js) ──────────────
-_DASH_JS = 'var _refreshTimer=null;\nvar _curStrat=\'KeltnerBreak-12h\';\nfunction startRefresh(){if(_refreshTimer)return;_refreshTimer=setInterval(function(){window.location.reload();},30000);}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){var cb=document.getElementById(\'cb-pause-refresh\');return cb&&cb.checked;}\nfunction pauseRefresh(){stopRefresh();}\nfunction resumeRefresh(){if(!isPauseChecked())startRefresh();}\nfunction onPauseRefreshToggle(checked){if(checked){stopRefresh();}else{startRefresh();}}\nfunction togglePauseRefresh(checked){var a=document.getElementById(\'cb-pause-refresh\');var b=document.getElementById(\'cb-pause-refresh-float\');if(a)a.checked=checked;if(b)b.checked=checked;onPauseRefreshToggle(checked);}\n\n// Definisi secondary per strategi\nvar STRAT_SECONDARY={\n  \'KeltnerBreak-12h\':[\n    {key:\'vol\',label:\'Vol 0.6x--5.0xMA\'},{key:\'rsi\',label:\'RSI<60\'},\n    {key:\'stoch\',label:\'Stoch%K<70\'},{key:\'atr\',label:\'ATR%<9%\'},\n    {key:\'htf\',label:\'HTF 3D vol>0.7xMA\'},{key:\'perf\',label:\'Perf>=0.5\'},{key:\'bull3\',label:\'3bar bullish\'}\n  ],\n  \'Reversal-8h T1\':[\n    {key:\'ha_bull\',label:\'c+1 HA bullish\'},{key:\'cross\',label:\'cross-up EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'Reversal-8h T3-REV\':[\n    {key:\'elapsed\',label:\'Elapsed 5%-50%\'},{key:\'cross_live\',label:\'price_now>EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'brkX2-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'rsi\',label:\'RSI<60\'},{key:\'stoch\',label:\'Stoch%K<80\'},\n    {key:\'htf\',label:\'12h candle bullish\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'CrossEMA-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'htf\',label:\'HTF12h vol>1.0xMA\'},\n    {key:\'vol24\',label:\'Vol24h>=$1.0jt\'}\n  ],\n  \'Akumulasi-4h\':[\n    {key:\'vol_asim\',label:\'Vol hijau>merah\'},{key:\'rsi\',label:\'RSI 30-56\'},\n    {key:\'macd_flat\',label:\'MACD flat≈0\'},{key:\'body_ratio\',label:\'Body ratio<0.57\'}\n  ]\n};\n\nfunction onStratSelect(strat){\n  _curStrat=strat;\n  // Update dropdown kandidat\n  var opts=document.querySelectorAll(\'.nm-opt\');\n  var count=0;\n  opts.forEach(function(o){\n    var show=o.getAttribute(\'data-strat\')===strat;\n    o.style.display=show?\'\':\'none\';\n    if(show)count++;\n  });\n  document.getElementById(\'nm-count\').textContent=\'(\'+count+\' kandidat dari scan terakhir)\';\n  // Reset pair select\n  var sel=document.getElementById(\'pair-select\');if(sel)sel.value=\'\';\n  // Reset panel\n  var panel=document.getElementById(\'pair-detail\');if(panel)panel.style.display=\'none\';\n  // Update secondary grid\n  renderSecondaryGrid(strat);\n  // Reset primary status\n  var ps=document.getElementById(\'primary-status\');\n  if(ps)ps.innerHTML=\'<span style="color:var(--muted)">-- pilih pair untuk lihat nilai aktual --</span>\';\n}\n\nfunction renderSecondaryGrid(strat){\n  var grid=document.getElementById(\'secondary-grid\');\n  if(!grid)return;\n  var defs=STRAT_SECONDARY[strat]||[];\n  grid.innerHTML=defs.map(function(d){\n    return \'<div class="sec-item" data-key="\'+d.key+\'"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px"><input type="checkbox" class="sec-cb" data-key="\'+d.key+\'" checked style="cursor:pointer"><span class="sec-label">\'+d.label+\'</span><span class="sec-actual" style="color:var(--muted)">--</span><span class="sec-status">--</span></label></div>\';\n  }).join(\'\');\n  // Re-attach event listeners\n  grid.querySelectorAll(\'.sec-cb\').forEach(function(cb){\n    cb.addEventListener(\'change\',function(){\n      fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});\n    });\n  });\n}\n\ndocument.addEventListener(\'DOMContentLoaded\',function(){\n  startRefresh();\n  onStratSelect(\'KeltnerBreak-12h\');\n  restoreActiveDealsSort();\n  loadBtcGateStatus();\n});\n\nvar BTC_GATE_STATUS_ORDER=[\'brkX2\',\'brkX2_12h_closed\',\'brkX2_4h\',\'decouple_4h\',\'dipbuy_universe\',\'qscalp_3m\',\'rvolbreak_8h\',\'trend_confirm_4h\'];\nfunction loadBtcGateStatus(){\n  var el=document.getElementById(\'btc-gate-status-badges\');\n  if(!el)return;\n  fetch(\'/api/btc_gate_status\').then(function(r){return r.json();}).then(function(d){\n    var html=BTC_GATE_STATUS_ORDER.filter(function(k){return d[k];}).map(function(k){\n      var s=d[k];\n      var color=s.status===\'ok\'?\'var(--green)\':(s.status===\'blocked\'?\'var(--red)\':\'var(--green)\');\n      var text=s.status===\'ok\'?\'LOLOS\':(s.status===\'blocked\'?\'TERBLOKIR\':\'TIDAK DIBERLAKUKAN\');\n      var tip=(s.syarat||\'\').replace(/"/g,\'&quot;\');\n      return \'<span style="margin-right:14px;white-space:nowrap" title="\'+tip+\'"><b>\'+s.label+\':</b> <span style="color:\'+color+\'">\'+text+\'</span></span>\';\n    }).join(\'\');\n    el.innerHTML=html;\n  }).catch(function(e){el.textContent=\'Error: \'+e;});\n}\n\nfunction onPairSelect(sym){\n  var panel=document.getElementById(\'pair-detail\');\n  if(!sym){panel.style.display=\'none\';return;}\n  panel.style.display=\'block\';\n  panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';\n  pauseRefresh();\n  fetch(\'/api/strategy_detail?sym=\'+encodeURIComponent(sym)+\'&strat=\'+encodeURIComponent(_curStrat))\n    .then(function(r){return r.json();})\n    .then(function(d){\n      resumeRefresh();\n      if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}\n      // Update primary\n      var ps=document.getElementById(\'primary-status\');\n      ps.innerHTML=d.primary.map(function(p){return badge(p.ok,p.label+\' (\'+p.actual+\')\');}).join(\' \');\n      // Update secondary\n      d.secondary.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n      // Panel ringkasan\n      var allP=d.primary_ok;\n      panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | \'+\n        d.primary.map(function(p){return (p.ok?\'<span style="color:var(--green)">\':\'<span style="color:var(--red)">\') + p.label+\': \'+p.actual+\'</span>\';}).join(\' | \')+\n        \' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');\n    })\n    .catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});\n}\n\nfunction updateSec(key,actual,ok){\n  document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){\n    var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');\n    if(a)a.textContent=\'(skrg \'+actual+\')\';\n    if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';\n  });\n}\n\nfunction doManualScan(){\n  var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');\n  btn.disabled=true;btn.textContent=\'Scanning...\';\n  st.textContent=\'Sedang scan semua pair... (30-60 detik)\';\n  pauseRefresh();\n  fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){\n    btn.disabled=false;btn.textContent=\'Scan Sekarang\';\n    st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';\n    renderResults(data.pairs);resumeRefresh();\n  }).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});\n}\n\nfunction promptOpenLong(){\n  var sel=document.getElementById(\'pair-select\');\n  var sym=sel?sel.value:\'\';\n  if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}\n  var ss=document.getElementById(\'strat-select\');var strat=ss?ss.value:\'KeltnerBreak-12h\';\n  if(!confirm(\'Open Long [\'+strat+\']: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;\n  execOpenLong(sym,strat);\n}\n\nfunction execOpenLong(sym,strat){\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'strat\',strat||\"KeltnerBreak-12h\");\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Membuka deal \'+sym+\'...\';\n  pauseRefresh();\n  fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){\n    resumeRefresh();\n    var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);\n    if(st)st.textContent=msg;alert(msg);\n  }).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction renderResults(pairs){\n  var el=document.getElementById(\'scan-results\');\n  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];\n  if(sample){\n    document.getElementById(\'primary-status\').innerHTML=\n      sample.secondaries?sample.secondaries.map(function(s){return badge(s.ok,s.key+\':\'+s.actual);}).join(\' \'):\'\';\n    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n  }\n  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);\n  if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos syarat primary.</div>\';return;}\n  var rows=cands.map(function(p){\n    var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');\n    var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';\n    var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';\n    return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';\n  }).join(\'\');\n  el.innerHTML=\'<table><thead><tr><th>Pair</th><th>isArmed</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';\n}\n\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){\n  if(v===undefined||v===null)return \'?\';\n  if(v>=1000)return v.toFixed(0);\n  if(v>=1)return v.toFixed(4);\n  if(v>=0.01)return v.toFixed(6);\n  if(v>=0.0001)return v.toFixed(8);\n  // harga sangat kecil seperti SHIB: pakai fixed decimal\n  var s=v.toFixed(10);\n  // hapus trailing zeros berlebihan tapi sisakan min 2 significant digits\n  return parseFloat(s).toPrecision(4);\n}\nfunction doOpenLong(sym){execOpenLong(sym);}\n\nfunction _setCookie(k,v){document.cookie=k+\'=\'+v+\';path=/;max-age=2592000\';}\n\nfunction _getCookie(k){var m=document.cookie.match(\'(^|;) ?\'+k+\'=([^;]*)(;|$)\');return m?m[2]:null;}\n\nfunction toggleCard(header){var card=header.parentElement;var name=\'c_\'+(card.querySelector(\'h2\').textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));card.classList.toggle(\'collapsed\');var collapsed=card.classList.contains(\'collapsed\');_setCookie(name,collapsed?\'1\':\'0\');}\n\nfunction restoreCards(){document.querySelectorAll(\'.card\').forEach(function(card){var h=card.querySelector(\'h2\');if(!h)return;var name=\'c_\'+(h.textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));if(_getCookie(name)===\'1\')card.classList.add(\'collapsed\');});}\n\nfunction editEntry(sym,curVal){\n  var v=prompt(\'Edit entry price untuk \'+sym.replace(\'USDT\',\'/USDT\')+\':\\n(harga aktual dari 3Commas)\',curVal);\n  if(v===null)return;\n  v=parseFloat(v);\n  if(isNaN(v)||v<=0){alert(\'Nilai tidak valid\');return;}\n  if(!confirm(\'Set entry \'+sym.replace(\'USDT\',\'/USDT\')+\' = \'+v+\'?\'))return;\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'field\',\'entry_price\');fd.append(\'value\',v);\n  pauseRefresh();\n  fetch(\'/edit_deal\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var el=document.getElementById(\'ep-\'+sym);\n        if(el)el.textContent=v;\n        alert(\'Entry \'+sym.replace(\'USDT\',\'/USDT\')+\' diupdate ke \'+v);\n      } else {\n        alert(\'Gagal: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction confirmCancelDeal(form, sym) {\n  var input = form.querySelector(\'input[name="pct"]\');\n  var pct = (input && input.value) ? parseFloat(input.value) : 100;\n  if (isNaN(pct) || pct <= 0 || pct > 100) { alert(\'Persentase cancel harus 1-100.\'); return false; }\n  var pair = sym.replace(\'USDT\',\'/USDT\');\n  var msg = pct >= 100\n    ? (\'Cancel deal \' + pair + \' SELURUHNYA?\\n\\nBot berhenti kelola pair ini (auto add fund/TP/close berhenti). Koin yang sudah dibeli TETAP di wallet, TIDAK dijual.\')\n    : (\'Cancel \' + pct + \'% dari deal \' + pair + \'?\\n\\nSisa \' + (100 - pct) + \'% TETAP jadi deal aktif (TP/trailing/close jalan normal). Bagian yang di-cancel berhenti dikelola bot, koin TETAP di wallet, TIDAK dijual.\');\n  return confirm(msg);\n}\n\nfunction rowCloseDeal(sym){\n  if(!confirm(\'CLOSE DEAL \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan jual posisi ini sekarang juga di Binance.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_close\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Close \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! Price=\'+data.price+\' Profit=\'+data.profit_pct+\'%\');\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Close GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction rowAddFund(sym){\n  var amtEl=document.getElementById(\'addfund-amt-\'+sym);\n  var amount=amtEl?amtEl.value.trim():\'\';\n  if(!confirm(\'ADD FUND untuk \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nNominal: \'+(amount||\'otomatis sesuai sizing saat open\')+\'\\nAverage price akan diupdate otomatis.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);if(amount)fd.append(\'amount\',amount);\n  fetch(\'/manual_addfund\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! +$\'+data.add_usd+\' @ \'+data.price+\' | Avg=\'+data.avg_price);\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\n\nfunction openAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  if(!modal||!body)return;\n  modal.style.display=\'flex\';\n  body.innerHTML=\'Memuat...\';\n  pauseRefresh();\n  var targets=[];\n  document.querySelectorAll(\'#active-deals-body tr\').forEach(function(tr){\n    var symTd=tr.querySelector(\'td.sym\');\n    if(!symTd)return;\n    var sym=symTd.textContent.replace(\'/USDT\',\'USDT\').trim();\n    var tds=tr.querySelectorAll(\'td\');\n    var strat=tds[1]?tds[1].textContent.trim():\'\';\n    targets.push({sym:sym, label:symTd.textContent.trim()+\' (\'+strat+\')\'});\n  });\n  fetch(\'/api/addfund_source_assets\').then(function(r){return r.json();}).then(function(d){\n    if(!d.ok){body.innerHTML=\'<div style="color:var(--red)">Error: \'+(d.error||\'gagal memuat aset\')+\'</div>\';return;}\n    if(targets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada Active Deal untuk ditambah fund.</div>\';return;}\n    if(d.assets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada aset nganggur senilai >= $5 yang bisa dijual (semua aset di wallet sudah jadi Active Deal, atau nilainya di bawah $5).</div>\';return;}\n    var targetOpts=targets.map(function(t){return \'<option value="\'+t.sym+\'">\'+t.label+\'</option>\';}).join(\'\');\n    var sourceOpts=d.assets.map(function(a){return \'<option value="\'+a.asset+\'" data-free="\'+a.free+\'" data-value="\'+a.value_usdt+\'">\'+a.asset+\' (\'+a.free+\', \\u2248$\'+a.value_usdt.toFixed(2)+\')</option>\';}).join(\'\');\n    body.innerHTML=\n      \'<label style="display:block;margin-bottom:8px">Add fund ke deal:<br>\'+\n      \'<select id="afa-target" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+targetOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:8px">Sumber aset (dijual buat dapat USDT):<br>\'+\n      \'<select id="afa-source" onchange="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+sourceOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:10px">Jual berapa % dari saldo (default 100%):<br>\'+\n      \'<input type="number" id="afa-pct" min="1" max="100" value="100" oninput="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)"></label>\'+\n      \'<div id="afa-estimate" style="margin-bottom:12px;color:var(--accent)"></div>\'+\n      \'<button type="button" onclick="submitAddFundFromAsset()" style="background:#7c5cff;color:#fff;border:none;border-radius:4px;padding:6px 14px;font-size:11px;cursor:pointer;font-weight:600;font-family:var(--font)">Eksekusi</button>\';\n    updateAddFundAssetEstimate();\n  }).catch(function(e){resumeRefresh();body.innerHTML=\'<div style="color:var(--red)">Error: \'+e+\'</div>\';});\n}\n\nfunction updateAddFundAssetEstimate(){\n  var sel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  var est=document.getElementById(\'afa-estimate\');\n  if(!sel||!pctEl||!est||!sel.options.length)return;\n  var opt=sel.options[sel.selectedIndex];\n  var value=parseFloat(opt.dataset.value)||0;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  var estimate=value*(pct/100);\n  est.textContent=\'\\u2248 jual \'+pct+\'% \'+opt.value+\' \\u2248 $\'+estimate.toFixed(2)+\' akan ditambahkan ke deal target\';\n}\n\nfunction submitAddFundFromAsset(){\n  var targetSel=document.getElementById(\'afa-target\');\n  var sourceSel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  if(!targetSel||!sourceSel||!pctEl)return;\n  var target=targetSel.value;\n  var source=sourceSel.value;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  if(!confirm(\'Jual \'+pct+\'% saldo \'+source+\' lalu tambahkan hasilnya (USDT) ke deal \'+target.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan eksekusi order JUAL market sungguhan di Binance, lalu BELI tambahan ke \'+target.replace(\'USDT\',\'/USDT\')+\'.\'))return;\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  body.innerHTML=\'Memproses...\';\n  pauseRefresh();\n  fetch(\'/api/addfund_from_asset\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({source_asset:source,target_symbol:target,pct:pct})})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'BERHASIL! Jual \'+data.sold_qty+\' \'+source+\' -> $\'+data.proceeds_usdt.toFixed(2)+\' ditambahkan ke \'+data.target_symbol.replace(\'USDT\',\'/USDT\')+\' (avg baru \'+data.avg_price+\')\');\n        closeAddFundAssetModal();\n        setTimeout(function(){window.location.reload();},1000);\n      } else {\n        alert(\'GAGAL: \'+data.error);\n        body.innerHTML=\'<div style="color:var(--red)">Gagal: \'+data.error+\'</div><button type="button" onclick="openAddFundAssetModal()" style="margin-top:10px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 10px;font-size:11px;cursor:pointer;font-family:var(--font)">Coba lagi</button>\';\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction closeAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  if(modal)modal.style.display=\'none\';\n  resumeRefresh();\n}\n\nfunction sortActiveDeals(mode){\n  _setCookie(\'active_deals_sort\',mode);\n  applyActiveDealsSort(mode);\n}\nfunction applyActiveDealsSort(mode){\n  var tbody=document.getElementById(\'active-deals-body\');\n  if(!tbody)return;\n  var rows=Array.prototype.slice.call(tbody.querySelectorAll(\'tr\'));\n  if(mode===\'performance\'){\n    rows.sort(function(a,b){return parseFloat(b.getAttribute(\'data-performance\'))-parseFloat(a.getAttribute(\'data-performance\'));});\n  } else if(mode===\'urgency\'){\n    rows.sort(function(a,b){return parseFloat(a.getAttribute(\'data-urgency\'))-parseFloat(b.getAttribute(\'data-urgency\'));});\n  } else {\n    return;\n  }\n  rows.forEach(function(row){tbody.appendChild(row);});\n}\nfunction restoreActiveDealsSort(){\n  var saved=_getCookie(\'active_deals_sort\')||\'default\';\n  var sel=document.getElementById(\'active-deals-sort\');\n  if(sel)sel.value=saved;\n  applyActiveDealsSort(saved);\n}\n'
+_DASH_JS = 'var _refreshTimer=null;\nvar _curStrat=\'KeltnerBreak-12h\';\nfunction startRefresh(){if(_refreshTimer)return;_refreshTimer=setInterval(function(){window.location.reload();},30000);}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){var cb=document.getElementById(\'cb-pause-refresh\');return cb&&cb.checked;}\nfunction pauseRefresh(){stopRefresh();}\nfunction resumeRefresh(){if(!isPauseChecked())startRefresh();}\nfunction onPauseRefreshToggle(checked){if(checked){stopRefresh();}else{startRefresh();}}\nfunction togglePauseRefresh(checked){var a=document.getElementById(\'cb-pause-refresh\');var b=document.getElementById(\'cb-pause-refresh-float\');if(a)a.checked=checked;if(b)b.checked=checked;onPauseRefreshToggle(checked);}\n\n// Definisi secondary per strategi\nvar STRAT_SECONDARY={\n  \'KeltnerBreak-12h\':[\n    {key:\'vol\',label:\'Vol 0.6x--5.0xMA\'},{key:\'rsi\',label:\'RSI<60\'},\n    {key:\'stoch\',label:\'Stoch%K<70\'},{key:\'atr\',label:\'ATR%<9%\'},\n    {key:\'htf\',label:\'HTF 3D vol>0.7xMA\'},{key:\'perf\',label:\'Perf>=0.5\'},{key:\'bull3\',label:\'3bar bullish\'}\n  ],\n  \'Reversal-8h T1\':[\n    {key:\'ha_bull\',label:\'c+1 HA bullish\'},{key:\'cross\',label:\'cross-up EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'Reversal-8h T3-REV\':[\n    {key:\'elapsed\',label:\'Elapsed 5%-50%\'},{key:\'cross_live\',label:\'price_now>EMA20\'},\n    {key:\'perf\',label:\'Perf>=0.5\'},{key:\'vol24\',label:\'Vol24h>=$1.5jt\'}\n  ],\n  \'brkX2-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'rsi\',label:\'RSI<60\'},{key:\'stoch\',label:\'Stoch%K<80\'},\n    {key:\'htf\',label:\'12h candle bullish\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ],\n  \'CrossEMA-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'htf\',label:\'HTF12h vol>1.0xMA\'},\n    {key:\'vol24\',label:\'Vol24h>=$1.0jt\'}\n  ],\n  \'Akumulasi-4h\':[\n    {key:\'vol_asim\',label:\'Vol hijau>merah\'},{key:\'rsi\',label:\'RSI 30-56\'},\n    {key:\'macd_flat\',label:\'MACD flat≈0\'},{key:\'body_ratio\',label:\'Body ratio<0.57\'}\n  ]\n};\n\nfunction onStratSelect(strat){\n  _curStrat=strat;\n  // Update dropdown kandidat\n  var opts=document.querySelectorAll(\'.nm-opt\');\n  var count=0;\n  opts.forEach(function(o){\n    var show=o.getAttribute(\'data-strat\')===strat;\n    o.style.display=show?\'\':\'none\';\n    if(show)count++;\n  });\n  document.getElementById(\'nm-count\').textContent=\'(\'+count+\' kandidat dari scan terakhir)\';\n  // Reset pair select\n  var sel=document.getElementById(\'pair-select\');if(sel)sel.value=\'\';\n  // Reset panel\n  var panel=document.getElementById(\'pair-detail\');if(panel)panel.style.display=\'none\';\n  // Update secondary grid\n  renderSecondaryGrid(strat);\n  // Reset primary status\n  var ps=document.getElementById(\'primary-status\');\n  if(ps)ps.innerHTML=\'<span style="color:var(--muted)">-- pilih pair untuk lihat nilai aktual --</span>\';\n}\n\nfunction renderSecondaryGrid(strat){\n  var grid=document.getElementById(\'secondary-grid\');\n  if(!grid)return;\n  var defs=STRAT_SECONDARY[strat]||[];\n  grid.innerHTML=defs.map(function(d){\n    return \'<div class="sec-item" data-key="\'+d.key+\'"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px"><input type="checkbox" class="sec-cb" data-key="\'+d.key+\'" checked style="cursor:pointer"><span class="sec-label">\'+d.label+\'</span><span class="sec-actual" style="color:var(--muted)">--</span><span class="sec-status">--</span></label></div>\';\n  }).join(\'\');\n  // Re-attach event listeners\n  grid.querySelectorAll(\'.sec-cb\').forEach(function(cb){\n    cb.addEventListener(\'change\',function(){\n      fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});\n    });\n  });\n}\n\ndocument.addEventListener(\'DOMContentLoaded\',function(){\n  startRefresh();\n  onStratSelect(\'KeltnerBreak-12h\');\n  restoreActiveDealsSort();\n  loadBtcGateStatus();\n});\n\nvar BTC_GATE_STATUS_ORDER=[\'brkX2\',\'brkX2_12h_closed\',\'brkX2_4h\',\'decouple_4h\',\'dipbuy_universe\',\'mombreak_1h\',\'rvolbreak_8h\',\'trend_confirm_4h\'];\nfunction loadBtcGateStatus(){\n  var el=document.getElementById(\'btc-gate-status-badges\');\n  if(!el)return;\n  fetch(\'/api/btc_gate_status\').then(function(r){return r.json();}).then(function(d){\n    var html=BTC_GATE_STATUS_ORDER.filter(function(k){return d[k];}).map(function(k){\n      var s=d[k];\n      var color=s.status===\'ok\'?\'var(--green)\':(s.status===\'blocked\'?\'var(--red)\':\'var(--green)\');\n      var text=s.status===\'ok\'?\'LOLOS\':(s.status===\'blocked\'?\'TERBLOKIR\':\'TIDAK DIBERLAKUKAN\');\n      var tip=(s.syarat||\'\').replace(/"/g,\'&quot;\');\n      return \'<span style="margin-right:14px;white-space:nowrap" title="\'+tip+\'"><b>\'+s.label+\':</b> <span style="color:\'+color+\'">\'+text+\'</span></span>\';\n    }).join(\'\');\n    el.innerHTML=html;\n  }).catch(function(e){el.textContent=\'Error: \'+e;});\n}\n\nfunction onPairSelect(sym){\n  var panel=document.getElementById(\'pair-detail\');\n  if(!sym){panel.style.display=\'none\';return;}\n  panel.style.display=\'block\';\n  panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';\n  pauseRefresh();\n  fetch(\'/api/strategy_detail?sym=\'+encodeURIComponent(sym)+\'&strat=\'+encodeURIComponent(_curStrat))\n    .then(function(r){return r.json();})\n    .then(function(d){\n      resumeRefresh();\n      if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}\n      // Update primary\n      var ps=document.getElementById(\'primary-status\');\n      ps.innerHTML=d.primary.map(function(p){return badge(p.ok,p.label+\' (\'+p.actual+\')\');}).join(\' \');\n      // Update secondary\n      d.secondary.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n      // Panel ringkasan\n      var allP=d.primary_ok;\n      panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | \'+\n        d.primary.map(function(p){return (p.ok?\'<span style="color:var(--green)">\':\'<span style="color:var(--red)">\') + p.label+\': \'+p.actual+\'</span>\';}).join(\' | \')+\n        \' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');\n    })\n    .catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});\n}\n\nfunction updateSec(key,actual,ok){\n  document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){\n    var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');\n    if(a)a.textContent=\'(skrg \'+actual+\')\';\n    if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';\n  });\n}\n\nfunction doManualScan(){\n  var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');\n  btn.disabled=true;btn.textContent=\'Scanning...\';\n  st.textContent=\'Sedang scan semua pair... (30-60 detik)\';\n  pauseRefresh();\n  fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){\n    btn.disabled=false;btn.textContent=\'Scan Sekarang\';\n    st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';\n    renderResults(data.pairs);resumeRefresh();\n  }).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});\n}\n\nfunction promptOpenLong(){\n  var sel=document.getElementById(\'pair-select\');\n  var sym=sel?sel.value:\'\';\n  if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}\n  var ss=document.getElementById(\'strat-select\');var strat=ss?ss.value:\'KeltnerBreak-12h\';\n  if(!confirm(\'Open Long [\'+strat+\']: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;\n  execOpenLong(sym,strat);\n}\n\nfunction execOpenLong(sym,strat){\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'strat\',strat||\"KeltnerBreak-12h\");\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Membuka deal \'+sym+\'...\';\n  pauseRefresh();\n  fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){\n    resumeRefresh();\n    var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);\n    if(st)st.textContent=msg;alert(msg);\n  }).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction renderResults(pairs){\n  var el=document.getElementById(\'scan-results\');\n  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];\n  if(sample){\n    document.getElementById(\'primary-status\').innerHTML=\n      sample.secondaries?sample.secondaries.map(function(s){return badge(s.ok,s.key+\':\'+s.actual);}).join(\' \'):\'\';\n    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n  }\n  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);\n  if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos syarat primary.</div>\';return;}\n  var rows=cands.map(function(p){\n    var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');\n    var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';\n    var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';\n    return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';\n  }).join(\'\');\n  el.innerHTML=\'<table><thead><tr><th>Pair</th><th>isArmed</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';\n}\n\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){\n  if(v===undefined||v===null)return \'?\';\n  if(v>=1000)return v.toFixed(0);\n  if(v>=1)return v.toFixed(4);\n  if(v>=0.01)return v.toFixed(6);\n  if(v>=0.0001)return v.toFixed(8);\n  // harga sangat kecil seperti SHIB: pakai fixed decimal\n  var s=v.toFixed(10);\n  // hapus trailing zeros berlebihan tapi sisakan min 2 significant digits\n  return parseFloat(s).toPrecision(4);\n}\nfunction doOpenLong(sym){execOpenLong(sym);}\n\nfunction _setCookie(k,v){document.cookie=k+\'=\'+v+\';path=/;max-age=2592000\';}\n\nfunction _getCookie(k){var m=document.cookie.match(\'(^|;) ?\'+k+\'=([^;]*)(;|$)\');return m?m[2]:null;}\n\nfunction toggleCard(header){var card=header.parentElement;var name=\'c_\'+(card.querySelector(\'h2\').textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));card.classList.toggle(\'collapsed\');var collapsed=card.classList.contains(\'collapsed\');_setCookie(name,collapsed?\'1\':\'0\');}\n\nfunction restoreCards(){document.querySelectorAll(\'.card\').forEach(function(card){var h=card.querySelector(\'h2\');if(!h)return;var name=\'c_\'+(h.textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));if(_getCookie(name)===\'1\')card.classList.add(\'collapsed\');});}\n\nfunction editEntry(sym,curVal){\n  var v=prompt(\'Edit entry price untuk \'+sym.replace(\'USDT\',\'/USDT\')+\':\\n(harga aktual dari 3Commas)\',curVal);\n  if(v===null)return;\n  v=parseFloat(v);\n  if(isNaN(v)||v<=0){alert(\'Nilai tidak valid\');return;}\n  if(!confirm(\'Set entry \'+sym.replace(\'USDT\',\'/USDT\')+\' = \'+v+\'?\'))return;\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'field\',\'entry_price\');fd.append(\'value\',v);\n  pauseRefresh();\n  fetch(\'/edit_deal\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var el=document.getElementById(\'ep-\'+sym);\n        if(el)el.textContent=v;\n        alert(\'Entry \'+sym.replace(\'USDT\',\'/USDT\')+\' diupdate ke \'+v);\n      } else {\n        alert(\'Gagal: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction confirmCancelDeal(form, sym) {\n  var input = form.querySelector(\'input[name="pct"]\');\n  var pct = (input && input.value) ? parseFloat(input.value) : 100;\n  if (isNaN(pct) || pct <= 0 || pct > 100) { alert(\'Persentase cancel harus 1-100.\'); return false; }\n  var pair = sym.replace(\'USDT\',\'/USDT\');\n  var msg = pct >= 100\n    ? (\'Cancel deal \' + pair + \' SELURUHNYA?\\n\\nBot berhenti kelola pair ini (auto add fund/TP/close berhenti). Koin yang sudah dibeli TETAP di wallet, TIDAK dijual.\')\n    : (\'Cancel \' + pct + \'% dari deal \' + pair + \'?\\n\\nSisa \' + (100 - pct) + \'% TETAP jadi deal aktif (TP/trailing/close jalan normal). Bagian yang di-cancel berhenti dikelola bot, koin TETAP di wallet, TIDAK dijual.\');\n  return confirm(msg);\n}\n\nfunction rowCloseDeal(sym){\n  if(!confirm(\'CLOSE DEAL \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan jual posisi ini sekarang juga di Binance.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_close\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Close \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! Price=\'+data.price+\' Profit=\'+data.profit_pct+\'%\');\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Close GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction rowAddFund(sym){\n  var amtEl=document.getElementById(\'addfund-amt-\'+sym);\n  var amount=amtEl?amtEl.value.trim():\'\';\n  if(!confirm(\'ADD FUND untuk \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nNominal: \'+(amount||\'otomatis sesuai sizing saat open\')+\'\\nAverage price akan diupdate otomatis.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);if(amount)fd.append(\'amount\',amount);\n  fetch(\'/manual_addfund\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! +$\'+data.add_usd+\' @ \'+data.price+\' | Avg=\'+data.avg_price);\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\n\nfunction openAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  if(!modal||!body)return;\n  modal.style.display=\'flex\';\n  body.innerHTML=\'Memuat...\';\n  pauseRefresh();\n  var targets=[];\n  document.querySelectorAll(\'#active-deals-body tr\').forEach(function(tr){\n    var symTd=tr.querySelector(\'td.sym\');\n    if(!symTd)return;\n    var sym=symTd.textContent.replace(\'/USDT\',\'USDT\').trim();\n    var tds=tr.querySelectorAll(\'td\');\n    var strat=tds[1]?tds[1].textContent.trim():\'\';\n    targets.push({sym:sym, label:symTd.textContent.trim()+\' (\'+strat+\')\'});\n  });\n  fetch(\'/api/addfund_source_assets\').then(function(r){return r.json();}).then(function(d){\n    if(!d.ok){body.innerHTML=\'<div style="color:var(--red)">Error: \'+(d.error||\'gagal memuat aset\')+\'</div>\';return;}\n    if(targets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada Active Deal untuk ditambah fund.</div>\';return;}\n    if(d.assets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada aset nganggur senilai >= $5 yang bisa dijual (semua aset di wallet sudah jadi Active Deal, atau nilainya di bawah $5).</div>\';return;}\n    var targetOpts=targets.map(function(t){return \'<option value="\'+t.sym+\'">\'+t.label+\'</option>\';}).join(\'\');\n    var sourceOpts=d.assets.map(function(a){return \'<option value="\'+a.asset+\'" data-free="\'+a.free+\'" data-value="\'+a.value_usdt+\'">\'+a.asset+\' (\'+a.free+\', \\u2248$\'+a.value_usdt.toFixed(2)+\')</option>\';}).join(\'\');\n    body.innerHTML=\n      \'<label style="display:block;margin-bottom:8px">Add fund ke deal:<br>\'+\n      \'<select id="afa-target" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+targetOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:8px">Sumber aset (dijual buat dapat USDT):<br>\'+\n      \'<select id="afa-source" onchange="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+sourceOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:10px">Jual berapa % dari saldo (default 100%):<br>\'+\n      \'<input type="number" id="afa-pct" min="1" max="100" value="100" oninput="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)"></label>\'+\n      \'<div id="afa-estimate" style="margin-bottom:12px;color:var(--accent)"></div>\'+\n      \'<button type="button" onclick="submitAddFundFromAsset()" style="background:#7c5cff;color:#fff;border:none;border-radius:4px;padding:6px 14px;font-size:11px;cursor:pointer;font-weight:600;font-family:var(--font)">Eksekusi</button>\';\n    updateAddFundAssetEstimate();\n  }).catch(function(e){resumeRefresh();body.innerHTML=\'<div style="color:var(--red)">Error: \'+e+\'</div>\';});\n}\n\nfunction updateAddFundAssetEstimate(){\n  var sel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  var est=document.getElementById(\'afa-estimate\');\n  if(!sel||!pctEl||!est||!sel.options.length)return;\n  var opt=sel.options[sel.selectedIndex];\n  var value=parseFloat(opt.dataset.value)||0;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  var estimate=value*(pct/100);\n  est.textContent=\'\\u2248 jual \'+pct+\'% \'+opt.value+\' \\u2248 $\'+estimate.toFixed(2)+\' akan ditambahkan ke deal target\';\n}\n\nfunction submitAddFundFromAsset(){\n  var targetSel=document.getElementById(\'afa-target\');\n  var sourceSel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  if(!targetSel||!sourceSel||!pctEl)return;\n  var target=targetSel.value;\n  var source=sourceSel.value;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  if(!confirm(\'Jual \'+pct+\'% saldo \'+source+\' lalu tambahkan hasilnya (USDT) ke deal \'+target.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan eksekusi order JUAL market sungguhan di Binance, lalu BELI tambahan ke \'+target.replace(\'USDT\',\'/USDT\')+\'.\'))return;\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  body.innerHTML=\'Memproses...\';\n  pauseRefresh();\n  fetch(\'/api/addfund_from_asset\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({source_asset:source,target_symbol:target,pct:pct})})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'BERHASIL! Jual \'+data.sold_qty+\' \'+source+\' -> $\'+data.proceeds_usdt.toFixed(2)+\' ditambahkan ke \'+data.target_symbol.replace(\'USDT\',\'/USDT\')+\' (avg baru \'+data.avg_price+\')\');\n        closeAddFundAssetModal();\n        setTimeout(function(){window.location.reload();},1000);\n      } else {\n        alert(\'GAGAL: \'+data.error);\n        body.innerHTML=\'<div style="color:var(--red)">Gagal: \'+data.error+\'</div><button type="button" onclick="openAddFundAssetModal()" style="margin-top:10px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 10px;font-size:11px;cursor:pointer;font-family:var(--font)">Coba lagi</button>\';\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction closeAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  if(modal)modal.style.display=\'none\';\n  resumeRefresh();\n}\n\nfunction sortActiveDeals(mode){\n  _setCookie(\'active_deals_sort\',mode);\n  applyActiveDealsSort(mode);\n}\nfunction applyActiveDealsSort(mode){\n  var tbody=document.getElementById(\'active-deals-body\');\n  if(!tbody)return;\n  var rows=Array.prototype.slice.call(tbody.querySelectorAll(\'tr\'));\n  if(mode===\'performance\'){\n    rows.sort(function(a,b){return parseFloat(b.getAttribute(\'data-performance\'))-parseFloat(a.getAttribute(\'data-performance\'));});\n  } else if(mode===\'urgency\'){\n    rows.sort(function(a,b){return parseFloat(a.getAttribute(\'data-urgency\'))-parseFloat(b.getAttribute(\'data-urgency\'));});\n  } else {\n    return;\n  }\n  rows.forEach(function(row){tbody.appendChild(row);});\n}\nfunction restoreActiveDealsSort(){\n  var saved=_getCookie(\'active_deals_sort\')||\'default\';\n  var sel=document.getElementById(\'active-deals-sort\');\n  if(sel)sel.value=saved;\n  applyActiveDealsSort(saved);\n}\n'
 
 def _fmt_price(v):
     """Format harga agar tidak pakai notasi scientific (e-06 dll)."""
@@ -13785,7 +13789,7 @@ refreshShadowChart();
       <tr data-performance="{{ d.get('performance_score', 0) }}" data-urgency="{{ d.get('urgency_sort', 3999) }}">
         <td class="sym {{ 'profit-pos' if d.get('upnl_usd',0) > 0 else 'profit-neg' }}">{{ sym.replace("USDT","/USDT") }}</td>
         <td style="white-space:nowrap">
-          {% set _sm = {"brkX2":"brkx2-12h","brkX2_closed":"KeltnerBreak-12h CC (arsip)","brkX2_intrabar":"KeltnerBreak-12h Intrabar (arsip)","brkX2_12h_closed":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h","decouple_4h":"Decouple-4h","dipbuy_universe":"Dip-Buy Universe","qscalp_3m":"QScalp-3m","rvolbreak_8h":"RVolBreak-8h","rvolbreak_1h":"RVOLBreak-1h","hunting_4h":"Hunting-4h","akum_entry_a":"Akumulasi Entry A","akum_entry_b":"Akumulasi Entry B"} %}
+          {% set _sm = {"brkX2":"brkx2-12h","brkX2_closed":"KeltnerBreak-12h CC (arsip)","brkX2_intrabar":"KeltnerBreak-12h Intrabar (arsip)","brkX2_12h_closed":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h","decouple_4h":"Decouple-4h","dipbuy_universe":"Dip-Buy Universe","mombreak_1h":"MomentumBreak-1h","rvolbreak_8h":"RVolBreak-8h","rvolbreak_1h":"RVOLBreak-1h","hunting_4h":"Hunting-4h","akum_entry_a":"Akumulasi Entry A","akum_entry_b":"Akumulasi Entry B"} %}
           <div>{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</div>
           <div style="font-size:9px;color:var(--muted)">{{ d.get("opened_at","")[:16] if d.get("opened_at") else "-" }}</div>
         </td>
@@ -14068,7 +14072,7 @@ refreshShadowChart();
           <option value="CrossEMA-4h">CrossEMA-4h</option>
           <option value="Akumulasi-4h">Akumulasi-4h ⭐</option>
           <option value="Hunting-4h">Hunting-4h 🎯</option>
-          <option value="QScalp-3m">QScalp-3m ⚡</option>
+          <option value="MomentumBreak-1h">MomentumBreak-1h ⚡</option>
         </select>
       </div>
       <!-- Dropdown kandidat dinamis per strategi -->
@@ -14080,7 +14084,7 @@ refreshShadowChart();
         "CrossEMA-4h": near_miss.get("CrossEMA-4h", []),
         "Akumulasi-4h": near_miss.get("Akumulasi-4h", []),
         "Hunting-4h": near_miss.get("Hunting-4h", []),
-        "QScalp-3m": near_miss.get("QScalp-3m", [])
+        "MomentumBreak-1h": near_miss.get("MomentumBreak-1h", [])
       } %}
       <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <label style="font-size:11px;color:var(--muted)">Pilih item hasil scan:</label>
@@ -14503,11 +14507,11 @@ refreshHuntingSignals();
 </div>
 
 <div class="container dash-section-start" data-tab="strategies">
-  <div class="section-title">⚡ Strategi #8 — QScalp-3m</div>
+  <div class="section-title">⚡ Strategi #8 — MomentumBreak-1h</div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-header" onclick="toggleCard(this)">
-      <h2>QScalp-3m <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Scalp cepat, full rule-based, TANPA AI | TF 3m | Slot 2</span></h2>
-      <span class="scan-time" id="qscalp-scan-time">Scan: —</span>
+      <h2>MomentumBreak-1h <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Momentum breakout, full rule-based, TANPA AI | TF 1h | Slot 2</span></h2>
+      <span class="scan-time" id="mombreak-scan-time">Scan: —</span>
     </div>
     <div class="card-body">
       <div style="font-size:11px;color:var(--muted);margin-bottom:10px">
@@ -14515,20 +14519,20 @@ refreshHuntingSignals();
         Exit flat: arm 0.8% / trail 0.3% / stop 2.0% / timeout 15 candle (45 menit). Parameter tidak bisa diubah dari sini
         (bukan filter opsional spt Hunting-4h) -- ganti lewat kode kalau perlu pindah ke kombo cadangan E/F/H.
       </div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Slot: <b id="qscalp-slot" style="color:var(--text)">—</b></div>
-      <div id="qscalp-signals"><em style="color:var(--muted);font-size:11px">Belum ada sinyal.</em></div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Slot: <b id="mombreak-slot" style="color:var(--text)">—</b></div>
+      <div id="mombreak-signals"><em style="color:var(--muted);font-size:11px">Belum ada sinyal.</em></div>
     </div>
   </div>
 </div>
 
 <script>
-function refreshQscalpSignals() {
-  fetch("/api/qscalp_signals")
+function refreshMomentumBreakSignals() {
+  fetch("/api/mombreak_signals")
     .then(function(r){ return r.json(); })
     .then(function(data) {
-      var el = document.getElementById("qscalp-signals");
-      var ts = document.getElementById("qscalp-scan-time");
-      var slot = document.getElementById("qscalp-slot");
+      var el = document.getElementById("mombreak-signals");
+      var ts = document.getElementById("mombreak-scan-time");
+      var slot = document.getElementById("mombreak-slot");
       if (ts) ts.textContent = "Scan: " + (data.scan_ts || "—");
       if (slot) slot.textContent = data.slot || "—";
       if (!data.signals || !data.signals.length) {
@@ -14546,8 +14550,8 @@ function refreshQscalpSignals() {
     })
     .catch(function(){});
 }
-setInterval(refreshQscalpSignals, 30000);
-refreshQscalpSignals();
+setInterval(refreshMomentumBreakSignals, 30000);
+refreshMomentumBreakSignals();
 </script>
 
 <script src="/dash.js?v=1786097338"></script>
@@ -14576,7 +14580,7 @@ var SC_LABELS = {
     akum_entry_b: 'Akum-4h Entry B',
     hunting_4h: 'Hunting-4h',
     trend_confirm_4h: 'TrenKonfirmasi-4h',
-    qscalp_3m: 'QScalp-3m',
+    mombreak_1h: 'MomentumBreak-1h',
     decouple_4h: 'Decouple-4h',
     rvolbreak_1h: 'RVOLBreak-1h',
     rvolbreak_8h: 'RVolBreak-8h',
@@ -14606,12 +14610,12 @@ var SC_ADDFUND_LABEL = {brkX2: 'auto (score-based)', trend_confirm_4h: 'auto (sc
 // Python) beli LANGSUNG 1x, tidak lewat kolom Add Fund sama sekali -- jadi tidak kelihatan di
 // tabel ini kecuali ditandai manual di sini. Catatan statis (bukan dari /api/strategy_config).
 var SC_BASE_NOTE = {brkX2_4h: '/ $100 conviction'};
-var SC_NO_PARTIAL = {qscalp_3m: true};  // QScalp selalu jual 100% saat close (kolom Jual % dimmed)
-var SC_NO_AI = {qscalp_3m: true};  // strategi full rule-based, checkbox AI-call tidak berlaku
+var SC_NO_PARTIAL = {mombreak_1h: true};  // MomentumBreak selalu jual 100% saat close (kolom Jual % dimmed)
+var SC_NO_AI = {mombreak_1h: true};  // strategi full rule-based, checkbox AI-call tidak berlaku
 // 01/10/2026 (permintaan Mas Budi): strategi yg di-PAUSE atas keputusan Mas Budi (sama dgn PAUSED_HIDDEN_STRATEGIES di Python,
 // baris ~1369 -- kalau daftar itu berubah, ubah juga di sini) barisnya di-DIM + DIKUNCI (tidak bisa diklik) selama flag OFF.
 // 02/10/2026: 'reversal' dikeluarkan -- direaktivasi (reversal_resumed_20261002), tidak lagi dikunci.
-// 04/10/2026: 'qscalp_3m' dikeluarkan juga -- diresume (validasi ulang #21/21 lolos kuat kedua
+// 04/10/2026: 'mombreak_1h' dikeluarkan juga -- diresume (validasi ulang #21/21 lolos kuat kedua
 // periode), sama pola dgn reversal. Centang "Izinkan Open Long" sekarang bisa diklik Mas Budi.
 var SC_PAUSED_LOCKED = {brkX2_crossema: true};
 // 10/10/2026 (Gate0, permintaan Mas Budi): kolom "Pakai Syarat BTC" -- AKTIF (Tahap 2, sama hari,
@@ -14625,13 +14629,13 @@ var SC_PAUSED_LOCKED = {brkX2_crossema: true};
 // dipanggil di thread1_scan(), TIDAK PERNAH di thread1c_scan_intrabar()/thread1c_scan_intrabar_early()
 // (jalur intrabar, lihat kasus brkX2_4h yg sempat 2x salah gara2 soal timing intrabar serupa --
 // tidak aman digeneralisir tanpa uji sendiri).
-var SC_BTC_GATE_HELPED = {brkX2_12h_closed: true, decouple_4h: true, trend_confirm_4h: true, qscalp_3m: true};
-var SC_BTC_GATE_ELAPSED = {qscalp_3m: true};  // satu2nya yg rumusnya punya parameter elapsed %
+var SC_BTC_GATE_HELPED = {brkX2_12h_closed: true, decouple_4h: true, trend_confirm_4h: true, mombreak_1h: true};
+var SC_BTC_GATE_ELAPSED = {mombreak_1h: true};  // satu2nya yg rumusnya punya parameter elapsed %
 var SC_BTC_GATE_TOOLTIP = {
     brkX2_12h_closed: 'Syarat: BTCUSDT pada HTF 1D DAN 3D, candle TERTUTUP terakhir keduanya harus hijau. Backtest 10/10/2026: dari 100 kesempatan histori, 56 tetap lolos; win-rate naik +2,5pp, rata-rata profit/trade naik +0,17pp. Bukti paling kuat & konsisten dari 7 strategi yang diuji. HANYA berlaku jalur closed-candle (T1) -- lihat Tahap 2.',
     decouple_4h: 'Syarat: BTCUSDT pada HTF 12H DAN 1D, cukup SALAH SATU candle tertutup terakhir hijau. Backtest 10/10/2026: dari 100 kesempatan, 74 tetap lolos; rata-rata profit/trade naik +0,05pp.',
     trend_confirm_4h: 'Syarat: BTCUSDT pada HTF 12H DAN 1D, candle tertutup terakhir keduanya harus hijau. Backtest 10/10/2026: dari 100 kesempatan, 39 tetap lolos; rata-rata profit/trade naik +0,14pp. Satu-satunya uji yang menunjukkan bukti untuk strategi ini.',
-    qscalp_3m: 'Syarat: tunggu candle BTCUSDT 3 menit (TF strategi ini sendiri) closed sampai persentase di kolom sebelah, DAN BTC-nya harus naik minimal 0,10% di candle itu. Backtest 10/10/2026 (elapsed=100%): dari 100 kesempatan, 36 tetap lolos; rata-rata profit/trade naik +0,06pp (kenaikan relatif terbesar dari 7 strategi, tapi datanya paling sedikit).'
+    mombreak_1h: 'Syarat: tunggu candle BTCUSDT 1 jam (TF strategi ini sendiri, diganti dari 3 menit 14/10/2026) closed sampai persentase di kolom sebelah, DAN BTC-nya harus naik minimal 0,10% di candle itu. Ambang 0,10% itu HASIL BACKTEST LAMA khusus candle 3 menit (dari 100 kesempatan, 36 tetap lolos; avg profit naik +0,06pp) -- BELUM diuji ulang utk candle 1 jam, dipertahankan sbg titik awal.'
 };
 var SC_BTC_GATE_TOOLTIP_OFF_TESTED = {
     brkX2_4h: 'Sudah diuji 10/10/2026 (2x, sempat ketemu bug lookahead lalu diperbaiki) -- hasilnya TIDAK membantu, nyaris tidak ada beda / cenderung menurunkan hasil. Tidak direkomendasikan.',
@@ -14641,7 +14645,7 @@ var SC_BTC_GATE_TOOLTIP_OFF_TESTED = {
 var SC_BTC_GATE_TOOLTIP_UNTESTED_SPECIFIC = {
     brkX2: 'Varian "legacy" (brkx2-12h) sudah tidak buka deal baru sama sekali (cuma arsip deal lama) -- tidak relevan diuji.'
 };
-var SC_BTC_GATE_TOOLTIP_UNTESTED = 'Belum pernah diuji -- backtest Gate0 10/10/2026 cuma mencakup 7 strategi (KeltnerBreak-12h, decouple_4h, dipbuy_universe, trend_confirm_4h, qscalp_3m, rvolbreak_1h, brkX2-4h). Strategi ini belum ada datanya sama sekali.';
+var SC_BTC_GATE_TOOLTIP_UNTESTED = 'Belum pernah diuji -- backtest Gate0 10/10/2026 cuma mencakup 7 strategi (KeltnerBreak-12h, decouple_4h, dipbuy_universe, trend_confirm_4h, mombreak_1h, rvolbreak_1h, brkX2-4h). Strategi ini belum ada datanya sama sekali.';
 function btcGateCellHtml(k, cfg) {
     if (SC_BTC_GATE_HELPED[k]) {
         var checked = cfg.btc_gate_enabled !== false;
@@ -14740,7 +14744,7 @@ function loadStrategyConfig() {
                     + '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-base-' + k + '" value="' + (cfg.base_usd || 8) + '" min="1" step="1" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;' + dim + '">' + (SC_BASE_NOTE[k] ? '<span style="' + dim + ';color:var(--muted);font-style:italic;font-size:10px;margin-left:4px" title="Beli langsung $100 sekali kalau ATR%>=5 DAN Volume>=2x MA20 di candle sinyal (tidak lewat Add Fund)">' + SC_BASE_NOTE[k] + '</span>' : '') + '</td>'
                     + addFundCell
                     + (SC_NO_PARTIAL[k]
-                        ? '<td style="text-align:center;padding:5px 8px"><span style="opacity:0.35;color:var(--muted);font-size:10px;font-style:italic" title="QScalp selalu jual 100% saat close (setelan ini tidak berlaku)">100% (tetap)</span></td>'
+                        ? '<td style="text-align:center;padding:5px 8px"><span style="opacity:0.35;color:var(--muted);font-size:10px;font-style:italic" title="MomentumBreak selalu jual 100% saat close (setelan ini tidak berlaku)">100% (tetap)</span></td>'
                         : '<td style="text-align:center;padding:5px 8px"><input type="number" id="sc-sellpct-' + k + '" value="' + (cfg.close_sell_pct || 100) + '" min="1" max="100" step="1" style="width:55px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px" title="Persentase koin yang DIJUAL saat close yang UNTUNG. Sisanya disimpan di Simple Earn Flexible (kalau koin tidak punya produk Earn atau sisa terlalu kecil, dijual 100%). Close rugi / hard-stop selalu 100%. 100 = jual semua (perilaku lama)."></td>')
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-cooldown-' + k + '" ' + (cooldownEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer" title="Skip re-entry pair yang sama selama masih cooldown"></td>'
                     + '<td style="text-align:center;padding:5px 8px">' + saveButton + '</td>'
@@ -15298,7 +15302,7 @@ window.addEventListener('pageshow', _forceCloseConvertModalOnLoad); // jaga2 (te
 
 if (typeof STRAT_SECONDARY !== 'undefined') {
     STRAT_SECONDARY['Hunting-4h'] = [{key: 'rsi', label: 'RSI<60'}];
-    STRAT_SECONDARY['QScalp-3m'] = [];  // semua syarat sudah di primary, tidak ada secondary
+    STRAT_SECONDARY['MomentumBreak-1h'] = [];  // semua syarat sudah di primary, tidak ada secondary
 }
 setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); }, 30000);
 </script>
@@ -15318,7 +15322,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="brkX2_crossema">CrossEMA-4h</option>
         <option value="akumulasi">Akumulasi-4h</option>
         <option value="trend_confirm_4h">TrenKonfirmasi-4h</option>
-        <option value="qscalp_3m">QScalp-3m</option>
+        <option value="mombreak_1h">MomentumBreak-1h</option>
         <option value="decouple_4h">Decouple-4h</option>
         <option value="rvolbreak_1h">RVOLBreak-1h</option>
         <option value="rvolbreak_8h">RVolBreak-8h</option>
@@ -15398,7 +15402,7 @@ function sortClosedTrades(key) {
 
 function renderClosedTradesRows() {
     var rows = closedTradesRows.slice();
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',qscalp_3m:'QScalp-3m'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h'};
     var searchBox = document.getElementById('ct-filter-search');
     var searchTerm = searchBox ? searchBox.value.trim().toUpperCase() : '';
     if (searchTerm) {
@@ -15459,7 +15463,7 @@ function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
     if (!el) return;
     if (!rows.length) { el.innerHTML = ''; return; }
-    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',qscalp_3m:'QScalp-3m'};
+    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h'};
     // 10/10/2026 (permintaan Mas Budi): KeltnerBreak-12h digabung BALIK jadi SATU kartu lagi (balik
     // seperti sebelum 09/10/2026) -- raw strategy value 'brkX2' (legacy, sebelum split 1-hari),
     // 'brkX2_closed'/'brkX2_intrabar' (era split), DAN 'brkX2_12h_closed' (key baru skrg) SEMUA
@@ -15522,7 +15526,7 @@ function renderCtEquityCurve(rows) {
 function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',qscalp_3m:'QScalp-3m'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h'};
     var headers = ['Pair','Strategi','Opened','Entry','Closed','Exit','RSI@Open','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
@@ -15675,7 +15679,7 @@ function loadClosedTrades() {
         var a_usd = parseFloat(sa.total_pnl_usd || 0);
         aEl.style.display = 'flex';
         aEl.innerHTML = [
-          '<span style="color:#e0b050">Termasuk ' + nHid + ' trade yang disembunyikan (hard-stop, manual reconcile, di-patch, strategi dipause QScalp-3m, CrossEMA-4h &amp; Reversal-8h -- tampil kalau dipilih di filter Strategi):</span>',
+          '<span style="color:#e0b050">Termasuk ' + nHid + ' trade yang disembunyikan (hard-stop, manual reconcile, di-patch, strategi dipause MomentumBreak-1h, CrossEMA-4h &amp; Reversal-8h -- tampil kalau dipilih di filter Strategi):</span>',
           '<span style="font-size:10px">data CSV -- belum termasuk close 05-19/09 yang hanya ada di log OAC (hard-stop saat itu tidak dicatat ke CSV)</span>',
           'Total: <b>' + (sa.total || 0) + '</b>',
           '<span style="color:var(--green)">W: ' + (sa.wins || 0) + '</span>',
@@ -16013,7 +16017,7 @@ var SCAN_BLOCKERS_SCHEDULE = {
     'Reversal-8h': 'Hanya scan sekali saat candle 8h baru tertutup',
     'Hunting-4h':  'Scan tiap loop (~1-3 menit), tidak dibatasi jendela waktu',
     'Akumulasi-4h':'Scan periodik (~tiap beberapa menit)',
-    'QScalp-3m':   'Scan tiap ~60 detik (TF 3m), tidak dibatasi jendela waktu'
+    'MomentumBreak-1h':   'Scan tiap ~5 menit (TF 1h), tidak dibatasi jendela waktu'
 };
 function loadScanBlockers() {
     fetch('/api/scan_blockers').then(function(r){ return r.json(); }).then(function(d) {
@@ -21034,7 +21038,7 @@ def _akuma_simulate_trade(a: dict, i: int, sl_price: float,
 def run_akuma_failsafe_backtest():
     """Jalan di thread terpisah (dipicu /api/run_akuma_failsafe_backtest). Tidak menyentuh
     trading live. FETCH LANGSUNG dari Binance TANPA disk cache (pelajaran dari insiden disk
-    QScalp ronde 1) -- cache 4h /data/stoch_bt_cache/ sudah dihapus & diarsipkan ke Drive
+    MomentumBreak ronde 1) -- cache 4h /data/stoch_bt_cache/ sudah dihapus & diarsipkan ke Drive
     12/09/2026, jangan dibangun ulang."""
     global _akuma_fs_status
     with _akuma_fs_lock:
@@ -21149,11 +21153,11 @@ _akuma_es_lock = threading.Lock()
 _akuma_es_status = {"running": False, "started_at": None, "progress": "", "done": False,
                      "results": None, "error": None}
 
-# RONDE 2 (12/09/2026, permintaan Mas Budi -- pola sama spt QScalp-3m ronde 3): ronde
+# RONDE 2 (12/09/2026, permintaan Mas Budi -- pola sama spt MomentumBreak-1h ronde 3): ronde
 # pertama di atas nunjukkin 3 arah menang SENDIRIAN, semua arahnya "longgarkan" --
 # rsimax65 (PF=0.75, n=2615 terbesar+terbaik), reentry25 (PF=0.72, n=2863 terbesar dari
 # semua kombo), volspike1.2 (PF=0.69, n=2890). Ronde ini uji GABUNGAN ketiganya (pasangan
-# + triple penuh) utk lihat apakah efeknya bertumpuk (spt QScalp) atau saling meniadakan.
+# + triple penuh) utk lihat apakah efeknya bertumpuk (spt MomentumBreak) atau saling meniadakan.
 # baseline = konstanta AKUM_A_* LIVE saat ini (VOL_SPIKE_MULT=1.8, RSI_MAX_ENTRY=55,
 # REENTRY_CANDLES=15). RSI_MIN/OBV_SLOPE/TOUCH_BUFFER tetap baseline (40/3/0.004) di semua
 # baris -- ronde 1 sudah buktikan ketiganya tidak membantu banyak, tidak diikutkan di sini.
@@ -21332,7 +21336,7 @@ def run_akuma_entry_sweep_backtest():
 # exit DIKUNCI ke 1 varian standar (atr_2x_4x, reuse _stoch_bt_simulate/STOCH_BT_EXIT_VARIANTS
 # yg sudah ada) supaya perbandingan murni soal kualitas sinyal ENTRY, bukan exit. TAHAP 2
 # (menyusul) gabungkan varian yg MENANG di tahap ini jadi kombinasi kecil (pola sama spt
-# QScalp-3m ronde 3, menggabung 2 arah yg terbukti membantu sendiri-sendiri).
+# MomentumBreak-1h ronde 3, menggabung 2 arah yg terbukti membantu sendiri-sendiri).
 # Universe: 474 pair (permintaan Mas Budi -- bukan dibatasi likuid, murni soal kombinasi
 # indikator bukan soal eksekusi cepat). Fetch langsung (no disk cache), sama pola dgn backtest
 # lain sesi ini.
@@ -21837,7 +21841,7 @@ def run_reversal_ath_backtest():
             _rev_ath_status['error'] = str(e)
 
 
-# ===================== ONE-OFF: QScalp-3m -- riset strategi scalp baru (12/09/2026) =====================
+# ===================== ONE-OFF: MomentumBreak-1h -- riset strategi scalp baru (12/09/2026) =====================
 # Strategi BARU (belum ada di live), didiskusikan dgn Mas Budi: tangkap pump cepat (detik-menit)
 # yg selesai sebelum strategi TF 4h/8h/12h sempat bereaksi. Keputusan desain yg sudah disepakati:
 #   - TF 3 menit, full rule-based (TANPA AI -- delay AI bisa bikin kelewat entry/exit yg tepat)
@@ -21846,21 +21850,21 @@ def run_reversal_ath_backtest():
 # Scope backtest INI (disepakati Mas Budi, beda dari 4 strategi lain krn data 3m 80x lebih besar
 # dari 4h utk rentang sama): 90 hari terakhir (bukan 2022-sekarang -- pola pump cepat sangat
 # dipengaruhi kondisi likuiditas/market TERKINI, histori lama kurang relevan + storage tidak
-# akan cukup), pair PALING LIKUID saja (top QSCALP_UNIVERSE_SIZE by volume 24h, bukan semua 474).
-_qscalp_bt_lock = threading.Lock()
-_qscalp_bt_status = {"running": False, "started_at": None, "progress": "", "done": False,
+# akan cukup), pair PALING LIKUID saja (top MOMBREAK_UNIVERSE_SIZE by volume 24h, bukan semua 474).
+_mombreak_bt_lock = threading.Lock()
+_mombreak_bt_status = {"running": False, "started_at": None, "progress": "", "done": False,
                       "results": None, "error": None}
 
-QSCALP_CACHE_DIR = os.path.join(DATA_DIR, "qscalp_3m_cache")
-QSCALP_LOOKBACK_DAYS = 90
-QSCALP_UNIVERSE_SIZE = 120
+MOMBREAK_CACHE_DIR = os.path.join(DATA_DIR, "mombreak_1h_cache")
+MOMBREAK_LOOKBACK_DAYS = 90
+MOMBREAK_UNIVERSE_SIZE = 120
 
 # ── Ronde 1 (12/09/2026): semua 5 varian exit PF<1 (0.66-0.78), avg negatif semua -- exit
 # TERNYATA BUKAN masalahnya (kelima varian sama-sama jelek, jarak PF cuma 0.66-0.78). Ronde 2:
 # exit DIKUNCI ke varian terbaik ronde 1 (C: arm0.8/trail0.3/stop2.0/timeout15), sweep ENTRY.
-QSCALP_FIXED_EXIT = (0.8, 0.3, 2.0, 15)   # arm%, trail%, stop%, timeout candle
+MOMBREAK_FIXED_EXIT = (0.8, 0.3, 2.0, 15)   # arm%, trail%, stop%, timeout candle
 
-QSCALP_EMA_FAST = 9
+MOMBREAK_EMA_FAST = 9
 
 # baseline ronde 1 = (vol_mult=4.0, momentum_pct=1.75, breakout_lookback=15, anti_fomo_pct=2.0).
 # Ronde 2 (single-dimensi, 1 parameter diubah tiap kombo) hasilnya: breakout_lookback nyaris
@@ -21872,7 +21876,7 @@ QSCALP_EMA_FAST = 9
 # membantu (momentum lebih ketat + anti-FOMO lebih longgar), plus 1 titik pengisi celah kurva
 # momentum (2.0%, belum pernah dites sendirian) dan varian vol_mult dilonggarkan bareng.
 # Target: cari kombo dgn PF>1.3 DAN n>300 sekaligus (belum ada yg begitu di ronde 1/2).
-QSCALP_ENTRY_SWEEP = [
+MOMBREAK_ENTRY_SWEEP = [
     ("baseline",       4.0, 1.75, 15, 2.0),   # pembanding, sama spt ronde 1/2
     ("mom2.0_alone",   4.0, 2.0,  15, 2.0),   # isi celah kurva momentum (1.75->2.5 belum dites)
     ("combo_A",        4.0, 2.0,  15, 3.0),   # mom lebih ketat + fomo dilonggarkan sedang
@@ -21886,9 +21890,9 @@ QSCALP_ENTRY_SWEEP = [
 ]
 
 
-def _qscalp_fetch_history(symbol: str, start_ms: int, end_ms: int):
+def _mombreak_fetch_history(symbol: str, start_ms: int, end_ms: int):
     """Paginate /api/v3/klines 3m -- volume data jauh lebih besar dari 4h (80x), jadi
-    dibatasi QSCALP_LOOKBACK_DAYS (90 hari), bukan 2022-sekarang spt cache 4h."""
+    dibatasi MOMBREAK_LOOKBACK_DAYS (90 hari), bukan 2022-sekarang spt cache 4h."""
     out = []
     cursor = start_ms
     while cursor < end_ms:
@@ -21925,19 +21929,19 @@ def _qscalp_fetch_history(symbol: str, start_ms: int, end_ms: int):
     return df
 
 
-def _qscalp_fetch_only(symbol: str, start_ms: int, end_ms: int):
+def _mombreak_fetch_only(symbol: str, start_ms: int, end_ms: int):
     """Fetch LANGSUNG, TANPA cache disk -- pelajaran dari ronde 1 (cache 3m/90hari/120pair
     bikin volume Railway penuh ~99% di tengah proses). Tiap symbol cuma di-fetch SEKALI per
     run (dipakai bareng utk semua kombinasi entry-sweep dari df yg sama), jadi biaya fetch
     ulang per-run masih wajar tanpa perlu simpan permanen ke disk."""
-    return _qscalp_fetch_history(symbol, start_ms, end_ms)
+    return _mombreak_fetch_history(symbol, start_ms, end_ms)
 
 
-def _qscalp_signals_for_symbol(df: pd.DataFrame, vol_mult: float, momentum_pct_min: float,
+def _mombreak_signals_for_symbol(df: pd.DataFrame, vol_mult: float, momentum_pct_min: float,
                                 breakout_lookback: int, anti_fomo_pct: float):
-    """Scan sinyal entry QScalp-3m (volume surge + momentum + breakout + anti-FOMO EMA9 band),
+    """Scan sinyal entry MomentumBreak-1h (volume surge + momentum + breakout + anti-FOMO EMA9 band),
     PARAMETERIZED (ronde 2, sweep entry) -- baseline ronde 1 pakai default fungsi ini via
-    QSCALP_ENTRY_SWEEP. Return list of dict {i} -- index candle konfirmasi sinyal."""
+    MOMBREAK_ENTRY_SWEEP. Return list of dict {i} -- index candle konfirmasi sinyal."""
     n = len(df)
     if n < 60:
         return []
@@ -21947,9 +21951,9 @@ def _qscalp_signals_for_symbol(df: pd.DataFrame, vol_mult: float, momentum_pct_m
     vol = df['vol'].values.astype(float)
 
     vol_ma20 = pd.Series(vol).rolling(20).mean().values
-    ema9 = pd.Series(close).ewm(span=QSCALP_EMA_FAST, adjust=False).mean().values
+    ema9 = pd.Series(close).ewm(span=MOMBREAK_EMA_FAST, adjust=False).mean().values
     hh_prior = pd.Series(high).rolling(breakout_lookback).max().shift(1).values
-    timeout_buf = QSCALP_FIXED_EXIT[3]
+    timeout_buf = MOMBREAK_FIXED_EXIT[3]
 
     out = []
     i = 20
@@ -21977,7 +21981,7 @@ def _qscalp_signals_for_symbol(df: pd.DataFrame, vol_mult: float, momentum_pct_m
     return out
 
 
-def _qscalp_simulate_trade(df: pd.DataFrame, i: int, arm_pct: float, trail_pct: float,
+def _mombreak_simulate_trade(df: pd.DataFrame, i: int, arm_pct: float, trail_pct: float,
                             stop_pct: float, timeout_candles: int):
     """Entry = open candle i+1 (no-lookahead). Exit: hard stop tetap dari entry, trailing
     setelah arm, timeout."""
@@ -22013,14 +22017,14 @@ def _qscalp_simulate_trade(df: pd.DataFrame, i: int, arm_pct: float, trail_pct: 
     return (exit_price / entry - 1) * 100 - 0.2
 
 
-def run_qscalp_backtest():
-    """Jalan di thread terpisah (dipicu /api/run_qscalp_backtest). Tidak menyentuh trading
+def run_mombreak_backtest():
+    """Jalan di thread terpisah (dipicu /api/run_mombreak_backtest). Tidak menyentuh trading
     live -- cuma baca data historis Binance (3m, 90 hari, pair likuid) + simulasi lokal."""
-    global _qscalp_bt_status
-    with _qscalp_bt_lock:
-        if _qscalp_bt_status['running']:
+    global _mombreak_bt_status
+    with _mombreak_bt_lock:
+        if _mombreak_bt_status['running']:
             return
-        _qscalp_bt_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+        _mombreak_bt_status = {"running": True, "started_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
                               "progress": "0/0", "done": False, "results": None, "error": None}
     try:
         pairs_all = get_usdt_spot_pairs()
@@ -22030,38 +22034,38 @@ def run_qscalp_backtest():
             try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
             except: pass
         ranked = sorted([p for p in pairs_all if p in volmap], key=lambda s: volmap[s], reverse=True)
-        pairs = ranked[:QSCALP_UNIVERSE_SIZE]
+        pairs = ranked[:MOMBREAK_UNIVERSE_SIZE]
         n_pairs = len(pairs)
         end_ms = int(time.time() * 1000)
-        start_ms = end_ms - QSCALP_LOOKBACK_DAYS * 24 * 3600 * 1000
-        log(f"[QSCALP-BT] Mulai backtest QScalp-3m, {n_pairs} pair TERLIKUID, "
-            f"{QSCALP_LOOKBACK_DAYS} hari terakhir, TF 3m")
+        start_ms = end_ms - MOMBREAK_LOOKBACK_DAYS * 24 * 3600 * 1000
+        log(f"[MOMBREAK-BT] Mulai backtest MomentumBreak-1h, {n_pairs} pair TERLIKUID, "
+            f"{MOMBREAK_LOOKBACK_DAYS} hari terakhir, TF 3m")
 
-        arm, trail, stop, timeout = QSCALP_FIXED_EXIT
-        combo_stats = {label: {} for label, *_ in QSCALP_ENTRY_SWEEP}
+        arm, trail, stop, timeout = MOMBREAK_FIXED_EXIT
+        combo_stats = {label: {} for label, *_ in MOMBREAK_ENTRY_SWEEP}
 
         for idx, sym in enumerate(pairs):
-            with _qscalp_bt_lock:
-                _qscalp_bt_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
+            with _mombreak_bt_lock:
+                _mombreak_bt_status['progress'] = f"{idx+1}/{n_pairs} ({sym})"
             try:
-                df = _qscalp_fetch_only(sym, start_ms, end_ms)
+                df = _mombreak_fetch_only(sym, start_ms, end_ms)
                 if df is None or len(df) < 200:
                     continue
-                for label, vol_mult, mom_pct, hh_lb, fomo_pct in QSCALP_ENTRY_SWEEP:
-                    signals = _qscalp_signals_for_symbol(df, vol_mult, mom_pct, hh_lb, fomo_pct)
+                for label, vol_mult, mom_pct, hh_lb, fomo_pct in MOMBREAK_ENTRY_SWEEP:
+                    signals = _mombreak_signals_for_symbol(df, vol_mult, mom_pct, hh_lb, fomo_pct)
                     if not signals:
                         continue
                     trades = []
                     for sig in signals:
-                        res = _qscalp_simulate_trade(df, sig['i'], arm, trail, stop, timeout)
+                        res = _mombreak_simulate_trade(df, sig['i'], arm, trail, stop, timeout)
                         if res is not None:
                             trades.append(res)
                     if trades:
                         combo_stats[label][sym] = trades
             except Exception as e:
-                log(f"WARN [QSCALP-BT] {sym}: {e}")
+                log(f"WARN [MOMBREAK-BT] {sym}: {e}")
             if (idx + 1) % 20 == 0:
-                log(f"[QSCALP-BT] progress {idx+1}/{n_pairs}")
+                log(f"[MOMBREAK-BT] progress {idx+1}/{n_pairs}")
 
         rows = []
         for label, per_symbol in combo_stats.items():
@@ -22080,8 +22084,8 @@ def run_qscalp_backtest():
                          'profit_factor': pf, 'avg_pct': avg})
         rows.sort(key=lambda r: r['profit_factor'], reverse=True)
 
-        msg_lines = ["📊 QScalp-3m Ronde 3 -- gabungan momentum lebih ketat + anti-FOMO lebih longgar",
-                     f"Universe: {n_pairs} pair TERLIKUID | {QSCALP_LOOKBACK_DAYS} hari terakhir | TF 3m",
+        msg_lines = ["📊 MomentumBreak-1h Ronde 3 -- gabungan momentum lebih ketat + anti-FOMO lebih longgar",
+                     f"Universe: {n_pairs} pair TERLIKUID | {MOMBREAK_LOOKBACK_DAYS} hari terakhir | TF 3m",
                      f"Exit tetap: arm{arm}%/trail{trail}%/stop{stop}%/timeout{timeout}c "
                      f"(terbaik ronde 1: PF=0.78)",
                      "Ronde 2: momentum2.5 sendiri PF=1.77 (n kecil), fomo5.0 sendiri PF=1.06 (n besar)",
@@ -22092,23 +22096,23 @@ def run_qscalp_backtest():
                 f"PF={r['profit_factor']:.2f} avg={r['avg_pct']:+.2f}%"
             )
         full_report = "\n".join(msg_lines)
-        log(f"[QSCALP-BT] SELESAI.\n{full_report}")
+        log(f"[MOMBREAK-BT] SELESAI.\n{full_report}")
         send_telegram(full_report, parse_mode=None)
 
-        with _qscalp_bt_lock:
-            _qscalp_bt_status['running'] = False
-            _qscalp_bt_status['done'] = True
-            _qscalp_bt_status['results'] = rows
-            _qscalp_bt_status['progress'] = 'done'
+        with _mombreak_bt_lock:
+            _mombreak_bt_status['running'] = False
+            _mombreak_bt_status['done'] = True
+            _mombreak_bt_status['results'] = rows
+            _mombreak_bt_status['progress'] = 'done'
     except Exception as e:
-        log(f"ERROR [QSCALP-BT] fatal: {e}")
-        with _qscalp_bt_lock:
-            _qscalp_bt_status['running'] = False
-            _qscalp_bt_status['error'] = str(e)
+        log(f"ERROR [MOMBREAK-BT] fatal: {e}")
+        with _mombreak_bt_lock:
+            _mombreak_bt_status['running'] = False
+            _mombreak_bt_status['error'] = str(e)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STRATEGI #8 QScalp-3m — LIVE (12/09/2026, setelah 3 ronde backtest)
+# STRATEGI #8 MomentumBreak-1h — LIVE (12/09/2026, setelah 3 ronde backtest)
 # Full rule-based, TANPA AI (desain awal, permintaan Mas Budi -- pump 3m selesai dalam
 # hitungan menit, latency AI bisa bikin kelewat entry/exit). Slot 2 standalone (tidak
 # mengurangi slot strategi lain, permintaan eksplisit). Forward-test awal target 12 deal
@@ -22125,13 +22129,13 @@ def run_qscalp_backtest():
 #   Combo H: vol_mult=2.5 mom=2.5% hh=15 fomo=5.0%  (PF=1.37 n=1371, 98 pair -- n terbesar)
 # Exit = varian C ronde 1 (arm/trail/stop FLAT %, bukan ATR-tiered spt strategi lain --
 # exit ATR-tiered TIDAK pernah dites utk TF 3m, jangan dicampur tanpa backtest baru).
-QSCALP_LIVE_VOL_MULT          = 4.0   # Combo E (19/09/2026, backtest ronde 3 PF terbaik 1.41)
-QSCALP_LIVE_MOMENTUM_PCT      = 2.5   # Combo E (sama di G/F/H -- ini parameter kunci)
-QSCALP_LIVE_BREAKOUT_LOOKBACK = 15    # Combo E (sama di semua kombo pemenang)
-QSCALP_LIVE_ANTI_FOMO_PCT     = 3.0   # Combo E (lebih ketat dari G=5.0, anti-FOMO)
-QSCALP_LIVE_ARM_PCT           = 0.8   # varian C ronde 1 (arm%)
-QSCALP_LIVE_TRAIL_PCT         = 0.3   # varian C ronde 1 (trail%)
-QSCALP_LIVE_STOP_PCT          = 1.0   # 14/10/2026: diperketat dari 2.0 -- backtest data 3m
+MOMBREAK_LIVE_VOL_MULT          = 4.0   # Combo E (19/09/2026, backtest ronde 3 PF terbaik 1.41)
+MOMBREAK_LIVE_MOMENTUM_PCT      = 2.5   # Combo E (sama di G/F/H -- ini parameter kunci)
+MOMBREAK_LIVE_BREAKOUT_LOOKBACK = 15    # Combo E (sama di semua kombo pemenang)
+MOMBREAK_LIVE_ANTI_FOMO_PCT     = 3.0   # Combo E (lebih ketat dari G=5.0, anti-FOMO)
+MOMBREAK_LIVE_ARM_PCT           = 0.8   # varian C ronde 1 (arm%)
+MOMBREAK_LIVE_TRAIL_PCT         = 0.3   # varian C ronde 1 (trail%)
+MOMBREAK_LIVE_STOP_PCT          = 1.0   # 14/10/2026: diperketat dari 2.0 -- backtest data 3m
                                        # REAL 12 bulan (3.798 sinyal, 175 pair, replikasi exit
                                        # persis): 1.0% total profit +10.13% vs 2.0%, avg/trade
                                        # +0.253% vs +0.230%, WR turun 66.7%->57.7% tapi kerugian
@@ -22140,35 +22144,38 @@ QSCALP_LIVE_STOP_PCT          = 1.0   # 14/10/2026: diperketat dari 2.0 -- backt
                                        # berbalik rugi (avg -1.20%, bukan rugi besar). RSI-based
                                        # entry-block DITOLAK (data nunjuk net rugi di semua
                                        # ambang) -- exit lebih ketat yg terbukti membantu, bukan
-                                       # blokir entry. Lihat project_qscalp_hardstop_tighten.
-QSCALP_LIVE_TIMEOUT_CANDLES   = 15    # varian C ronde 1 (15 candle x 3m = 45 menit)
-QSCALP_SCAN_INTERVAL          = 60    # detik -- lebih rapat dari strategi 4h/8h krn TF 3m
-QSCALP_FWDTEST_TARGET         = 12    # target forward-test awal (permintaan Mas Budi 12/09/2026)
+                                       # blokir entry. Lihat project_mombreak_hardstop_tighten.
+MOMBREAK_LIVE_TIMEOUT_CANDLES   = 15    # varian C ronde 1 (15 candle x 1h = 15 jam, naik dari 3m=45 menit
+                                         # 14/10/2026 saat TF diganti -- jumlah candle TETAP sama,
+                                         # cuma durasinya ikut TF baru, sama pola spt sweep TF)
+MOMBREAK_SCAN_INTERVAL          = 300   # detik (5 menit) -- 14/10/2026: dinaikkan dari 60s (bekas TF
+                                         # 3m) krn TF sekarang 1 jam, scan tiap 60s jadi boros/percuma
+MOMBREAK_FWDTEST_TARGET         = 12    # target forward-test awal (permintaan Mas Budi 12/09/2026)
 # 06/10/2026 (permintaan Mas Budi): lapisan TERTIARY overbought -- setelah primary lolos, sinyal DIBLOKIR
-# hanya kalau RSI(14) 3m di atas QSCALP_TERTIARY_RSI_MAX DAN BB %B di atas QSCALP_TERTIARY_BB_MAX
+# hanya kalau RSI(14) 3m di atas MOMBREAK_TERTIARY_RSI_MAX DAN BB %B di atas MOMBREAK_TERTIARY_BB_MAX
 # sekaligus. Dua syarat sekaligus dipilih supaya deal untung yang RSI-nya 70-90 tetap lolos.
-# Mematikan lapisan ini: QSCALP_TERTIARY_ENABLED = False. Nilai ambang belum diuji backtest, jadi
-# perlu ditinjau lagi setelah ada data cukup (lihat memory reminder_qscalp_tertiary_check).
-QSCALP_TERTIARY_ENABLED       = True
-QSCALP_TERTIARY_RSI_MAX       = 90.0
-QSCALP_TERTIARY_BB_MAX        = 1.0
+# Mematikan lapisan ini: MOMBREAK_TERTIARY_ENABLED = False. Nilai ambang belum diuji backtest, jadi
+# perlu ditinjau lagi setelah ada data cukup (lihat memory reminder_mombreak_tertiary_check).
+MOMBREAK_TERTIARY_ENABLED       = True
+MOMBREAK_TERTIARY_RSI_MAX       = 90.0
+MOMBREAK_TERTIARY_BB_MAX        = 1.0
 
-_qscalp_lock = threading.Lock()
-_qscalp_signals: list = []       # untuk dashboard (kandidat lolos scan terakhir)
-_qscalp_scan_ts = "-"
-_qscalp_last_candle_ts: dict = {}   # sym -> candle open ts (ms) sudah dientry, cegah dobel entry di candle yg sama
+_mombreak_lock = threading.Lock()
+_mombreak_signals: list = []       # untuk dashboard (kandidat lolos scan terakhir)
+_mombreak_scan_ts = "-"
+_mombreak_last_candle_ts: dict = {}   # sym -> candle open ts (ms) sudah dientry, cegah dobel entry di candle yg sama
 
 
-def active_deal_count_qscalp() -> int:
+def active_deal_count_mombreak() -> int:
     with active_deals_lock:
-        return sum(1 for d in active_deals.values() if d.get("strategy") == "qscalp_3m")
+        return sum(1 for d in active_deals.values() if d.get("strategy") == "mombreak_1h")
 
 
-def check_qscalp_signal(df: pd.DataFrame, symbol: str):
-    """Cek sinyal QScalp-3m LIVE di candle TERAKHIR df (sama pola dgn check_hunting_strategy --
+def check_mombreak_signal(df: pd.DataFrame, symbol: str):
+    """Cek sinyal MomentumBreak-1h LIVE di candle TERAKHIR df (sama pola dgn check_hunting_strategy --
     df['-1'] dipakai sbg 'saat ini', konsisten dgn strategi 4h lain di codebase ini).
     Return dict ringkas kalau lolos, None kalau tidak. Replikasi PERSIS
-    _qscalp_signals_for_symbol() (backtest) tapi cuma cek 1 titik (candle terakhir),
+    _mombreak_signals_for_symbol() (backtest) tapi cuma cek 1 titik (candle terakhir),
     bukan scan seluruh histori."""
     n = len(df)
     if n < 40:
@@ -22181,22 +22188,22 @@ def check_qscalp_signal(df: pd.DataFrame, symbol: str):
 
     vol_ma20 = pd.Series(vol).rolling(20).mean().values
     vm = vol_ma20[i]
-    if pd.isna(vm) or vm <= 0 or vol[i] < QSCALP_LIVE_VOL_MULT * vm:
+    if pd.isna(vm) or vm <= 0 or vol[i] < MOMBREAK_LIVE_VOL_MULT * vm:
         return None
     if close[i] <= open_[i]:
         return None
     if i < 2 or close[i-2] <= 0:
         return None
     momentum_pct = (close[i] / close[i-2] - 1) * 100
-    if momentum_pct < QSCALP_LIVE_MOMENTUM_PCT:
+    if momentum_pct < MOMBREAK_LIVE_MOMENTUM_PCT:
         return None
-    hh_prior = pd.Series(high).rolling(QSCALP_LIVE_BREAKOUT_LOOKBACK).max().shift(1).values
+    hh_prior = pd.Series(high).rolling(MOMBREAK_LIVE_BREAKOUT_LOOKBACK).max().shift(1).values
     hh = hh_prior[i]
     if pd.isna(hh) or close[i] <= hh:
         return None
-    ema9 = pd.Series(close).ewm(span=QSCALP_EMA_FAST, adjust=False).mean().values
+    ema9 = pd.Series(close).ewm(span=MOMBREAK_EMA_FAST, adjust=False).mean().values
     e9 = ema9[i]
-    if pd.isna(e9) or e9 <= 0 or close[i] > e9 * (1 + QSCALP_LIVE_ANTI_FOMO_PCT / 100):
+    if pd.isna(e9) or e9 <= 0 or close[i] > e9 * (1 + MOMBREAK_LIVE_ANTI_FOMO_PCT / 100):
         return None
 
     try:
@@ -22207,9 +22214,9 @@ def check_qscalp_signal(df: pd.DataFrame, symbol: str):
     except Exception:
         atr_pct = 1.0
 
-    # 21/09/2026 (temuan Mas Budi: kolom RSI@Open QScalp selalu kosong di web History & notif Telegram):
-    # jalur QScalp tidak pernah menghitung/menyimpan RSI -- sinyalnya rule-based murni (vol/momentum/
-    # breakout/EMA9), jadi RSI(14) TF 3m cuma dihitung utk DICATAT (bukan syarat entry).
+    # 21/09/2026 (temuan Mas Budi: kolom RSI@Open MomentumBreak selalu kosong di web History & notif Telegram):
+    # jalur MomentumBreak tidak pernah menghitung/menyimpan RSI -- sinyalnya rule-based murni (vol/momentum/
+    # breakout/EMA9), jadi RSI(14) TF-nya sendiri (1h, dulu 3m) cuma dihitung utk DICATAT (bukan syarat entry).
     rsi_now = None
     try:
         _rs = ta.rsi(pd.Series(df['close']), length=14).iloc[-1]
@@ -22217,7 +22224,7 @@ def check_qscalp_signal(df: pd.DataFrame, symbol: str):
     except Exception:
         rsi_now = None
 
-    # 06/10/2026: BB %B(20,2) 3m di candle yang sama (dipakai lapisan TERTIARY, lihat QSCALP_TERTIARY_*).
+    # 06/10/2026: BB %B(20,2) di candle TF-nya sendiri (1h, dulu 3m) (dipakai lapisan TERTIARY, lihat MOMBREAK_TERTIARY_*).
     bb_pct = None
     try:
         _cl = pd.Series(df['close']).astype(float)
@@ -22232,8 +22239,8 @@ def check_qscalp_signal(df: pd.DataFrame, symbol: str):
 
     # Lapisan TERTIARY: blokir hanya kalau RSI DAN BB %B sama-sama overbought (lihat komentar di konstanta).
     tertiary_block = bool(
-        QSCALP_TERTIARY_ENABLED and rsi_now is not None and bb_pct is not None
-        and rsi_now > QSCALP_TERTIARY_RSI_MAX and bb_pct > QSCALP_TERTIARY_BB_MAX
+        MOMBREAK_TERTIARY_ENABLED and rsi_now is not None and bb_pct is not None
+        and rsi_now > MOMBREAK_TERTIARY_RSI_MAX and bb_pct > MOMBREAK_TERTIARY_BB_MAX
     )
 
     return {'symbol': symbol, 'close': float(close[i]), 'momentum_pct': float(momentum_pct),
@@ -22241,27 +22248,27 @@ def check_qscalp_signal(df: pd.DataFrame, symbol: str):
             'tertiary_block': tertiary_block, 'candle_ot': int(df['ot'].iloc[i])}
 
 
-def open_qscalp_if_signal(sig: dict) -> bool:
-    """Eksekusi open long QScalp-3m. Dipanggil segera setelah check_qscalp_signal() lolos
+def open_mombreak_if_signal(sig: dict) -> bool:
+    """Eksekusi open long MomentumBreak-1h. Dipanggil segera setelah check_mombreak_signal() lolos
     (tidak ada babak-2/AI-batch spt hunting -- desain full rule-based, langsung eksekusi)."""
     symbol = sig['symbol']
     with active_deals_lock:
         if symbol in active_deals:
             return False
-    if active_deal_count_qscalp() >= QSCALP_MAX_DEALS:
+    if active_deal_count_mombreak() >= MOMBREAK_MAX_DEALS:
         return False
-    if is_cooldown_enabled('qscalp_3m') and cooldown_remaining(symbol) > 0:
+    if is_cooldown_enabled('mombreak_1h') and cooldown_remaining(symbol) > 0:
         return False
     candle_ot = sig['candle_ot']
-    if _qscalp_last_candle_ts.get(symbol) == candle_ot:
+    if _mombreak_last_candle_ts.get(symbol) == candle_ot:
         return False  # sudah dientry di candle ini, hindari dobel-entry antar siklus scan
 
     close = sig['close']; atrp = sig['atr_pct']
-    ok, target_usd, add_usd = open_deal_with_sizing(symbol, 1, strategy="qscalp_3m")
+    ok, target_usd, add_usd = open_deal_with_sizing(symbol, 1, strategy="mombreak_1h")
     if not ok:
-        log(f"[QSCALP] {symbol} open ditolak Binance")
+        log(f"[MOMBREAK] {symbol} open ditolak Binance")
         return False
-    _qscalp_last_candle_ts[symbol] = candle_ot
+    _mombreak_last_candle_ts[symbol] = candle_ot
 
     try:
         ticker_now = _binance_get("/api/v3/ticker/price", {"symbol": symbol})
@@ -22272,7 +22279,7 @@ def open_qscalp_if_signal(sig: dict) -> bool:
     candle_open_ms = candle_ot
 
     add_to_active_deals(symbol, {
-        "strategy":         "qscalp_3m",
+        "strategy":         "mombreak_1h",
         "entry_price":      entry_price,
         "signal_price":     close,
         "peak":             entry_price,
@@ -22284,13 +22291,13 @@ def open_qscalp_if_signal(sig: dict) -> bool:
         "opened_candle_ts": int(candle_open_ms),
         "opened_at_wib":    now_wib().strftime('%d/%m/%Y %H:%M:%S'),
         "trailing_armed":   False,
-        "tf":               "3m",
+        "tf":               "1h",
         "momentum_pct_open": sig['momentum_pct'],
         "vol_ratio_open":    sig['vol_ratio'],
-        "rsi_open":          sig.get('rsi'),   # RSI(14) 3m saat sinyal (21/09/2026) -> notif CLOSE & CSV
+        "rsi_open":          sig.get('rsi'),   # RSI(14) TF-nya sendiri saat sinyal (21/09/2026) -> notif CLOSE & CSV
     })
     # ai_call=False permanen (bukan cuma default dashboard) -- gate langsung di thread2_monitor
-    # via `strat == 'qscalp_3m'`, tapi override ini dipasang juga sbg lapis kedua eksplisit.
+    # via `strat == 'mombreak_1h'`, tapi override ini dipasang juga sbg lapis kedua eksplisit.
     try:
         _ov = load_deal_overrides()
         _ov.setdefault(symbol, {})['ai_call'] = False
@@ -22299,17 +22306,17 @@ def open_qscalp_if_signal(sig: dict) -> bool:
         pass
 
     msg = (
-        f"⚡ QScalp-3m | OPEN LONG\n"
+        f"⚡ MomentumBreak-1h | OPEN LONG\n"
         f"{now_wib().strftime('%d/%m/%Y %H:%M:%S')} WIB\n"
         f"Pair       : {to_display_pair(symbol)}\n"
         f"Entry pasar: {_fmt_price(entry_price)}  |  Sinyal: {_fmt_price(close)}\n"
         f"Slippage   : {slip_pct:+.2f}%\n"
         f"Momentum 2c: {sig['momentum_pct']:.2f}%  |  Vol: {sig['vol_ratio']:.1f}xMA20\n"
-        + (f"RSI(14,3m) : {sig['rsi']:.1f}\n" if sig.get('rsi') is not None else "") +
-        f"Arm {QSCALP_LIVE_ARM_PCT}% / Trail {QSCALP_LIVE_TRAIL_PCT}% / Stop {QSCALP_LIVE_STOP_PCT}% / "
-        f"Timeout {QSCALP_LIVE_TIMEOUT_CANDLES}c(3m)\n"
+        + (f"RSI(14,1h) : {sig['rsi']:.1f}\n" if sig.get('rsi') is not None else "") +
+        f"Arm {MOMBREAK_LIVE_ARM_PCT}% / Trail {MOMBREAK_LIVE_TRAIL_PCT}% / Stop {MOMBREAK_LIVE_STOP_PCT}% / "
+        f"Timeout {MOMBREAK_LIVE_TIMEOUT_CANDLES}c(1h)\n"
         f"Modal: ${target_usd:.0f}\n"
-        f"Slot qscalp: {active_deal_count_qscalp()}/{QSCALP_MAX_DEALS}"
+        f"Slot mombreak: {active_deal_count_mombreak()}/{MOMBREAK_MAX_DEALS}"
     )
     send_telegram(msg, parse_mode=None)
     csv_log_open({
@@ -22319,28 +22326,28 @@ def open_qscalp_if_signal(sig: dict) -> bool:
         'entry_price':    _fmt_price(entry_price),
         'slip_pct':       f"{slip_pct:+.2f}",
         'atr_pct':        f"{atrp:.2f}",
-        'trail_dist_pct': QSCALP_LIVE_TRAIL_PCT,
+        'trail_dist_pct': MOMBREAK_LIVE_TRAIL_PCT,
         'base_usd':       target_usd,
         'score':          1,
         'rsi_open':       f"{sig['rsi']:.1f}" if sig.get('rsi') is not None else '',
-        'strategy':       'qscalp_3m',
+        'strategy':       'mombreak_1h',
     })
     return True
 
 
-def thread_qscalp_scan():
-    """Scan QScalp-3m: universe = top QSCALP_UNIVERSE_SIZE pair TERLIKUID (sama spt backtest),
+def thread_mombreak_scan():
+    """Scan MomentumBreak-1h: universe = top MOMBREAK_UNIVERSE_SIZE pair TERLIKUID (sama spt backtest),
     cek candle 3m TERAKHIR tiap pair. Full rule-based, TANPA AI -- langsung eksekusi begitu
     lolos (tidak ada babak-2 AI-batch)."""
-    global _qscalp_scan_ts
-    if not is_strategy_enabled('qscalp_3m'):
+    global _mombreak_scan_ts
+    if not is_strategy_enabled('mombreak_1h'):
         return
-    # Gate0 Tahap 2 (10/10/2026): syarat candle 3m BTCUSDT (TF native, bukan HTF) sudah
-    # naik >=0,10% -- default nunggu candle-nya benar2 closed (elapsed=100%, lihat qscalp_btc_gate_ok()).
-    _qs3m_gate_ok = qscalp_btc_gate_ok()
-    _notify_btc_gate_transition('qscalp_3m', 'QScalp-3m', _qs3m_gate_ok, f'candle 3 menit BTCUSDT terakhir naik >= {QSCALP_BTC_GATE_GENDUT_PCT}%')
+    # Gate0 Tahap 2 (10/10/2026): syarat candle 1h BTCUSDT (TF native, bukan HTF) sudah
+    # naik >=0,10% -- default nunggu candle-nya benar2 closed (elapsed=100%, lihat mombreak_btc_gate_ok()).
+    _qs3m_gate_ok = mombreak_btc_gate_ok()
+    _notify_btc_gate_transition('mombreak_1h', 'MomentumBreak-1h', _qs3m_gate_ok, f'candle 1 jam BTCUSDT terakhir naik >= {MOMBREAK_BTC_GATE_GENDUT_PCT}%')
     if not _qs3m_gate_ok:
-        log(f"[T_QSCALP] Gate0: syarat BTC (gendut 3m) belum lolos, scan dibatalkan periode ini.")
+        log(f"[T_MOMBREAK] Gate0: syarat BTC (gendut 1h) belum lolos, scan dibatalkan periode ini.")
         return
     try:
         ticker = get_ticker_24h()
@@ -22351,9 +22358,9 @@ def thread_qscalp_scan():
             try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
             except Exception: pass
         # 20/09/2026: buang fiat/stablecoin/komoditas SEBELUM ambil top-N likuid -- kalau tidak,
-        # pair seperti USDC/FDUSD/USD1/EUR (paling likuid) memakan slot universe QScalp.
+        # pair seperti USDC/FDUSD/USD1/EUR (paling likuid) memakan slot universe MomentumBreak.
         pairs_all = [s for s in volmap if s.endswith('USDT') and s not in SYMBOL_BLACKLIST]
-        pairs = sorted(pairs_all, key=lambda s: volmap[s], reverse=True)[:QSCALP_UNIVERSE_SIZE]
+        pairs = sorted(pairs_all, key=lambda s: volmap[s], reverse=True)[:MOMBREAK_UNIVERSE_SIZE]
 
         display = []
         blockers = {}
@@ -22361,7 +22368,7 @@ def thread_qscalp_scan():
         for sym in pairs:
             scanned += 1
             try:
-                df = get_ohlcv(sym, interval="3m", limit=60)
+                df = get_ohlcv(sym, interval="1h", limit=60)
                 if df is None or len(df) < 40:
                     count_blocker(blockers, "Data candle kurang", True)
                     continue
@@ -22375,7 +22382,7 @@ def thread_qscalp_scan():
                 if len(df) < 40:
                     count_blocker(blockers, "Data candle kurang", True)
                     continue
-                sig = check_qscalp_signal(df, sym)
+                sig = check_mombreak_signal(df, sym)
                 if sig is None:
                     count_blocker(blockers, "Syarat entry belum lolos", True)
                     continue
@@ -22384,28 +22391,28 @@ def thread_qscalp_scan():
                     count_blocker(blockers, "Tertiary: RSI & BB%b overbought", True)
                     continue
                 display.append(sig)
-                open_qscalp_if_signal(sig)
+                open_mombreak_if_signal(sig)
             except Exception as _qe:
                 pass
         ts = now_wib().strftime("%d/%m/%Y %H:%M:%S")
-        with _qscalp_lock:
-            _qscalp_signals.clear()
-            _qscalp_signals.extend(display[:50])
-            _qscalp_scan_ts = ts
-        record_scan_blockers("QScalp-3m", scanned, len(display), blockers)
+        with _mombreak_lock:
+            _mombreak_signals.clear()
+            _mombreak_signals.extend(display[:50])
+            _mombreak_scan_ts = ts
+        record_scan_blockers("MomentumBreak-1h", scanned, len(display), blockers)
     except Exception as e:
-        log(f"WARN [QSCALP] scan error: {e}")
+        log(f"WARN [MOMBREAK] scan error: {e}")
 
 
-def run_thread_qscalp():
-    """Thread T_QSCALP: scan QScalp-3m tiap QSCALP_SCAN_INTERVAL detik."""
+def run_thread_mombreak():
+    """Thread T_MOMBREAK: scan MomentumBreak-1h tiap MOMBREAK_SCAN_INTERVAL detik."""
     time.sleep(20)
     while True:
         try:
-            thread_qscalp_scan()
+            thread_mombreak_scan()
         except Exception as e:
-            log(f"WARN T_QSCALP: {e}")
-        time.sleep(QSCALP_SCAN_INTERVAL)
+            log(f"WARN T_MOMBREAK: {e}")
+        time.sleep(MOMBREAK_SCAN_INTERVAL)
 
 
 def run_web_dashboard():
@@ -22888,7 +22895,7 @@ def run_web_dashboard():
                 "hunting_4h": "Hunting-4h",
                 "akum_entry_a": "Akumulasi-4h", "akum_entry_b": "Akumulasi-4h",
                 "trend_confirm_4h": "TrenKonfirmasi-4h",
-                "qscalp_3m": "QScalp-3m",
+                "mombreak_1h": "MomentumBreak-1h",
             }
             strategy_display = _STRAT_DISPLAY.get(strategy, strategy)
             opened_at = deal.get("opened_at") or deal.get("opened_at_wib") or "-"
@@ -22902,7 +22909,7 @@ def run_web_dashboard():
             _opened_ts = deal.get("opened_candle_ts")
             if _opened_ts:
                 # 20/09/2026 (audit konsistensi strategi): dulu map timeframe di-hardcode lokal
-                # di sini dan KETINGGALAN 'qscalp_3m' -- akibatnya Hold candles QScalp-3m dihitung
+                # di sini dan KETINGGALAN 'mombreak_1h' -- akibatnya Hold candles MomentumBreak-1h dihitung
                 # pakai fallback 12h (jauh meleset). Sekarang pakai helper global
                 # _candle_seconds_for_strategy() supaya satu sumber kebenaran untuk SEMUA strategi.
                 _candle_secs = _candle_seconds_for_strategy(strategy)
@@ -23119,10 +23126,10 @@ def run_web_dashboard():
                     "status": "na",
                     "syarat": "Sudah diuji 10/10/2026 -- hasilnya justru berlawanan arah (strategi beli-saat-dip, BTC turun malah lebih bagus). Tidak dipakai.",
                 },
-                "qscalp_3m": {
-                    "label": "QScalp-3m",
-                    "status": "ok" if qscalp_btc_gate_ok() else "blocked",
-                    "syarat": f"Candle 3 menit BTCUSDT terakhir naik >= {QSCALP_BTC_GATE_GENDUT_PCT}%",
+                "mombreak_1h": {
+                    "label": "MomentumBreak-1h",
+                    "status": "ok" if mombreak_btc_gate_ok() else "blocked",
+                    "syarat": f"Candle 1 jam BTCUSDT terakhir naik >= {MOMBREAK_BTC_GATE_GENDUT_PCT}%",
                 },
                 "rvolbreak_8h": {
                     "label": "RVolBreak-8h",
@@ -23284,9 +23291,9 @@ def run_web_dashboard():
                     }))
 
 
-                elif strat == "QScalp-3m":
-                    df = get_ohlcv(sym, interval="3m", limit=60)
-                    if df is None: return jsonify(_s({"error": "Gagal ambil OHLCV 3m"}))
+                elif strat == "MomentumBreak-1h":
+                    df = get_ohlcv(sym, interval="1h", limit=60)
+                    if df is None: return jsonify(_s({"error": "Gagal ambil OHLCV 1h"}))
                     if len(df) > 1 and df['ct'].iloc[-1] >= int(time.time() * 1000): df = df.iloc[:-1]
                     if len(df) < 40: return jsonify(_s({"error": "Data kurang"}))
                     close_v = df['close'].values.astype(float); high_v = df['high'].values.astype(float)
@@ -23296,23 +23303,23 @@ def run_web_dashboard():
                     vm = vol_ma20[i] if not pd.isna(vol_ma20[i]) and vol_ma20[i] > 0 else None
                     vol_ratio = float(vol_v[i] / vm) if vm else None
                     momentum_pct = float((close_v[i] / close_v[i-2] - 1) * 100) if i >= 2 and close_v[i-2] > 0 else None
-                    hh_prior = pd.Series(high_v).rolling(QSCALP_LIVE_BREAKOUT_LOOKBACK).max().shift(1).values
+                    hh_prior = pd.Series(high_v).rolling(MOMBREAK_LIVE_BREAKOUT_LOOKBACK).max().shift(1).values
                     hh = hh_prior[i] if not pd.isna(hh_prior[i]) else None
-                    ema9 = pd.Series(close_v).ewm(span=QSCALP_EMA_FAST, adjust=False).mean().values
+                    ema9 = pd.Series(close_v).ewm(span=MOMBREAK_EMA_FAST, adjust=False).mean().values
                     e9 = ema9[i] if not pd.isna(ema9[i]) else None
                     close_now = float(close_v[i])
-                    p = [vol_ratio is not None and vol_ratio >= QSCALP_LIVE_VOL_MULT,
+                    p = [vol_ratio is not None and vol_ratio >= MOMBREAK_LIVE_VOL_MULT,
                          close_now > open_v[i],
-                         momentum_pct is not None and momentum_pct >= QSCALP_LIVE_MOMENTUM_PCT,
+                         momentum_pct is not None and momentum_pct >= MOMBREAK_LIVE_MOMENTUM_PCT,
                          hh is not None and close_now > hh,
-                         e9 is not None and e9 > 0 and close_now <= e9 * (1 + QSCALP_LIVE_ANTI_FOMO_PCT / 100)]
+                         e9 is not None and e9 > 0 and close_now <= e9 * (1 + MOMBREAK_LIVE_ANTI_FOMO_PCT / 100)]
                     return jsonify(_s({"strat": strat, "sym": sym,
                         "primary": [
-                            {"label": f"Vol>={QSCALP_LIVE_VOL_MULT}xMA20", "ok": p[0], "actual": f"{vol_ratio:.2f}x" if vol_ratio is not None else "n/a"},
+                            {"label": f"Vol>={MOMBREAK_LIVE_VOL_MULT}xMA20", "ok": p[0], "actual": f"{vol_ratio:.2f}x" if vol_ratio is not None else "n/a"},
                             {"label": "Candle hijau (close>open)", "ok": p[1], "actual": f"{close_now:.6g} vs open {open_v[i]:.6g}"},
-                            {"label": f"Momentum>={QSCALP_LIVE_MOMENTUM_PCT}%/2candle", "ok": p[2], "actual": f"{momentum_pct:.2f}%" if momentum_pct is not None else "n/a"},
-                            {"label": f"Breakout HH{QSCALP_LIVE_BREAKOUT_LOOKBACK}c", "ok": p[3], "actual": f"{close_now:.6g} vs HH {hh:.6g}" if hh is not None else "n/a"},
-                            {"label": f"Anti-FOMO close<=EMA9+{QSCALP_LIVE_ANTI_FOMO_PCT}%", "ok": p[4], "actual": f"{close_now:.6g} vs EMA9 {e9:.6g}" if e9 is not None else "n/a"},
+                            {"label": f"Momentum>={MOMBREAK_LIVE_MOMENTUM_PCT}%/2candle", "ok": p[2], "actual": f"{momentum_pct:.2f}%" if momentum_pct is not None else "n/a"},
+                            {"label": f"Breakout HH{MOMBREAK_LIVE_BREAKOUT_LOOKBACK}c", "ok": p[3], "actual": f"{close_now:.6g} vs HH {hh:.6g}" if hh is not None else "n/a"},
+                            {"label": f"Anti-FOMO close<=EMA9+{MOMBREAK_LIVE_ANTI_FOMO_PCT}%", "ok": p[4], "actual": f"{close_now:.6g} vs EMA9 {e9:.6g}" if e9 is not None else "n/a"},
                         ],
                         "secondary": [],
                         "primary_ok": all(p),
@@ -24261,23 +24268,23 @@ def run_web_dashboard():
                         return jsonify({"ok": False, "error": "Hunting open gagal atau syarat tidak terpenuhi"})
                 except Exception as e:
                     return jsonify({"ok": False, "error": f"Hunting open error: {e}"})
-            elif strat == "QScalp-3m":
+            elif strat == "MomentumBreak-1h":
                 try:
-                    df3 = get_ohlcv(sym, interval="3m", limit=60)
+                    df3 = get_ohlcv(sym, interval="1h", limit=60)
                     if df3 is None:
-                        return jsonify({"ok": False, "error": "Gagal ambil OHLCV 3m"})
+                        return jsonify({"ok": False, "error": "Gagal ambil OHLCV 1h"})
                     if len(df3) > 1 and df3['ct'].iloc[-1] >= int(time.time() * 1000):
                         df3 = df3.iloc[:-1]
-                    sig = check_qscalp_signal(df3, sym)
+                    sig = check_mombreak_signal(df3, sym)
                     if sig is None:
-                        return jsonify({"ok": False, "error": "Syarat entry QScalp-3m tidak terpenuhi saat ini"})
-                    ok3 = open_qscalp_if_signal(sig)
+                        return jsonify({"ok": False, "error": "Syarat entry MomentumBreak-1h tidak terpenuhi saat ini"})
+                    ok3 = open_mombreak_if_signal(sig)
                     if ok3:
-                        return jsonify({"ok": True, "sym": sym, "score": 1, "target_usd": get_strategy_base_usd('qscalp_3m')})
+                        return jsonify({"ok": True, "sym": sym, "score": 1, "target_usd": get_strategy_base_usd('mombreak_1h')})
                     else:
-                        return jsonify({"ok": False, "error": "QScalp open gagal (slot penuh/cooldown/ditolak Binance)"})
+                        return jsonify({"ok": False, "error": "MomentumBreak open gagal (slot penuh/cooldown/ditolak Binance)"})
                 except Exception as e:
-                    return jsonify({"ok": False, "error": f"QScalp open error: {e}"})
+                    return jsonify({"ok": False, "error": f"MomentumBreak open error: {e}"})
             elif strat == "Reversal-8h T1":
                 strat_key = "reversal"
                 tf_label  = "8h"
@@ -25036,38 +25043,38 @@ def run_web_dashboard():
                 return jsonify({"ok": True, "message": "Cache dihapus."})
             return jsonify({"ok": True, "message": "Cache tidak ada (sudah bersih)."})
 
-        @app.route("/api/run_qscalp_backtest", methods=["GET", "POST"])
-        def api_run_qscalp_backtest():
-            """One-off (12/09/2026): riset strategi baru QScalp-3m (belum live). Fetch data 3m
-            90 hari terakhir, pair paling likuid saja (lihat QSCALP_UNIVERSE_SIZE). Cek progress
-            via /api/qscalp_backtest_status."""
+        @app.route("/api/run_mombreak_backtest", methods=["GET", "POST"])
+        def api_run_mombreak_backtest():
+            """One-off (12/09/2026): riset strategi baru MomentumBreak-1h (belum live). Fetch data 3m
+            90 hari terakhir, pair paling likuid saja (lihat MOMBREAK_UNIVERSE_SIZE). Cek progress
+            via /api/mombreak_backtest_status."""
             if request.args.get("confirm") != "1":
                 return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
-            with _qscalp_bt_lock:
-                if _qscalp_bt_status.get("running"):
-                    return jsonify({"ok": False, "error": "sudah jalan", "status": _qscalp_bt_status})
-            threading.Thread(target=run_qscalp_backtest, daemon=True).start()
+            with _mombreak_bt_lock:
+                if _mombreak_bt_status.get("running"):
+                    return jsonify({"ok": False, "error": "sudah jalan", "status": _mombreak_bt_status})
+            threading.Thread(target=run_mombreak_backtest, daemon=True).start()
             return jsonify({"ok": True, "message": "Backtest dimulai di background."})
 
-        @app.route("/api/qscalp_backtest_status")
-        def api_qscalp_backtest_status():
-            with _qscalp_bt_lock:
-                return jsonify(dict(_qscalp_bt_status))
+        @app.route("/api/mombreak_backtest_status")
+        def api_mombreak_backtest_status():
+            with _mombreak_bt_lock:
+                return jsonify(dict(_mombreak_bt_status))
 
-        @app.route("/api/delete_qscalp_cache", methods=["GET", "POST"])
-        def api_delete_qscalp_cache():
-            """URGENT (12/09/2026): cache 3m QScalp bikin volume penuh lagi (~99%) di tengah
+        @app.route("/api/delete_mombreak_cache", methods=["GET", "POST"])
+        def api_delete_mombreak_cache():
+            """URGENT (12/09/2026): cache 3m MomentumBreak bikin volume penuh lagi (~99%) di tengah
             backtest pertama (banyak symbol GAGAL ke-cache krn disk penuh -- datanya sendiri
             tetap kepakai di hasil backtest yg sudah selesai, cuma cache lokalnya yg rusak/
             parsial). Hapus supaya bot trading live tidak berisiko gagal tulis file."""
             if request.args.get("confirm") != "1":
                 return jsonify({"ok": False, "error": "tambahkan ?confirm=1"}), 400
             import shutil
-            cache_dir = QSCALP_CACHE_DIR
+            cache_dir = MOMBREAK_CACHE_DIR
             if os.path.isdir(cache_dir):
                 shutil.rmtree(cache_dir)
-                log(f"[QSCALP-BT] {cache_dir} dihapus permanen (volume penuh, urgent).")
-                return jsonify({"ok": True, "message": "Cache QScalp dihapus."})
+                log(f"[MOMBREAK-BT] {cache_dir} dihapus permanen (volume penuh, urgent).")
+                return jsonify({"ok": True, "message": "Cache MomentumBreak dihapus."})
             return jsonify({"ok": True, "message": "Cache tidak ada (sudah bersih)."})
 
         @app.route("/api/hunting_config", methods=["POST"])
@@ -25105,7 +25112,7 @@ def run_web_dashboard():
                 ("akum_entry_a", "Akum-4h Entry A"),
                 ("akum_entry_b", "Akum-4h Entry B"),
                 ("trend_confirm_4h", "TrenKonfirmasi-4h"),
-                ("qscalp_3m", "QScalp-3m"),
+                ("mombreak_1h", "MomentumBreak-1h"),
                 # 10/10/2026 (ketahuan lewat pertanyaan Mas Budi): decouple_4h/rvolbreak_1h/
                 # dipbuy_universe sudah LIVE (order Binance asli) tapi dari awal lupa ditambahkan
                 # ke daftar ini -- csv_progress() sudah baca strategy key-nya dgn benar (tidak perlu
@@ -25146,13 +25153,13 @@ def run_web_dashboard():
             rows.sort(key=lambda r: (r["win"] / r["n"]) if r["n"] > 0 else -1, reverse=True)
             return jsonify({"strategies": rows, "hidden_paused": hidden_paused_labels})
 
-        @app.route("/api/qscalp_signals")
-        def api_qscalp_signals():
-            with _qscalp_lock:
+        @app.route("/api/mombreak_signals")
+        def api_mombreak_signals():
+            with _mombreak_lock:
                 return jsonify({
-                    "signals": list(_qscalp_signals),
-                    "scan_ts": _qscalp_scan_ts,
-                    "slot": f"{active_deal_count_qscalp()}/{QSCALP_MAX_DEALS}",
+                    "signals": list(_mombreak_signals),
+                    "scan_ts": _mombreak_scan_ts,
+                    "slot": f"{active_deal_count_mombreak()}/{MOMBREAK_MAX_DEALS}",
                 })
 
         def categorize_exit_reason(reason: str) -> str:
@@ -25237,7 +25244,7 @@ def run_web_dashboard():
                 # di-patch), hanya dipakai utk ringkasan stats_all "termasuk yang disembunyikan" -- tampilan baris & stats
                 # utama TIDAK berubah. Fase lama (phase_offsets) tetap tidak ikut, sama dgn tampilan normal.
                 rows_pre_hide = list(rows)
-                # 28/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE (qscalp_3m, brkX2_crossema; 29/09/2026 +reversal)
+                # 28/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE (mombreak_1h, brkX2_crossema; 29/09/2026 +reversal)
                 # -- SEMUA deal-nya disembunyikan dari tampilan Closed Trades default. Baris TETAP di CSV (counter fase /
                 # batas rugi harian tidak berubah) dan tetap ikut ringkasan stats_all "termasuk yang disembunyikan".
                 # Tampil lagi kalau strategi itu dipilih eksplisit di filter Strategi, atau ?show_paused=1.
@@ -25283,7 +25290,7 @@ def run_web_dashboard():
                 # strategi + menit open (detik tidak dicocokkan); baris tanpa waktu open (dibuat saat close,
                 # mis. DASH) memakai 'c:' + menit close.
                 # 21/09/2026 (permintaan Mas Budi, cek seluruh riwayat): +4 baris dgn penyebab yg sama --
-                # DASH (add-fund peak lama, 789eab3) dan STRAX/XRP/SAGA QScalp (peak dari ticker post-order
+                # DASH (add-fund peak lama, 789eab3) dan STRAX/XRP/SAGA MomentumBreak (peak dari ticker post-order
                 # vs fill, 968373b; peak == ticker ENTRY di CSV). TRUMP/HOODB/C sengaja TIDAK disembunyikan
                 # (hasil nyata, bukan bug yg di-patch).
                 # Alasan tiap baris dicatat (remark) & ditampilkan di halaman Closed Deals (ct-hidden-note).
@@ -25300,11 +25307,11 @@ def run_web_dashboard():
                     ('QQQB/USDT',     'akum_entry_a',     '2026-09-11 21:34'): _WHY_RECONCILE,
                     ('AR/USDT',       'brkX2',            '2026-09-19 10:23'): _WHY_ADDFUND,
                     ('GENIUS/USDT',   'trend_confirm_4h', '2026-09-18 08:12'): _WHY_ADDFUND,
-                    ('MARSCOIN/USDT', 'qscalp_3m',        '2026-09-18 20:55'): _WHY_PEAK,
+                    ('MARSCOIN/USDT', 'mombreak_1h',        '2026-09-18 20:55'): _WHY_PEAK,
                     ('DASH/USDT',     'brkX2',            'c:2026-09-05 20:16'): _WHY_ADDFUND,
-                    ('STRAX/USDT',    'qscalp_3m',        '2026-09-14 19:12'): _WHY_PEAK,
-                    ('XRP/USDT',      'qscalp_3m',        '2026-09-15 20:07'): _WHY_PEAK,
-                    ('SAGA/USDT',     'qscalp_3m',        '2026-09-17 23:34'): _WHY_PEAK,
+                    ('STRAX/USDT',    'mombreak_1h',        '2026-09-14 19:12'): _WHY_PEAK,
+                    ('XRP/USDT',      'mombreak_1h',        '2026-09-15 20:07'): _WHY_PEAK,
+                    ('SAGA/USDT',     'mombreak_1h',        '2026-09-17 23:34'): _WHY_PEAK,
                 }
                 def _patched_key(r):
                     return ((r.get('symbol') or ''), (r.get('strategy') or 'brkX2'),
@@ -26542,10 +26549,10 @@ def grade_kelayakan_brkx2_12h(symbol: str):
         return None
 
 # REMARK (01/10/2026) -- status 4 strategi yg BELUM dapat grade, dan kapan layak diterapkan:
-#   - qscalp_3m: TIDAK AKAN PERNAH dapat grade lewat jalur ini -- ai_call_open=False PERMANEN
+#   - mombreak_1h: TIDAK AKAN PERNAH dapat grade lewat jalur ini -- ai_call_open=False PERMANEN
 #     secara desain (baris ~1187), strategi ini tidak pernah memanggil AI utk OPEN sama sekali.
 #     Selain itu SUDAH DIHENTIKAN (strategy_enabled=False sejak migrasi 28/09/2026, baris ~1279
-#     "qscalp_3m_paused_20260928") -- tidak lagi membuka deal baru sama sekali saat ini.
+#     "mombreak_1h_paused_20260928") -- tidak lagi membuka deal baru sama sekali saat ini.
 #   - brkX2_crossema (CrossEMA-4h) & reversal (Reversal-8h): SEDANG DIPAUSE (strategy_enabled
 #     di-set False lewat migrasi 28-29/09/2026, lihat PAUSED_HIDDEN_STRATEGIES baris ~1369) --
 #     tidak membuka deal baru saat ini. INGATKAN LAGI kalau salah satu diaktifkan ulang lewat
@@ -26571,7 +26578,7 @@ def grade_kelayakan_brkx2_12h(symbol: str):
 #     mau ulang) -- TAPI jangan ulangi dgn n sekecil ini, tunggu min. ratusan sinyal per tahun.
 def grade_kelayakan_line(symbol: str, strategy: str):
     """Satu baris teks utk disisipkan ke prompt/log AI -- kosong (tidak disisipkan apa pun) kalau
-    strategi belum divalidasi (lihat REMARK di atas: qscalp_3m/brkX2_crossema/reversal/
+    strategi belum divalidasi (lihat REMARK di atas: mombreak_1h/brkX2_crossema/reversal/
     akum_entry_a/akum_entry_b) atau data gagal diambil -- fail-open, TIDAK menghalangi keputusan AI."""
     if strategy == 'trend_confirm_4h':
         g = grade_kelayakan_trend_confirm_4h(symbol)
@@ -27424,12 +27431,12 @@ if __name__ == '__main__':
         log(f"  Slot: {HUNTING_MAX_DEALS} | Base order: ${HUNTING_ORDER_VOLUME} | Target forward-test: {HUNTING_FWDTEST_TARGET} deal")
         log(f"  Bot : #{COMMAS_BOT_ID_HUNTING}")
     log("  " + "-"*51)
-    log("  STRATEGI #8 QScalp-3m: ON | TF 3m | TANPA AI (full rule-based)")
-    log(f"  Entry Combo E: vol>={QSCALP_LIVE_VOL_MULT}xMA20 + momentum>={QSCALP_LIVE_MOMENTUM_PCT}%/2candle + "
-        f"breakout HH{QSCALP_LIVE_BREAKOUT_LOOKBACK}c + close<=EMA9+{QSCALP_LIVE_ANTI_FOMO_PCT}%")
-    log(f"  Exit: arm{QSCALP_LIVE_ARM_PCT}%/trail{QSCALP_LIVE_TRAIL_PCT}%/stop{QSCALP_LIVE_STOP_PCT}% flat, "
-        f"timeout {QSCALP_LIVE_TIMEOUT_CANDLES}c(3m) | scan tiap {QSCALP_SCAN_INTERVAL}s")
-    log(f"  Slot: {QSCALP_MAX_DEALS} (standalone) | Target forward-test: {QSCALP_FWDTEST_TARGET} deal | Universe: {QSCALP_UNIVERSE_SIZE} pair terlikuid")
+    log("  STRATEGI #8 MomentumBreak-1h: ON | TF 1h (diganti dari 3m, 14/10/2026) | TANPA AI (full rule-based)")
+    log(f"  Entry Combo E: vol>={MOMBREAK_LIVE_VOL_MULT}xMA20 + momentum>={MOMBREAK_LIVE_MOMENTUM_PCT}%/2candle + "
+        f"breakout HH{MOMBREAK_LIVE_BREAKOUT_LOOKBACK}c + close<=EMA9+{MOMBREAK_LIVE_ANTI_FOMO_PCT}%")
+    log(f"  Exit: arm{MOMBREAK_LIVE_ARM_PCT}%/trail{MOMBREAK_LIVE_TRAIL_PCT}%/stop{MOMBREAK_LIVE_STOP_PCT}% flat, "
+        f"timeout {MOMBREAK_LIVE_TIMEOUT_CANDLES}c(1h) | scan tiap {MOMBREAK_SCAN_INTERVAL}s")
+    log(f"  Slot: {MOMBREAK_MAX_DEALS} (standalone) | Target forward-test: {MOMBREAK_FWDTEST_TARGET} deal | Universe: {MOMBREAK_UNIVERSE_SIZE} pair terlikuid")
     log("="*55)
     # Flush banner sebelum thread-thread mulai print
     time.sleep(2.0)
@@ -27450,7 +27457,7 @@ if __name__ == '__main__':
     apply_one_time_config_migrations()
     migrate_csv_hold_remark_once()
     migrate_trim_reversal_2nd3rd_once()   # 02/10/2026: hapus closed deals "2nd"/"3rd" reversal-8h, permintaan Mas Budi
-    threading.Thread(target=backfill_qscalp_rsi_once, daemon=True).start()   # 21/09/2026: isi RSI@Open QScalp lama
+    threading.Thread(target=backfill_mombreak_rsi_once, daemon=True).start()   # 21/09/2026: isi RSI@Open MomentumBreak lama
     threading.Thread(target=recompute_shadow_levels_once, daemon=True).start()   # 21/09/2026: hitung ulang paper test ber-level tetap
     threading.Thread(target=archive_akuma_all3_inflated_once, daemon=True).start()   # 27/09/2026: arsip akuma_all3 lama, reset ke 0/20
     threading.Thread(target=reset_shadow_keltnerbreak_closed_once, daemon=True).start()   # 03/10/2026: arsip 3 closed lama shadow keltnerbreak_12h, reset ke 0/20
@@ -27526,8 +27533,8 @@ if __name__ == '__main__':
     t_s6 = threading.Thread(target=run_thread_strat6, daemon=True, name="T-Strat6")
     threads.append(t_s6)
     n_threads += 1
-    t_qscalp = threading.Thread(target=run_thread_qscalp, daemon=True, name="T-QScalp")
-    threads.append(t_qscalp)
+    t_mombreak = threading.Thread(target=run_thread_mombreak, daemon=True, name="T-MomentumBreak")
+    threads.append(t_mombreak)
     n_threads += 1
 
     for t in threads: t.start()
