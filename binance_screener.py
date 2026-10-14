@@ -14243,7 +14243,7 @@ refreshShadowChart();
   <!-- ═══════════════ AKUMULASI DETECTOR ═══════════════ -->
 {% if akum_card_enabled %}
 <div class="container dash-section-start" data-tab="strategies">
-  <div class="section-title">⭐ Strategi #5 — Akumulasi Detector (4h)</div>
+  <div class="section-title">⭐ Akumulasi Detector (4h)</div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-header" onclick="toggleCard(this)">
       <h2>Akumulasi-4h <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Fase sideways post-downtrend | TF 4h | Maks 5 pair</span></h2>
@@ -14481,7 +14481,7 @@ refreshShadowChart();
   <!-- ═══════════════ HUNTING-4H ═══════════════ -->
 {% if hunting_card_enabled %}
 <div class="container dash-section-start" data-tab="strategies">
-  <div class="section-title">🎯 Strategi #7 — Hunting (4h)</div>
+  <div class="section-title">🎯 Hunting (4h)</div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-header" onclick="toggleCard(this)">
       <h2>Hunting-4h <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">EMA kompresi tipis, harga baru breakout | TF 4h</span></h2>
@@ -14555,7 +14555,7 @@ refreshHuntingSignals();
 {% endif %}
 
 <div class="container dash-section-start" data-tab="strategies">
-  <div class="section-title">⚡ Strategi #8 — MomentumBreak-1h</div>
+  <div class="section-title">⚡ MomentumBreak-1h</div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-header" onclick="toggleCard(this)">
       <h2>MomentumBreak-1h <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Momentum breakout, full rule-based, TANPA AI | TF 1h | Slot 2</span></h2>
