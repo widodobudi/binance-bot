@@ -22586,6 +22586,20 @@ def run_web_dashboard():
             with _dashboard_lock:
                 nm = dict(_dashboard_state["near_miss"])
                 ls = dict(_dashboard_state["last_scan"])
+            # 14/10/2026 (permintaan Mas Budi, tab "Kandidat Terdekat per Strategi" di menu
+            # Strategies beda isi dgn Strategy Control): "Reversal-8h"/"CrossEMA-4h" nyangkut
+            # permanen di near_miss dict (key cuma ditambah, TIDAK PERNAH dihapus) dari jaman
+            # sebelum di-TERMINATE 03/10/2026 -- scan function-nya (thread1b_scan_reversal,
+            # crossema scan) sudah `return` di baris paling atas begitu REVERSAL_ENABLED/
+            # STRAT_CROSSEMA_ENABLED jadi False, jadi datanya BEKU, bukan cuma kosong. Pakai
+            # get_terminated_strategies() yg sama dgn /api/strategy_config (04/10/2026) biar
+            # satu sumber kebenaran, bukan daftar hardcode kedua yg bisa lupa disinkron lagi.
+            # Hunting-4h SENGAJA dikecualikan (lihat injeksi di bawah) -- meski HUNTING_ENABLED
+            # False (auto-trading mati), scan-nya tetap jalan khusus utk dropdown Manual Scan.
+            _terminated_keys = get_terminated_strategies()
+            for _nm_label, _nm_key in (("Reversal-8h", "reversal"), ("CrossEMA-4h", "brkX2_crossema")):
+                if _nm_key in _terminated_keys:
+                    nm.pop(_nm_label, None)
             # Sisipkan hunting signals ke nm agar muncul di dropdown Manual Scan
             with _hunting_lock:
                 nm["Hunting-4h"] = [
