@@ -14197,6 +14197,7 @@ refreshShadowChart();
 </div>
 
   <!-- ═══════════════ AKUMULASI DETECTOR ═══════════════ -->
+{% if akum_card_enabled %}
 <div class="container dash-section-start" data-tab="strategies">
   <div class="section-title">⭐ Strategi #5 — Akumulasi Detector (4h)</div>
   <div class="card" style="margin-bottom:16px">
@@ -14375,6 +14376,7 @@ refreshShadowChart();
     </div>
   </div>
 </div>
+{% endif %}
 
 <div class="container dash-section-start" data-tab="strategies">
   <div class="section-title">Kandidat Terdekat per Strategi</div>
@@ -14433,6 +14435,7 @@ refreshShadowChart();
 
 
   <!-- ═══════════════ HUNTING-4H ═══════════════ -->
+{% if hunting_card_enabled %}
 <div class="container dash-section-start" data-tab="strategies">
   <div class="section-title">🎯 Strategi #7 — Hunting (4h)</div>
   <div class="card" style="margin-bottom:16px">
@@ -14505,6 +14508,7 @@ setInterval(refreshHuntingSignals, 30000);
 refreshHuntingSignals();
 </script>
 </div>
+{% endif %}
 
 <div class="container dash-section-start" data-tab="strategies">
   <div class="section-title">⚡ Strategi #8 — MomentumBreak-1h</div>
@@ -22616,14 +22620,21 @@ def run_web_dashboard():
             for _nm_label, _nm_key in (("Reversal-8h", "reversal"), ("CrossEMA-4h", "brkX2_crossema")):
                 if _nm_key in _terminated_keys:
                     nm.pop(_nm_label, None)
-            # Sisipkan hunting signals ke nm agar muncul di dropdown Manual Scan
-            with _hunting_lock:
-                nm["Hunting-4h"] = [
-                    {"sym": s["symbol"], "n_pass": 4, "total": 4,
-                     "dist_ema20": s.get("dist_ema20_pct", 0),
-                     "fails": []}
-                    for s in _hunting_signals
-                ]
+            # 14/10/2026 (temuan Mas Budi): Hunting-4h di-TERMINATE 03/10/2026 (HUNTING_ENABLED=False),
+            # dan scan_hunting_signals_only() -- fungsi SATU2NYA yang mengisi _hunting_signals --
+            # JUGA `return` di baris pertama kalau HUNTING_ENABLED False. Jadi injeksi ini SEBELUMNYA
+            # nyuntik data BEKU (dari sebelum 03/10), bukan live spt dikira -- sama persis pola stale
+            # yg sudah diperbaiki utk Reversal-8h/CrossEMA-4h (lihat get_terminated_strategies()).
+            if HUNTING_ENABLED:
+                with _hunting_lock:
+                    nm["Hunting-4h"] = [
+                        {"sym": s["symbol"], "n_pass": 4, "total": 4,
+                         "dist_ema20": s.get("dist_ema20_pct", 0),
+                         "fails": []}
+                        for s in _hunting_signals
+                    ]
+            else:
+                nm.pop("Hunting-4h", None)
             overrides = load_deal_overrides()
             # Hitung elapsed candle saat ini untuk info window
             now_ms = int(time.time() * 1000)
@@ -22685,6 +22696,8 @@ def run_web_dashboard():
                 fmt_price=_fmt_price,
                 akum_entry_status=akum_entry_status,
                 free_usdt=free_usdt,
+                akum_card_enabled=STRAT_AKUM_ENABLED,
+                hunting_card_enabled=HUNTING_ENABLED,
             )
 
         @app.route("/manual_addfund", methods=["POST"])
