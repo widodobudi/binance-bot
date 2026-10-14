@@ -12046,6 +12046,38 @@ def check_trendconfirm_entry(df):
                'gap_ema20_accel': gap_ema20_accel}
     return True, score, detail
 
+def trendconfirm_near_miss_detail(df):
+    """14/10/2026 (permintaan Mas Budi -- tab "Kandidat Terdekat" belum pernah dibuat utk
+    TrenKonfirmasi-4h): evaluasi SEMUA 4 syarat WAJIB check_trendconfirm_entry() secara
+    terpisah (read-only, TIDAK dipanggil dari/mempengaruhi check_trendconfirm_entry() ASLI
+    sama sekali -- murni duplikat utk tampilan, pola sama spt near_miss KeltnerBreak-12h/
+    Reversal-8h). Return (n_pass, total, fails) atau None kalau datanya kurang."""
+    if df is None or len(df) < TRENDCONFIRM_ATR_MEDIAN_WINDOW + 20:
+        return None
+    r = df.iloc[-1]
+    ema20 = r.get('ema20')
+    if pd.isna(ema20) or ema20 <= 0:
+        return None
+    atrp = r.get('atr_pct'); rsi = r.get('rsi')
+    vol_ma20 = df['vol'].rolling(20).mean().iloc[-1]
+    if pd.isna(atrp) or pd.isna(vol_ma20) or vol_ma20 <= 0 or pd.isna(rsi):
+        return None
+    rvol = float(r['vol']) / float(vol_ma20)
+    atr_med = df['atr_pct'].rolling(TRENDCONFIRM_ATR_MEDIAN_WINDOW).median().iloc[-1]
+    if pd.isna(atr_med):
+        return None
+    gap_ema20 = (float(r['close']) / float(ema20) - 1) * 100
+    checks = [
+        (float(atrp) >= float(atr_med), f"ATR% < median100 ({atrp:.2f}% < {atr_med:.2f}%)"),
+        (gap_ema20 >= 0.0, f"close < EMA20 ({gap_ema20:+.2f}%)"),
+        (rvol >= TRENDCONFIRM_RVOL_MIN, f"RVOL < {TRENDCONFIRM_RVOL_MIN:g}x ({rvol:.2f}x)"),
+        (float(rsi) < TRENDCONFIRM_RSI_MAX, f"RSI >= {TRENDCONFIRM_RSI_MAX:g} ({float(rsi):.1f})"),
+    ]
+    n_pass = sum(1 for ok, _ in checks if ok)
+    fails = [msg for ok, msg in checks if not ok]
+    return n_pass, len(checks), fails
+
+
 def thread_trendconfirm_scan():
     """Scan sinyal TrenKonfirmasi-4h. Dipanggil periodik tiap TRENDCONFIRM_SCAN_INTERVAL detik."""
     global _trendconfirm_last_candle_ts
@@ -12094,6 +12126,7 @@ def thread_trendconfirm_scan():
     candidates = []
     scan_blockers_tc = {}
     scan_total_tc = 0
+    near_miss_tc = []   # 14/10/2026: tab "Kandidat Terdekat" -- lihat trendconfirm_near_miss_detail()
     for sym_info in ticker:
         sym = sym_info.get("symbol", "")
         if not sym.endswith("USDT"): continue
@@ -12119,6 +12152,11 @@ def thread_trendconfirm_scan():
                 count_blocker(scan_blockers_tc, "Data OHLCV kurang", True)
                 continue
             df = compute_indicators_4h(df)
+            _nm = trendconfirm_near_miss_detail(df)
+            if _nm is not None:
+                _n_pass, _n_total, _fails = _nm
+                if _n_pass >= 2:   # sama ambang spt Reversal-8h (tampilkan hanya yg lolos >=2/total)
+                    near_miss_tc.append((_n_pass, sym, _fails, _n_total))
             ok, score, detail = check_trendconfirm_entry(df)
             if not ok:
                 count_blocker(scan_blockers_tc, "Syarat wajib belum lolos", True)
@@ -12141,6 +12179,8 @@ def thread_trendconfirm_scan():
             log(f"  [T_TRENDCONFIRM] error {sym}: {e}")
 
     record_scan_blockers("TrenKonfirmasi-4h", scan_total_tc, len(candidates), scan_blockers_tc)
+    log_near_miss("TrenKonfirmasi-4h", near_miss_tc, 4)
+    update_dashboard_near_miss("TrenKonfirmasi-4h", near_miss_tc)
     if not candidates:
         log(f"[T_TRENDCONFIRM] Tidak ada kandidat ({scan_total_tc} discan).")
         return
@@ -13038,6 +13078,7 @@ _dashboard_state = {
         "brkX2-4h": [],
         "CrossEMA-4h": [],
         "Akumulasi-4h": [],
+        "TrenKonfirmasi-4h": [],
     },
     "last_scan": {},
 }
@@ -22669,6 +22710,9 @@ def run_web_dashboard():
                 "Akumulasi-4h": (
                     f"Scan tiap 30 menit. Deteksi fase akumulasi (sideways post-downtrend) TF 4h. "
                     f"Scan terakhir: {_akum_last_scan_ts or 'belum ada'}."
+                ),
+                "TrenKonfirmasi-4h": (
+                    f"Scan sepanjang candle 4h (tiap {TRENDCONFIRM_SCAN_INTERVAL}s), tidak dibatasi jendela waktu."
                 ),
                 "Hunting-4h": (
                     f"Scan Hunting terakhir: {_hunting_scan_ts}. "
