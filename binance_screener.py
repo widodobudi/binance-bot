@@ -14519,9 +14519,9 @@ refreshHuntingSignals();
     </div>
     <div class="card-body">
       <div style="font-size:11px;color:var(--muted);margin-bottom:10px">
-        Entry (Combo G, backtest 12/09/2026): vol&ge;3.0xMA20 + momentum&ge;2.5%/2candle + breakout HH15c + close&le;EMA9+5.0%.
-        Exit flat: arm 0.8% / trail 0.3% / stop 2.0% / timeout 15 candle (45 menit). Parameter tidak bisa diubah dari sini
-        (bukan filter opsional spt Hunting-4h) -- ganti lewat kode kalau perlu pindah ke kombo cadangan E/F/H.
+        Entry (Combo E): vol&ge;4.0xMA20 + momentum&ge;2.5%/2candle + breakout HH15c + close&le;EMA9+3.0%.
+        Exit flat: arm 0.8% / trail 0.3% / stop 1.0% / timeout 15 candle (15 jam, TF 1h). Parameter tidak bisa diubah dari sini
+        (bukan filter opsional spt Hunting-4h) -- ganti lewat kode kalau perlu diubah.
       </div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Slot: <b id="mombreak-slot" style="color:var(--text)">—</b></div>
       <div id="mombreak-signals"><em style="color:var(--muted);font-size:11px">Belum ada sinyal.</em></div>
