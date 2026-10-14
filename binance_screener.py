@@ -22131,7 +22131,16 @@ QSCALP_LIVE_BREAKOUT_LOOKBACK = 15    # Combo E (sama di semua kombo pemenang)
 QSCALP_LIVE_ANTI_FOMO_PCT     = 3.0   # Combo E (lebih ketat dari G=5.0, anti-FOMO)
 QSCALP_LIVE_ARM_PCT           = 0.8   # varian C ronde 1 (arm%)
 QSCALP_LIVE_TRAIL_PCT         = 0.3   # varian C ronde 1 (trail%)
-QSCALP_LIVE_STOP_PCT          = 2.0   # varian C ronde 1 (hard stop%, FLAT dari entry)
+QSCALP_LIVE_STOP_PCT          = 1.0   # 14/10/2026: diperketat dari 2.0 -- backtest data 3m
+                                       # REAL 12 bulan (3.798 sinyal, 175 pair, replikasi exit
+                                       # persis): 1.0% total profit +10.13% vs 2.0%, avg/trade
+                                       # +0.253% vs +0.230%, WR turun 66.7%->57.7% tapi kerugian
+                                       # per trade yg kena stop jauh lebih kecil (net menutup).
+                                       # Trade yg SEKARANG menang lewat trailing: cuma 13.6% yg
+                                       # berbalik rugi (avg -1.20%, bukan rugi besar). RSI-based
+                                       # entry-block DITOLAK (data nunjuk net rugi di semua
+                                       # ambang) -- exit lebih ketat yg terbukti membantu, bukan
+                                       # blokir entry. Lihat project_qscalp_hardstop_tighten.
 QSCALP_LIVE_TIMEOUT_CANDLES   = 15    # varian C ronde 1 (15 candle x 3m = 45 menit)
 QSCALP_SCAN_INTERVAL          = 60    # detik -- lebih rapat dari strategi 4h/8h krn TF 3m
 QSCALP_FWDTEST_TARGET         = 12    # target forward-test awal (permintaan Mas Budi 12/09/2026)
