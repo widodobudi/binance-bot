@@ -13080,6 +13080,8 @@ _dashboard_state = {
         "Akumulasi-4h": [],
         "TrenKonfirmasi-4h": [],
         "Decouple-4h": [],
+        "RVolBreak-8h": [],
+        "Dip-Buy Universe": [],
     },
     "last_scan": {},
 }
@@ -18889,6 +18891,7 @@ def thread_rvolbreak8h_scan() -> None:
 
     import pandas_ta as _pta_rv
     candidates = []
+    near_miss_rv = []   # 14/10/2026: tab "Kandidat Terdekat"
     for sym in universe:
         if sym in existing: continue
         if is_cooldown_enabled('rvolbreak_8h') and cooldown_remaining(sym) > 0: continue
@@ -18906,6 +18909,13 @@ def thread_rvolbreak8h_scan() -> None:
             atr_now = df['atr_pct'].iloc[i]
             if any(pd.isna(x) for x in [dh, rvol_now, atr_now]) or atr_now <= 0:
                 continue
+            _rv_checks = [
+                (close_now > dh, f"belum breakout Donchian24 (close {close_now:.6g} <= {dh:.6g})"),
+                (rvol_now >= RVOLBREAK_RVOL_MIN, f"RVOL < {RVOLBREAK_RVOL_MIN:g}x ({rvol_now:.2f}x)"),
+            ]
+            _rv_n_pass = sum(1 for ok, _ in _rv_checks if ok)
+            if _rv_n_pass >= 1:
+                near_miss_rv.append((_rv_n_pass, sym, [m for ok, m in _rv_checks if not ok], len(_rv_checks)))
             if not (close_now > dh and rvol_now >= RVOLBREAK_RVOL_MIN):
                 continue
             # RSI(14) dicatat INFO-ONLY di rsi_open -- TIDAK dipakai utk open/add-fund/
@@ -18917,6 +18927,8 @@ def thread_rvolbreak8h_scan() -> None:
         except Exception as e:
             log(f"  [T_RVOLBREAK8H] error {sym}: {e}")
 
+    log_near_miss("RVolBreak-8h", near_miss_rv, 2)
+    update_dashboard_near_miss("RVolBreak-8h", near_miss_rv)
     if not candidates:
         return
     candidates.sort(key=lambda x: x[3], reverse=True)   # RVOL tertinggi dulu
@@ -19056,6 +19068,8 @@ def thread_dipbuy_universe_scan() -> None:
 
     import pandas_ta as _pta_db
     candidates = []
+    near_miss_db = []   # 14/10/2026: tab "Kandidat Terdekat" -- syarat cuma 1 (drop 4h cukup dalam),
+                         # jadi "near miss" di sini = koin yg SUDAH turun tapi belum cukup dalam.
     for sym in universe:
         if is_cooldown_enabled('dipbuy_universe') and cooldown_remaining(sym) > 0: continue
         if sizing_fail_remaining(sym) > 0: continue
@@ -19070,7 +19084,11 @@ def thread_dipbuy_universe_scan() -> None:
             close_now, close_prev = float(df['close'].iloc[-1]), float(df['close'].iloc[-2])
             if close_prev <= 0: continue
             chg_4h = (close_now / close_prev - 1) * 100
-            if chg_4h > SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN: continue
+            if chg_4h > SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN:
+                if chg_4h < 0:   # sudah turun, belum cukup dalam -- ini "near miss" beneran
+                    near_miss_db.append((0, sym,
+                        [f"drop 4h belum cukup dalam ({chg_4h:+.2f}% > ambang {SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN:g}%)"], 1))
+                continue
             atrp_series = _pta_db.atr(df['high'], df['low'], df['close'], length=14) / df['close'] * 100
             atr_now = float(atrp_series.iloc[-1])
             if pd.isna(atr_now) or atr_now <= 0: continue
@@ -19083,6 +19101,8 @@ def thread_dipbuy_universe_scan() -> None:
         except Exception as e:
             log(f"  [T_DIPBUY] error {sym}: {e}")
 
+    log_near_miss("Dip-Buy Universe", near_miss_db, 1)
+    update_dashboard_near_miss("Dip-Buy Universe", near_miss_db)
     if not candidates:
         return
     candidates.sort(key=lambda x: x[3])   # chg_4h paling negatif (dip terdalam) dulu
@@ -22728,6 +22748,14 @@ def run_web_dashboard():
                 "Decouple-4h": (
                     f"Scan sepanjang candle 4h, tidak dibatasi jendela waktu. Sinyal = selisih return "
                     f"20-candle vs BTC baru saja melewati ambang {DECOUPLE_REL_MIN_PCT:g}pp (crossing fresh)."
+                ),
+                "RVolBreak-8h": (
+                    f"Scan sepanjang candle 8h, tidak dibatasi jendela waktu. Sinyal = breakout Donchian "
+                    f"24-candle DAN RVOL >= {RVOLBREAK_RVOL_MIN:g}x."
+                ),
+                "Dip-Buy Universe": (
+                    f"Scan sepanjang candle 4h, tidak dibatasi jendela waktu. Sinyal = turun "
+                    f">= {abs(SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN):g}% dalam 1 candle 4h."
                 ),
                 "Hunting-4h": (
                     f"Scan Hunting terakhir: {_hunting_scan_ts}. "
