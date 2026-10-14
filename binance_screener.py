@@ -7635,10 +7635,10 @@ def mombreak_btc_gate_ok() -> bool:
     -> pakai candle 1h BTC TERAKHIR YANG SUDAH CLOSED (sama gaya check_mombreak_signal() baca candle
     sinyal sendiri). Elapsed < 100% (belum tervalidasi, tapi dibuat bisa jalan kalau Mas Budi
     coba ubah) -> pakai candle 1h BTC yg SEDANG berjalan, baru dicek begitu elapsed-nya cukup.
-    14/10/2026: diturunkan dari varian 3m (TF lama MomentumBreak-1h, sebelum ganti nama dari
-    QScalp-3m) -- MOMBREAK_BTC_GATE_GENDUT_PCT=0.10 BELUM diuji ulang utk candle 1 jam (dulu
-    divalidasi khusus candle 3 menit, gerak 0.10% di situ != gerak 0.10% di candle 1 jam yg
-    jauh lebih lambar). Dipertahankan apa adanya sbg titik awal, PERLU dibacktest ulang."""
+    14/10/2026: diturunkan dari varian 3m (TF lama strategi ini sebelum ganti nama) --
+    MOMBREAK_BTC_GATE_GENDUT_PCT=0.10 BELUM diuji ulang utk candle 1 jam (dulu divalidasi
+    khusus candle 3 menit, gerak 0.10% di situ != gerak 0.10% di candle 1 jam yg jauh lebih
+    lambar). Dipertahankan apa adanya sbg titik awal, PERLU dibacktest ulang."""
     if not is_btc_gate_enabled('mombreak_1h'):
         return True
     elapsed_threshold = get_btc_gate_elapsed_pct('mombreak_1h')
