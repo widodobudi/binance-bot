@@ -13079,6 +13079,7 @@ _dashboard_state = {
         "CrossEMA-4h": [],
         "Akumulasi-4h": [],
         "TrenKonfirmasi-4h": [],
+        "Decouple-4h": [],
     },
     "last_scan": {},
 }
@@ -18698,6 +18699,7 @@ def thread_decouple_scan() -> None:
 
     import pandas_ta as _pta_dc
     candidates = []
+    near_miss_dc = []   # 14/10/2026: tab "Kandidat Terdekat" -- cuma 2 syarat nyata (crossing fresh)
     for sym in universe:
         if sym in existing: continue
         # 09/10/2026: TIDAK exclude bStock di sini (beda dari trend_confirm_4h) -- shadow yg
@@ -18717,6 +18719,13 @@ def thread_decouple_scan() -> None:
             coin_ret20_prev = cc[-2] / cc[-2 - DECOUPLE_LOOKBACK] - 1
             rel_now = (coin_ret20 - btc_ret20) * 100
             rel_prev = (coin_ret20_prev - btc_ret20_prev) * 100
+            _dc_checks = [
+                (rel_now >= DECOUPLE_REL_MIN_PCT, f"selisih vs BTC < {DECOUPLE_REL_MIN_PCT:g}pp ({rel_now:+.1f}pp)"),
+                (rel_prev < DECOUPLE_REL_MIN_PCT, f"sudah unggul sejak candle lalu (bukan crossing baru)"),
+            ]
+            _dc_n_pass = sum(1 for ok, _ in _dc_checks if ok)
+            if _dc_n_pass >= 1:
+                near_miss_dc.append((_dc_n_pass, sym, [m for ok, m in _dc_checks if not ok], len(_dc_checks)))
             if not (rel_now >= DECOUPLE_REL_MIN_PCT and rel_prev < DECOUPLE_REL_MIN_PCT):
                 continue
             atrp_series = _pta_dc.atr(df['high'], df['low'], df['close'], length=14) / df['close'] * 100
@@ -18732,6 +18741,8 @@ def thread_decouple_scan() -> None:
         except Exception as e:
             log(f"  [T_DECOUPLE] error {sym}: {e}")
 
+    log_near_miss("Decouple-4h", near_miss_dc, 2)
+    update_dashboard_near_miss("Decouple-4h", near_miss_dc)
     if not candidates:
         return
     candidates.sort(key=lambda x: x[3], reverse=True)
@@ -22713,6 +22724,10 @@ def run_web_dashboard():
                 ),
                 "TrenKonfirmasi-4h": (
                     f"Scan sepanjang candle 4h (tiap {TRENDCONFIRM_SCAN_INTERVAL}s), tidak dibatasi jendela waktu."
+                ),
+                "Decouple-4h": (
+                    f"Scan sepanjang candle 4h, tidak dibatasi jendela waktu. Sinyal = selisih return "
+                    f"20-candle vs BTC baru saja melewati ambang {DECOUPLE_REL_MIN_PCT:g}pp (crossing fresh)."
                 ),
                 "Hunting-4h": (
                     f"Scan Hunting terakhir: {_hunting_scan_ts}. "
