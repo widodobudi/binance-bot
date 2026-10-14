@@ -7993,6 +7993,18 @@ def blockers_entry_4h(df) -> list:
     live_price = float(df.iloc[-1]["close"])
     if not (live_price > float(kc_now)):
         return ["Belum tembus Keltner upper"]
+    # 15/10/2026 (permintaan Mas Budi, dipicu AXL -8,53%/GNS -10,84% 14/10/2026 -- dua2nya
+    # breakout di candle 4h YANG SAMA, elapsed ~88-89%): backtest 177 pair 2022-2026 (131.684
+    # sinyal, K=0.30 live, 2x cross-check identik) -- breakout yang baru muncul di SEPEREMPAT
+    # TERAKHIR candle 4h (elapsed>=75%) WR jauh lebih lemah (41-46%) drpd yang muncul lebih
+    # awal (46-56%), KONSISTEN di semua 5 tahun 2022-2026 tanpa kecuali (lihat validasi
+    # per-tahun). Blokir di sini (babak 1/individual, SEBELUM AI) krn kasus nyata GNS
+    # SENDIRIAN di kolam babak-1 saat itu (1/1 diloloskan) -- deprioritize di batch-rank
+    # saja TIDAK akan menyelamatkannya, harus gerbang wajib teknikal spt ini.
+    candle_open_ms = int(df.iloc[-1]["ts"])
+    elapsed_pct = (time.time() * 1000 - candle_open_ms) / (4 * 3600 * 1000) * 100
+    if elapsed_pct >= 75:
+        return [f"Breakout telat ({elapsed_pct:.0f}% candle 4h sudah berjalan, histori WR jauh lebih lemah di atas 75%)"]
     return []
 
 def check_entry_4h(df) -> bool:
