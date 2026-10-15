@@ -25895,6 +25895,15 @@ AI_OPEN_APPROVE_COOLDOWN_SEC = 10 * 60
 # supaya begitu AI pulih (mis. saldo di-top-up), keputusan riil kembali jalan cepat.
 AI_UNAVAILABLE_COOLDOWN_SEC = 5 * 60
 _ai_open_skip_cooldown = {}   # {(symbol, strategy): until_timestamp}
+# 15/10/2026 (permintaan Mas Budi): dulu SKIP sengaja TIDAK PERNAH notif Telegram (03/09/2026,
+# lihat REMARK di ai_decision_open -- real-time per-penolakan kebukti bikin spam, WALUSDT/
+# SOXSBUSDT ditolak berulang tiap 5-10 menit). Sekarang diminta lagi TAPI versi rangkuman
+# berkala (bukan real-time per kejadian) -- tiap AI_SKIP_SUMMARY_INTERVAL_SEC, kumpulan
+# penolakan sejak rangkuman terakhir dikirim sbg 1 pesan, dikelompokkan per (strategi, simbol)
+# supaya pengulangan simbol yang sama tidak membuat pesan panjang berulang-ulang.
+AI_SKIP_SUMMARY_INTERVAL_SEC = 60 * 60
+_ai_skip_summary_buffer = []
+_ai_skip_summary_lock = threading.Lock()
 # 01/10/2026 (permintaan Mas Budi, audit biaya AI batch-rank): label strategi yg dipakai ai_decision_open()
 # -> key config utk get_strategy_base_usd(), supaya cek kapasitas SEBELUM AI memakai base order RIIL
 # strategi itu (bukan 0 spt di cek 25/09). Root cause (log Railway 28/09, GRT/USDT dipilih 12x tapi tidak
@@ -26963,12 +26972,21 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
         f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
         f"{'─'*36}\n"
     )
-    # SKIP TIDAK PERNAH kirim Telegram lagi (03/09/2026, permintaan Mas Budi, berlaku ke SEMUA
+    # SKIP TIDAK PERNAH kirim Telegram REAL-TIME (03/09/2026, permintaan Mas Budi, berlaku ke SEMUA
     # 7 strategi -- bukan cuma TrenKonfirmasi-4h): SKIP artinya tidak ada tindakan, notifnya jauh
     # lebih sering & kurang bernilai dibanding OPEN (yg berarti sesuatu benar2 terjadi), dan
     # volume-nya kebukti bikin spam. Tetap dicatat (log() + log_ai_decision() di atas) utk
-    # audit/investigasi, cuma dihapus dari Telegram. OPEN tetap gated `notify` spt sebelumnya
-    # (TrenKonfirmasi-4h babak 1 masih notify=False di situ, 6 strategi lain default notify=True).
+    # audit/investigasi. OPEN tetap gated `notify` spt sebelumnya (TrenKonfirmasi-4h babak 1
+    # masih notify=False di situ, 6 strategi lain default notify=True).
+    # 15/10/2026 (permintaan Mas Budi): SKIP sekarang DITAMPUNG (bukan dikirim langsung) ke buffer
+    # rangkuman berkala -- lihat run_ai_skip_summary_notifier(), dikirim 1x/jam sbg 1 pesan gabungan.
+    if not decision:
+        with _ai_skip_summary_lock:
+            _ai_skip_summary_buffer.append({
+                'strategy': strategy, 'symbol': symbol,
+                'reason': (reasoning.split('\n')[0].strip()[:150] if reasoning else '(AI tidak kasih alasan tertulis)'),
+                'ts': now_wib().strftime('%H:%M'),
+            })
     if notify and decision:
         if reasoning:
             send_telegram(
@@ -26980,6 +26998,38 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
                 parse_mode=None
             )
     return decision
+
+
+def run_ai_skip_summary_notifier():
+    """15/10/2026 (permintaan Mas Budi): kirim rangkuman penolakan AI babak-1 (ai_decision_open
+    SKIP) tiap AI_SKIP_SUMMARY_INTERVAL_SEC sbg 1 pesan Telegram -- bukan per-kejadian (itu
+    sudah terbukti spam & SENGAJA dimatikan 03/09/2026). Dikelompokkan per (strategi, simbol)
+    supaya simbol yg ditolak berkali-kali dalam 1 jam (umum terjadi, lihat WALUSDT/SOXSBUSDT)
+    cuma muncul 1 baris + hitungan, bukan diulang-ulang."""
+    while True:
+        time.sleep(AI_SKIP_SUMMARY_INTERVAL_SEC)
+        try:
+            with _ai_skip_summary_lock:
+                items = list(_ai_skip_summary_buffer)
+                _ai_skip_summary_buffer.clear()
+            if not items:
+                continue
+            grouped = {}
+            for it in items:
+                key = (it['strategy'], it['symbol'])
+                g = grouped.setdefault(key, {'count': 0, 'reason': '', 'ts': ''})
+                g['count'] += 1
+                g['reason'] = it['reason']
+                g['ts'] = it['ts']
+            lines = [f"🔕 Ringkasan penolakan AI ({len(items)} keputusan, {len(grouped)} simbol unik, {AI_SKIP_SUMMARY_INTERVAL_SEC//60} menit terakhir):"]
+            for (strat, sym), g in sorted(grouped.items(), key=lambda kv: -kv[1]['count'])[:25]:
+                cnt_txt = f" ({g['count']}x, terakhir {g['ts']})" if g['count'] > 1 else f" ({g['ts']})"
+                lines.append(f"• {to_display_pair(sym)} [{strat}]{cnt_txt}: {g['reason']}")
+            if len(grouped) > 25:
+                lines.append(f"... dan {len(grouped) - 25} simbol lain (lihat ai_decisions_log.txt utk lengkap)")
+            send_telegram("\n".join(lines), parse_mode=None)
+        except Exception as e:
+            log(f"WARN run_ai_skip_summary_notifier: {e}")
 
 
 def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: int = 5,
@@ -27642,6 +27692,9 @@ if __name__ == '__main__':
     n_threads += 1
     t_mombreak = threading.Thread(target=run_thread_mombreak, daemon=True, name="T-MomentumBreak")
     threads.append(t_mombreak)
+    n_threads += 1
+    t_skip_summary = threading.Thread(target=run_ai_skip_summary_notifier, daemon=True, name="T-AISkipSummary")
+    threads.append(t_skip_summary)
     n_threads += 1
 
     for t in threads: t.start()
