@@ -15511,7 +15511,7 @@ function renderClosedTradesRows() {
             var usd = parseFloat(r.profit_usd||0);
             var clr = pct>=0?'var(--green)':'var(--red)';
             return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">' +
-                '<td style="padding:5px 8px;font-weight:600">' + (r.symbol ? ('<a href="javascript:void(0)" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="color:' + clr + ';text-decoration:none;cursor:pointer" title="Buka chart TradingView">' + r.symbol + '</a>') : '-') + '</td>' +
+                '<td style="padding:5px 8px;font-weight:600">' + (r.symbol ? ('<a href="javascript:void(0)" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="color:' + clr + ';text-decoration:none;cursor:pointer" title="Buka chart TradingView">' + r.symbol + '</a>' + (r.fixed_note ? ' <span style="color:var(--green);font-size:9px;font-weight:600;cursor:help;border:1px solid var(--green);border-radius:3px;padding:0 3px" title="Sudah di-fix: ' + String(r.fixed_note).replace(/"/g,'&quot;') + '">✓ FIXED</span>' : '')) : '-') + '</td>' +
                 '<td style="padding:5px 8px;color:var(--muted)">' + (strat_map[r.strategy]||r.strategy||'-') + '</td>' +
                 '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.open_time ? r.open_time.substring(0,16) : '-') + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.entry_price||'-') + '</td>' +
@@ -25724,6 +25724,24 @@ def run_web_dashboard():
                 def _patched_key(r):
                     return ((r.get('symbol') or ''), (r.get('strategy') or 'brkX2'),
                             (r.get('open_time_wib') or '')[:16] or 'c:' + (r.get('close_time_wib') or '')[:16])
+                # 16/10/2026 (permintaan Mas Budi): tanda "sudah di-fix" di BELAKANG nama pair pada baris
+                # yang TETAP TAMPIL di Closed Deals (beda dari _patched_hidden di atas yang MENYEMBUNYIKAN
+                # baris) -- baris2 ini akar masalahnya sudah ditangani fix yang sudah live, cuma ditandai
+                # biar kelihatan sekilas, row tetap ada apa adanya. Key = (symbol, close_time_wib menit) --
+                # SENGAJA tidak ikut strategy di key (identitas strategi KeltnerBreak-12h berubah2 lintas
+                # waktu: 'brkX2'/'brkX2_closed'/'brkX2_intrabar'/'brkX2_12h_closed', lihat union filter di
+                # atas -- symbol+menit-close sudah cukup unik utk match yg aman).
+                _WHY_FIX_EKSTREM_SIZING = "modal dikecilkan 25% utk sinyal tier Ekstrem ATR>=7% (live 16/10/2026, commit 5e59c40)"
+                _WHY_FIX_LATE_ENTRY_4H  = "entry breakout yg muncul di >=75% candle 4h (telat) sekarang diblokir (live 15/10/2026, commit b95c553)"
+                _known_fixed = {
+                    ('AVA/USDT',   '2026-10-16 14:02'): _WHY_FIX_EKSTREM_SIZING,
+                    ('MAGIC/USDT', '2026-10-12 21:41'): _WHY_FIX_EKSTREM_SIZING,
+                    ('MOVR/USDT',  '2026-10-01 21:05'): _WHY_FIX_EKSTREM_SIZING,
+                    ('AXL/USDT',   '2026-10-14 20:13'): _WHY_FIX_LATE_ENTRY_4H,
+                    ('GNS/USDT',   '2026-10-14 19:12'): _WHY_FIX_LATE_ENTRY_4H,
+                }
+                def _fixed_note_of(r):
+                    return _known_fixed.get(((r.get('symbol') or ''), (r.get('close_time_wib') or '')[:16]), '')
                 show_hidden = request.args.get("show_hidden", "") in ("1", "true", "True")
                 hidden_patched_rows = []
                 if not show_hidden:
@@ -25828,6 +25846,7 @@ def run_web_dashboard():
                         "duration":     dur,
                         "rsi_open":     r.get('rsi_open',''),
                         "entry_mode":   r.get('entry_mode',''),
+                        "fixed_note":   _fixed_note_of(r),
                     })
                 total = wins + losses
                 wr = round(wins / total * 100, 1) if total else 0
