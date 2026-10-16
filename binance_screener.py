@@ -23496,30 +23496,6 @@ def run_web_dashboard():
             log(f"[FIX-QTY] {sym} qty bot {old:.4f} -> wallet {wallet:.4f} (selisih {wallet - old:+.4f}); {tier_note}")
             return jsonify({"ok": True, "sym": sym, "qty_lama": old, "qty_baru": wallet, "tier": tier_note})
 
-        @app.route("/api/_debug_futures_connectivity")
-        def api_debug_futures_connectivity():
-            """SEMENTARA (16/10/2026, permintaan Mas Budi) -- cek apakah server Railway bisa
-            akses fapi.binance.com (REST API Binance FUTURES, domain BEDA dari api.binance.com
-            yg sudah dipakai bot ini utk spot). Dipicu rencana nambah sentimen BTC (funding
-            rate/long-short ratio) sbg konteks tambahan ke ai_decision_open/batch_rank/
-              add_fund/close. HAPUS endpoint ini setelah hasilnya dicek -- bukan fitur permanen."""
-            import urllib.request
-            results = {}
-            tests = {
-                'fapi_fundingRate': 'https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1',
-                'fapi_premiumIndex': 'https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT',
-                'futures_data_longshort': 'https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=1h&limit=1',
-            }
-            for name, url in tests.items():
-                try:
-                    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        body = resp.read().decode()[:300]
-                    results[name] = {"ok": True, "status": resp.status, "body_sample": body}
-                except Exception as e:
-                    results[name] = {"ok": False, "error": repr(e)[:300]}
-            return jsonify(results)
-
         @app.route("/api/btc_gate_status")
         def api_btc_gate_status():
             # 13/10/2026 (permintaan Mas Budi): panel status LIVE gerbang BTC per strategi di
