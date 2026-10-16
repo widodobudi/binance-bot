@@ -25904,6 +25904,14 @@ _ai_open_skip_cooldown = {}   # {(symbol, strategy): until_timestamp}
 AI_SKIP_SUMMARY_INTERVAL_SEC = 60 * 60
 _ai_skip_summary_buffer = []
 _ai_skip_summary_lock = threading.Lock()
+# 16/10/2026 (permintaan Mas Budi): email versi sama TAPI tiap 4 jam (bukan 1 jam) -- email
+# dirasa lebih "berat" dari Telegram, tiap jam kerasa spam di inbox. Buffer TERPISAH dari
+# Telegram (BUKAN baca buffer yg sama) krn buffer Telegram di-clear tiap 1 jam -- kalau email
+# baca buffer itu tiap 4 jam, isinya cuma sisa 1 jam terakhir (3 jam lainnya sudah kepakai
+# duluan sama notifier Telegram), bukan rangkuman 4 jam penuh.
+AI_SKIP_EMAIL_INTERVAL_SEC = 4 * 60 * 60
+_ai_skip_email_buffer = []
+_ai_skip_email_lock = threading.Lock()
 # 01/10/2026 (permintaan Mas Budi, audit biaya AI batch-rank): label strategi yg dipakai ai_decision_open()
 # -> key config utk get_strategy_base_usd(), supaya cek kapasitas SEBELUM AI memakai base order RIIL
 # strategi itu (bukan 0 spt di cek 25/09). Root cause (log Railway 28/09, GRT/USDT dipilih 12x tapi tidak
@@ -26981,12 +26989,15 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     # 15/10/2026 (permintaan Mas Budi): SKIP sekarang DITAMPUNG (bukan dikirim langsung) ke buffer
     # rangkuman berkala -- lihat run_ai_skip_summary_notifier(), dikirim 1x/jam sbg 1 pesan gabungan.
     if not decision:
+        _skip_entry = {
+            'strategy': strategy, 'symbol': symbol,
+            'reason': (reasoning.split('\n')[0].strip()[:150] if reasoning else '(AI tidak kasih alasan tertulis)'),
+            'ts': now_wib().strftime('%H:%M'),
+        }
         with _ai_skip_summary_lock:
-            _ai_skip_summary_buffer.append({
-                'strategy': strategy, 'symbol': symbol,
-                'reason': (reasoning.split('\n')[0].strip()[:150] if reasoning else '(AI tidak kasih alasan tertulis)'),
-                'ts': now_wib().strftime('%H:%M'),
-            })
+            _ai_skip_summary_buffer.append(_skip_entry)
+        with _ai_skip_email_lock:
+            _ai_skip_email_buffer.append(_skip_entry)
     if notify and decision:
         if reasoning:
             send_telegram(
@@ -27030,6 +27041,38 @@ def run_ai_skip_summary_notifier():
             send_telegram("\n".join(lines), parse_mode=None)
         except Exception as e:
             log(f"WARN run_ai_skip_summary_notifier: {e}")
+
+
+def run_ai_skip_email_notifier():
+    """16/10/2026 (permintaan Mas Budi): versi email dari run_ai_skip_summary_notifier(), tiap
+    AI_SKIP_EMAIL_INTERVAL_SEC (4 jam) -- buffer SENDIRI (_ai_skip_email_buffer), independen dari
+    buffer Telegram yg di-clear tiap 1 jam."""
+    while True:
+        time.sleep(AI_SKIP_EMAIL_INTERVAL_SEC)
+        try:
+            with _ai_skip_email_lock:
+                items = list(_ai_skip_email_buffer)
+                _ai_skip_email_buffer.clear()
+            if not items:
+                continue
+            grouped = {}
+            for it in items:
+                key = (it['strategy'], it['symbol'])
+                g = grouped.setdefault(key, {'count': 0, 'reason': '', 'ts': ''})
+                g['count'] += 1
+                g['reason'] = it['reason']
+                g['ts'] = it['ts']
+            lines = [f"Ringkasan penolakan AI {AI_SKIP_EMAIL_INTERVAL_SEC // 3600} jam terakhir "
+                     f"({len(items)} keputusan, {len(grouped)} simbol unik):", ""]
+            for (strat, sym), g in sorted(grouped.items(), key=lambda kv: -kv[1]['count']):
+                cnt_txt = f" ({g['count']}x, terakhir {g['ts']})" if g['count'] > 1 else f" ({g['ts']})"
+                lines.append(f"- {to_display_pair(sym)} [{strat}]{cnt_txt}: {g['reason']}")
+            send_email_open_long(
+                f"Ringkasan penolakan AI -- {len(grouped)} simbol ({now_wib().strftime('%d/%m %H:%M')} WIB)",
+                "\n".join(lines)
+            )
+        except Exception as e:
+            log(f"WARN run_ai_skip_email_notifier: {e}")
 
 
 def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: int = 5,
@@ -27695,6 +27738,9 @@ if __name__ == '__main__':
     n_threads += 1
     t_skip_summary = threading.Thread(target=run_ai_skip_summary_notifier, daemon=True, name="T-AISkipSummary")
     threads.append(t_skip_summary)
+    n_threads += 1
+    t_skip_email = threading.Thread(target=run_ai_skip_email_notifier, daemon=True, name="T-AISkipEmail")
+    threads.append(t_skip_email)
     n_threads += 1
 
     for t in threads: t.start()
