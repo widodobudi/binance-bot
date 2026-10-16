@@ -13918,7 +13918,7 @@ refreshShadowChart();
           {% endif %}
         </td>
         <td style="white-space:nowrap">
-          <div class="{{ "profit-pos" if d.get("upnl_usd",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_usd",0)) }} <span style="font-size:9px;color:var(--muted)">(${{ "%.0f"|format(d.get("total_usd_display",0)) }})</span></div>
+          <div class="{{ "profit-pos" if d.get("upnl_usd",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_usd",0)) }} <span style="font-size:12px;color:var(--muted)">(${{ "%.0f"|format(d.get("total_usd_display",0)) }})</span></div>
           <div class="{{ "profit-pos" if d.get("upnl_pct",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_pct",0)) }}%</div>
         </td>
         <td>
