@@ -7831,6 +7831,71 @@ def get_live_atr_pct(symbol: str, strategy: str, fallback: float) -> float:
         _live_atr_cache[symbol] = (now, atrp)
     return atrp
 
+# ───────────────── Idea #5 (17/10/2026, persetujuan Mas Budi): arm-dini + perketat
+# trailing begitu harga menyentuh BB Upper(20,2) ─────────────────
+# Backtest (TRAIN 2022-2024 / TEST 2025-2026, exit asli tiap strategi via AST):
+#   KeltnerBreak-12h : total +14.1-14.5%
+#   brkX2-4h         : total +8.2-10.5%, WR naik 50.7->58.0%/53.4->60.2%
+#   MomentumBreak-1h : total +65-72%, WR naik 61.7->74.1%/63.8->77.5% (rumus bespoke-nya
+#                      sendiri sudah sangat ketat/flat, jadi BB Upper sbg jalur arm
+#                      alternatif dampaknya jauh lebih besar dari 3 strategi ATR-tiered)
+#   BBSnap-4h        : +-0% (non-breakout, entry jauh dari BB Upper -- mekanisme jarang aktif)
+# DIKECUALIKAN: hunting_4h (TERMINATED 03/10/2026, keputusan Mas Budi -- tidak pernah diuji
+# kombinasi ini) dan akum_entry_a/b (sudah dikecualikan dari trailing sama sekali, lihat _is_akum).
+BBUPPER_TIGHT_FACTOR = 0.6
+
+# Peta timeframe native per strategi KHUSUS utk fitur ini -- SENGAJA baru & lengkap, TIDAK
+# mewarisi mapping implisit di get_live_atr_pct() di atas (itu punya celah lama: strategi yg
+# ditambah belakangan -- trend_confirm_4h/decouple_4h/bbsnap_4h/bbsnap_8h/rvolbreak_8h/dipbuy_universe
+# -- jatuh ke "else" TIMEFRAME global 12h, padahal TF asli mereka 4h/8h; celah itu SENGAJA TIDAK
+# disentuh di sini, terpisah dari fitur baru ini).
+BB_UPPER_TF_BY_STRATEGY = {
+    'brkX2_12h_closed': '12h', 'brkX2': '12h', 'brkX2_closed': '12h', 'brkX2_intrabar': '12h',
+    'brkX2_4h': '4h', 'brkX2_crossema': '4h',
+    'trend_confirm_4h': '4h', 'decouple_4h': '4h', 'dipbuy_universe': '4h',
+    'bbsnap_4h': '4h', 'bbsnap_8h': '8h',
+    'rvolbreak_8h': '8h', 'rvolbreak_1h': '1h',
+    'reversal': REVERSAL_TIMEFRAME,
+    'mombreak_1h': '1h',
+    'hunting_4h': '4h',
+}
+
+LIVE_BBUPPER_CACHE_SECONDS = 300  # 5 menit -- TTL pola sama dgn LIVE_ATR_CACHE_SECONDS
+_live_bbupper_cache = {}
+_live_bbupper_cache_lock = threading.Lock()
+
+def get_live_bb_upper(symbol: str, strategy: str):
+    """BB Upper(20,2) live dari candle TERTUTUP TERAKHIR (bukan candle yang masih berjalan --
+    backtest 17/10/2026 membuktikan varian closed-candle menang lawan intrabar utk arm-dini
+    ini, sama seperti idea #2 di sesi sebelumnya). Return None kalau strategi tidak ada di
+    BB_UPPER_TF_BY_STRATEGY (mis. akum_entry_a/b) atau fetch/hitung gagal -- caller WAJIB
+    treat None sebagai "fitur tidak aktif utk deal ini", bukan 0."""
+    tf = BB_UPPER_TF_BY_STRATEGY.get(strategy)
+    if tf is None:
+        return None
+    now = time.time()
+    cache_key = (symbol, tf)
+    with _live_bbupper_cache_lock:
+        cached = _live_bbupper_cache.get(cache_key)
+        if cached and now - cached[0] < LIVE_BBUPPER_CACHE_SECONDS:
+            return cached[1]
+    bb_upper = None
+    try:
+        frame = get_ohlcv_4h(symbol, limit=35) if tf == '4h' else get_ohlcv(symbol, interval=tf, limit=35)
+        if frame is not None and len(frame) >= 22:
+            closed = frame.iloc[:-1]  # buang candle terakhir -- kemungkinan masih berjalan
+            bb = ta.bbands(closed['close'], length=20, std=2.0)
+            bbu_col = next((c for c in bb.columns if c.startswith('BBU_')), None)
+            if bbu_col is not None:
+                val = bb[bbu_col].iloc[-1]
+                if not pd.isna(val):
+                    bb_upper = float(val)
+    except Exception as error:
+        log(f"[T2] live BB Upper {symbol} ({strategy}) gagal: {error}")
+    with _live_bbupper_cache_lock:
+        _live_bbupper_cache[cache_key] = (now, bb_upper)
+    return bb_upper
+
 def current_volatility_guard(symbol: str, strategy: str, entry_atr: float) -> tuple:
     """Return (allowed, atr_pct) for add-fund; unavailable data fails closed."""
     try:
@@ -9590,6 +9655,11 @@ def thread2_monitor():
                         active_deals[sym]['bo_addfund_dip_from'] = None
                 d['bo_addfund_dip_from'] = None
 
+        # Idea #5 (17/10/2026): BB Upper live, dipakai utk arm-dini + perketat trailing di bawah.
+        # TIDAK berlaku utk hunting_4h (TERMINATED, keputusan Mas Budi -- lihat REMARK BBUPPER_TIGHT_FACTOR).
+        live_bb_upper = get_live_bb_upper(sym, strat)
+        _bbupper_touched = strat != 'hunting_4h' and live_bb_upper is not None and peak >= live_bb_upper
+
         # Trailing factor variatif untuk hunting_4h
         if strat == 'hunting_4h':
             _sk   = d.get('last_stoch_k', float('nan'))
@@ -9611,8 +9681,12 @@ def thread2_monitor():
             tdist   = round(base_td * _factor, 4)
         elif strat == 'mombreak_1h':
             tdist = mombreak_trail_pct()  # flat %, bukan ATR-tiered -- lihat backtest 3 ronde
+            if _bbupper_touched:
+                tdist = round(tdist * BBUPPER_TIGHT_FACTOR, 4)
         else:
             tdist = trailing_dist_progressive(live_atrp, prof_peak)
+            if _bbupper_touched:
+                tdist = round(tdist * BBUPPER_TIGHT_FACTOR, 4)
         armed = d.get('trailing_armed', False)
 
         # arm trailing setelah profit >= arm_pct tier ATR% LIVE (pakai puncak, bukan
@@ -9621,7 +9695,9 @@ def thread2_monitor():
         _is_akum = strat in ('akum_entry_a', 'akum_entry_b')
         _mombreak_arm = strat == 'mombreak_1h'
         _cur_arm_pct = mombreak_arm_pct() if _mombreak_arm else get_arm_pct(live_atrp)
-        if (not armed) and (not _is_akum) and get_deal_override(sym, 'arm_trailing_enabled', True) and prof_peak >= _cur_arm_pct:
+        # Idea #5: arm dini kalau BB Upper tersentuh DULUAN, sebelum tier ATR%/flat% biasa
+        # tercapai -- _bbupper_touched sudah False utk hunting_4h (lihat di atas).
+        if (not armed) and (not _is_akum) and get_deal_override(sym, 'arm_trailing_enabled', True) and (prof_peak >= _cur_arm_pct or _bbupper_touched):
             # AI decision jika ai_call=True -- cooldown 10 menit (06/09/2026, pola sama persis dgn
             # fix ai_decision_close 03/09/2026): SEBELUMNYA ai_decision_armed() ditanya ULANG tiap
             # siklus T2 (~15-20 detik) selama profit masih di atas ambang arm & AI masih bilang
@@ -9647,7 +9723,9 @@ def thread2_monitor():
                 save_active_deals()
                 continue
             armed = True
-            log(f"[T2] {sym} trailing ARMED (peak profit {prof_peak:.2f}%, ATR% live {live_atrp:.2f}%)")
+            _arm_via = "BB Upper" if (_bbupper_touched and prof_peak < _cur_arm_pct) else f"tier {_cur_arm_pct:.1f}%"
+            log(f"[T2] {sym} trailing ARMED via {_arm_via} (peak profit {prof_peak:.2f}%, ATR% live {live_atrp:.2f}%, "
+                f"BB Upper live {_fmt_price(live_bb_upper) if live_bb_upper else '—'})")
             # Simpan waktu arm, ATR% live saat arm (acuan un-arm), dan stoch saat arm
             with active_deals_lock:
                 if sym in active_deals:
@@ -9660,6 +9738,8 @@ def thread2_monitor():
             log_oac('ARMED', sym, d.get('strategy', 'brkX2'), {
                 'peak_profit':  f"{prof_peak:.2f}%",
                 'arm_pct':      f"{_cur_arm_pct:.1f}%",
+                'arm_via':      _arm_via,
+                'bb_upper_live': _fmt_price(live_bb_upper) if live_bb_upper else "—",
                 'atr_pct':      f"{live_atrp:.2f}%",
                 'trail_dist':   f"{tdist:.2f}%",
                 'entry_price':  _fmt_price(d.get('entry_price', 0)),
@@ -22954,18 +23034,24 @@ def run_web_dashboard():
                 # kondisi arm (kalau Wait) atau ke titik close sebenarnya (kalau sudah armed,
                 # deviasi trailing saja cuma aturan tetap, bukan jarak live ke stop).
                 if dd.get("strategy", "") not in ("akum_entry_a", "akum_entry_b"):
-                    _live_atrp_d = get_live_atr_pct(sym, dd.get("strategy", "brkX2"), dd.get("atr_pct", 3.0) or 3.0)
+                    _strat_d_bbu = dd.get("strategy", "brkX2")
+                    _live_atrp_d = get_live_atr_pct(sym, _strat_d_bbu, dd.get("atr_pct", 3.0) or 3.0)
+                    _peak_d = dd.get("peak", ep) or ep
+                    _live_bbu_d = get_live_bb_upper(sym, _strat_d_bbu)
+                    _bbu_touched_d = (_strat_d_bbu != 'hunting_4h' and _live_bbu_d is not None and _peak_d >= _live_bbu_d)
                     if dd.get("trailing_armed"):
-                        _peak_d = dd.get("peak", ep) or ep
                         if _peak_d > 0 and ep > 0:
                             _prof_peak_d = (_peak_d / ep - 1) * 100 - FEE_ROUND_TRIP_PCT
-                            _tdist_d = trailing_dist_progressive(_live_atrp_d, _prof_peak_d)
+                            _tdist_d = mombreak_trail_pct() if _strat_d_bbu == 'mombreak_1h' else trailing_dist_progressive(_live_atrp_d, _prof_peak_d)
+                            if _bbu_touched_d:
+                                _tdist_d = round(_tdist_d * BBUPPER_TIGHT_FACTOR, 4)
                             _stop_price_d = _peak_d * (1 - _tdist_d / 100)
                             if _stop_price_d > 0:
                                 _gap_pct_d = (lp / _stop_price_d - 1) * 100
-                                dd["arm_status_detail"] = f"trail {_tdist_d:.1f}%, jarak ke stop {_gap_pct_d:.2f}%"
+                                dd["arm_status_detail"] = f"trail {_tdist_d:.1f}%{' (BB Upper)' if _bbu_touched_d else ''}, jarak ke stop {_gap_pct_d:.2f}%"
                     else:
-                        dd["arm_status_detail"] = f"arm @ +{get_arm_pct(_live_atrp_d):.1f}%"
+                        _arm_pct_d = mombreak_arm_pct() if _strat_d_bbu == 'mombreak_1h' else get_arm_pct(_live_atrp_d)
+                        dd["arm_status_detail"] = "arm (BB Upper tersentuh)" if _bbu_touched_d else f"arm @ +{_arm_pct_d:.1f}%"
                 deals_display[sym] = dd
             closest_to_close = estimate_closest_deal_to_close(deals_display)
             with _dashboard_lock:
