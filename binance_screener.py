@@ -222,6 +222,10 @@ UNARM_ATR_MARGIN_PP     = 0.5   # ATR% live harus naik >0.5pp dari ATR% live saa
 UNARM_MIN_ARMED_MINUTES = 15    # minimal armed 15 menit sebelum boleh dievaluasi un-arm
 VOLATILITY_GUARD_ATR_PCT = 10.0  # ATR terbaru di atas ini: jangan add fund
 VOLATILITY_GUARD_ATR_MULT = 2.0   # ATR melonjak >=2x ATR saat open: jangan add fund
+# 16/10/2026 (permintaan Mas Budi, dipicu AVAUSDT -12,72% ATR Ekstrem di KeltnerBreak-12h):
+# modal dikecilkan jadi 25% kalau ATR saat sinyal sudah tier Ekstrem (>=7%, lihat hard_stop_pct())
+# -- lihat REMARK lengkap di open_deal_with_sizing(), cabang brkX2_12h_closed.
+BRKX2_12H_EKSTREM_SIZE_MULT = 0.25
 HARD_STOP_MULT = 1.1              # pengali (K) atas base hard-stop per tier ATR% (lihat hard_stop_pct()).
                                    # K=1.1 disepakati 26/08/2026 studi kasus TLM/USDT: base tier Volatil 9%
                                    # x1.1 = 9.9%, cover wick turun sampai -9.9% tanpa ke-exit (wick TLM -9.55%)
@@ -6754,6 +6758,17 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     elif strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed'):
         target  = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
         add_usd = 0
+        # 16/10/2026 (permintaan Mas Budi, dipicu AVAUSDT -12,72% ATR Ekstrem): tier Ekstrem
+        # TERBUKTI backtest justru tier PALING UNTUNG (WR 78,7%, avg +6,44%, 177 pair 2022-2026)
+        # -- makanya TIDAK diblokir & TIDAK exit dipercepat (keduanya terbukti memperburuk hasil
+        # keseluruhan). Yang dikecilkan cuma UKURAN MODAL-nya, bukan sinyalnya ditolak -- supaya
+        # kalau kebetulan kena hard-stop (21,3% dari sinyal Ekstrem), rugi $ per kejadian
+        # mengecil, tapi strategi tetap dapat exposure (walau lebih kecil) ke tier yg paling
+        # profitable itu. 25% dipilih Mas Budi, dekat anchor half-Kelly (~28%) dari win-rate/
+        # payoff-ratio tier Ekstrem (Kelly penuh 56%, dianggap terlalu agresif).
+        if strategy == 'brkX2_12h_closed' and atr_pct is not None and atr_pct >= 7.0:
+            target = round(target * BRKX2_12H_EKSTREM_SIZE_MULT, 2)
+            log(f"[SIZING] {symbol} brkX2_12h_closed tier Ekstrem (ATR%={atr_pct:.2f}) -> modal dikecilkan {BRKX2_12H_EKSTREM_SIZE_MULT*100:.0f}% jadi ${target:.2f}")
     # Decouple-4h LIVE (09/10/2026, Tahap 1/4): base_usd TETAP $50, TANPA add-fund/conviction-tier --
     # sama pola brkX2 (KeltnerBreak-12h), skor sinyal (score_to_target_usd) tidak relevan utk formula
     # 1-syarat-tunggal strategi ini.
@@ -8887,7 +8902,7 @@ def thread1_scan():
         v = held_bx12[sym]
         signal_price = v['signal_price']; atrp = v['atrp']; score = v['score']
 
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2_12h_closed')
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2_12h_closed', atr_pct=atrp)
         if ok:
             entry_price = get_price_now(sym)
             if entry_price <= 0:
@@ -10615,7 +10630,7 @@ def thread1c_scan_intrabar():
         signal_price = v['signal_price']; atrp = v['atrp']; score = v['score']
         price_now = v['price_now']; r12 = v['r12']
 
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2_12h_closed')
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2_12h_closed', atr_pct=atrp)
         if ok:
             entry_price = get_price_now(sym)
             if entry_price <= 0: entry_price = price_now
@@ -10833,7 +10848,7 @@ def thread1c_scan_intrabar_early():
         signal_price = v['signal_price']; atrp = v['atrp']; score = v['score']
         price_now = v['price_now']; r12 = v['r12']
 
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2_12h_closed')
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, 'brkX2_12h_closed', atr_pct=atrp)
         if ok:
             entry_price = get_price_now(sym)
             if entry_price <= 0: entry_price = price_now
