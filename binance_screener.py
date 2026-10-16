@@ -26796,64 +26796,107 @@ def fetch_ltf_context_for_ai(symbol: str) -> str:
         return ""
 
 
-_btc_sentiment_cache = {"ts": 0.0, "section": ""}
-BTC_SENTIMENT_CACHE_SEC = 600  # 10 menit -- funding rate baru tiap 8 jam, long/short ratio tiap bbrp menit
+_sentiment_raw_cache = {}  # symbol -> {"ts": float, "data": {...}}
+SENTIMENT_CACHE_SEC = 600  # 10 menit -- funding rate baru tiap 8 jam, long/short ratio tiap bbrp menit
 
-def get_btc_sentiment_section() -> str:
-    """Funding Rate & Long/Short Ratio BTCUSDT (fapi.binance.com, domain FUTURES --
-    beda dari api.binance.com yg dipakai bot ini utk spot, tapi sudah dikonfirmasi bisa
-    diakses dari Railway 16/10/2026). Di-cache BTC_SENTIMENT_CACHE_SEC supaya tidak
-    manggil API tiap keputusan AI. Fail-open: return "" kalau gagal (TIDAK memblokir
-    keputusan AI manapun -- info tambahan saja).
-
-    16/10/2026 (permintaan Mas Budi): ditambahkan sbg KONTEKS TAMBAHAN ke 4 titik
-    keputusan AI (ai_decision_open babak1, ai_decision_batch_rank babak2,
-    ai_decision_add_fund, ai_decision_close) utk SEMUA strategi -- BTC-wide, bukan
-    per-koin (banyak altcoin yg ditradingkan bot ini tidak py pasar futures sendiri).
-    Catatan peredam SENGAJA disertakan: backtest funding rate & 3 varian long/short
-    ratio BTCUSDT vs KeltnerBreak-12h (9.239 sinyal) & brkX2-4h (131.684 sinyal,
-    177+ pair, data.binance.vision 2022-2026) TIDAK menemukan korelasi kuat & konsisten
-    TRAIN/TEST (Spearman rho selalu <0,06; yg sempat "signifikan" di TRAIN top-trader
-    L/S ratio utk KeltnerBreak-12h HILANG TOTAL di TEST, p=0,80) -- supaya AI tidak
-    membangun narasi berlebihan dari data yg sudah terbukti lemah."""
+def _get_sentiment_raw(symbol: str) -> dict:
+    """Funding Rate & Long/Short Account Ratio PER-SIMBOL (fapi.binance.com, domain FUTURES
+    -- beda dari api.binance.com yg dipakai bot ini utk spot, tapi sudah dikonfirmasi bisa
+    diakses dari Railway 16/10/2026). Cache SENTIMENT_CACHE_SEC per symbol. Fail-open total:
+    field bernilai None kalau symbol itu TIDAK py pasar futures sendiri atau API gagal --
+    TIDAK exception, TIDAK memblokir pemanggil."""
     now = time.time()
-    if _btc_sentiment_cache["section"] and now - _btc_sentiment_cache["ts"] < BTC_SENTIMENT_CACHE_SEC:
-        return _btc_sentiment_cache["section"]
-    parts = []
+    cached = _sentiment_raw_cache.get(symbol)
+    if cached and now - cached["ts"] < SENTIMENT_CACHE_SEC:
+        return cached["data"]
+    data = {"funding_rate": None, "long_short_ratio": None, "long_pct": None, "short_pct": None}
     try:
         import urllib.request, json as _json
         req = urllib.request.Request(
-            "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT",
+            f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}",
             headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=8) as resp:
             d = _json.loads(resp.read().decode())
-        parts.append(f"Funding Rate BTCUSDT: {float(d['lastFundingRate'])*100:+.4f}% (per 8 jam)")
-    except Exception as e:
-        log(f"WARN [sentimen-BTC] funding rate gagal: {e}")
+        data["funding_rate"] = float(d['lastFundingRate'])
+    except Exception:
+        pass  # wajar -- banyak altcoin yg ditradingkan bot ini tidak py pasar futures sendiri
     try:
         import urllib.request, json as _json
         req = urllib.request.Request(
-            "https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=15m&limit=1",
+            f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol}&period=15m&limit=1",
             headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=8) as resp:
             d = _json.loads(resp.read().decode())
         if d:
-            parts.append(f"Long/Short Account Ratio BTCUSDT: {float(d[0]['longShortRatio']):.3f} "
-                          f"(long {float(d[0]['longAccount'])*100:.1f}% / short {float(d[0]['shortAccount'])*100:.1f}%)")
-    except Exception as e:
-        log(f"WARN [sentimen-BTC] long/short ratio gagal: {e}")
-    if not parts:
-        _btc_sentiment_cache["ts"] = now
-        _btc_sentiment_cache["section"] = ""
+            data["long_short_ratio"] = float(d[0]['longShortRatio'])
+            data["long_pct"] = float(d[0]['longAccount']) * 100
+            data["short_pct"] = float(d[0]['shortAccount']) * 100
+    except Exception:
+        pass
+    _sentiment_raw_cache[symbol] = {"ts": now, "data": data}
+    return data
+
+
+def _sentiment_has_data(data: dict) -> bool:
+    return data["funding_rate"] is not None or data["long_short_ratio"] is not None
+
+
+SENTIMENT_DAMPEN_NOTE = (
+    "backtest historis 2022-2026 (9.239 sinyal KeltnerBreak-12h + 131.684 sinyal brkX2-4h, "
+    "data.binance.vision) TIDAK menemukan korelasi kuat/konsisten metrik sentimen ini dgn hasil "
+    "trade -- jadikan info tambahan saja, BUKAN faktor penentu utama"
+)
+
+
+def get_sentiment_for(symbol: str):
+    """Return (label, is_fallback, data). Coba PER-KOIN dulu (symbol yg sedang dievaluasi);
+    kalau koin itu tidak py pasar futures sendiri (data kosong), fallback ke BTCUSDT sbg
+    gambaran umum pasar -- supaya selalu ada info ditampilkan, ditandai is_fallback=True
+    biar AI tidak salah kira itu sentimen koin yg sedang dievaluasi.
+    16/10/2026 (permintaan Mas Budi, "saya maunya pada semua coins"): dari 244 symbol
+    universe bot ini, 209 py pasar futures sendiri, 35 tidak (a.l. FLOKI/PEPE/SHIB/BONK/
+    LUNC/OSMO/AMP + token leverage/B-suffix) -- makanya fallback ini perlu, bukan opsional."""
+    data = _get_sentiment_raw(symbol)
+    if _sentiment_has_data(data):
+        return symbol, False, data
+    if symbol != "BTCUSDT":
+        btc_data = _get_sentiment_raw("BTCUSDT")
+        if _sentiment_has_data(btc_data):
+            return "BTCUSDT", True, btc_data
+    return symbol, False, data  # semua gagal (termasuk BTC) -- data all-None, caller cek _sentiment_has_data
+
+
+def get_sentiment_section(symbol: str) -> str:
+    """Versi LENGKAP (1 blok dgn header + catatan peredam) -- dipakai di ai_decision_open
+    (babak 1), ai_decision_add_fund, ai_decision_close: masing2 cuma 1 symbol per panggilan."""
+    label, is_fallback, data = get_sentiment_for(symbol)
+    if not _sentiment_has_data(data):
         return ""
-    section = (
-        "\nSentimen BTC (konteks tambahan, BUKAN per-koin):\n- " + "\n- ".join(parts) +
-        "\n(Catatan: backtest historis 2022-2026 TIDAK menemukan korelasi kuat/konsisten metrik ini "
-        "dgn hasil trade -- jadikan info tambahan saja, BUKAN faktor penentu utama.)\n"
-    )
-    _btc_sentiment_cache["ts"] = now
-    _btc_sentiment_cache["section"] = section
-    return section
+    lines = []
+    if data["funding_rate"] is not None:
+        lines.append(f"Funding Rate {label}: {data['funding_rate']*100:+.4f}% (per 8 jam)")
+    if data["long_short_ratio"] is not None:
+        lines.append(f"Long/Short Account Ratio {label}: {data['long_short_ratio']:.3f} "
+                      f"(long {data['long_pct']:.1f}% / short {data['short_pct']:.1f}%)")
+    header = (f"Sentimen {label} (fallback -- {symbol} tidak punya pasar futures sendiri):"
+              if is_fallback else f"Sentimen {symbol} (per-koin):")
+    return f"\n{header}\n- " + "\n- ".join(lines) + f"\n(Catatan: {SENTIMENT_DAMPEN_NOTE}.)\n"
+
+
+def get_sentiment_compact(symbol: str) -> str:
+    """Versi RINGKAS (1 fragment, TANPA header/catatan peredam -- itu ditaruh 1x terpisah di
+    prompt, bukan diulang per baris) -- dipakai di ai_decision_batch_rank (babak 2) yg
+    membandingkan BANYAK kandidat/koin sekaligus dlm 1 daftar."""
+    label, is_fallback, data = get_sentiment_for(symbol)
+    if not _sentiment_has_data(data):
+        return ""
+    bits = []
+    if data["funding_rate"] is not None:
+        bits.append(f"funding={data['funding_rate']*100:+.3f}%")
+    if data["long_short_ratio"] is not None:
+        bits.append(f"L/S={data['long_short_ratio']:.2f}")
+    tag = f"{label}{'*' if is_fallback else ''}"
+    return f" | sentimen({tag}): " + ", ".join(bits)
 
 
 def get_full_4h_indicator_context(symbol: str) -> str:
@@ -27276,7 +27319,7 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     if _ltf_bear_str:
         ltf_section += f"\n{_ltf_bear_str}\n"
     ind4h_section = f"\n{ind4h_str}\n" if ind4h_str else ""
-    sentimen_section = get_btc_sentiment_section()
+    sentimen_section = get_sentiment_section(symbol)
     _second_look_note = (
         "\nPERHATIAN: kandidat ini AWALNYA DITOLAK oleh filter momentum otomatis (akselerasi "
         "melambat/negatif) -- ini kesempatan kedua. Kalau ragu atau indikator lain juga lemah, "
@@ -27498,18 +27541,27 @@ def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: i
 
     lines_desc = []
     ltf_log_lines = []
+    _any_sentimen = False
     for i, c in enumerate(candidates, 1):
         det = c.get('detail', {})
         # 27/09/2026 (permintaan Mas Budi, kasus ORDI): candle bearish LTF per kandidat -- info tambahan, BUKAN gate.
         _lb = get_ltf_bearish(c['symbol'])
         _lb_txt = ltf_bearish_compact(_lb)
         ltf_log_lines.append(f"{to_display_pair(c['symbol'])}: {_lb_txt}")
+        # 16/10/2026 (permintaan Mas Budi, "saya maunya pada semua coins"): sentimen PER-KANDIDAT
+        # (fallback ke BTC per-koin kalau koinnya tidak py pasar futures sendiri -- lihat
+        # get_sentiment_compact()), ringkas supaya daftar tidak kepanjangan; catatan peredam
+        # cukup 1x di luar daftar, bukan diulang tiap baris.
+        _sent_compact = get_sentiment_compact(c['symbol'])
+        if _sent_compact:
+            _any_sentimen = True
         lines_desc.append(
             f"{i}. {to_display_pair(c['symbol'])} | skor={c.get('score','?')} | "
             f"ATR%={det.get('atr_pct',0):.2f} | RVOL={det.get('rvol',0):.2f}x | "
             f"BB%b={det.get('bb_pct',0):.2f} | vs EMA20={det.get('gap_ema20_pct',0):+.2f}% | "
             f"RSI={det.get('rsi',0):.1f}"
             + (f" | LTF merah (berurutan/dari-6/perubahan-6-candle) {_lb_txt}" if _lb else "")
+            + _sent_compact
         )
     daftar_str = "\n".join(lines_desc)
     if any("LTF merah" in ln for ln in lines_desc):
@@ -27518,7 +27570,9 @@ def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: i
                        "BUKAN aturan.)")
     ltf_log_block = "LTF bearish per kandidat: " + " | ".join(ltf_log_lines) + "\n"
     guidance_section = f"{extra_guidance}\n\n" if extra_guidance else ""
-    sentimen_section = get_btc_sentiment_section()
+    sentimen_note = (f"\n(Kolom 'sentimen' = Funding Rate & Long/Short Account Ratio futures; tanda * = "
+                      f"koin itu tidak punya pasar futures sendiri jadi dipakaikan sentimen BTC sbg gambaran "
+                      f"umum pasar. Catatan: {SENTIMENT_DAMPEN_NOTE}.)\n" if _any_sentimen else "\n")
 
     prompt = (
         f"Kamu adalah AI analyst trading crypto. Ada {len(candidates)} kandidat OPEN LONG "
@@ -27529,7 +27583,7 @@ def ai_decision_batch_rank(candidates: list, strategy_label: str, max_approve: i
         f"-- kandidat yg lebih lemah dibuang meski tadinya lolos penilaian individual.\n\n"
         f"{guidance_section}"
         f"Daftar kandidat:\n{daftar_str}\n"
-        f"{sentimen_section}\n"
+        f"{sentimen_note}"
         f"Format jawaban (ikuti persis):\n"
         f"PILIH: <daftar pair dipisah koma, urutan dari paling bagus, mis. BTC/USDT, ETH/USDT>\n"
         f"Alasan: alasan singkat kenapa yang lain tidak dipilih\n\n"
@@ -27700,7 +27754,7 @@ def ai_decision_add_fund(symbol: str, strategy: str, d: dict, add_usd: float, cu
     profit_now = (price/entry - 1)*100 if entry > 0 and price > 0 else 0
     ind4h_str = get_full_4h_indicator_context(symbol)
     ind4h_section = f"\n{ind4h_str}\n" if ind4h_str else ""
-    sentimen_section = get_btc_sentiment_section()
+    sentimen_section = get_sentiment_section(symbol)
     prompt = (
         f"Kamu adalah AI analyst trading crypto. Berikan analisis singkat.\n\n"
         f"Deal: {to_display_pair(symbol)} | Strategi: {strategy}\n"
@@ -27901,7 +27955,7 @@ def ai_decision_close(symbol: str, strategy: str, d: dict, price: float, peak: f
     # indikator, cuma harga/ATR%/reason (01/09/2026, permintaan Budi setelah kasus TLM/BICO).
     ind4h_str = get_full_4h_indicator_context(symbol)
     ind4h_section = f"\n{ind4h_str}\n" if ind4h_str else ""
-    sentimen_section = get_btc_sentiment_section()
+    sentimen_section = get_sentiment_section(symbol)
     prompt = (
         f"Kamu adalah AI assistant untuk trading bot crypto.\n\n"
         f"Deal: {to_display_pair(symbol)} | Strategi: {strategy}\n"
