@@ -7842,7 +7842,20 @@ def get_live_atr_pct(symbol: str, strategy: str, fallback: float) -> float:
 #   BBSnap-4h        : +-0% (non-breakout, entry jauh dari BB Upper -- mekanisme jarang aktif)
 # DIKECUALIKAN: hunting_4h (TERMINATED 03/10/2026, keputusan Mas Budi -- tidak pernah diuji
 # kombinasi ini) dan akum_entry_a/b (sudah dikecualikan dari trailing sama sekali, lihat _is_akum).
-BBUPPER_TIGHT_FACTOR = 0.6
+#
+# 17/10/2026 (permintaan Mas Budi): faktor 0,6 FLAT di atas terbukti backtest masih kalah dari
+# versi BERTINGKAT -- makin jauh peak di atas BB Upper (dalam %), makin ketat trailing-nya.
+# "grad_A" (breakpoint 0,5%/1,5%) menang KONSISTEN di SEMUA 3 strategi diuji (KeltnerBreak-12h
+# TRAIN+4,7%/TEST+4,2%, brkX2-4h TRAIN+3,3%/TEST+2,7%, MomentumBreak-1h TRAIN+6,4%/TEST+5,9%,
+# WR naik di semua) dibanding flat 0,6 MAUPUN varian breakpoint lebih lebar (grad_B 1,0%/2,5%).
+# overshoot_pct = (peak/bb_upper-1)*100 -- seberapa jauh peak SUDAH di atas BB Upper saat ini.
+BBUPPER_TIGHT_TIERS = [(0.5, 0.6), (1.5, 0.45), (float('inf'), 0.3)]
+
+def bbupper_tight_factor(overshoot_pct: float) -> float:
+    for breakpoint_pct, factor in BBUPPER_TIGHT_TIERS:
+        if overshoot_pct < breakpoint_pct:
+            return factor
+    return BBUPPER_TIGHT_TIERS[-1][1]
 
 # Peta timeframe native per strategi KHUSUS utk fitur ini -- SENGAJA baru & lengkap, TIDAK
 # mewarisi mapping implisit di get_live_atr_pct() di atas (itu punya celah lama: strategi yg
@@ -9656,9 +9669,10 @@ def thread2_monitor():
                 d['bo_addfund_dip_from'] = None
 
         # Idea #5 (17/10/2026): BB Upper live, dipakai utk arm-dini + perketat trailing di bawah.
-        # TIDAK berlaku utk hunting_4h (TERMINATED, keputusan Mas Budi -- lihat REMARK BBUPPER_TIGHT_FACTOR).
+        # TIDAK berlaku utk hunting_4h (TERMINATED, keputusan Mas Budi -- lihat REMARK BBUPPER_TIGHT_TIERS).
         live_bb_upper = get_live_bb_upper(sym, strat)
         _bbupper_touched = strat != 'hunting_4h' and live_bb_upper is not None and peak >= live_bb_upper
+        _bbupper_overshoot_pct = (peak / live_bb_upper - 1) * 100 if _bbupper_touched else 0.0
 
         # Trailing factor variatif untuk hunting_4h
         if strat == 'hunting_4h':
@@ -9682,11 +9696,11 @@ def thread2_monitor():
         elif strat == 'mombreak_1h':
             tdist = mombreak_trail_pct()  # flat %, bukan ATR-tiered -- lihat backtest 3 ronde
             if _bbupper_touched:
-                tdist = round(tdist * BBUPPER_TIGHT_FACTOR, 4)
+                tdist = round(tdist * bbupper_tight_factor(_bbupper_overshoot_pct), 4)
         else:
             tdist = trailing_dist_progressive(live_atrp, prof_peak)
             if _bbupper_touched:
-                tdist = round(tdist * BBUPPER_TIGHT_FACTOR, 4)
+                tdist = round(tdist * bbupper_tight_factor(_bbupper_overshoot_pct), 4)
         armed = d.get('trailing_armed', False)
 
         # arm trailing setelah profit >= arm_pct tier ATR% LIVE (pakai puncak, bukan
@@ -23044,7 +23058,8 @@ def run_web_dashboard():
                             _prof_peak_d = (_peak_d / ep - 1) * 100 - FEE_ROUND_TRIP_PCT
                             _tdist_d = mombreak_trail_pct() if _strat_d_bbu == 'mombreak_1h' else trailing_dist_progressive(_live_atrp_d, _prof_peak_d)
                             if _bbu_touched_d:
-                                _tdist_d = round(_tdist_d * BBUPPER_TIGHT_FACTOR, 4)
+                                _overshoot_d = (_peak_d / _live_bbu_d - 1) * 100
+                                _tdist_d = round(_tdist_d * bbupper_tight_factor(_overshoot_d), 4)
                             _stop_price_d = _peak_d * (1 - _tdist_d / 100)
                             if _stop_price_d > 0:
                                 _gap_pct_d = (lp / _stop_price_d - 1) * 100
