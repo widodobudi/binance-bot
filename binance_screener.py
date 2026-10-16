@@ -247,6 +247,11 @@ HARD_STOP_MULT_BY_STRATEGY = {
     # RVOLBreak-1h +0.766%->+0.796%, Dip-Buy Universe +3.127%->+3.443% (semua di K=1.1 vs K=1.3).
     'decouple_4h': 1.3, 'rvolbreak_1h': 1.3, 'dipbuy_universe': 1.3,   # rvolbreak_1h: LEGACY, lihat REMARK RVOLBREAK_8H_* -- hanya utk posisi lama yg masih terbuka
     'rvolbreak_8h': 1.3,   # 12/10/2026: sama K dgn versi 1h yg digantikan (dipakai jg sbg asumsi K konstan di rvolbreak_tf_sweep.py)
+    # 16/10/2026 (permintaan Mas Budi): BBSnap K-sweep (177 pair 2022-2026, 2x cross-check identik)
+    # -- bbsnap_4h: K nyaris tidak berpengaruh, 1.1 (default HARD_STOP_MULT) sudah titik terbaik,
+    # TIDAK perlu override di sini. bbsnap_8h: K=0.6 total profit +4.7% vs K=1.1, rugi terburuk
+    # mengecil dari -12.3% ke -6.8%, WR nyaris sama (54.2% vs 54.8%).
+    'bbsnap_8h': 0.6,
 }
 # 06/10/2026 (permintaan Mas Budi): brkX2-4h, setelah posisi pernah untung >= BRKX2_4H_BE_TRIGGER_PCT,
 # batas jual dipindah ke harga beli (entry +0.1%). Setelah biaya 0.2%, hasil keluar sekitar -0.1%,
@@ -256,7 +261,12 @@ HARD_STOP_MULT_BY_STRATEGY = {
 BRKX2_4H_BE_TRIGGER_PCT = 1.0
 # 06/10/2026: impas +1% untuk TrenKonfirmasi-4h (tanpa faktor 0.8). 0 = mati. Hanya aktif setelah di-push.
 TC4H_BE_TRIGGER_PCT = 1.0
-BE_TRIGGER_BY_STRATEGY = {'brkX2_4h': BRKX2_4H_BE_TRIGGER_PCT, 'trend_confirm_4h': TC4H_BE_TRIGGER_PCT}
+# 16/10/2026: bbsnap_4h/8h dibacktest pakai BE_TRIGGER 1.0% + buffer 0.1% (sama default yg
+# dipakai backtest-nya) -- ditulis eksplisit di sini supaya live PERSIS cocok dgn backtest
+# (tanpa entry eksplisit, defaultnya BE_TRIGGER_BY_STRATEGY.get(strat,0)=0 -- BE mati total).
+BBSNAP_BE_TRIGGER_PCT = 1.0
+BE_TRIGGER_BY_STRATEGY = {'brkX2_4h': BRKX2_4H_BE_TRIGGER_PCT, 'trend_confirm_4h': TC4H_BE_TRIGGER_PCT,
+                          'bbsnap_4h': BBSNAP_BE_TRIGGER_PCT, 'bbsnap_8h': BBSNAP_BE_TRIGGER_PCT}
 # 11/10/2026 (permintaan Mas Budi): batas jual mekanisme impas ("entry +0.1%") SEBELUMNYA hardcode
 # `entry * 1.001` di thread2_monitor() -- ketahuan dari laporan Mas Budi, 9 deal TrenKonfirmasi-4h
 # yang "impas" SEMUA hasil akhirnya negatif (-0,10% s/d -0,66%), karena fee round-trip (0.2%,
@@ -1451,6 +1461,14 @@ STRATEGY_CONFIG_DEFAULTS = {
     # 09/10/2026 (Tahap 3/4): dipbuy_universe naik dari shadow ke live, lulus target 50/50 (43W/7L,
     # +85.5%) -- exit DIGANTI ke trailing (lihat REMARK DIPBUY_UNIVERSE_* di sekitar baris 16424).
     "dipbuy_universe": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    # 16/10/2026 (permintaan Mas Budi): BBSnap-4h/8h, strategi BARU "BB Lower Snapback" --
+    # LANGSUNG LIVE tanpa shadow (sama preseden rvolbreak_8h di atas), krn formula sudah
+    # tervalidasi backtest 177 pair 2022-2026 (entry: close balik di atas BB Lower setelah
+    # breakdown, filter RVOL>=1.5 & BB-width>Q3 saat breakdown). base_usd SENGAJA minimal
+    # ($10, permintaan eksplisit Mas Budi "base order minimal dulu saja") krn belum ada
+    # jejak live sama sekali. Belum ada gerbang BTC (belum pernah dibacktest utk strategi ini).
+    "bbsnap_4h":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    "bbsnap_8h":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
 }
 # 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
 # default TRUE di semua strategi (kecuali mombreak_1h, sama seperti ai_call_open -- desain rule-based
@@ -9855,6 +9873,12 @@ def thread2_monitor():
         elif d.get('strategy','brkX2') == 'dipbuy_universe':
             hold_limit_sec = DIPBUY_UNIVERSE_MAX_HOLD_CANDLES * STRAT4H_SECONDS
             hold_label = f"batas {DIPBUY_UNIVERSE_MAX_HOLD_CANDLES} candle 4h (dipbuy)"
+        elif d.get('strategy','brkX2') == 'bbsnap_4h':
+            hold_limit_sec = BBSNAP_4H_MAX_HOLD_CANDLES * BBSNAP_4H_SECONDS
+            hold_label = f"batas {BBSNAP_4H_MAX_HOLD_CANDLES} candle 4h (bbsnap)"
+        elif d.get('strategy','brkX2') == 'bbsnap_8h':
+            hold_limit_sec = BBSNAP_8H_MAX_HOLD_CANDLES * BBSNAP_8H_SECONDS
+            hold_label = f"batas {BBSNAP_8H_MAX_HOLD_CANDLES} candle 8h (bbsnap)"
         elif d.get('strategy','brkX2') == 'mombreak_1h':
             hold_limit_sec = MOMBREAK_LIVE_TIMEOUT_CANDLES * 3600
             hold_label = f"batas {MOMBREAK_LIVE_TIMEOUT_CANDLES} candle 1h (mombreak)"
@@ -9979,6 +10003,8 @@ def thread2_monitor():
                 else RVOLBREAK_1H_MAX_HOLD_CANDLES if d.get('strategy') == 'rvolbreak_1h'
                 else RVOLBREAK_8H_MAX_HOLD_CANDLES if d.get('strategy') == 'rvolbreak_8h'
                 else DIPBUY_UNIVERSE_MAX_HOLD_CANDLES if d.get('strategy') == 'dipbuy_universe'
+                else BBSNAP_4H_MAX_HOLD_CANDLES if d.get('strategy') == 'bbsnap_4h'
+                else BBSNAP_8H_MAX_HOLD_CANDLES if d.get('strategy') == 'bbsnap_8h'
                 else d.get('timeout_candles', AKUM_ENTRY_TIMEOUT) if d.get('strategy','') in ('akum_entry_a','akum_entry_b')
                 else MAX_HOLD_DAYS
             )
@@ -13103,6 +13129,8 @@ _dashboard_state = {
         "RVolBreak-8h": [],
         "Dip-Buy Universe": [],
         "MomentumBreak-1h": [],
+        "BBSnap-4h": [],
+        "BBSnap-8h": [],
     },
     "last_scan": {},
 }
@@ -13854,7 +13882,7 @@ refreshShadowChart();
       <tr data-performance="{{ d.get('performance_score', 0) }}" data-urgency="{{ d.get('urgency_sort', 3999) }}">
         <td class="sym {{ 'profit-pos' if d.get('upnl_usd',0) > 0 else 'profit-neg' }}">{{ sym.replace("USDT","/USDT") }}</td>
         <td style="white-space:nowrap">
-          {% set _sm = {"brkX2":"brkx2-12h","brkX2_closed":"KeltnerBreak-12h CC (arsip)","brkX2_intrabar":"KeltnerBreak-12h Intrabar (arsip)","brkX2_12h_closed":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h","decouple_4h":"Decouple-4h","dipbuy_universe":"Dip-Buy Universe","mombreak_1h":"MomentumBreak-1h","rvolbreak_8h":"RVolBreak-8h","rvolbreak_1h":"RVOLBreak-1h","hunting_4h":"Hunting-4h","akum_entry_a":"Akumulasi Entry A","akum_entry_b":"Akumulasi Entry B"} %}
+          {% set _sm = {"brkX2":"brkx2-12h","brkX2_closed":"KeltnerBreak-12h CC (arsip)","brkX2_intrabar":"KeltnerBreak-12h Intrabar (arsip)","brkX2_12h_closed":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h","decouple_4h":"Decouple-4h","dipbuy_universe":"Dip-Buy Universe","mombreak_1h":"MomentumBreak-1h","rvolbreak_8h":"RVolBreak-8h","rvolbreak_1h":"RVOLBreak-1h","hunting_4h":"Hunting-4h","akum_entry_a":"Akumulasi Entry A","akum_entry_b":"Akumulasi Entry B","bbsnap_4h":"BBSnap-4h","bbsnap_8h":"BBSnap-8h"} %}
           <div>{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</div>
           <div style="font-size:9px;color:var(--muted)">{{ d.get("opened_at","")[:16] if d.get("opened_at") else "-" }}</div>
         </td>
@@ -14605,7 +14633,9 @@ var SC_LABELS = {
     decouple_4h: 'Decouple-4h',
     rvolbreak_1h: 'RVOLBreak-1h',
     rvolbreak_8h: 'RVolBreak-8h',
-    dipbuy_universe: 'Dip-Buy Universe'
+    dipbuy_universe: 'Dip-Buy Universe',
+    bbsnap_4h: 'BBSnap-4h',
+    bbsnap_8h: 'BBSnap-8h'
 };
 // 24/09/2026 (permintaan Mas Budi): Entry A & Entry B sekarang baris terpisah supaya base_usd
 // masing-masing kelihatan & bisa diedit sendiri-sendiri (base_usd MEMANG sudah independen di
@@ -15348,6 +15378,8 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="rvolbreak_1h">RVOLBreak-1h</option>
         <option value="rvolbreak_8h">RVolBreak-8h</option>
         <option value="dipbuy_universe">Dip-Buy Universe</option>
+        <option value="bbsnap_4h">BBSnap-4h</option>
+        <option value="bbsnap_8h">BBSnap-8h</option>
         <option value="__exclude_hardstop__">Semua strategi, exclude hardstop volatilitas</option>
       </select>
     <select id="ct-filter-pair" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
@@ -15423,7 +15455,7 @@ function sortClosedTrades(key) {
 
 function renderClosedTradesRows() {
     var rows = closedTradesRows.slice();
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h'};
     var searchBox = document.getElementById('ct-filter-search');
     var searchTerm = searchBox ? searchBox.value.trim().toUpperCase() : '';
     if (searchTerm) {
@@ -15484,7 +15516,7 @@ function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
     if (!el) return;
     if (!rows.length) { el.innerHTML = ''; return; }
-    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h'};
+    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h'};
     // 10/10/2026 (permintaan Mas Budi): KeltnerBreak-12h digabung BALIK jadi SATU kartu lagi (balik
     // seperti sebelum 09/10/2026) -- raw strategy value 'brkX2' (legacy, sebelum split 1-hari),
     // 'brkX2_closed'/'brkX2_intrabar' (era split), DAN 'brkX2_12h_closed' (key baru skrg) SEMUA
@@ -15547,7 +15579,7 @@ function renderCtEquityCurve(rows) {
 function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h'};
     var headers = ['Pair','Strategi','Opened','Entry','Closed','Exit','RSI@Open','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
@@ -18246,6 +18278,30 @@ RVOLBREAK_8H_SCAN_INTERVAL    = 300     # detik -- sama dgn versi 1h lama (exit 
 RVOLBREAK_8H_MAX_DEALS        = 2
 RVOLBREAK_8H_MAX_HOLD_CANDLES = 24      # 24 candle 8h = 8 hari, sama persis dibacktest (rvolbreak_tf_sweep.py)
 
+# ── BBSnap-4h / BBSnap-8h LIVE (16/10/2026, permintaan Mas Budi -- LANGSUNG LIVE tanpa fase
+# shadow, sama preseden RVolBreak-8h di atas: formula sudah tervalidasi penuh lewat backtest
+# 177 pair 2022-2026, K-sweep 2x cross-check). Entry struktural: close balik DI ATAS BB Lower
+# (20,2) setelah sempat close DI BAWAH/PAS BB Lower (breakdown, boleh berapa candle sebelumnya
+# selama belum pernah balik duluan) -- DITAMBAH 2 filter wajib: RVOL (vol/SMA20vol) candle
+# pemulihan >= BBSNAP_RVOL_MIN, DAN lebar band (BB upper-lower)/mid saat candle breakdown di
+# atas kuartil-3 histori (BBSNAP_4H_BBWIDTH_MIN/BBSNAP_8H_BBWIDTH_MIN, angka tetap dari hasil
+# backtest, BUKAN dihitung ulang live per simbol). RSI diuji TAPI TIDAK dipakai -- backtest
+# nunjukkin RSI tumpang-tindih dgn RVOL/BB-width, kadang malah lebih jelek dipakai bareng.
+# Modal $10 (SENGAJA minimal, permintaan eksplisit Mas Budi "base order minimal dulu saja" --
+# strategi ini belum ada jejak live sama sekali, beda dari RVolBreak-8h yg migrasi dari versi 1h).
+BBSNAP_SCAN_INTERVAL      = 600     # detik, sama pola Decouple-4h/TrenKonfirmasi-4h
+BBSNAP_RVOL_MIN            = 1.5
+BBSNAP_4H_ENABLED          = True
+BBSNAP_4H_SECONDS          = STRAT4H_SECONDS
+BBSNAP_4H_MAX_DEALS        = 2
+BBSNAP_4H_MAX_HOLD_CANDLES = 30     # 30 candle 4h = 5 hari, sama persis dibacktest
+BBSNAP_4H_BBWIDTH_MIN      = 12.83  # kuartil-3 lebar BB saat breakdown, dari backtest 2022-2026
+BBSNAP_8H_ENABLED          = True
+BBSNAP_8H_SECONDS          = RVOLBREAK_8H_SECONDS   # 28800 = 8 jam, konstanta umum bukan milik rvolbreak
+BBSNAP_8H_MAX_DEALS        = 2
+BBSNAP_8H_MAX_HOLD_CANDLES = 15     # 15 candle 8h = 5 hari, sama persis dibacktest
+BBSNAP_8H_BBWIDTH_MIN      = 18.41  # kuartil-3 lebar BB saat breakdown, dari backtest 2022-2026
+
 
 def _shadow_keltnerbreak_compute(df):
     """Indikator Keltner Channel -- formula PERSIS brkx2_replace_sim.py (EMA20 mid, ATR10 x2)."""
@@ -19002,6 +19058,214 @@ def run_thread_rvolbreak8h() -> None:
         except Exception as e:
             log(f"WARN T_RVOLBREAK8H error: {e}")
         time.sleep(RVOLBREAK_8H_SCAN_INTERVAL)
+
+
+_BBSNAP_TF_CONFIG = {
+    '4h': dict(strategy='bbsnap_4h', label='BBSnap-4h', log_tag='T_BBSNAP4H', interval='4h',
+               seconds=BBSNAP_4H_SECONDS, max_deals_const='BBSNAP_4H_MAX_DEALS',
+               bbwidth_min=BBSNAP_4H_BBWIDTH_MIN, limit=120),
+    '8h': dict(strategy='bbsnap_8h', label='BBSnap-8h', log_tag='T_BBSNAP8H', interval='8h',
+               seconds=BBSNAP_8H_SECONDS, max_deals_const='BBSNAP_8H_MAX_DEALS',
+               bbwidth_min=BBSNAP_8H_BBWIDTH_MIN, limit=120),
+}
+
+
+def thread_bbsnap_scan(tf_label: str) -> None:
+    """Scan sinyal BBSnap-4h/8h LIVE (16/10/2026, permintaan Mas Budi -- LANGSUNG LIVE tanpa
+    shadow, lihat REMARK konstanta BBSNAP_* di atas). Satu fungsi dipakai utk DUA strategi
+    (parameterized by tf_label) krn logikanya identik, cuma TF/konstanta beda -- hindari
+    duplikasi kode 2x. Entry: candle TERTUTUP terakhir close balik di atas BB Lower(20,2)
+    setelah sempat close di bawah/pas BB Lower (breakdown, boleh beberapa candle sebelumnya),
+    DAN RVOL candle pemulihan >= BBSNAP_RVOL_MIN, DAN lebar band saat candle breakdown >
+    ambang Q3 utk TF ini."""
+    cfg = _BBSNAP_TF_CONFIG[tf_label]
+    strategy, label, log_tag = cfg['strategy'], cfg['label'], cfg['log_tag']
+    max_deals = globals()[cfg['max_deals_const']]
+    if not (BBSNAP_4H_ENABLED if tf_label == '4h' else BBSNAP_8H_ENABLED): return
+    if not is_strategy_enabled(strategy): return
+
+    if is_daily_loss_limit_breached():
+        log(f"[{log_tag}] Scan di-skip -- batas rugi harian tersulut")
+        return
+
+    n_active = deal_count_by_strategy(strategy)
+    if n_active >= max_deals: return
+
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST]
+    except Exception as e:
+        log(f"WARN [{log_tag}] gagal ambil universe: {e}")
+        return
+
+    with active_deals_lock:
+        existing = set(active_deals.keys())
+
+    import pandas_ta as _pta_bbs
+    candidates = []
+    near_miss_bbs = []   # 2 syarat nyata: cross-up BB Lower (struktural) + RVOL/BBwidth
+    for sym in universe:
+        if sym in existing: continue
+        if is_cooldown_enabled(strategy) and cooldown_remaining(sym) > 0: continue
+        if sizing_fail_remaining(sym) > 0: continue
+        try:
+            df = get_ohlcv(sym, interval=cfg['interval'], limit=cfg['limit'])
+            if df is None or len(df) < 60: continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) < 46: continue
+            c, h, l, v = df['close'], df['high'], df['low'], df['vol']
+            bb = _pta_bbs.bbands(c, length=20, std=2)
+            bb_lower = bb.iloc[:, 0]; bb_mid = bb.iloc[:, 1]; bb_upper = bb.iloc[:, 2]
+            bb_width_pct = (bb_upper - bb_lower) / bb_mid * 100
+            atr_pct = _pta_bbs.atr(h, l, c, length=14) / c * 100
+            vol_ma20 = v.rolling(20).mean()
+            rvol = v / vol_ma20
+
+            n = len(df)
+            i = n - 1
+            close_ = c.values; bbl_ = bb_lower.values; bbw_ = bb_width_pct.values
+            rvol_ = rvol.values; atrp_ = atr_pct.values
+            if any(pd.isna(x) for x in [bbl_[i], bbl_[i-1], atrp_[i], rvol_[i]]) or atrp_[i] <= 0:
+                continue
+            below = close_ <= bbl_
+            cross_up_ok = bool(below[i-1] and not below[i])
+            rvol_now = float(rvol_[i])
+            # cari candle breakdown (awal stretch 'below' yg baru berakhir) utk BB-width-nya
+            j = i - 1
+            while j > 25 and below[j-1]:
+                j -= 1
+            bbw_breakdown = float(bbw_[j]) if not pd.isna(bbw_[j]) else None
+            _bbs_checks = [
+                (cross_up_ok, "belum cross-up BB Lower stlh breakdown"),
+                (bbw_breakdown is not None and bbw_breakdown > cfg['bbwidth_min'],
+                 f"BB-width saat breakdown <= {cfg['bbwidth_min']:g}% ({bbw_breakdown:.2f}% kalau ada)" if bbw_breakdown is not None else "BB-width breakdown tidak tersedia"),
+                (rvol_now >= BBSNAP_RVOL_MIN, f"RVOL < {BBSNAP_RVOL_MIN:g}x ({rvol_now:.2f}x)"),
+            ]
+            _bbs_n_pass = sum(1 for ok, _ in _bbs_checks if ok)
+            if _bbs_n_pass >= 1:
+                near_miss_bbs.append((_bbs_n_pass, sym, [m for ok, m in _bbs_checks if not ok], len(_bbs_checks)))
+            if not (cross_up_ok and bbw_breakdown is not None and bbw_breakdown > cfg['bbwidth_min']
+                    and rvol_now >= BBSNAP_RVOL_MIN):
+                continue
+            candidates.append((sym, float(close_[i]), float(atrp_[i]), rvol_now, bbw_breakdown))
+        except Exception as e:
+            log(f"  [{log_tag}] error {sym}: {e}")
+
+    log_near_miss(label, near_miss_bbs, 3)
+    update_dashboard_near_miss(label, near_miss_bbs)
+    if not candidates:
+        return
+    candidates.sort(key=lambda x: x[3], reverse=True)   # RVOL tertinggi dulu
+    log(f"[{log_tag}] {len(candidates)} kandidat. Buka deal terbaik (slot {n_active}/{max_deals})...")
+
+    # ============ BABAK 1: AI individual per-kandidat (notify=False) ============
+    held = {}
+    for sym, signal_price, atr_now, rvol_now, bbw_breakdown in candidates:
+        with active_deals_lock:
+            if sym in active_deals: continue
+        if is_ai_call_open_enabled(strategy):
+            _ai_ind = {'atr_pct': f"{atr_now:.2f}%", 'signal_price': _fmt_price(signal_price),
+                       'rvol': f"{rvol_now:.2f}x", 'bb_width_breakdown': f"{bbw_breakdown:.2f}%"}
+            if not ai_decision_open(sym, label, _ai_ind, deal_count_by_strategy(strategy), notify=False):
+                log(f"[{log_tag}] {sym} babak-1 di-skip oleh AI individual")
+                continue
+        held[sym] = {'signal_price': signal_price, 'atr_now': atr_now, 'rvol_now': rvol_now, 'bbw_breakdown': bbw_breakdown}
+
+    if not held:
+        return
+
+    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
+    log(f"[{log_tag}] Babak 1 selesai: {len(held)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
+    log_ai_babak1(label, [to_display_pair(s) for s in held.keys()], AI_BATCH_MAX_APPROVE)
+    batch_input = [{'symbol': s, 'strategy': strategy, 'score': 1,
+                     'detail': {'atr_pct': v['atr_now'], 'rvol': v['rvol_now']}}
+                    for s, v in held.items()]
+    approved = ai_decision_batch_rank(
+        batch_input, strategy_label=label, max_approve=AI_BATCH_MAX_APPROVE,
+        criteria_note="Kriteria: RVOL (besarnya volume candle pemulihan), BB-width saat breakdown, ATR%",
+    )
+
+    for sym in approved:
+        n_active = deal_count_by_strategy(strategy)
+        if n_active >= max_deals: break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        v = held[sym]
+        signal_price = v['signal_price']; atr_now = v['atr_now']; rvol_now = v['rvol_now']; bbw_breakdown = v['bbw_breakdown']
+
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy=strategy)
+        if not ok: continue
+
+        try:
+            ticker_now = _binance_get("/api/v3/ticker/price", {"symbol": sym})
+            fill_price = float(ticker_now["price"]) if ticker_now else signal_price
+        except Exception:
+            fill_price = signal_price
+
+        now_ms = int(time.time() * 1000)
+        candle_open_ms = (now_ms // (cfg['seconds'] * 1000)) * (cfg['seconds'] * 1000)
+        add_to_active_deals(sym, {
+            "strategy":          strategy,
+            "entry_price":       fill_price,
+            "signal_price":      signal_price,
+            "atr_pct":           atr_now,
+            "target_usd":        target_usd,
+            "add_usd":           add_usd,
+            "opened_ts":         time.time(),
+            "opened_candle_ts":  candle_open_ms,
+            "tf":                cfg['interval'],
+        })
+        n_active += 1
+        slip_pct = (fill_price / signal_price - 1) * 100 if signal_price > 0 else 0
+        csv_log_open({
+            'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+            'symbol':         to_display_pair(sym),
+            'signal_price':   f"{_fmt_price(signal_price)}",
+            'entry_price':    f"{_fmt_price(fill_price)}",
+            'slip_pct':       f"{slip_pct:+.2f}",
+            'atr_pct':        f"{atr_now:.2f}",
+            'base_usd':       target_usd,
+            'strategy':       strategy,
+        })
+        send_telegram(
+            f"{label} | OPEN LONG\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Pair  : {to_display_pair(sym)}\n"
+            f"Harga entry (pasar): {_fmt_price(fill_price)}\n"
+            f"Harga sinyal ({cfg['interval']}): {_fmt_price(signal_price)}\n"
+            f"Selisih (slippage): {slip_pct:+.2f}%\n"
+            f"ATR%  : {atr_now:.2f}  |  RVOL: {rvol_now:.2f}x  |  BB-width breakdown: {bbw_breakdown:.2f}%\n"
+            f"Modal: ${target_usd:.0f}" + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else ""),
+            parse_mode=None
+        )
+        log(f"[{log_tag}] OPEN {sym} @ {fill_price:.8g} (sinyal {signal_price:.8g}, ATR%={atr_now:.2f}, RVOL={rvol_now:.2f}x)")
+
+
+def run_thread_bbsnap4h() -> None:
+    """Thread T_BBSNAP4H: scan BBSnap-4h tiap BBSNAP_SCAN_INTERVAL detik."""
+    while True:
+        try:
+            thread_bbsnap_scan('4h')
+        except Exception as e:
+            log(f"WARN T_BBSNAP4H error: {e}")
+        time.sleep(BBSNAP_SCAN_INTERVAL)
+
+
+def run_thread_bbsnap8h() -> None:
+    """Thread T_BBSNAP8H: scan BBSnap-8h tiap BBSNAP_SCAN_INTERVAL detik."""
+    while True:
+        try:
+            thread_bbsnap_scan('8h')
+        except Exception as e:
+            log(f"WARN T_BBSNAP8H error: {e}")
+        time.sleep(BBSNAP_SCAN_INTERVAL)
 
 
 def thread_dipbuy_universe_scan() -> None:
@@ -22773,6 +23037,16 @@ def run_web_dashboard():
                     f"momentum>={MOMBREAK_LIVE_MOMENTUM_PCT:g}%/2candle + breakout HH{MOMBREAK_LIVE_BREAKOUT_LOOKBACK}c "
                     f"+ close<=EMA9+{MOMBREAK_LIVE_ANTI_FOMO_PCT:g}% (5 syarat)."
                 ),
+                "BBSnap-4h": (
+                    f"Scan sepanjang candle 4h, tidak dibatasi jendela waktu. Sinyal = close balik di atas "
+                    f"BB Lower(20,2) stlh breakdown, DAN RVOL>={BBSNAP_RVOL_MIN:g}x, DAN BB-width saat "
+                    f"breakdown >{BBSNAP_4H_BBWIDTH_MIN:g}%."
+                ),
+                "BBSnap-8h": (
+                    f"Scan sepanjang candle 8h, tidak dibatasi jendela waktu. Sinyal = close balik di atas "
+                    f"BB Lower(20,2) stlh breakdown, DAN RVOL>={BBSNAP_RVOL_MIN:g}x, DAN BB-width saat "
+                    f"breakdown >{BBSNAP_8H_BBWIDTH_MIN:g}%."
+                ),
                 "Hunting-4h": (
                     f"Scan Hunting terakhir: {_hunting_scan_ts}. "
                     "Belum ada kandidat yang memenuhi seluruh syarat saat scan terakhir."
@@ -23256,6 +23530,16 @@ def run_web_dashboard():
                     "label": "TrenKonfirmasi-4h",
                     "status": "ok" if trendconfirm4h_btc_gate_ok() else "blocked",
                     "syarat": "BTCUSDT HTF 12H DAN 1D candle tertutup terakhir keduanya hijau",
+                },
+                "bbsnap_4h": {
+                    "label": "BBSnap-4h",
+                    "status": "na",
+                    "syarat": "Belum pernah diuji -- strategi baru (16/10/2026), belum ada data backtest gerbang BTC sama sekali.",
+                },
+                "bbsnap_8h": {
+                    "label": "BBSnap-8h",
+                    "status": "na",
+                    "syarat": "Belum pernah diuji -- strategi baru (16/10/2026), belum ada data backtest gerbang BTC sama sekali.",
                 },
             })
 
@@ -25239,6 +25523,8 @@ def run_web_dashboard():
                 ("rvolbreak_1h", "RVOLBreak-1h"),
                 ("rvolbreak_8h", "RVolBreak-8h"),
                 ("dipbuy_universe", "Dip-Buy Universe"),
+                ("bbsnap_4h", "BBSnap-4h"),
+                ("bbsnap_8h", "BBSnap-8h"),
             ]
             # 26/09/2026 (permintaan Mas Budi): "kecepatan closing" PROFIT POSITIF -- tier
             # adaptif hari/minggu/bulan (lihat strategy_recent_close_stats()) + interval rata2
@@ -27735,6 +28021,12 @@ if __name__ == '__main__':
     n_threads += 1
     t_mombreak = threading.Thread(target=run_thread_mombreak, daemon=True, name="T-MomentumBreak")
     threads.append(t_mombreak)
+    n_threads += 1
+    t_bbsnap4h = threading.Thread(target=run_thread_bbsnap4h, daemon=True, name="T-BBSnap4h")
+    threads.append(t_bbsnap4h)
+    n_threads += 1
+    t_bbsnap8h = threading.Thread(target=run_thread_bbsnap8h, daemon=True, name="T-BBSnap8h")
+    threads.append(t_bbsnap8h)
     n_threads += 1
     t_skip_summary = threading.Thread(target=run_ai_skip_summary_notifier, daemon=True, name="T-AISkipSummary")
     threads.append(t_skip_summary)
