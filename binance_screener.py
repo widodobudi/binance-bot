@@ -5885,8 +5885,18 @@ def has_enough_balance_for_hunting(target_usd: float,
             f"kapital={total_capital} locked={locked:.0f} avail={available:.0f} need={target_usd}")
     return ok
 
-def send_open_long(symbol: str, strategy: str = 'brkX2') -> bool:
-    """Buka long position. Kalau USE_BINANCE_DIRECT=True → langsung ke Binance market buy."""
+def send_open_long(symbol: str, strategy: str = 'brkX2', usd_override: float | None = None) -> bool:
+    """Buka long position. Kalau USE_BINANCE_DIRECT=True → langsung ke Binance market buy.
+    17/10/2026 (patch "sizing-disconnect-fix", permintaan Mas Budi -- ketahuan dari kasus
+    TIA/USDT brkX2_12h_closed 17/10/2026: sinyal tier Ekstrem SEHARUSNYA modal dikecilkan 25%
+    jadi $15 (sudah kehitung & kelog benar di open_deal_with_sizing()), tapi order BELI yang
+    beneran jalan tetap pakai base_usd penuh $60 -- fungsi ini re-fetch get_strategy_base_usd()
+    sendiri dari nol, TIDAK PERNAH menerima target yang sudah dihitung caller-nya). usd_override,
+    kalau diisi, dipakai LANGSUNG sbg modal order -- bukan re-fetch base_usd dari nol -- supaya
+    penyesuaian sizing apa pun yang sudah diputuskan caller (BRKX2_12H_EKSTREM_SIZE_MULT,
+    BRKX2_4H_CONVICTION_TARGET_USD, score_to_target_usd, dst) benar2 sampai ke eksekusi, bukan
+    cuma kehitung & kelog doang. None (default) = perilaku lama, TIDAK berubah utk caller yang
+    belum dikasih usd_override (reversal, 2 titik bypass di luar open_deal_with_sizing())."""
     # 20/09/2026 (permintaan Mas Budi: BFUSD dkk / mata uang negara HARUS ditolak utk open deal):
     # gerbang TERAKHIR di titik masuk tunggal semua open live, terlepas strategi mana yg
     # memanggil -- soalnya thread_mombreak_scan() dulu ambil top-liquid pair TANPA cek
@@ -5900,7 +5910,7 @@ def send_open_long(symbol: str, strategy: str = 'brkX2') -> bool:
         return False
     if USE_BINANCE_DIRECT:
         try:
-            usd = get_strategy_base_usd(strategy)
+            usd = float(usd_override) if usd_override is not None else get_strategy_base_usd(strategy)
             if not ensure_spot_usdt(float(usd)):
                 # 17/09/2026 (permintaan Mas Budi): kandidat ini SUDAH lolos semua syarat
                 # (teknikal + AI) -- kalau Spot USDT + Earn Flexible (ensure_spot_usdt)
@@ -6799,7 +6809,10 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     else:
         target  = max(score_to_target_usd(score, strategy), _cfg_base)
         add_usd = max(0, target - _cfg_base)
-    ok = send_open_long(symbol, strategy)
+    # 17/10/2026 (patch "sizing-disconnect-fix"): usd_override=target -- lihat REMARK di
+    # send_open_long(). Sebelum patch ini, 'target' yang dihitung di atas (termasuk potongan
+    # BRKX2_12H_EKSTREM_SIZE_MULT dkk) TIDAK PERNAH dipakai order BELI yang sesungguhnya.
+    ok = send_open_long(symbol, strategy, usd_override=target)
     if not ok:
         return False, target, 0
     return True, target, add_usd
@@ -9539,18 +9552,15 @@ def thread2_monitor():
                 pass
         add_usd      = d.get('add_usd', 0)
         add_fund_sent = d.get('add_fund_sent', False)
-        # brkX2 (12h): recompute add_usd pakai tier sizing TERKINI (bukan nilai lama saat open),
-        # supaya perubahan score_to_target_usd langsung berlaku ke deal yg belum add-fund.
-        if d.get('strategy', 'brkX2') in ('brkX2', 'brkX2_12h_closed') and not add_fund_sent and 'score' in d:
-            _cur_base     = get_strategy_base_usd(d.get('strategy', 'brkX2'))
-            _fresh_target = max(score_to_target_usd(d.get('score', 0)), _cur_base)
-            _fresh_add    = max(0, _fresh_target - _cur_base)
-            if _fresh_add != add_usd:
-                log(f"[T2] {sym} add_usd disesuaikan ke tier terkini: ${add_usd} -> ${_fresh_add}")
-                add_usd = _fresh_add
-                with active_deals_lock:
-                    if sym in active_deals:
-                        active_deals[sym]['add_usd'] = _fresh_add
+        # 17/10/2026 (patch "sizing-disconnect-fix", permintaan Mas Budi): blok recompute
+        # add_usd pakai score_to_target_usd() DIHAPUS -- kontradiksi langsung dgn keputusan
+        # 03/10/2026 (lihat REMARK di open_deal_with_sizing() cabang brkX2/brkX2_12h_closed:
+        # "base_usd TETAP, TANPA add-fund/conviction-tier") yang sudah mengunci add_usd=0 saat
+        # open. Blok ini tidak ikut diupdate saat keputusan itu dibuat, jadi tetap diam-diam
+        # menaikkan modal brkX2_12h_closed pakai skema skor lama ($60->$90) -- ketahuan dari
+        # kasus TIA/USDT (sinyal tier Ekstrem, modal SEHARUSNYA dikecilkan ke $15, malah
+        # dinaikkan ke $90 lewat jalur ini). add_usd utk brkX2/brkX2_12h_closed sekarang SELALU
+        # 0 persis seperti yang diputuskan open_deal_with_sizing() saat open, tidak diutak-atik lagi.
         if add_usd > 0 and not add_fund_sent:
             if not get_deal_override(sym, 'auto_add_fund', True):
                 log(f"[T2] {sym} add fund di-skip (auto_add_fund=OFF via dashboard)")
