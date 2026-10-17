@@ -222,14 +222,12 @@ UNARM_ATR_MARGIN_PP     = 0.5   # ATR% live harus naik >0.5pp dari ATR% live saa
 UNARM_MIN_ARMED_MINUTES = 15    # minimal armed 15 menit sebelum boleh dievaluasi un-arm
 VOLATILITY_GUARD_ATR_PCT = 10.0  # ATR terbaru di atas ini: jangan add fund
 VOLATILITY_GUARD_ATR_MULT = 2.0   # ATR melonjak >=2x ATR saat open: jangan add fund
-# Patch name: ekstrem-size-cut (nama diberikan retroaktif 17/10/2026 -- dibuat 16/10/2026,
-# commit 5e59c40, sebelum konvensi penamaan patch dimulai).
-# 16/10/2026 (permintaan Mas Budi, dipicu AVAUSDT -12,72% ATR Ekstrem di KeltnerBreak-12h):
-# modal dikecilkan jadi 25% kalau ATR saat sinyal sudah tier Ekstrem (>=7%, lihat hard_stop_pct())
-# -- lihat REMARK lengkap di open_deal_with_sizing(), cabang brkX2_12h_closed. Baru BENERAN
-# sampai ke order beli sejak patch sizing-disconnect-fix (17/10/2026) -- sebelum itu cuma
-# kehitung & kelog, tidak pernah dipakai eksekusi nyata (lihat REMARK di send_open_long()).
-BRKX2_12H_EKSTREM_SIZE_MULT = 0.25
+# Patch name: ekstrem-size-cut -- KONSTANTA INI DIHAPUS 17/10/2026, diganti/diperluas jadi
+# patch "ekstrem-supertrend-sizing" (EKSTREM_SUPERTREND_SIZING, dekat open_deal_with_sizing()).
+# Riwayat: dibuat 16/10/2026 (commit 5e59c40, dipicu AVAUSDT -12,72%), cuma brkX2_12h_closed,
+# flat 25%. Sempat punya bug "sizing-disconnect-fix" (kehitung tapi tidak pernah dipakai order
+# beli sungguhan, diperbaiki 17/10/2026 pagi) SEBELUM akhirnya diperluas sore harinya ke semua
+# strategi + syarat Supertrend tambahan -- lihat REMARK lengkap di EKSTREM_SUPERTREND_SIZING.
 HARD_STOP_MULT = 1.1              # pengali (K) atas base hard-stop per tier ATR% (lihat hard_stop_pct()).
                                    # K=1.1 disepakati 26/08/2026 studi kasus TLM/USDT: base tier Volatil 9%
                                    # x1.1 = 9.9%, cover wick turun sampai -9.9% tanpa ke-exit (wick TLM -9.55%)
@@ -6679,6 +6677,178 @@ BRKX2_4H_CONVICTION_VOL_MIN    = 2.0    # rasio volume vs MA20 minimum candle si
 # base_usd normal tetap dijaga: $50 normal -> $100 conviction). REMARK nilai lama: $30.
 BRKX2_4H_CONVICTION_TARGET_USD = 100    # modal kalau KEDUA syarat di atas lolos bersamaan
 
+# ───────────────── Patch "ekstrem-supertrend-sizing" (17/10/2026) ─────────────────
+# Perluasan ekstrem-size-cut (16/10/2026, commit 5e59c40, cuma KeltnerBreak-12h, flat 25%)
+# ke SEMUA strategi trailing live, + syarat KEDUA yang sebelumnya tidak ada sama sekali:
+# Supertrend(10,3.0) TF-native strategi sedang Downtrend candle TERTUTUP terakhir.
+#
+# LATAR BELAKANG & ARGUMENTASI (permintaan eksplisit Mas Budi 17/10/2026, supaya angka2 di
+# bawah bisa ditelusuri lagi nanti -- bukan cuma angka tanpa konteks):
+#
+# 1. Mas Budi tanya kenapa ekstrem-size-cut cuma KeltnerBreak-12h, minta dicek ke SEMUA
+#    strategi live + 1 syarat tambahan (Supertrend Downtrend).
+# 2. Metodologi: backtest 17/10/2026, 244 pair, TRAIN 2022-2024/TEST 2025-2026, exit ASLI
+#    tiap strategi (hard_stop_pct/get_arm_pct/trailing_dist_progressive via AST dari file
+#    ini sendiri, bukan rumus terpisah). Per strategi, per syarat (ATR>=7% DAN terpisah
+#    Supertrend Downtrend, BUKAN AND/OR satu gerbang -- 2 kelompok independen, overlap
+#    dibiarkan apa adanya), hitung half-Kelly (f* = WR - (1-WR)/payoff, HASILNYA DIBAGI 2)
+#    kelompok yg kena syarat -- metodologi SAMA PERSIS yang menghasilkan 25% ekstrem-size-cut
+#    asli (half-Kelly tier Ekstrem KeltnerBreak-12h ~28%, Kelly PENUH 56% dianggap Mas Budi
+#    terlalu agresif, makanya dibagi 2).
+# 3. Angka FINAL per syarat = yang LEBIH KECIL (lebih konservatif) antara half-Kelly TRAIN
+#    vs TEST -- keputusan eksplisit Mas Budi, supaya tidak overfit ke satu split & tetap
+#    hati-hati, BUKAN dirata-rata atau disamakan semua strategi.
+# 4. Hasil per strategi JAUH BERBEDA -- INI SEBABNYA TIDAK BOLEH 25% rata semua:
+#    - brkX2-4h, Syarat Supertrend Downtrend: half-Kelly NEGATIF (-9,7%/-9,0% TRAIN/TEST,
+#      WR cuma ~20% vs baseline ~52%) -- SATU-SATUNYA kasus session ini. Bukan "berisiko
+#      tapi untung" (size-cut), tapi rugi rata-rata beneran -- jadi BLOKIR total, bukan
+#      size-cut. Syarat ATR-nya brkX2-4h sendiri TETAP size-cut normal (half-Kelly positif
+#      27,3%/27,9%, konsisten).
+#    - CrossEMA-4h: entry-nya SENDIRI mewajibkan Supertrend(2,5) Downtrend (st_dir==-1) --
+#      otomatis 100% sinyal, jadi syarat Supertrend TIDAK RELEVAN sbg pembeda di sini,
+#      dilewati (bukan size-cut, bukan blokir -- sudah "terbawa" definisi entry).
+#    - Dip-Buy Universe: entry-nya sendiri (drop 1 candle <=-15%) otomatis hampir selalu
+#      disertai ATR tinggi (70-93% overlap) & Supertrend Downtrend -- KEDUA syarat nyaris
+#      sama dengan baseline (tidak membedakan apa2), TAPI tetap diberi size-cut (lihat
+#      poin 5 kehati-hatian Mas Budi), pakai angka half-Kelly aslinya meski kecil bedanya.
+#    - MomentumBreak-1h: ATR>=7% TIDAK PERNAH terjadi (n=0) di candle 1 JAM -- ambang 7%
+#      di tier Ekstrem dikalibrasi utk candle lebih panjang (12h/8h/4h), bukan 1h.
+#      Syarat ATR dilewati KHUSUS strategi ini, syarat Supertrend tetap size-cut normal.
+#    - Reversal-8h: data historis strategi ini sendiri cuma n=168-298 total sinyal (5 tahun,
+#      244 pair -- LOW-FREQUENCY, bukan bug). TRAIN vs TEST TIDAK KONSISTEN (ayun
+#      6,9%-26,5%) -- SENGAJA TIDAK diberi size-cut apa pun dari backtest ini, lihat
+#      reminder_reversal8h_ekstrem_supertrend_recheck.md (cek ulang ~April 2027 atau
+#      >=50 deal baru closed, mana lebih dulu).
+#    - hunting_4h: TIDAK ADA di EKSTREM_SUPERTREND_SIZING -- TERMINATED (HUNTING_ENABLED=
+#      False), Mas Budi eksplisit skip strategi ini dari investigasi 17/10/2026.
+#    - akum_entry_a/akum_entry_b: TIDAK ADA -- sudah dikecualikan dari trailing/sizing
+#      dinamis sama sekali (base_usd Strategy Control tetap, lihat cabang akum di atas).
+#    - Strategi lainnya (KeltnerBreak-12h, BBSnap-4h/8h, TrenKonfirmasi-4h, Decouple-4h,
+#      RVolBreak-8h): KEDUA syarat size-cut layak, besarannya beda2 (21%-38%) sesuai angka
+#      half-Kelly masing2 -- lihat komentar inline di EKSTREM_SUPERTREND_SIZING utk angka
+#      TRAIN/TEST lengkap per strategi.
+# 5. Kategori "netral" (half-Kelly kelompok ≈ baseline, backtest TIDAK membuktikan kondisi
+#    ini lebih berisiko dari rata-rata) TETAP diberi size-cut, bukan dibiarkan modal normal
+#    -- keputusan eksplisit Mas Budi: "saya ingin hindarkan yang potensial problem untuk
+#    dapat base order size normal", prinsip kehati-hatian, bukan murni backtest-driven.
+# 6. Kombinasi 2 syarat: INDEPENDEN, overlap pakai yang PALING KETAT (bukan dikalikan/
+#    ditumpuk) -- keputusan eksplisit utk KeltnerBreak-12h, dipakai sbg pola default semua
+#    strategi size_cut+size_cut. brkX2-4h BEDA (size_cut+block): BLOKIR MENANG kalau
+#    overlap -- deal yang diblokir tidak jadi dibuka sama sekali, jadi size-cut ATR-nya
+#    otomatis tidak relevan (tidak ada apa2 yang perlu dikecilkan). Ini logika OR: syarat
+#    mana pun yang trigger, aksinya (size-cut ATAU blokir) langsung jalan sendiri-sendiri,
+#    tidak perlu DUA2nya trigger baru ada efek.
+EKSTREM_ATR_PCT = 7.0  # ambang tier "Ekstrem" -- SAMA dgn hard_stop_pct(), dipakai semua
+                       # strategi ATR-tiered KECUALI MomentumBreak-1h (lihat poin 4 di atas)
+
+# strategy_key: (atr_mult, st_mult, st_action) -- mult None = syarat tidak berlaku/relevan
+# di strategi itu (lihat alasan per strategi di REMARK atas). st_action='block' = BLOKIR
+# TOTAL (bukan size-cut) kalau Supertrend Downtrend; 'na' = Supertrend bukan pembeda sama
+# sekali (CrossEMA-4h, wajib di entry); 'size_cut' = dikalikan st_mult spt biasa.
+EKSTREM_SUPERTREND_SIZING = {
+    # KeltnerBreak-12h (+ 3 key legacy formula sama persis): half-Kelly ATR 28,8/28,3->28%,
+    # ST 32,9/25,0->25% (sampel ST lebih kecil, n=69-88, tapi dua2nya positif konsisten).
+    'brkX2_12h_closed': (0.28, 0.25, 'size_cut'),
+    'brkX2':             (0.28, 0.25, 'size_cut'),
+    'brkX2_closed':      (0.28, 0.25, 'size_cut'),
+    'brkX2_intrabar':    (0.28, 0.25, 'size_cut'),
+    # brkX2-4h: half-Kelly ATR 27,3/27,9->27% (size-cut normal); ST Kelly NEGATIF
+    # (-9,7%/-9,0%, WR~20% vs baseline~52%) -> BLOKIR, SATU-SATUNYA strategi dgn block.
+    'brkX2_4h':          (0.27, None, 'block'),
+    # BBSnap-4h: ATR 32,7/21,4->21% (lemah/n kecil 145-304 tapi positif); ST (netral,
+    # ~98-99% overlap dgn baseline krn strategi mean-reversion) 19,3/13,4->13%.
+    'bbsnap_4h':         (0.21, 0.13, 'size_cut'),
+    # BBSnap-8h: ATR 29,4/26,5->26%; ST (netral) 23,6/19,7->20%.
+    'bbsnap_8h':         (0.26, 0.20, 'size_cut'),
+    # MomentumBreak-1h: ATR n=0 di TF 1h, tidak berlaku (lihat poin 4); ST 21,2/19,9->20%
+    # (tipis tapi konsisten, baseline 17,1/18,9%).
+    'mombreak_1h':       (None, 0.20, 'size_cut'),
+    # TrenKonfirmasi-4h: ATR 38,7/38,4->38% (TERKUAT dari semua strategi, baseline cuma
+    # 29,5/26,2%); ST (netral, sedikit DI BAWAH baseline) 26,3/22,9->23%.
+    'trend_confirm_4h':  (0.38, 0.23, 'size_cut'),
+    # Decouple-4h: ATR 23,7/21,6->22%; ST (netral, TEST jauh lebih lemah dari TRAIN
+    # 14,7%->5,5%, ambil yg lebih kecil) 14,7/5,5->6%.
+    'decouple_4h':       (0.22, 0.06, 'size_cut'),
+    # Dip-Buy Universe: KEDUANYA netral (overlap definisi entry 70-93%, lihat poin 4) --
+    # TETAP size-cut krn kehati-hatian (poin 5), pakai angka half-Kelly asli meski kecil
+    # bedanya dari baseline. ATR 35,2/38,1->35%; ST 37,0/39,5->37%.
+    'dipbuy_universe':   (0.35, 0.37, 'size_cut'),
+    # RVolBreak-8h (+ key legacy rvolbreak_1h, formula sama): ATR 37,9/35,8->36%; ST
+    # (netral, di bawah baseline 31,7/32,1%) 21,5/20,3->20%.
+    'rvolbreak_8h':      (0.36, 0.20, 'size_cut'),
+    'rvolbreak_1h':      (0.36, 0.20, 'size_cut'),
+    # CrossEMA-4h: ATR 30,5/29,2->29%; ST 'na' -- WAJIB di entry (st_dir mult=2,5 ==-1),
+    # n=100% identik baseline, tidak relevan sbg pembeda terpisah (lihat poin 4).
+    'brkX2_crossema':    (0.29, None, 'na'),
+    # 'reversal' SENGAJA TIDAK ADA -- data terlalu tipis, lihat poin 4 +
+    # reminder_reversal8h_ekstrem_supertrend_recheck.md. 'hunting_4h'/'akum_entry_a'/
+    # 'akum_entry_b' SENGAJA TIDAK ADA -- lihat poin 4.
+}
+
+LIVE_SUPERTREND_CACHE_SECONDS = 300  # pola sama persis LIVE_ATR_CACHE_SECONDS/LIVE_BBUPPER_CACHE_SECONDS
+_live_supertrend_cache = {}
+_live_supertrend_cache_lock = threading.Lock()
+
+def get_live_supertrend_downtrend(symbol: str, strategy: str):
+    """True/False = Supertrend(10,3.0) candle TERTUTUP terakhir di TF native strategi sedang
+    arah TURUN -- None kalau strategi tidak ada di peta TF (BB_UPPER_TF_BY_STRATEGY, REUSE
+    peta yang sama dipakai idea #5/BB-Upper, bukan peta terpisah) atau fetch/hitung gagal.
+    length=10/multiplier=3.0 = konvensi DOMINAN seluruh bot (SUPERTREND_LENGTH/
+    STRAT4H_ST_LENGTH/STRAT4H_ST_MULT) -- BUKAN varian 2,5 khusus CrossEMA, krn ini fitur
+    SIZING terpisah dari syarat entry masing2 strategi."""
+    tf = BB_UPPER_TF_BY_STRATEGY.get(strategy)
+    if tf is None:
+        return None
+    now = time.time()
+    cache_key = (symbol, tf)
+    with _live_supertrend_cache_lock:
+        cached = _live_supertrend_cache.get(cache_key)
+        if cached and now - cached[0] < LIVE_SUPERTREND_CACHE_SECONDS:
+            return cached[1]
+    down = None
+    try:
+        frame = get_ohlcv_4h(symbol, limit=35) if tf == '4h' else get_ohlcv(symbol, interval=tf, limit=35)
+        if frame is not None and len(frame) >= 22:
+            closed = frame.iloc[:-1]  # buang candle terakhir -- kemungkinan masih berjalan
+            st = ta.supertrend(closed['high'], closed['low'], closed['close'], length=10, multiplier=3.0)
+            st_col = next((c for c in st.columns if 'SUPERTd' in c), None)
+            if st_col is not None:
+                val = st[st_col].iloc[-1]
+                if not pd.isna(val):
+                    down = (val == -1)
+    except Exception as error:
+        log(f"[SIZING] live Supertrend {symbol} ({strategy}) gagal: {error}")
+    with _live_supertrend_cache_lock:
+        _live_supertrend_cache[cache_key] = (now, down)
+    return down
+
+def ekstrem_supertrend_size_mult(symbol: str, strategy: str, atr_pct: float | None):
+    """Return (multiplier, alasan_log). multiplier<=0.0 = BLOKIR -- caller WAJIB batalkan
+    open sama sekali (bukan cuma kalikan modal jadi 0). multiplier=1.0 = tidak ada
+    penyesuaian (strategi tidak ada di EKSTREM_SUPERTREND_SIZING, atau tidak ada syarat yg
+    trigger). Overlap 2 syarat size_cut: ambil yang PALING KETAT (angka terkecil), BUKAN
+    dikalikan -- lihat poin 6 REMARK di atas."""
+    cfg = EKSTREM_SUPERTREND_SIZING.get(strategy)
+    if cfg is None:
+        return 1.0, ""
+    atr_mult, st_mult, st_action = cfg
+    is_ekstrem = atr_pct is not None and atr_pct >= EKSTREM_ATR_PCT and atr_mult is not None
+    is_downtrend = st_action != 'na' and bool(get_live_supertrend_downtrend(symbol, strategy))
+    if st_action == 'block' and is_downtrend:
+        tf = BB_UPPER_TF_BY_STRATEGY.get(strategy, '?')
+        return 0.0, (f"Supertrend {tf} downtrend -- BLOKIR (ekstrem-supertrend-sizing, "
+                      f"backtest 17/10/2026: half-Kelly negatif utk {strategy})")
+    candidates = []
+    if is_ekstrem:
+        candidates.append((atr_mult, f"ATR%={atr_pct:.2f} Ekstrem (>={EKSTREM_ATR_PCT:g}%)"))
+    if is_downtrend and st_action == 'size_cut' and st_mult is not None:
+        tf = BB_UPPER_TF_BY_STRATEGY.get(strategy, '?')
+        candidates.append((st_mult, f"Supertrend {tf} downtrend"))
+    if not candidates:
+        return 1.0, ""
+    best_mult, best_reason = min(candidates, key=lambda x: x[0])
+    return best_mult, best_reason
+
 def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
                           atr_pct: float | None = None, vol_ratio: float | None = None):
     """Buka deal + simpan add_usd di active_deals untuk dikirim T2 setelah deal confirmed.
@@ -6772,17 +6942,12 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     elif strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed'):
         target  = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
         add_usd = 0
-        # 16/10/2026 (permintaan Mas Budi, dipicu AVAUSDT -12,72% ATR Ekstrem): tier Ekstrem
-        # TERBUKTI backtest justru tier PALING UNTUNG (WR 78,7%, avg +6,44%, 177 pair 2022-2026)
-        # -- makanya TIDAK diblokir & TIDAK exit dipercepat (keduanya terbukti memperburuk hasil
-        # keseluruhan). Yang dikecilkan cuma UKURAN MODAL-nya, bukan sinyalnya ditolak -- supaya
-        # kalau kebetulan kena hard-stop (21,3% dari sinyal Ekstrem), rugi $ per kejadian
-        # mengecil, tapi strategi tetap dapat exposure (walau lebih kecil) ke tier yg paling
-        # profitable itu. 25% dipilih Mas Budi, dekat anchor half-Kelly (~28%) dari win-rate/
-        # payoff-ratio tier Ekstrem (Kelly penuh 56%, dianggap terlalu agresif).
-        if strategy == 'brkX2_12h_closed' and atr_pct is not None and atr_pct >= 7.0:
-            target = round(target * BRKX2_12H_EKSTREM_SIZE_MULT, 2)
-            log(f"[SIZING] {symbol} brkX2_12h_closed tier Ekstrem (ATR%={atr_pct:.2f}) -> modal dikecilkan {BRKX2_12H_EKSTREM_SIZE_MULT*100:.0f}% jadi ${target:.2f}")
+        # Size-cut tier Ekstrem (asalnya 16/10/2026, patch "ekstrem-size-cut", dipicu AVAUSDT
+        # -12,72%) sekarang SATU MEKANISME dgn semua strategi lain -- lihat REMARK lengkap &
+        # angka per-strategi di EKSTREM_SUPERTREND_SIZING/ekstrem_supertrend_size_mult() di
+        # bawah (patch "ekstrem-supertrend-sizing", 17/10/2026), dicek di titik TUNGGAL
+        # sebelum send_open_long() di akhir fungsi ini. Blok hardcoded khusus brkX2_12h_closed
+        # yang dulu di sini (BRKX2_12H_EKSTREM_SIZE_MULT) SUDAH DIHAPUS, diganti.
     # Decouple-4h LIVE (09/10/2026, Tahap 1/4): base_usd TETAP $50, TANPA add-fund/conviction-tier --
     # sama pola brkX2 (KeltnerBreak-12h), skor sinyal (score_to_target_usd) tidak relevan utk formula
     # 1-syarat-tunggal strategi ini.
@@ -6797,6 +6962,24 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     # Dip-Buy Universe LIVE (09/10/2026, Tahap 3/4): sama pola decouple_4h/rvolbreak_1h.
     elif strategy == 'dipbuy_universe':
         target  = float(_cfg_base if _cfg_base else 50.0)
+        add_usd = 0
+    # Patch name: generic-sizing-gap-fix (17/10/2026, ketahuan sambil pasang
+    # ekstrem-supertrend-sizing -- lihat REMARK di bawah). RVolBreak-8h/BBSnap-4h/BBSnap-8h
+    # TIDAK PERNAH dapat cabang sendiri di sini sejak dibuat (12/10 & 16/10/2026) -- ketiganya
+    # jatuh ke cabang umum paling bawah (`else`), yang pakai score_to_target_usd(). Caller
+    # ketiga strategi ini SELALU kirim score=1 (hardcoded, lihat thread_rvolbreak8h_scan()/
+    # thread_bbsnap_scan()) -- score_to_target_usd(1, strategy) TIDAK PUNYA kasus khusus utk
+    # ketiganya, jadi SELALU jatuh ke fallback BRKX2_TIER_LOW_USD=$60, REGARDLESS kondisi
+    # pasar. Akibatnya modal RIIL selama ini SELALU $60 utk ketiganya, BUKAN $10 (BBSnap,
+    # "modal minimal" permintaan eksplisit Mas Budi) atau $50 (RVolBreak-8h, "TETAP TANPA
+    # add-fund" sama persis RVOLBreak-1h/Decouple-4h/Dip-Buy Universe). Diperbaiki dgn pola
+    # SAMA PERSIS decouple_4h/rvolbreak_1h/dipbuy_universe di atas -- base_usd TETAP dari
+    # Strategy Control, TANPA add-fund.
+    elif strategy == 'rvolbreak_8h':
+        target  = float(_cfg_base if _cfg_base else 50.0)
+        add_usd = 0
+    elif strategy in ('bbsnap_4h', 'bbsnap_8h'):
+        target  = float(_cfg_base if _cfg_base else 10.0)
         add_usd = 0
     # brkX2_4h di Binance direct: pakai base_usd dari Strategy Control, KECUALI tier
     # conviction (ATR%+Volume tinggi bersamaan di candle sinyal, lihat BRKX2_4H_CONVICTION_*)
@@ -6813,9 +6996,21 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     else:
         target  = max(score_to_target_usd(score, strategy), _cfg_base)
         add_usd = max(0, target - _cfg_base)
+    # Patch "ekstrem-supertrend-sizing" (17/10/2026) -- lihat REMARK lengkap di
+    # EKSTREM_SUPERTREND_SIZING/ekstrem_supertrend_size_mult() di atas. Dicek di SATU titik
+    # ini (setelah SEMUA cabang sizing per-strategi di atas selesai, sebelum eksekusi beli)
+    # supaya berlaku general ke strategi mana pun tanpa perlu diulang di tiap cabang.
+    _ess_mult, _ess_reason = ekstrem_supertrend_size_mult(symbol, strategy, atr_pct)
+    if _ess_mult <= 0:
+        log(f"[SIZING] {symbol} ({strategy}) BLOKIR -- {_ess_reason}")
+        record_sizing_fail(symbol)
+        return False, target, 0
+    if _ess_mult < 1.0:
+        target = round(target * _ess_mult, 2)
+        log(f"[SIZING] {symbol} ({strategy}) modal dikecilkan {_ess_mult*100:.0f}% jadi ${target:.2f} -- {_ess_reason}")
     # 17/10/2026 (patch "sizing-disconnect-fix"): usd_override=target -- lihat REMARK di
     # send_open_long(). Sebelum patch ini, 'target' yang dihitung di atas (termasuk potongan
-    # BRKX2_12H_EKSTREM_SIZE_MULT dkk) TIDAK PERNAH dipakai order BELI yang sesungguhnya.
+    # size-cut apa pun) TIDAK PERNAH dipakai order BELI yang sesungguhnya.
     ok = send_open_long(symbol, strategy, usd_override=target)
     if not ok:
         return False, target, 0
@@ -12073,7 +12268,7 @@ def thread_crossema_scan():
             atrp = v['atrp']; signal_price = v['signal_price']; price_now = v['price_now']
             elapsed_pct = v['elapsed_pct']; _rsi_val_cx = v['rsi']
             try:
-                ok, target_usd, add_usd = open_deal_with_sizing(sym, 0, strategy="brkX2_crossema")
+                ok, target_usd, add_usd = open_deal_with_sizing(sym, 0, strategy="brkX2_crossema", atr_pct=atrp)
                 if not ok:
                     count_blocker(scan_blockers_cx, "Order open", True)
                     continue
@@ -12481,7 +12676,7 @@ def thread_trendconfirm_scan():
             if sym in active_deals: continue
         signal_price, atrp, score, detail, df, rsi_val = held[sym]
 
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, strategy="trend_confirm_4h")
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, score, strategy="trend_confirm_4h", atr_pct=atrp)
         if not ok: continue
 
         try:
@@ -13487,6 +13682,7 @@ def execute_tp_tier(sym: str, tier_n: int, price: float) -> dict:
         save_deal_overrides(overrides)
     with active_deals_lock:
         qty_coin = float(active_deals.get(sym, {}).get("qty_coin", 0) or 0)
+        entry_price = float(active_deals.get(sym, {}).get("entry_price", 0) or 0)
     if qty_coin <= 0 or price <= 0:
         _tp_tier_persist(sym, lambda e: _tp_tier_mark(e, tier_n, done=False))
         return {"action": "skip", "reason": "qty atau harga tidak valid"}
@@ -13507,15 +13703,37 @@ def execute_tp_tier(sym: str, tier_n: int, price: float) -> dict:
     if sold <= 0:
         _tp_tier_persist(sym, lambda e_: _tp_tier_mark(e_, tier_n, done=False))
         return {"action": "error", "error": "order jual tidak terisi"}
+    proceeds_usdt = float(res.get("proceeds_usdt", 0) or 0)
     fill = {"n": tier_n, "ts": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "qty": sold,
             "price": float(res.get("price_avg", 0) or 0),
-            "proceeds_usdt": float(res.get("proceeds_usdt", 0) or 0),
+            "proceeds_usdt": proceeds_usdt,
             "order_id": res.get("orderId")}
     _tp_tier_persist(sym, lambda e_: e_.setdefault("tp_tier_fills", []).append(fill))
     with active_deals_lock:
         if sym in active_deals:
             active_deals[sym]["qty_coin"] = max(0.0, qty_coin - sold)
     save_active_deals()
+    # Patch "tier-tp-profit-to-master" (17/10/2026, permintaan Mas Budi -- ketahuan dari
+    # kasus KMNO/USDT Tier 1 terpicu tapi hasil jualnya tetap mengendap di Sub Account
+    # walau checkbox "Transfer Profit Closed-Deal ke Master Account" ON): SEBELUM patch ini,
+    # execute_tp_tier() TIDAK PERNAH memanggil transfer_profit_to_master() sama sekali --
+    # cuma full-close (thread2_monitor() baris ~10451) yang memanggilnya, jadi penjualan
+    # SEBAGIAN (tier) selalu luput. Sekarang bagian UNTUNG SAJA dari tier ini (proceeds
+    # dikurangi cost basis qty yang dijual di tier ini, bukan proceeds penuh -- cost basis
+    # dari entry_price/average SEBELUM tier ini dieksekusi, sudah dibaca di atas sebelum
+    # qty_coin berkurang) ditransfer, pola & non-blocking SAMA PERSIS full-close path.
+    # Checkbox OFF -> transfer_profit_to_master() sendiri sudah return early (reason=
+    # "disabled"), proceeds tetap di Sub Account apa adanya -- tidak ada perubahan perilaku.
+    if entry_price > 0:
+        _tier_cost_basis = sold * entry_price
+        _tier_profit_usd = round(proceeds_usdt - _tier_cost_basis, 2)
+        if _tier_profit_usd > 0:
+            _tier_earn_res = transfer_profit_to_master(
+                _tier_profit_usd, context=f"{to_display_pair(sym)} Tier {tier_n} (partial)")
+            if _tier_earn_res["ok"]:
+                log(f"[TP-TIER] {sym} Tier {tier_n}: profit ${_tier_profit_usd:.2f} ditransfer Sub->Master")
+            elif _tier_earn_res["reason"] not in ("skip", "disabled"):
+                log(f"WARN [TP-TIER] {sym} Tier {tier_n}: transfer profit ke Master gagal ({_tier_earn_res['reason']})")
     return {"action": "partial", "fill": fill}
 
 def tp_tier_close_summary(sym: str, final_qty: float, final_price: float, entry_price: float):
@@ -18993,7 +19211,7 @@ def thread_decouple_scan() -> None:
         # BTC dalam 20 candle") tidak batal karena harga bergerak sedikit sejak sinyal, dan
         # shadow yg dibacktest juga tidak punya pengecekan ini. Harga eksekusi riil tetap dari
         # fill order (fill_price di bawah), bukan signal_price yg sudah agak basi.
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='decouple_4h')
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='decouple_4h', atr_pct=atr_now)
         if not ok: continue
 
         try:
@@ -19175,7 +19393,7 @@ def thread_rvolbreak8h_scan() -> None:
         # Tidak ada re-check level/harga sebelum beli di sini -- backtest yg divalidasi juga
         # tidak punya pengecekan ini, dan harga eksekusi riil tetap dari fill order (fill_price
         # di bawah), bukan signal_price yg sudah agak basi.
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='rvolbreak_8h')
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='rvolbreak_8h', atr_pct=atr_now)
         if not ok: continue
 
         try:
@@ -19374,7 +19592,7 @@ def thread_bbsnap_scan(tf_label: str) -> None:
         v = held[sym]
         signal_price = v['signal_price']; atr_now = v['atr_now']; rvol_now = v['rvol_now']; bbw_breakdown = v['bbw_breakdown']
 
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy=strategy)
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy=strategy, atr_pct=atr_now)
         if not ok: continue
 
         try:
@@ -19554,7 +19772,7 @@ def thread_dipbuy_universe_scan() -> None:
         v = held[sym]
         signal_price = v['signal_price']; atr_now = v['atr_now']; chg_4h = v['chg_4h']; rsi_now = v['rsi_now']
 
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='dipbuy_universe')
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='dipbuy_universe', atr_pct=atr_now)
         if not ok: continue
 
         try:
@@ -22748,7 +22966,7 @@ def open_mombreak_if_signal(sig: dict) -> bool:
         return False  # sudah dientry di candle ini, hindari dobel-entry antar siklus scan
 
     close = sig['close']; atrp = sig['atr_pct']
-    ok, target_usd, add_usd = open_deal_with_sizing(symbol, 1, strategy="mombreak_1h")
+    ok, target_usd, add_usd = open_deal_with_sizing(symbol, 1, strategy="mombreak_1h", atr_pct=atrp)
     if not ok:
         log(f"[MOMBREAK] {symbol} open ditolak Binance")
         return False
