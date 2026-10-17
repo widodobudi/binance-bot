@@ -23272,6 +23272,31 @@ def run_web_dashboard():
                 total_usd = estimate_deal_total_usd(dd)
                 dd["total_usd_display"] = total_usd
                 dd["upnl_usd"] = round(dd["upnl_pct"] / 100 * total_usd, 2)
+                # Patch "size-cut-tooltip" fallback (17/10/2026, permintaan Mas Budi -- screenshot
+                # DUSK/USDT masih belum ada teksnya): deal yang DIBUKA SEBELUM commit e6e5944 tidak
+                # punya field 'size_cut_reason' (baru ditulis mulai deal baru). Supaya deal LAMA yang
+                # kena cut juga kelihatan alasannya (bukan cuma deal baru ke depan), infer dari data
+                # yang SUDAH tersimpan: target_usd (modal asli saat open, sebelum add-fund apa pun)
+                # vs base_usd strategi SAAT INI di Strategy Control -- kalau lebih kecil & strategi
+                # ini memang ikut EKSTREM_SUPERTREND_SIZING, hampir pasti kena cut. ATR saat open
+                # (field 'atr_pct', sudah disimpan jauh sebelum fitur ini ada) dipakai mastikan syarat
+                # mana yang kemungkinan trigger. Bukan 100% presisi (tidak tahu Supertrend historis
+                # persis saat itu), makanya frasanya "kemungkinan".
+                if "size_cut_reason" not in dd and dd.get("strategy") in EKSTREM_SUPERTREND_SIZING:
+                    try:
+                        _orig_target = float(dd.get("target_usd")) if dd.get("target_usd") not in (None, "") else None
+                    except (TypeError, ValueError):
+                        _orig_target = None
+                    _cfg_base_now = get_strategy_base_usd(dd.get("strategy", ""))
+                    if _orig_target is not None and _cfg_base_now and _orig_target < _cfg_base_now * 0.99:
+                        _atrp_open = dd.get("atr_pct")
+                        _atr_mult_cfg = EKSTREM_SUPERTREND_SIZING[dd["strategy"]][0]
+                        if _atrp_open is not None and _atr_mult_cfg is not None and _atrp_open >= EKSTREM_ATR_PCT:
+                            _note = f"ATR%={_atrp_open:.2f} Ekstrem saat open"
+                        else:
+                            _note = "kemungkinan Supertrend Downtrend (atau versi lama flat 25%) saat open"
+                        dd["size_cut_reason"] = (f"{_note} -- deal lama sblm label ini ada, modal "
+                                                  f"${_orig_target:.0f} < base normal ${_cfg_base_now:.0f}")
                 # 26/09/2026 (permintaan Mas Budi): skor buat 2 mode urutan Active Deals di
                 # dashboard -- "Performance" (siapa paling untung) & "Urgency" (siapa paling
                 # butuh perhatian). Performance = profit% net fee + bonus kecil kalau trailing
