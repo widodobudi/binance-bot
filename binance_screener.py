@@ -6750,51 +6750,70 @@ BRKX2_4H_CONVICTION_TARGET_USD = 100    # modal kalau KEDUA syarat di atas lolos
 #    otomatis tidak relevan (tidak ada apa2 yang perlu dikecilkan). Ini logika OR: syarat
 #    mana pun yang trigger, aksinya (size-cut ATAU blokir) langsung jalan sendiri-sendiri,
 #    tidak perlu DUA2nya trigger baru ada efek.
-EKSTREM_ATR_PCT = 7.0  # ambang tier "Ekstrem" -- SAMA dgn hard_stop_pct(), dipakai semua
-                       # strategi ATR-tiered KECUALI MomentumBreak-1h (lihat poin 4 di atas)
+EKSTREM_ATR_PCT = 7.0   # ambang tier "Ekstrem" -- SAMA dgn hard_stop_pct(), dipakai semua
+                        # strategi ATR-tiered KECUALI MomentumBreak-1h (lihat poin 4 di atas)
+# Patch "volatil-tier-sizecut" (17/10/2026, follow-up SAMA HARI, permintaan Mas Budi setelah
+# tanya "kenapa cuma tier Ekstrem yang dipotong, tier Volatil [4-7%] tidak?"): backtest BARU
+# (REUSE 100% dataframe hasil simulasi ekstrem-supertrend-sizing yang SAMA PERSIS, cuma
+# re-filter grup ATR 4-7% lalu hitung half-Kelly dgn metodologi identik -- TIDAK re-simulasi
+# apa pun) menunjukkan tier Volatil ternyata JUSTRU sering SAMA KETAT atau LEBIH KETAT dari
+# tier Ekstrem yang sudah live (bukan lebih longgar spt dugaan intuitif) -- temuan empiris,
+# bukan asumsi. Mas Budi setuju diterapkan ke SEMUA strategi yang sama dgn tier Ekstrem,
+# KECUALI MomentumBreak-1h (ATR>=4% TIDAK PERNAH terjadi juga di candle 1 jam, n=0 sama
+# spt tier Ekstrem) dan Reversal-8h (data tetap terlalu tipis, alasan sama spt tier Ekstrem).
+# Tier Volatil & Ekstrem SALING EKSKLUSIF by definition (1 ATR cuma masuk 1 tier sekaligus),
+# jadi TIDAK perlu aturan "ambil lebih ketat" di ANTARA keduanya -- otomatis cuma 1 yang aktif
+# tergantung ATR saat itu. Supertrend Downtrend tetap kondisi terpisah yg bisa overlap dgn
+# salah satu tier ATR manapun, pola "ambil paling ketat" (poin 6 lama) tetap berlaku di situ.
+VOLATIL_ATR_PCT = 4.0  # ambang bawah tier "Volatil" -- SAMA dgn hard_stop_pct() (4% <= ATR < 7%)
 
-# strategy_key: (atr_mult, st_mult, st_action) -- mult None = syarat tidak berlaku/relevan
-# di strategi itu (lihat alasan per strategi di REMARK atas). st_action='block' = BLOKIR
-# TOTAL (bukan size-cut) kalau Supertrend Downtrend; 'na' = Supertrend bukan pembeda sama
-# sekali (CrossEMA-4h, wajib di entry); 'size_cut' = dikalikan st_mult spt biasa.
+# strategy_key: (volatil_atr_mult, ekstrem_atr_mult, st_mult, st_action) -- mult None = syarat
+# tidak berlaku/relevan di strategi itu (lihat alasan per strategi di REMARK atas & di atas
+# dict ini). st_action='block' = BLOKIR TOTAL (bukan size-cut) kalau Supertrend Downtrend;
+# 'na' = Supertrend bukan pembeda sama sekali (CrossEMA-4h, wajib di entry); 'size_cut' =
+# dikalikan st_mult spt biasa.
 EKSTREM_SUPERTREND_SIZING = {
-    # KeltnerBreak-12h (+ 3 key legacy formula sama persis): half-Kelly ATR 28,8/28,3->28%,
-    # ST 32,9/25,0->25% (sampel ST lebih kecil, n=69-88, tapi dua2nya positif konsisten).
-    'brkX2_12h_closed': (0.28, 0.25, 'size_cut'),
-    'brkX2':             (0.28, 0.25, 'size_cut'),
-    'brkX2_closed':      (0.28, 0.25, 'size_cut'),
-    'brkX2_intrabar':    (0.28, 0.25, 'size_cut'),
-    # brkX2-4h: half-Kelly ATR 27,3/27,9->27% (size-cut normal); ST Kelly NEGATIF
-    # (-9,7%/-9,0%, WR~20% vs baseline~52%) -> BLOKIR, SATU-SATUNYA strategi dgn block.
-    'brkX2_4h':          (0.27, None, 'block'),
-    # BBSnap-4h: ATR 32,7/21,4->21% (lemah/n kecil 145-304 tapi positif); ST (netral,
-    # ~98-99% overlap dgn baseline krn strategi mean-reversion) 19,3/13,4->13%.
-    'bbsnap_4h':         (0.21, 0.13, 'size_cut'),
-    # BBSnap-8h: ATR 29,4/26,5->26%; ST (netral) 23,6/19,7->20%.
-    'bbsnap_8h':         (0.26, 0.20, 'size_cut'),
-    # MomentumBreak-1h: ATR n=0 di TF 1h, tidak berlaku (lihat poin 4); ST 21,2/19,9->20%
-    # (tipis tapi konsisten, baseline 17,1/18,9%).
-    'mombreak_1h':       (None, 0.20, 'size_cut'),
-    # TrenKonfirmasi-4h: ATR 38,7/38,4->38% (TERKUAT dari semua strategi, baseline cuma
-    # 29,5/26,2%); ST (netral, sedikit DI BAWAH baseline) 26,3/22,9->23%.
-    'trend_confirm_4h':  (0.38, 0.23, 'size_cut'),
-    # Decouple-4h: ATR 23,7/21,6->22%; ST (netral, TEST jauh lebih lemah dari TRAIN
-    # 14,7%->5,5%, ambil yg lebih kecil) 14,7/5,5->6%.
-    'decouple_4h':       (0.22, 0.06, 'size_cut'),
-    # Dip-Buy Universe: KEDUANYA netral (overlap definisi entry 70-93%, lihat poin 4) --
-    # TETAP size-cut krn kehati-hatian (poin 5), pakai angka half-Kelly asli meski kecil
-    # bedanya dari baseline. ATR 35,2/38,1->35%; ST 37,0/39,5->37%.
-    'dipbuy_universe':   (0.35, 0.37, 'size_cut'),
-    # RVolBreak-8h (+ key legacy rvolbreak_1h, formula sama): ATR 37,9/35,8->36%; ST
-    # (netral, di bawah baseline 31,7/32,1%) 21,5/20,3->20%.
-    'rvolbreak_8h':      (0.36, 0.20, 'size_cut'),
-    'rvolbreak_1h':      (0.36, 0.20, 'size_cut'),
-    # CrossEMA-4h: ATR 30,5/29,2->29%; ST 'na' -- WAJIB di entry (st_dir mult=2,5 ==-1),
-    # n=100% identik baseline, tidak relevan sbg pembeda terpisah (lihat poin 4).
-    'brkX2_crossema':    (0.29, None, 'na'),
+    # KeltnerBreak-12h (+ 3 key legacy formula sama persis): half-Kelly Volatil 23,9/25,2->24%,
+    # Ekstrem 28,8/28,3->28%, ST 32,9/25,0->25% (sampel ST lebih kecil, n=69-88, tapi dua2nya
+    # positif konsisten).
+    'brkX2_12h_closed': (0.24, 0.28, 0.25, 'size_cut'),
+    'brkX2':             (0.24, 0.28, 0.25, 'size_cut'),
+    'brkX2_closed':      (0.24, 0.28, 0.25, 'size_cut'),
+    'brkX2_intrabar':    (0.24, 0.28, 0.25, 'size_cut'),
+    # brkX2-4h: half-Kelly Volatil 21,7/23,8->22%, Ekstrem 27,3/27,9->27% (keduanya size-cut
+    # normal); ST Kelly NEGATIF (-9,7%/-9,0%, WR~20% vs baseline~52%) -> BLOKIR, SATU-SATUNYA
+    # strategi dgn block.
+    'brkX2_4h':          (0.22, 0.27, None, 'block'),
+    # BBSnap-4h: Volatil 17,4/12,6->13%, Ekstrem 32,7/21,4->21% (lemah/n kecil 145-304 tapi
+    # positif); ST (netral, ~98-99% overlap dgn baseline krn strategi mean-reversion)
+    # 19,3/13,4->13%.
+    'bbsnap_4h':         (0.13, 0.21, 0.13, 'size_cut'),
+    # BBSnap-8h: Volatil 10,9/10,4->10%, Ekstrem 29,4/26,5->26%; ST (netral) 23,6/19,7->20%.
+    'bbsnap_8h':         (0.10, 0.26, 0.20, 'size_cut'),
+    # MomentumBreak-1h: ATR>=4% (Volatil) JUGA n=0 di TF 1h (sama spt Ekstrem>=7%, lihat
+    # poin 4) -- size-cut berbasis ATR memang tidak relevan di strategi ini pada tingkat
+    # manapun; ST 21,2/19,9->20% (tipis tapi konsisten, baseline 17,1/18,9%).
+    'mombreak_1h':       (None, None, 0.20, 'size_cut'),
+    # TrenKonfirmasi-4h: Volatil 32,4/31,5->32%, Ekstrem 38,7/38,4->38% (TERKUAT dari semua
+    # strategi, baseline cuma 29,5/26,2%); ST (netral, sedikit DI BAWAH baseline) 26,3/22,9->23%.
+    'trend_confirm_4h':  (0.32, 0.38, 0.23, 'size_cut'),
+    # Decouple-4h: Volatil 18,3/16,7->17%, Ekstrem 23,7/21,6->22%; ST (netral, TEST jauh lebih
+    # lemah dari TRAIN 14,7%->5,5%, ambil yg lebih kecil) 14,7/5,5->6%.
+    'decouple_4h':       (0.17, 0.22, 0.06, 'size_cut'),
+    # Dip-Buy Universe: Volatil 41,2/37,8->38%, SATU-SATUNYA yang Volatil LEBIH LONGGAR drpd
+    # Ekstrem (35,2/38,1->35%) -- konsisten dgn alasan lama (entry drop>=15% 1 candle hampir
+    # selalu overlap ATR tinggi, beda tipis antar tier wajar). ST 37,0/39,5->37%.
+    'dipbuy_universe':   (0.38, 0.35, 0.37, 'size_cut'),
+    # RVolBreak-8h (+ key legacy rvolbreak_1h, formula sama): Volatil 30,5/31,9->30%, Ekstrem
+    # 37,9/35,8->36%; ST (netral, di bawah baseline 31,7/32,1%) 21,5/20,3->20%.
+    'rvolbreak_8h':      (0.30, 0.36, 0.20, 'size_cut'),
+    'rvolbreak_1h':      (0.30, 0.36, 0.20, 'size_cut'),
+    # CrossEMA-4h: Volatil 30,6/26,9->27%, Ekstrem 30,5/29,2->29%; ST 'na' -- WAJIB di entry
+    # (st_dir mult=2,5 ==-1), n=100% identik baseline, tidak relevan sbg pembeda terpisah.
+    'brkX2_crossema':    (0.27, 0.29, None, 'na'),
     # 'reversal' SENGAJA TIDAK ADA -- data terlalu tipis, lihat poin 4 +
-    # reminder_reversal8h_ekstrem_supertrend_recheck.md. 'hunting_4h'/'akum_entry_a'/
-    # 'akum_entry_b' SENGAJA TIDAK ADA -- lihat poin 4.
+    # reminder_reversal8h_ekstrem_supertrend_recheck.md (berlaku jg utk tier Volatil, bahkan
+    # lebih tipis lagi). 'hunting_4h'/'akum_entry_a'/'akum_entry_b' SENGAJA TIDAK ADA -- poin 4.
 }
 
 LIVE_SUPERTREND_CACHE_SECONDS = 300  # pola sama persis LIVE_ATR_CACHE_SECONDS/LIVE_BBUPPER_CACHE_SECONDS
@@ -6838,13 +6857,17 @@ def ekstrem_supertrend_size_mult(symbol: str, strategy: str, atr_pct: float | No
     """Return (multiplier, alasan_log). multiplier<=0.0 = BLOKIR -- caller WAJIB batalkan
     open sama sekali (bukan cuma kalikan modal jadi 0). multiplier=1.0 = tidak ada
     penyesuaian (strategi tidak ada di EKSTREM_SUPERTREND_SIZING, atau tidak ada syarat yg
-    trigger). Overlap 2 syarat size_cut: ambil yang PALING KETAT (angka terkecil), BUKAN
-    dikalikan -- lihat poin 6 REMARK di atas."""
+    trigger). Overlap ATR (Volatil/Ekstrem) + Supertrend: ambil yang PALING KETAT (angka
+    terkecil), BUKAN dikalikan -- lihat poin 6 REMARK di atas. Tier Volatil & Ekstrem sendiri
+    SALING EKSKLUSIF (1 ATR cuma masuk 1 tier), jadi keduanya TIDAK PERNAH jadi kandidat
+    bersamaan -- lihat REMARK patch 'volatil-tier-sizecut'."""
     cfg = EKSTREM_SUPERTREND_SIZING.get(strategy)
     if cfg is None:
         return 1.0, ""
-    atr_mult, st_mult, st_action = cfg
-    is_ekstrem = atr_pct is not None and atr_pct >= EKSTREM_ATR_PCT and atr_mult is not None
+    volatil_mult, ekstrem_mult, st_mult, st_action = cfg
+    is_ekstrem = atr_pct is not None and atr_pct >= EKSTREM_ATR_PCT and ekstrem_mult is not None
+    is_volatil = (not is_ekstrem and atr_pct is not None and atr_pct >= VOLATIL_ATR_PCT
+                  and volatil_mult is not None)
     is_downtrend = st_action != 'na' and bool(get_live_supertrend_downtrend(symbol, strategy))
     if st_action == 'block' and is_downtrend:
         tf = BB_UPPER_TF_BY_STRATEGY.get(strategy, '?')
@@ -6852,7 +6875,9 @@ def ekstrem_supertrend_size_mult(symbol: str, strategy: str, atr_pct: float | No
                       f"backtest 17/10/2026: half-Kelly negatif utk {strategy})")
     candidates = []
     if is_ekstrem:
-        candidates.append((atr_mult, f"ATR%={atr_pct:.2f} Ekstrem (>={EKSTREM_ATR_PCT:g}%)"))
+        candidates.append((ekstrem_mult, f"ATR%={atr_pct:.2f} Ekstrem (>={EKSTREM_ATR_PCT:g}%)"))
+    elif is_volatil:
+        candidates.append((volatil_mult, f"ATR%={atr_pct:.2f} Volatil ({VOLATIL_ATR_PCT:g}-{EKSTREM_ATR_PCT:g}%)"))
     if is_downtrend and st_action == 'size_cut' and st_mult is not None:
         tf = BB_UPPER_TF_BY_STRATEGY.get(strategy, '?')
         candidates.append((st_mult, f"Supertrend {tf} downtrend"))
@@ -23290,7 +23315,12 @@ def run_web_dashboard():
                     _cfg_base_now = get_strategy_base_usd(dd.get("strategy", ""))
                     if _orig_target is not None and _cfg_base_now and _orig_target < _cfg_base_now * 0.99:
                         _atrp_open = dd.get("atr_pct")
-                        _atr_mult_cfg = EKSTREM_SUPERTREND_SIZING[dd["strategy"]][0]
+                        # index [1] = ekstrem_mult (tuple sekarang 4 elemen sejak patch
+                        # "volatil-tier-sizecut" -- lihat REMARK EKSTREM_SUPERTREND_SIZING).
+                        # Deal yang masuk fallback ini SELALU lebih tua dari fitur Volatil-tier
+                        # (baru dibuat 17/10/2026 sore), jadi inferensi di sini sengaja tetap
+                        # cuma cek Ekstrem vs Supertrend, bukan Volatil juga.
+                        _atr_mult_cfg = EKSTREM_SUPERTREND_SIZING[dd["strategy"]][1]
                         if _atrp_open is not None and _atr_mult_cfg is not None and _atrp_open >= EKSTREM_ATR_PCT:
                             _note = f"ATR%={_atrp_open:.2f} Ekstrem saat open"
                         else:
