@@ -8972,9 +8972,27 @@ def record_scan_blockers(strategy: str, total: int, candidates: int, blockers: d
         }
     save_scan_blockers()
 
+# Patch "scan-blockers-stale-filter" (17/10/2026, permintaan Mas Budi -- screenshot panel
+# Scan Blockers masih nampilin "Hunting-4h" & "QScalp-3m" padahal keduanya sudah tidak ada):
+# scan_blockers.json TIDAK PERNAH dibersihkan otomatis saat strategi di-terminate/rename --
+# record_scan_blockers() cuma MENULIS snapshot baru per key, tidak ada mekanisme HAPUS key
+# lama. Hunting-4h: thread_hunting_scan() balik lebih awal krn is_strategy_enabled('hunting_4h')
+# False (terminated), jadi snapshot 03/10 terakhirnya nyangkut selamanya. QScalp-3m: key itu
+# sendiri sudah tidak PERNAH dipanggil lagi sejak full rename ke MomentumBreak-1h (14/10,
+# bukan 2 strategi paralel). "brkX2-12h" (beda dari "KeltnerBreak-12h") -- nama key LAMA
+# sebelum rename, sama persis nyangkut tapi belum ditanyakan Mas Budi. Diperbaiki DI SATU
+# TITIK (get_scan_blockers(), dipanggil /api/scan_blockers) via whitelist strategi yang BENAR2
+# masih aktif memanggil record_scan_blockers() -- bukan hapus file (lebih aman, snapshot lama
+# tetap ada di disk kalau perlu ditelusuri lagi, cuma tidak ditampilkan).
+SCAN_BLOCKERS_LIVE_KEYS = {
+    "KeltnerBreak-12h", "brkX2-4h", "CrossEMA-4h", "Reversal-8h",
+    "TrenKonfirmasi-4h", "Akumulasi-4h", "MomentumBreak-1h",
+}
+
 def get_scan_blockers() -> dict:
     with _scan_blockers_lock:
-        return {key: dict(value, blockers=dict(value["blockers"])) for key, value in _scan_blockers.items()}
+        return {key: dict(value, blockers=dict(value["blockers"])) for key, value in _scan_blockers.items()
+                if key in SCAN_BLOCKERS_LIVE_KEYS}
 
 def count_blocker(blockers: dict, label: str, failed: bool) -> None:
     if failed:
@@ -16505,9 +16523,14 @@ var SCAN_BLOCKERS_SCHEDULE = {
     'brkX2-4h':    'Hanya scan di menit ke-5 s/d 60 tiap candle 4h',
     'CrossEMA-4h': 'Hanya scan di menit ke-~12 s/d 36 tiap candle 4h',
     'Reversal-8h': 'Hanya scan sekali saat candle 8h baru tertutup',
-    'Hunting-4h':  'Scan tiap loop (~1-3 menit), tidak dibatasi jendela waktu',
+    'TrenKonfirmasi-4h':  'Scan tiap loop (~1-3 menit), tidak dibatasi jendela waktu',
     'Akumulasi-4h':'Scan periodik (~tiap beberapa menit)',
     'MomentumBreak-1h':   'Scan tiap ~5 menit (TF 1h), tidak dibatasi jendela waktu'
+    // 17/10/2026 (patch "scan-blockers-stale-filter"): 'Hunting-4h' SENGAJA DIHAPUS dari daftar
+    // ini -- strategi sudah terminated (is_strategy_enabled('hunting_4h')=False), server-side
+    // sekarang juga memfilternya (SCAN_BLOCKERS_LIVE_KEYS) jadi tidak akan muncul lagi sama
+    // sekali, bukan cuma "belum ada snapshot". 'QScalp-3m' juga TIDAK PERNAH ada di sini --
+    // sudah full-rename ke 'MomentumBreak-1h' (14/10), key lama itu cuma sisa snapshot stale.
 };
 function loadScanBlockers() {
     fetch('/api/scan_blockers').then(function(r){ return r.json(); }).then(function(d) {
