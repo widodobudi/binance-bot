@@ -668,8 +668,35 @@ TRENDCONFIRM_MAX_HOLD_CANDLES= 15        # timeout 15 candle 4h = 2.5 hari, sama
 # menit: +$5.25 p=0.027; 2 candle/15 menit: -$2.76; makin lama delay makin buruk, 105 menit:
 # -$4.49 win-rate 0%). Ukuran add-fund = SAMA BESAR dgn modal awal deal (lihat pemanggilan di
 # thread2_monitor -- BUKAN ukuran custom, itu asumsi yang dibacktest).
-TRENDCONFIRM_BREAKOUT_ADDFUND_DIP_PCT      = 2.0   # retrace minimum dari peak sblm dianggap "dip"
-TRENDCONFIRM_BREAKOUT_ADDFUND_BREAKOUT_PCT = 0.0   # margin ekstra di atas peak-sebelum-dip (0 = cukup balik pas)
+#
+# Patch "tc-addfund-reclaim-swap" (17/10/2026, permintaan Mas Budi): mekanisme di atas
+# DIMATIKAN & DIGANTI. Backtest ulang full-lifecycle (81.194 kandidat underwater, replay
+# open->add-fund->exit penuh pakai formula exit ASLI -- metodologi lebih ketat drpd
+# karakterisasi sinyal retrace->breakout 26/09/2026 di atas) menemukan mekanisme ini
+# TERNYATA NET MERUGIKAN: dari 5.903 kali benar2 terpicu secara historis, trade2 itu
+# RATA2 akan +2,867% (WR 98,6%) kalau DIBIARKAN TANPA add-fund sama sekali, tapi dgn
+# mekanisme ini malah cuma +2,610% (WR 93,7%) -- 285 trade yang tadinya menang jadi KALAH
+# gara2 ditambah modal, 0 yang terbantu. Total dampak -1.520% akumulasi, konsisten di
+# TRAIN(22-24) maupun TEST(25-26), bukan kebetulan 1 periode. Riset 26/09/2026 di atas
+# TIDAK dibatalkan (datanya tetap valid sbg KARAKTERISASI sinyal retrace->breakout itu
+# sendiri), tapi EFEK REAKTIF-nya (nambah modal PAS sinyal itu muncul di tengah deal yg
+# sudah berjalan) ternyata beda dari efek sinyalnya di entry -- baru ketahuan dari backtest
+# replay yang lebih ketat ini.
+#
+# DIGANTI dgn "EMA20 reclaim + RVol" (Roadmap Uji level_reclaim_detector Fase 2 -- Test for
+# Add Fund, lihat get_live_ema20_reclaim_signal()): cross-down EMA20(20) lalu cross-up lagi
+# dalam N candle TERTUTUP (TF native strategi), DENGAN RVol(20) candle cross-up itu >=
+# threshold. Backtest sel terbaik N=5/RVol>=1,0x: avg +1,397% (vs +1,362% mekanisme lama,
+# vs +1,380% TANPA add-fund sama sekali) -- menang tipis, TAPI jauh lebih jarang terpicu
+# (2,18% vs 7,3% kandidat) dan pada subset yg BENAR2 terpicu: 180 trade kalah->menang vs
+# cuma 41 menang->kalah (mekanisme lama: 0 trade terbantu sama sekali). Catatan jujur dari
+# backtest: di SEMUA strategi yg diuji (bukan cuma ini), 98-100% posisi underwater TIDAK
+# PERNAH sempat kena pola reclaim sebelum keburu exit duluan -- jadi ini BUKAN jaring
+# pengaman umum, cuma tambahan opportunistic yg jarang kena. Konstanta lama
+# (TRENDCONFIRM_BREAKOUT_ADDFUND_DIP_PCT/BREAKOUT_PCT) DIHAPUS -- cari commit SEBELUM patch
+# ini di git history kalau kode lama perlu ditelusuri lagi.
+TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES = 5    # maks jarak candle (TF native strategi) antara cross-down EMA20 dan cross-up (reclaim)
+TRENDCONFIRM_RECLAIM_ADDFUND_RVOL_MIN  = 1.0  # RVol(20) minimum di candle cross-up (reclaim)
 TRENDCONFIRM_SCAN_INTERVAL   = 600       # 23/09/2026 (audit biaya AI 22/09 + sweep window 23/09,
                                           # permintaan Mas Budi): naik dari 180 -- sebelumnya scan 24 jam
                                           # nonstop, terbukti jadi penyumbang panggilan AI TERBESAR
@@ -6853,6 +6880,61 @@ def get_live_supertrend_downtrend(symbol: str, strategy: str):
         _live_supertrend_cache[cache_key] = (now, down)
     return down
 
+LIVE_EMA20_RECLAIM_CACHE_SECONDS = 300  # pola sama persis LIVE_SUPERTREND_CACHE_SECONDS/LIVE_BBUPPER_CACHE_SECONDS
+_live_ema20_reclaim_cache = {}
+_live_ema20_reclaim_cache_lock = threading.Lock()
+
+def get_live_ema20_reclaim_signal(symbol: str, strategy: str, n_candles: int, rvol_min: float):
+    """True = candle TERTUTUP terakhir di TF native strategi adalah candle "reclaim": close
+    cross-up EMA20(20) DENGAN RVol(20) candle itu >= rvol_min, DAN ada cross-down EMA20 di
+    salah satu dari n_candles SEBELUM candle reclaim itu (patch "tc-addfund-reclaim-swap",
+    17/10/2026, Roadmap Uji level_reclaim_detector Fase 2 -- Test for Add Fund). False =
+    pola tidak terpenuhi. None = strategi tidak ada di peta TF (BB_UPPER_TF_BY_STRATEGY,
+    REUSE peta yang sama dipakai idea #5/BB-Upper & Supertrend-sizing) atau fetch/hitung
+    gagal. GENERIC (bisa dipanggil strategi mana pun) -- per 17/10/2026 baru di-WIRE ke
+    trend_confirm_4h (lihat thread2_monitor()); strategi lain (mis. RVolBreak-8h) masih
+    nunggu backtest/keputusan terpisah, JANGAN diwire tanpa itu (lihat
+    reminder_bbsnap_dipbuy_addfund_reclaim_recheck.md utk BBSnap/Dip-Buy yang eksplisit
+    ditahan)."""
+    tf = BB_UPPER_TF_BY_STRATEGY.get(strategy)
+    if tf is None:
+        return None
+    now = time.time()
+    cache_key = (symbol, tf, n_candles, round(rvol_min, 4))
+    with _live_ema20_reclaim_cache_lock:
+        cached = _live_ema20_reclaim_cache.get(cache_key)
+        if cached and now - cached[0] < LIVE_EMA20_RECLAIM_CACHE_SECONDS:
+            return cached[1]
+    signal = None
+    try:
+        limit = max(40, n_candles + 25)
+        frame = get_ohlcv_4h(symbol, limit=limit) if tf == '4h' else get_ohlcv(symbol, interval=tf, limit=limit)
+        if frame is not None and len(frame) >= n_candles + 22:
+            closed = frame.iloc[:-1]  # buang candle terakhir -- kemungkinan masih berjalan
+            ema20 = ta.ema(closed['close'], length=20).values
+            vol_ma20 = closed['vol'].rolling(20).mean()
+            rvol = (closed['vol'] / vol_ma20).values
+            close_ = closed['close'].values
+            n = len(closed)
+            last = n - 1
+            if last >= 22 and not (pd.isna(ema20[last]) or pd.isna(ema20[last - 1]) or pd.isna(rvol[last])):
+                crossed_up = (close_[last - 1] < ema20[last - 1]) and (close_[last] >= ema20[last])
+                rvol_ok = rvol[last] >= rvol_min
+                had_cross_down = False
+                lo_bound = max(1, last - n_candles)
+                for j in range(lo_bound, last):
+                    if pd.isna(ema20[j]) or pd.isna(ema20[j - 1]):
+                        continue
+                    if close_[j - 1] >= ema20[j - 1] and close_[j] < ema20[j]:
+                        had_cross_down = True
+                        break
+                signal = bool(crossed_up and rvol_ok and had_cross_down)
+    except Exception as error:
+        log(f"[ADDFUND] live EMA20-reclaim {symbol} ({strategy}) gagal: {error}")
+    with _live_ema20_reclaim_cache_lock:
+        _live_ema20_reclaim_cache[cache_key] = (now, signal)
+    return signal
+
 def ekstrem_supertrend_size_mult(symbol: str, strategy: str, atr_pct: float | None):
     """Return (multiplier, alasan_log). multiplier<=0.0 = BLOKIR -- caller WAJIB batalkan
     open sama sekali (bukan cuma kalikan modal jadi 0). multiplier=1.0 = tidak ada
@@ -9925,64 +10007,52 @@ def thread2_monitor():
         strat = d.get('strategy', 'brkX2')
         live_atrp = get_live_atr_pct(sym, strat, atrp)
 
-        # 26/09/2026 (permintaan Mas Budi): add-fund reaktif "dip lalu breakout" khusus
-        # TrenKonfirmasi-4h -- lihat REMARK lengkap di TRENDCONFIRM_BREAKOUT_ADDFUND_DIP_PCT
-        # (~baris 502). Murni rule-based, INSTANT (bukan tunda/konfirmasi -- itu terbukti
-        # membalik hasil jadi rugi di backtest), sekali per deal (fire-once via bo_addfund_used).
-        # prof_peak/prof_now dihitung TANPA potong fee -- konsisten dgn backtest (raw close-price
-        # profit%, bukan prof_from_entry yg sudah dipotong FEE_ROUND_TRIP_PCT).
-        if strat == 'trend_confirm_4h' and not d.get('bo_addfund_used', False):
-            _bo_prof_now = (price/entry - 1) * 100
-            _bo_dip_from = d.get('bo_addfund_dip_from')
-            if _bo_dip_from is None:
-                if prof_peak - _bo_prof_now >= TRENDCONFIRM_BREAKOUT_ADDFUND_DIP_PCT:
-                    with active_deals_lock:
-                        if sym in active_deals:
-                            active_deals[sym]['bo_addfund_dip_from'] = prof_peak
-                    d['bo_addfund_dip_from'] = prof_peak
-                    log(f"[T2] {sym} breakout-addfund: dip tervalidasi (peak {prof_peak:+.2f}% -> skrg {_bo_prof_now:+.2f}%)")
-            elif _bo_prof_now >= _bo_dip_from + TRENDCONFIRM_BREAKOUT_ADDFUND_BREAKOUT_PCT:
+        # Patch "tc-addfund-reclaim-swap" (17/10/2026, permintaan Mas Budi): add-fund reaktif
+        # khusus TrenKonfirmasi-4h -- GANTI dari "dip lalu breakout" (26/09/2026, TERBUKTI net
+        # merugikan di backtest replay 17/10/2026 -- lihat REMARK lengkap di
+        # TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES ~baris 671, kode lama di git history) jadi
+        # "EMA20 reclaim + RVol" (get_live_ema20_reclaim_signal(), Roadmap Uji
+        # level_reclaim_detector Fase 2). Underwater (price<entry) WAJIB dicek DI SINI (bukan
+        # di dalam fungsi live-nya, yang generic/tanpa konteks posisi) sebelum cek pola --
+        # reclaim tanpa posisi underwater bukan sinyal yang relevan utk add-fund. Fire-once via
+        # reclaim_addfund_used (ganti nama dari bo_addfund_used lama -- deal lama yang masih
+        # bawa field lama itu diabaikan, tidak dibaca lagi).
+        if strat == 'trend_confirm_4h' and not d.get('reclaim_addfund_used', False) and price < entry:
+            _reclaim_signal = get_live_ema20_reclaim_signal(
+                sym, strat, TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES, TRENDCONFIRM_RECLAIM_ADDFUND_RVOL_MIN)
+            if _reclaim_signal:
                 if not get_deal_override(sym, 'auto_add_fund', True):
-                    log(f"[T2] {sym} breakout-addfund: TERPICU tapi auto_add_fund=OFF (toggle 'Auto Avg Down') -- di-skip, tidak dicoba ulang")
+                    log(f"[T2] {sym} reclaim-addfund: TERPICU tapi auto_add_fund=OFF (toggle 'Auto Avg Down') -- di-skip, tidak dicoba ulang")
                     with active_deals_lock:
                         if sym in active_deals:
-                            active_deals[sym]['bo_addfund_used'] = True
+                            active_deals[sym]['reclaim_addfund_used'] = True
                 else:
-                    _bo_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('trend_confirm_4h'))
-                    _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=_bo_modal)
+                    _rc_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('trend_confirm_4h'))
+                    _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=_rc_modal)
                     if not _glob_ok:
-                        log(f"[T2] {sym} breakout-addfund: TERPICU tapi kapasitas gabungan penuh ({_glob_reason}) -- di-skip, tidak dicoba ulang")
+                        log(f"[T2] {sym} reclaim-addfund: TERPICU tapi kapasitas gabungan penuh ({_glob_reason}) -- di-skip, tidak dicoba ulang")
                         with active_deals_lock:
                             if sym in active_deals:
-                                active_deals[sym]['bo_addfund_used'] = True
+                                active_deals[sym]['reclaim_addfund_used'] = True
                     else:
-                        log(f"[T2] {sym} breakout-addfund TERPICU: dip dari {_bo_dip_from:+.2f}%, "
-                            f"skrg {_bo_prof_now:+.2f}% -- tambah modal ${_bo_modal:.0f}")
-                        _bo_result = execute_add_fund(sym, _bo_modal)
+                        log(f"[T2] {sym} reclaim-addfund TERPICU: EMA20 reclaim (<={TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES} candle) "
+                            f"+ RVol>={TRENDCONFIRM_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_rc_modal:.0f}")
+                        _rc_result = execute_add_fund(sym, _rc_modal)
                         with active_deals_lock:
                             if sym in active_deals:
-                                active_deals[sym]['bo_addfund_used'] = True
-                                active_deals[sym]['bo_addfund_dip_from'] = None
-                        if _bo_result.get('ok'):
+                                active_deals[sym]['reclaim_addfund_used'] = True
+                        if _rc_result.get('ok'):
                             send_telegram(
-                                f"📈 Breakout Add-Fund (TrenKonfirmasi-4h)\n"
+                                f"📈 Reclaim Add-Fund (TrenKonfirmasi-4h)\n"
                                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                                 f"Pair    : {to_display_pair(sym)}\n"
-                                f"Dip dari: {_bo_dip_from:+.2f}% -> breakout {_bo_prof_now:+.2f}%\n"
-                                f"Modal ditambah: ${_bo_modal:.0f} @ {_fmt_price(_bo_result.get('price',0))}",
+                                f"Pola    : EMA20 cross-down lalu cross-up (reclaim) + RVol\n"
+                                f"Modal ditambah: ${_rc_modal:.0f} @ {_fmt_price(_rc_result.get('price',0))}",
                                 parse_mode=None
                             )
                         else:
-                            log(f"WARN [T2] {sym} breakout-addfund gagal: {_bo_result.get('error')}")
+                            log(f"WARN [T2] {sym} reclaim-addfund gagal: {_rc_result.get('error')}")
                         continue   # entry/peak lokal sudah basi setelah add-fund -- lanjut siklus berikutnya
-            elif _bo_prof_now > _bo_dip_from:
-                # BREAKOUT_PCT=0.0 bikin cabang ini nyaris tidak pernah kepicu praktis (breakout
-                # sudah tertangkap di cabang atas begitu >= dip_from) -- dijaga utk jaga-jaga kalau
-                # BREAKOUT_PCT diubah >0 di masa depan (lihat REMARK: 0.0 sengaja dipilih dari backtest).
-                with active_deals_lock:
-                    if sym in active_deals:
-                        active_deals[sym]['bo_addfund_dip_from'] = None
-                d['bo_addfund_dip_from'] = None
 
         # Idea #5 (17/10/2026): BB Upper live, dipakai utk arm-dini + perketat trailing di bawah.
         # TIDAK berlaku utk hunting_4h (TERMINATED, keputusan Mas Budi -- lihat REMARK BBUPPER_TIGHT_TIERS).
