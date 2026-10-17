@@ -6820,6 +6820,11 @@ BRKX2_4H_CONVICTION_TARGET_USD = 100    # modal kalau KEDUA syarat di atas lolos
 #    tidak perlu DUA2nya trigger baru ada efek.
 EKSTREM_ATR_PCT = 7.0   # ambang tier "Ekstrem" -- SAMA dgn hard_stop_pct(), dipakai semua
                         # strategi ATR-tiered KECUALI MomentumBreak-1h (lihat poin 4 di atas)
+# Patch "sizecut-min-notional-floor" (18/10/2026) -- lihat REMARK lengkap di
+# open_deal_with_sizing() dekat pemakaiannya. $6 (bukan $5 persis, minNotional riil Binance
+# utk mayoritas pair USDT) = buffer $1 jaga2 thd pergerakan harga antara dihitung di sini vs
+# dieksekusi Binance.
+BINANCE_MIN_NOTIONAL_SAFE_USD = 6.0
 # Patch "volatil-tier-sizecut" (17/10/2026, follow-up SAMA HARI, permintaan Mas Budi setelah
 # tanya "kenapa cuma tier Ekstrem yang dipotong, tier Volatil [4-7%] tidak?"): backtest BARU
 # (REUSE 100% dataframe hasil simulasi ekstrem-supertrend-sizing yang SAMA PERSIS, cuma
@@ -7167,7 +7172,28 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
         return False, target, 0
     if _ess_mult < 1.0:
         target = round(target * _ess_mult, 2)
-        log(f"[SIZING] {symbol} ({strategy}) modal dikecilkan {_ess_mult*100:.0f}% jadi ${target:.2f} -- {_ess_reason}")
+        # Patch "sizecut-min-notional-floor" (18/10/2026, ketahuan dari kasus PROMUSDT
+        # BBSnap-8h: modal $10 dikecilkan 26% jadi $2,60, DI BAWAH minNotional Binance
+        # ($5,00 utk PROM/USDT, dicek live via exchangeInfo -- mayoritas pair USDT pakai
+        # angka default yg sama) -- order BELI DITOLAK Binance (-1013 Filter failure:
+        # NOTIONAL), bukan cuma 1x tapi berulang tiap PROM lolos sinyal semalam (18/10
+        # dini hari). Size-cut yg sudah live sejak ekstrem-supertrend-sizing (17/10) TIDAK
+        # PERNAH mempertimbangkan lantai minimum order Binance -- utk strategi berbasis
+        # modal kecil (BBSnap $10, CrossEMA $8, dst) dikombinasi potongan agresif (sampai
+        # ~6-13% utk sebagian strategi/kondisi), hasil akhirnya BISA jatuh di bawah $5.
+        # BINANCE_MIN_NOTIONAL_SAFE_USD=$6 (bukan $5 persis) -- buffer $1 jaga-jaga thd
+        # pergerakan harga antara saat dihitung di sini vs saat order benar2 dieksekusi
+        # Binance (quoteOrderQty dievaluasi Binance sendiri saat itu juga, bukan harga yg
+        # kita lihat sekarang). Floor INI MENGESAMPINGKAN persentase cut yg sebenarnya
+        # diputuskan (mis. PROM seharusnya $2,60/26%, dipaksa naik ke $6/60%) -- tetap jauh
+        # LEBIH AMAN drpd order gagal total (modal $0, sinyal terbuang percuma).
+        if target < BINANCE_MIN_NOTIONAL_SAFE_USD:
+            log(f"[SIZING] {symbol} ({strategy}) modal hasil size-cut {_ess_mult*100:.0f}% (${target:.2f}) "
+                f"di bawah floor Binance ${BINANCE_MIN_NOTIONAL_SAFE_USD:.2f} -- {_ess_reason} -- "
+                f"dinaikkan PAKSA ke ${BINANCE_MIN_NOTIONAL_SAFE_USD:.2f} supaya order tidak ditolak NOTIONAL")
+            target = BINANCE_MIN_NOTIONAL_SAFE_USD
+        else:
+            log(f"[SIZING] {symbol} ({strategy}) modal dikecilkan {_ess_mult*100:.0f}% jadi ${target:.2f} -- {_ess_reason}")
         # Patch "size-cut-tooltip" (17/10/2026): simpan alasan di buffer per-symbol, dikonsumsi
         # add_to_active_deals() lalu ditempel ke deal (field 'size_cut_reason') supaya
         # dashboard bisa tampilkan teks "kenapa modal ini lebih kecil dari base normal".
