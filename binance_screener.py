@@ -104,6 +104,13 @@ USE_BINANCE_DIRECT = os.environ.get("USE_BINANCE_DIRECT", "false").lower() == "t
 # Buffer qty_coin sementara antara send_open_long → add_to_active_deals
 _binance_pending_qty:   dict = {}
 _binance_pending_price: dict = {}
+# Patch "size-cut-tooltip" (17/10/2026, permintaan Mas Budi -- lihat screenshot DUSK/USDT
+# $15 ditanya "apa iya base order-nya cuma segini"): buffer alasan size-cut sementara antara
+# open_deal_with_sizing() → add_to_active_deals(), pola SAMA PERSIS _binance_pending_qty/
+# _binance_pending_price di atas, supaya tiap deal yang modalnya dikecilkan (EKSTREM_SUPERTREND_SIZING)
+# bisa ditandai & dijelaskan di dashboard, bukan cuma kelihatan "modal lebih kecil dari biasa"
+# tanpa konteks.
+_pending_size_cut_reason: dict = {}
 # 21/09/2026: fill SELL market terakhir per symbol ({'qty','proceeds','ts'}, diakumulasi kalau 1 close = >1 order),
 # diisi binance_sell_market() dan dibaca thread2_monitor lewat pop_recent_sell_fill() supaya EXIT/PROFIT di CSV
 # memakai harga jual SEBENARNYA, bukan harga pantauan saat trigger.
@@ -4232,6 +4239,11 @@ def save_active_deals():
 
 def add_to_active_deals(symbol: str, data: dict):
     enriched = {**data, 'opened_at': now_wib().strftime('%Y-%m-%d %H:%M:%S')}
+    # Patch "size-cut-tooltip" (17/10/2026): tempel alasan size-cut (kalau ada) dari buffer
+    # yang diisi open_deal_with_sizing() -- lihat REMARK _pending_size_cut_reason di atas.
+    _scr = _pending_size_cut_reason.pop(symbol, None)
+    if _scr:
+        enriched['size_cut_reason'] = _scr
     # Kalau Binance direct mode: inject qty_coin dan entry_price aktual dari order fill
     if USE_BINANCE_DIRECT and symbol in _binance_pending_qty:
         enriched['qty_coin']    = _binance_pending_qty.pop(symbol)
@@ -7008,11 +7020,16 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     if _ess_mult < 1.0:
         target = round(target * _ess_mult, 2)
         log(f"[SIZING] {symbol} ({strategy}) modal dikecilkan {_ess_mult*100:.0f}% jadi ${target:.2f} -- {_ess_reason}")
+        # Patch "size-cut-tooltip" (17/10/2026): simpan alasan di buffer per-symbol, dikonsumsi
+        # add_to_active_deals() lalu ditempel ke deal (field 'size_cut_reason') supaya
+        # dashboard bisa tampilkan teks "kenapa modal ini lebih kecil dari base normal".
+        _pending_size_cut_reason[symbol] = _ess_reason
     # 17/10/2026 (patch "sizing-disconnect-fix"): usd_override=target -- lihat REMARK di
     # send_open_long(). Sebelum patch ini, 'target' yang dihitung di atas (termasuk potongan
     # size-cut apa pun) TIDAK PERNAH dipakai order BELI yang sesungguhnya.
     ok = send_open_long(symbol, strategy, usd_override=target)
     if not ok:
+        _pending_size_cut_reason.pop(symbol, None)
         return False, target, 0
     return True, target, add_usd
 
@@ -14292,6 +14309,9 @@ refreshShadowChart();
         <td style="white-space:nowrap">
           <div class="{{ "profit-pos" if d.get("upnl_usd",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_usd",0)) }} <span style="font-size:12px;color:var(--muted)">(${{ "%.0f"|format(d.get("total_usd_display",0)) }})</span></div>
           <div class="{{ "profit-pos" if d.get("upnl_pct",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_pct",0)) }}%</div>
+          {% if d.get("size_cut_reason") %}
+          <div style="font-size:8px;color:#ff9f43;margin-top:2px;max-width:140px;line-height:1.3" title="Modal base order strategi ini dikecilkan otomatis saat deal dibuka (patch ekstrem-supertrend-sizing) -- bukan base_usd normal.">&#9986; modal dikecilkan: {{ d.get("size_cut_reason") }}</div>
+          {% endif %}
         </td>
         <td>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;align-items:start;min-width:130px">
