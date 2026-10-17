@@ -4305,7 +4305,33 @@ def save_active_deals():
     except Exception as e:
         log(f"WARN gagal simpan active_deals.json: {e}")
 
+TP_OVERRIDE_KEYS_RESET_ON_OPEN = ('tp1_target_mode', 'tp1_target_pct', 'tp1_target_price',
+                                   'tp1_target_usd', 'tp1usd', 'tp_tiers')
+
 def add_to_active_deals(symbol: str, data: dict):
+    # Patch "tp-net-profit-gate" (18/10/2026, root cause dari kasus HBAR/USDT MomentumBreak-1h
+    # -- lihat REMARK lengkap di thread2_monitor() dekat pengecekan TP): seluruh override
+    # per-deal (get_deal_override/load_deal_overrides) tersimpan PER SIMBOL, bukan per-deal,
+    # dan SEBELUM patch ini TIDAK PERNAH dihapus saat deal lama ditutup -- target TP (harga/
+    # $/% / tier) dari deal LAMA di simbol yang sama nyangkut & langsung kepakai di deal BARU
+    # begitu dibuka, walau entry price-nya sudah beda sama sekali. Dibersihkan DI SINI (titik
+    # TUNGGAL semua strategi buka deal baru) SEBELUM active_deals ditulis, supaya setiap deal
+    # baru mulai dari TP kosong (balik ke default aman: $1 USD net profit), bukan warisan
+    # target lama yang bisa sudah tidak masuk akal (di bawah entry baru, dll). SENGAJA cuma
+    # bersihkan key TP (tp1_*/tp_tiers) -- toggle lain (hold_no_sell/auto_add_fund/ai_call/
+    # auto_close/arm_trailing_enabled) TIDAK disentuh, itu preferensi per-simbol yang memang
+    # wajar dipertahankan lintas deal (mis. "simbol ini selalu hold, jangan jual").
+    try:
+        _ov = load_deal_overrides()
+        if symbol in _ov and any(k in _ov[symbol] for k in TP_OVERRIDE_KEYS_RESET_ON_OPEN):
+            for k in TP_OVERRIDE_KEYS_RESET_ON_OPEN:
+                _ov[symbol].pop(k, None)
+            if not _ov[symbol]:
+                _ov.pop(symbol, None)
+            save_deal_overrides(_ov)
+            log(f"   [TP-RESET] {symbol} target TP lama dibersihkan (deal baru dibuka)")
+    except Exception as e:
+        log(f"WARN [TP-RESET] {symbol} gagal bersihkan override TP lama: {e}")
     enriched = {**data, 'opened_at': now_wib().strftime('%Y-%m-%d %H:%M:%S')}
     # Patch "size-cut-tooltip" (17/10/2026): tempel alasan size-cut (kalau ada) dari buffer
     # yang diisi open_deal_with_sizing() -- lihat REMARK _pending_size_cut_reason di atas.
@@ -10381,6 +10407,25 @@ def thread2_monitor():
             if get_deal_override(sym, 'tp1usd', False) and _upnl_usd_now >= _tp_target_usd:
                 _tp_condition_met = True
                 _tp_reason = f"TP ${_tp_target_usd:.2f}: profit bersih ${_upnl_usd_now:.2f} (modal ${_total_usd_now:.0f})"
+        # Patch "tp-net-profit-gate" (18/10/2026, permintaan Mas Budi -- kasus HBAR/USDT
+        # MomentumBreak-1h: TP mode 'price' terpicu & closed cuma 1 menit setelah open dgn
+        # profit bersih NEGATIF -$0,02/-0,24%). Akar masalah SEBENARNYA: target harga TP
+        # tersimpan PER SIMBOL (get_deal_override), bukan per-deal, dan TIDAK PERNAH dihapus
+        # saat deal lama ditutup -- target lama dari deal HBAR SEBELUMNYA (entry lebih
+        # rendah) nyangkut & langsung "kepenuhi" di deal BARU ini (entry lebih tinggi) begitu
+        # dibuka, krn mode 'price' cuma cek price>=target, SAMA SEKALI tidak mengecek
+        # untung/rugi bersihnya. Diperbaiki DUA lapis: (1) root cause -- override tp1_target_*
+        # sekarang dibersihkan tiap kali deal baru dibuka di simbol yg sama (lihat
+        # add_to_active_deals()); (2) jaring pengaman INI -- gerbang terakhir, berlaku ke
+        # SEMUA mode TP (pct/price/usd), bukan cuma mode 'price': walau syarat mode TP
+        # terpenuhi, TP TETAP TIDAK dieksekusi kalau profit bersih (_upnl_usd_now, sudah
+        # dipotong FEE_ROUND_TRIP_PCT) ternyata <= $0 -- jaga2 kalau root cause #1 kelewatan
+        # atau ada kasus lain yg belum ketahuan sekarang.
+        if _tp_condition_met and _upnl_usd_now <= 0:
+            log(f"[T2-TP] {sym} syarat TP mode '{_tp_mode}' terpenuhi TAPI profit bersih "
+                f"${_upnl_usd_now:.2f} <= $0 -- DIBATALKAN, bukan TP beneran (lihat REMARK tp-net-profit-gate)")
+            _tp_condition_met = False
+            _tp_reason = ""
         _tp_tiers_cfg = get_deal_override(sym, 'tp_tiers', []) or []
         _tier_forced_close = False   # penjualan tier tidak boleh ditahan AI (keputusan Mas Budi)
         if _tp_tiers_cfg:
