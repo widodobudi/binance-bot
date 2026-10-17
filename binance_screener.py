@@ -697,6 +697,25 @@ TRENDCONFIRM_MAX_HOLD_CANDLES= 15        # timeout 15 candle 4h = 2.5 hari, sama
 # ini di git history kalau kode lama perlu ditelusuri lagi.
 TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES = 5    # maks jarak candle (TF native strategi) antara cross-down EMA20 dan cross-up (reclaim)
 TRENDCONFIRM_RECLAIM_ADDFUND_RVOL_MIN  = 1.0  # RVol(20) minimum di candle cross-up (reclaim)
+
+# 17/10/2026 (patch "decouple-addfund-reclaim", follow-up SAMA HARI, permintaan eksplisit
+# Mas Budi: blok SENDIRI khusus Decouple-4h, BUKAN digabung generik dgn TrenKonfirmasi-4h
+# walau pola deteksinya sama persis get_live_ema20_reclaim_signal()): Decouple-4h ditambah
+# mekanisme add-fund -- strategi ini SEBELUMNYA TANPA add-fund sama sekali (keputusan
+# 09/10/2026, "base_usd TETAP, TANPA add-fund"), sekarang DITAMBAH reclaim (bukan ganti apa
+# pun, krn tidak ada mekanisme lama di strategi ini). Backtest (31.837 kandidat underwater,
+# sampel JAUH lebih besar drpd RVolBreak-8h): RVol>=1,0x (N berapa pun) konsisten membantu --
+# sel terbaik N=5/RVol=1,0: avg +1,186% (vs +1,149% tanpa add-fund), total +37.744 (vs
+# +36.588), terpicu 4,5% kandidat (n=1.441 -- sampel besar, bukan kekecilan), 138 trade
+# kalah->menang vs 30 sebaliknya. PERINGATAN dari backtest yg sama: RVol>=2,0x/3,0x JUSTRU
+# MERUGIKAN (N=3/RVol=3,0: delta -2,08pp) -- reclaim volume sangat tinggi secara historis
+# lebih sering mendahului lanjutan turun, bukan pemulihan. JANGAN naikkan ambang RVol
+# Decouple-4h di atas 1,0x tanpa backtest ulang -- beda dari TrenKonfirmasi-4h yang amannya
+# lebih lebar. Konstanta SENGAJA terpisah dari TRENDCONFIRM_RECLAIM_ADDFUND_* di atas
+# (walau nilainya kebetulan sama) -- supaya kalau salah satu perlu diubah nanti (mis. hasil
+# recheck RVolBreak-8h beda lagi), tidak ikut mengubah strategi lain.
+DECOUPLE_RECLAIM_ADDFUND_N_CANDLES = 5    # maks jarak candle (TF native strategi) antara cross-down EMA20 dan cross-up (reclaim)
+DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN  = 1.0  # RVol(20) minimum di candle cross-up (reclaim) -- JANGAN dinaikkan tanpa backtest ulang
 TRENDCONFIRM_SCAN_INTERVAL   = 600       # 23/09/2026 (audit biaya AI 22/09 + sweep window 23/09,
                                           # permintaan Mas Budi): naik dari 180 -- sebelumnya scan 24 jam
                                           # nonstop, terbukti jadi penyumbang panggilan AI TERBESAR
@@ -10052,6 +10071,53 @@ def thread2_monitor():
                             )
                         else:
                             log(f"WARN [T2] {sym} reclaim-addfund gagal: {_rc_result.get('error')}")
+                        continue   # entry/peak lokal sudah basi setelah add-fund -- lanjut siklus berikutnya
+
+        # Patch "decouple-addfund-reclaim" (17/10/2026, permintaan Mas Budi -- blok SENDIRI,
+        # bukan digabung dgn blok TrenKonfirmasi-4h di atas walau pola deteksinya sama persis
+        # get_live_ema20_reclaim_signal()): add-fund "EMA20 reclaim + RVol" khusus Decouple-4h.
+        # Lihat REMARK lengkap angka backtest di DECOUPLE_RECLAIM_ADDFUND_N_CANDLES (~baris 710)
+        # -- PENTING: ambang RVol strategi ini TIDAK BOLEH dinaikkan tanpa backtest ulang (beda
+        # dari TrenKonfirmasi-4h), backtest menemukan RVol>=2-3x justru merugikan di sini.
+        # Decouple-4h SEBELUMNYA tanpa add-fund sama sekali -- ini mekanisme BARU, bukan
+        # pengganti apa pun. Underwater (price<entry) WAJIB dicek sebelum cek pola, sama alasan
+        # spt blok TrenKonfirmasi-4h. Fire-once via reclaim_addfund_used (field sama, nama
+        # generik, aman dipakai lintas strategi -- cuma flag per-deal, bukan state bersama).
+        if strat == 'decouple_4h' and not d.get('reclaim_addfund_used', False) and price < entry:
+            _dc_signal = get_live_ema20_reclaim_signal(
+                sym, strat, DECOUPLE_RECLAIM_ADDFUND_N_CANDLES, DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN)
+            if _dc_signal:
+                if not get_deal_override(sym, 'auto_add_fund', True):
+                    log(f"[T2] {sym} reclaim-addfund: TERPICU tapi auto_add_fund=OFF (toggle 'Auto Avg Down') -- di-skip, tidak dicoba ulang")
+                    with active_deals_lock:
+                        if sym in active_deals:
+                            active_deals[sym]['reclaim_addfund_used'] = True
+                else:
+                    _dc_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('decouple_4h'))
+                    _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=_dc_modal)
+                    if not _glob_ok:
+                        log(f"[T2] {sym} reclaim-addfund: TERPICU tapi kapasitas gabungan penuh ({_glob_reason}) -- di-skip, tidak dicoba ulang")
+                        with active_deals_lock:
+                            if sym in active_deals:
+                                active_deals[sym]['reclaim_addfund_used'] = True
+                    else:
+                        log(f"[T2] {sym} reclaim-addfund TERPICU: EMA20 reclaim (<={DECOUPLE_RECLAIM_ADDFUND_N_CANDLES} candle) "
+                            f"+ RVol>={DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_dc_modal:.0f}")
+                        _dc_result = execute_add_fund(sym, _dc_modal)
+                        with active_deals_lock:
+                            if sym in active_deals:
+                                active_deals[sym]['reclaim_addfund_used'] = True
+                        if _dc_result.get('ok'):
+                            send_telegram(
+                                f"📈 Reclaim Add-Fund (Decouple-4h)\n"
+                                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                                f"Pair    : {to_display_pair(sym)}\n"
+                                f"Pola    : EMA20 cross-down lalu cross-up (reclaim) + RVol\n"
+                                f"Modal ditambah: ${_dc_modal:.0f} @ {_fmt_price(_dc_result.get('price',0))}",
+                                parse_mode=None
+                            )
+                        else:
+                            log(f"WARN [T2] {sym} reclaim-addfund gagal: {_dc_result.get('error')}")
                         continue   # entry/peak lokal sudah basi setelah add-fund -- lanjut siklus berikutnya
 
         # Idea #5 (17/10/2026): BB Upper live, dipakai utk arm-dini + perketat trailing di bawah.
