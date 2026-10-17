@@ -14310,7 +14310,7 @@ refreshShadowChart();
           <div class="{{ "profit-pos" if d.get("upnl_usd",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_usd",0)) }} <span style="font-size:12px;color:var(--muted)">(${{ "%.0f"|format(d.get("total_usd_display",0)) }})</span></div>
           <div class="{{ "profit-pos" if d.get("upnl_pct",0) > 0 else "profit-neg" }}">{{ "%+.2f"|format(d.get("upnl_pct",0)) }}%</div>
           {% if d.get("size_cut_reason") %}
-          <div style="font-size:8px;color:#ff9f43;margin-top:2px;max-width:140px;line-height:1.3" title="Modal base order strategi ini dikecilkan otomatis saat deal dibuka (patch ekstrem-supertrend-sizing) -- bukan base_usd normal.">&#9986; modal dikecilkan: {{ d.get("size_cut_reason") }}</div>
+          <div style="font-size:8px;color:#ff9f43;margin-top:2px;max-width:140px;line-height:1.3;white-space:normal;word-break:break-word" title="Modal base order strategi ini dikecilkan otomatis saat deal dibuka (patch ekstrem-supertrend-sizing) -- bukan base_usd normal.">&#9986; modal dikecilkan: {{ d.get("size_cut_reason") }}</div>
           {% endif %}
         </td>
         <td>
