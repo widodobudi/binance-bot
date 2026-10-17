@@ -222,9 +222,13 @@ UNARM_ATR_MARGIN_PP     = 0.5   # ATR% live harus naik >0.5pp dari ATR% live saa
 UNARM_MIN_ARMED_MINUTES = 15    # minimal armed 15 menit sebelum boleh dievaluasi un-arm
 VOLATILITY_GUARD_ATR_PCT = 10.0  # ATR terbaru di atas ini: jangan add fund
 VOLATILITY_GUARD_ATR_MULT = 2.0   # ATR melonjak >=2x ATR saat open: jangan add fund
+# Patch name: ekstrem-size-cut (nama diberikan retroaktif 17/10/2026 -- dibuat 16/10/2026,
+# commit 5e59c40, sebelum konvensi penamaan patch dimulai).
 # 16/10/2026 (permintaan Mas Budi, dipicu AVAUSDT -12,72% ATR Ekstrem di KeltnerBreak-12h):
 # modal dikecilkan jadi 25% kalau ATR saat sinyal sudah tier Ekstrem (>=7%, lihat hard_stop_pct())
-# -- lihat REMARK lengkap di open_deal_with_sizing(), cabang brkX2_12h_closed.
+# -- lihat REMARK lengkap di open_deal_with_sizing(), cabang brkX2_12h_closed. Baru BENERAN
+# sampai ke order beli sejak patch sizing-disconnect-fix (17/10/2026) -- sebelum itu cuma
+# kehitung & kelog, tidak pernah dipakai eksekusi nyata (lihat REMARK di send_open_long()).
 BRKX2_12H_EKSTREM_SIZE_MULT = 0.25
 HARD_STOP_MULT = 1.1              # pengali (K) atas base hard-stop per tier ATR% (lihat hard_stop_pct()).
                                    # K=1.1 disepakati 26/08/2026 studi kasus TLM/USDT: base tier Volatil 9%
