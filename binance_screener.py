@@ -14972,12 +14972,6 @@ refreshShadowChart();
 var _aiChatContents = [];
 var _aiChatBusy = false;
 var _aiChatPanelOpen = false;
-// 18/10/2026 (patch "ai-chat-multi-provider-failover"): aksi tulis yang diajukan AI cuma bisa
-// dilanjutkan provider YANG SAMA yang mengajukannya (tool_use/functionCall/tool_calls-nya cuma
-// dimengerti provider itu sendiri) -- disimpan terpisah dari _aiChatContents (yang netral/bebas
-// provider), dikirim balik apa adanya ke /api/ai_chat/confirm.
-var _aiChatPendingProvider = null;
-var _aiChatPendingNative = null;
 
 function toggleAiChatPanel() {
     _aiChatPanelOpen = !_aiChatPanelOpen;
@@ -15039,26 +15033,20 @@ function aiChatHandleResult(result, thinkingBubble) {
     aiChatSetBusy(false);
     if (!result) { aiChatAppendBubble('model', '<span style="color:var(--red)">Tidak ada respons dari server.</span>'); return; }
     _aiChatContents = result.contents || _aiChatContents;
-    var providerTag = result.provider ? '<div style="font-size:9px;color:var(--muted);margin-top:4px">Dijawab oleh: ' + result.provider + '</div>' : '';
     if (result.type === 'text') {
-        _aiChatPendingProvider = null; _aiChatPendingNative = null;
-        aiChatAppendBubble('model', String(result.text || '').replace(/</g, '&lt;') + providerTag);
+        aiChatAppendBubble('model', String(result.text || '').replace(/</g, '&lt;'));
     } else if (result.type === 'confirm') {
-        _aiChatPendingProvider = result.pending_provider || null;
-        _aiChatPendingNative = result.pending_native || null;
         var summary = aiChatActionSummary(result.tool_name, result.tool_args);
         var bubble = aiChatAppendBubble('model',
             '<div style="margin-bottom:8px">AI mau eksekusi:<br><b>' + summary + '</b></div>' +
             '<button type="button" class="ai-chat-confirm-btn" style="background:var(--green);color:#000;border:none;border-radius:4px;padding:5px 12px;font-size:11px;cursor:pointer;margin-right:6px;font-weight:600">Konfirmasi</button>' +
-            '<button type="button" class="ai-chat-cancel-btn" style="background:rgba(255,100,100,.15);color:var(--red);border:1px solid var(--red);border-radius:4px;padding:5px 12px;font-size:11px;cursor:pointer">Batalkan</button>' +
-            providerTag
+            '<button type="button" class="ai-chat-cancel-btn" style="background:rgba(255,100,100,.15);color:var(--red);border:1px solid var(--red);border-radius:4px;padding:5px 12px;font-size:11px;cursor:pointer">Batalkan</button>'
         );
         if (bubble) {
             bubble.querySelector('.ai-chat-confirm-btn').addEventListener('click', function(){ aiChatConfirmAction(true, bubble); });
             bubble.querySelector('.ai-chat-cancel-btn').addEventListener('click', function(){ aiChatConfirmAction(false, bubble); });
         }
     } else {
-        _aiChatPendingProvider = null; _aiChatPendingNative = null;
         aiChatAppendBubble('model', '<span style="color:var(--red)">Error: ' + (result.error || 'tidak diketahui') + '</span>');
     }
 }
@@ -15087,8 +15075,7 @@ function aiChatConfirmAction(approved, bubble) {
     aiChatSetBusy(true);
     var thinkingBubble = aiChatAppendThinking();
     fetch('/api/ai_chat/confirm', {method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({contents: _aiChatContents, approved: approved,
-            pending_provider: _aiChatPendingProvider, pending_native: _aiChatPendingNative})})
+        body: JSON.stringify({contents: _aiChatContents, approved: approved})})
         .then(function(r){ return r.json(); })
         .then(function(result){ aiChatHandleResult(result, thinkingBubble); })
         .catch(function(e){ if (thinkingBubble && thinkingBubble.parentNode) thinkingBubble.parentNode.removeChild(thinkingBubble); aiChatSetBusy(false); aiChatAppendBubble('model', '<span style="color:var(--red)">Error: ' + e + '</span>'); });
@@ -24166,16 +24153,13 @@ def run_web_dashboard():
         @app.route("/api/ai_chat", methods=["POST"])
         def api_ai_chat():
             """AI Chat Assistant dashboard -- lihat REMARK lengkap di _ai_chat_run_loop() dkk
-            (dekat "ai-chat-multi-provider-failover"). Coba Claude -> Alibaba -> Gemini berurutan
-            (diam2, Mas Budi cuma lihat hasil akhir + provider mana yang jawab). Tool TULIS TIDAK
-            PERNAH langsung dieksekusi di sini, selalu berhenti dulu minta konfirmasi
-            (/api/ai_chat/confirm). `contents`: riwayat kanonik {"role","text","provider"?} --
-            netral, BUKAN format provider manapun."""
+            (dekat _anthropic_chat_call()). Tool TULIS TIDAK PERNAH langsung dieksekusi di sini,
+            selalu berhenti dulu minta konfirmasi (/api/ai_chat/confirm)."""
             payload = request.get_json(force=True, silent=True) or {}
             contents = payload.get("contents") or []
             message = payload.get("message", "")
             if message:
-                contents = contents + [{"role": "user", "text": message}]
+                contents = contents + [{"role": "user", "content": [{"type": "text", "text": message}]}]
             if not contents:
                 return jsonify({"type": "error", "error": "Pesan kosong"}), 400
             return jsonify(_ai_chat_run_loop(contents))
@@ -24183,15 +24167,12 @@ def run_web_dashboard():
         @app.route("/api/ai_chat/confirm", methods=["POST"])
         def api_ai_chat_confirm():
             """Konfirmasi/tolak aksi tulis yang diajukan AI Chat Assistant. Lihat
-            _ai_chat_resume_after_confirm() -- tool_name/args diambil ulang dari `pending_native`
-            (riwayat native provider `pending_provider`, apa adanya dari respons /api/ai_chat
-            sebelumnya), bukan dari field terpisah (defense-in-depth)."""
+            _ai_chat_resume_after_confirm() -- tool_name/args diambil ulang dari `contents`
+            kiriman frontend, bukan dari field terpisah (defense-in-depth)."""
             payload = request.get_json(force=True, silent=True) or {}
             contents = payload.get("contents") or []
-            pending_provider = payload.get("pending_provider", "")
-            pending_native = payload.get("pending_native") or []
             approved = bool(payload.get("approved", False))
-            return jsonify(_ai_chat_resume_after_confirm(contents, pending_provider, pending_native, approved))
+            return jsonify(_ai_chat_resume_after_confirm(contents, approved))
 
         @app.route("/cancel_deal", methods=["POST"])
         def cancel_deal():
@@ -28104,12 +28085,17 @@ def _anthropic_chat_call_once(messages: list, api_key: str) -> dict:
 
 
 def _anthropic_chat_call(messages: list) -> dict:
-    """Panggil Claude dgn fallback 2-akun (ANTHROPIC_API_KEY=widodobudi@ utama,
-    ANTHROPIC_API_KEY_2=vassistbywbudi@ cadangan) -- pola fallback-nya IDENTIK
-    _anthropic_ai_call() (23/09/2026), TAPI SENGAJA fungsi terpisah: TIDAK ikut kirim
-    notifikasi Telegram "AI Decision ON/OFF" atau ikut update state _ai_provider_health --
-    gagal di SINI bukan berarti ai_decision_open/close ikut gagal (atau sebaliknya). Return
-    dict respons Anthropic MENTAH dari akun mana pun yang berhasil."""
+    """Patch "ai-chat-anthropic-switch" (18/10/2026, permintaan Mas Budi "pakai claude aja"
+    sebagai pengganti Gemini -- akses GEMINI_API_KEY ternyata 403 PERMISSION_DENIED, baru
+    ketahuan krn fitur ini pertama kalinya benar2 memanggil Gemini lagi setelah berminggu2
+    (Alibaba selalu menang duluan di fallback chain ai_decision_open/close)): panggil Claude
+    dgn fallback 2-akun (ANTHROPIC_API_KEY=widodobudi@ utama, ANTHROPIC_API_KEY_2=vassistbywbudi@
+    cadangan) -- pola fallback-nya IDENTIK _anthropic_ai_call() (23/09/2026), TAPI SENGAJA
+    fungsi terpisah: TIDAK ikut kirim notifikasi Telegram "AI Decision ON/OFF" atau ikut update
+    state _ai_provider_health -- gagal di SINI bukan berarti ai_decision_open/close ikut gagal
+    (atau sebaliknya), dan chat ini interaktif (Mas Budi langsung lihat hasilnya di layar,
+    tidak perlu notifikasi Telegram terpisah). Return dict respons Anthropic MENTAH dari akun
+    mana pun yang berhasil."""
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY belum di-set")
     try:
@@ -28118,15 +28104,15 @@ def _anthropic_chat_call(messages: list) -> dict:
         _msg = str(e).lower()
         _is_credit_error = "credit" in _msg or "billing" in _msg or "insufficient" in _msg
         if _is_credit_error and ANTHROPIC_API_KEY_2:
-            log("WARN [AI-CHAT] Claude akun utama (widodobudi@) kehabisan kredit -- coba akun cadangan (vassistbywbudi@)")
+            log("WARN [AI-CHAT] Akun utama (widodobudi@) kehabisan kredit -- coba akun cadangan (vassistbywbudi@)")
             return _anthropic_chat_call_once(messages, ANTHROPIC_API_KEY_2)
         raise
 
 
 def _ai_chat_dispatch_tool(name: str, args: dict) -> dict:
-    """Eksekutor MURNI satu tool (baca ATAU tulis) -- TIDAK tahu/peduli soal konfirmasi/provider,
-    itu keputusan caller (_ai_chat_generic_tool_loop/_ai_chat_generic_resume) supaya logic-nya
-    tidak ke-duplikasi di banyak tempat."""
+    """Eksekutor MURNI satu tool (baca ATAU tulis) -- TIDAK tahu/peduli soal konfirmasi, itu
+    keputusan caller (_ai_chat_run_loop/_ai_chat_resume_after_confirm) supaya logic konfirmasi
+    tidak ke-duplikasi di 2 tempat berbeda."""
     handler = AI_CHAT_TOOL_HANDLERS.get(name)
     if handler is None:
         return {"ok": False, "error": f"Tool '{name}' tidak dikenal"}
@@ -28137,311 +28123,71 @@ def _ai_chat_dispatch_tool(name: str, args: dict) -> dict:
         return {"ok": False, "error": f"Tool '{name}' gagal dieksekusi: {e}"}
 
 
-# ── Patch "ai-chat-multi-provider-failover" (18/10/2026, permintaan Mas Budi): Gemini ternyata
-# 403 (akses akun ditolak Google) dan Claude (KEDUA akun) ternyata kehabisan kredit -- Mas Budi
-# minta persis pola _ai_call() yg sudah dipakai ai_decision_open/close: coba Claude dulu, diam2
-# lanjut Alibaba kalau gagal, diam2 lanjut Gemini kalau itu juga gagal, Mas Budi CUMA lihat
-# jawaban akhir + keterangan AI mana yang menjawab -- bukan pesan error provider yang gagal di
-# tengah jalan (itu tetap dicatat di Railway log via log(), bukan dibuang, cuma tidak dikirim ke
-# layar). Claude/Gemini/Alibaba punya FORMAT tool-call yang beda total (tool_use/functionCall/
-# tool_calls) -- jadi riwayat percakapan yang disimpan & dikirim balik ke browser sekarang format
-# NETRAL ({"role","text","provider"?}), BUKAN format salah satu provider lagi. Tiap provider cuma
-# perlu didaftarkan di AI_CHAT_PROVIDER_ADAPTERS (5 fungsi adapter kecil) -- logic tool-loop
-# intinya SATU KALI SAJA di _ai_chat_generic_tool_loop()/_ai_chat_generic_resume(), supaya 3
-# provider TIDAK BISA diam-diam beda perilaku baca/tulis/konfirmasi.
-def _ai_chat_tools_gemini() -> list:
-    """Turunkan skema tool Gemini (functionDeclarations, tipe JSON-Schema HURUF BESAR) dari
-    AI_CHAT_TOOLS (kanonik, format Claude/JSON-Schema huruf kecil) -- skema tool cuma
-    didefinisikan SEKALI (AI_CHAT_TOOLS), supaya 3 salinan tidak bisa saling tidak sinkron."""
-    def conv(schema):
-        if not isinstance(schema, dict):
-            return schema
-        out = {}
-        for k, v in schema.items():
-            if k == "type" and isinstance(v, str):
-                out[k] = v.upper()
-            elif k == "properties" and isinstance(v, dict):
-                out[k] = {pk: conv(pv) for pk, pv in v.items()}
-            else:
-                out[k] = v
-        return out
-    return [{"name": t["name"], "description": t["description"], "parameters": conv(t["input_schema"])} for t in AI_CHAT_TOOLS]
-
-
-def _ai_chat_tools_openai() -> list:
-    """Turunkan skema tool gaya OpenAI (dipakai Alibaba/DashScope, endpoint OpenAI-compatible)
-    dari AI_CHAT_TOOLS -- tipe JSON-Schema-nya SAMA PERSIS huruf kecil, cuma dibungkus beda
-    ({"type":"function","function":{...}})."""
-    return [{"type": "function", "function": {"name": t["name"], "description": t["description"],
-             "parameters": t["input_schema"]}} for t in AI_CHAT_TOOLS]
-
-
-def _gemini_chat_call_raw(contents: list) -> dict:
-    """Panggil Gemini generateContent dgn tool-use, KHUSUS AI Chat Assistant -- beda dari
-    _gemini_ai_call() single-prompt/200-token dipakai ai_decision. Return candidates[0].content
-    MENTAH (dict berisi 'role' & 'parts')."""
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY belum di-set")
-    payload = {
-        "contents": contents,
-        "systemInstruction": {"parts": [{"text": AI_CHAT_SYSTEM_PROMPT}]},
-        "tools": [{"functionDeclarations": _ai_chat_tools_gemini()}],
-        "generationConfig": {"maxOutputTokens": AI_CHAT_MAX_OUTPUT_TOKENS, "temperature": 0.2},
-    }
-    endpoint = ("https://generativelanguage.googleapis.com/v1beta/models/"
-                + GEMINI_AI_MODEL + ":generateContent?key=" + GEMINI_API_KEY)
-    req = _urllib_req.Request(endpoint, data=json.dumps(payload).encode(),
-                               headers={"Content-Type": "application/json"}, method="POST")
-    try:
-        with _urllib_req.urlopen(req, timeout=AI_CHAT_TIMEOUT) as resp:
-            body = json.loads(resp.read())
-    except _urllib_err.HTTPError as e:
-        try:
-            detail = e.read().decode(errors="replace")[:300]
-        except Exception:
-            detail = str(e)
-        raise RuntimeError(f"HTTP {e.code}: {detail}")
-    candidates = body.get("candidates") or []
-    if not candidates:
-        raise RuntimeError(f"Gemini tidak mengembalikan kandidat jawaban (raw: {str(body)[:300]})")
-    return candidates[0]["content"]
-
-
-def _alibaba_chat_call_raw(messages: list) -> dict:
-    """Panggil Alibaba (Qwen) /chat/completions dgn tool-calling gaya OpenAI, KHUSUS AI Chat
-    Assistant -- beda dari _alibaba_http_call() single-prompt/tanpa tools dipakai ai_decision.
-    SENGAJA TIDAK ikut coba beberapa model cadangan spt _alibaba_ai_call() (_alibaba_model_list())
-    -- kompleksitas model-fallback DI DALAM provider-fallback belum perlu, satu model utama
-    (ALIBABA_AI_MODEL) dulu cukup. Return choices[0].message MENTAH."""
-    if not ALIBABA_API_KEY:
-        raise RuntimeError("ALIBABA_API_KEY belum di-set")
-    body = {
-        "model": ALIBABA_AI_MODEL,
-        "messages": [{"role": "system", "content": AI_CHAT_SYSTEM_PROMPT}] + messages,
-        "tools": _ai_chat_tools_openai(),
-        "max_tokens": AI_CHAT_MAX_OUTPUT_TOKENS,
-        "enable_thinking": False,
-    }
-    req = _urllib_req.Request(
-        ALIBABA_BASE_URL.rstrip("/") + "/chat/completions", data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json", "Authorization": "Bearer " + ALIBABA_API_KEY},
-        method="POST")
-    try:
-        with _urllib_req.urlopen(req, timeout=AI_CHAT_TIMEOUT) as resp:
-            body_resp = json.loads(resp.read())
-    except _urllib_err.HTTPError as e:
-        try:
-            err_body = e.read().decode("utf-8", errors="replace")
-        except Exception:
-            err_body = ""
-        detail = ""
-        try:
-            detail = json.loads(err_body).get("error", {}).get("message", "")
-        except Exception:
-            pass
-        raise RuntimeError(f"HTTP {e.code}: {detail or err_body or e.reason}")
-    choices = body_resp.get("choices") or []
-    if not choices:
-        raise RuntimeError(f"Alibaba tidak mengembalikan choices (raw: {str(body_resp)[:300]})")
-    return choices[0]["message"]
-
-
-# Adapter Claude: tool_use blocks, id eksplisit per panggilan, hasil tool jadi SATU pesan
-# role="user" gabungan (konvensi Messages API).
-def _claude_to_assistant_entry(resp):
-    return {"role": "assistant", "content": resp.get("content") or []}
-
-def _claude_get_tool_uses(entry):
-    return [{"id": b.get("id"), "name": b.get("name", ""), "args": b.get("input", {}) or {}}
-            for b in (entry.get("content") or []) if b.get("type") == "tool_use"]
-
-def _claude_get_text(entry):
-    return "".join(b.get("text", "") for b in (entry.get("content") or []) if b.get("type") == "text").strip()
-
-def _claude_to_tool_result_entries(results):
-    return [{"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": r["id"], "content": json.dumps(r["result"])} for r in results
-    ]}]
-
-# Adapter Gemini: functionCall TIDAK punya id eksplisit -- dicocokkan lewat NAMA (konvensi API
-# Gemini sendiri), jadi "id" dipakai di sini sebenarnya nama fungsinya.
-def _gemini_to_assistant_entry(content):
-    return {"role": "model", "parts": content.get("parts") or []}
-
-def _gemini_get_tool_uses(entry):
-    out = []
-    for p in entry.get("parts") or []:
-        fc = p.get("functionCall")
-        if fc:
-            out.append({"id": fc.get("name", ""), "name": fc.get("name", ""), "args": fc.get("args", {}) or {}})
-    return out
-
-def _gemini_get_text(entry):
-    return "".join(p.get("text", "") for p in entry.get("parts") or []).strip()
-
-def _gemini_to_tool_result_entries(results):
-    return [{"role": "function", "parts": [
-        {"functionResponse": {"name": r["name"], "response": r["result"]}} for r in results
-    ]}]
-
-# Adapter gaya OpenAI (Alibaba/Qwen): tool_calls punya id eksplisit, TAPI hasil tool jadi BANYAK
-# pesan role="tool" terpisah (satu per tool_call_id) -- beda dari Claude/Gemini yg satu pesan
-# gabungan, makanya to_tool_result_entries() semua provider SENGAJA return LIST (isi 1 atau lebih).
-def _openai_to_assistant_entry(message):
-    return {"role": "assistant", "content": message.get("content"), "tool_calls": message.get("tool_calls")}
-
-def _openai_get_tool_uses(entry):
-    out = []
-    for tc in entry.get("tool_calls") or []:
-        fn = tc.get("function", {}) or {}
-        try:
-            args = json.loads(fn.get("arguments") or "{}")
-        except Exception:
-            args = {}
-        out.append({"id": tc.get("id"), "name": fn.get("name", ""), "args": args})
-    return out
-
-def _openai_get_text(entry):
-    return (entry.get("content") or "").strip()
-
-def _openai_to_tool_result_entries(results):
-    return [{"role": "tool", "tool_call_id": r["id"], "content": json.dumps(r["result"])} for r in results]
-
-
-AI_CHAT_PROVIDER_ADAPTERS = {
-    "Claude": dict(
-        call_fn=_anthropic_chat_call, to_assistant_entry=_claude_to_assistant_entry,
-        get_tool_uses=_claude_get_tool_uses, get_text=_claude_get_text,
-        to_tool_result_entries=_claude_to_tool_result_entries,
-        to_native=lambda m: {"role": m["role"], "content": [{"type": "text", "text": m["text"]}]}),
-    "Alibaba (Qwen)": dict(
-        call_fn=_alibaba_chat_call_raw, to_assistant_entry=_openai_to_assistant_entry,
-        get_tool_uses=_openai_get_tool_uses, get_text=_openai_get_text,
-        to_tool_result_entries=_openai_to_tool_result_entries,
-        to_native=lambda m: {"role": m["role"], "content": m["text"]}),
-    "Gemini": dict(
-        call_fn=_gemini_chat_call_raw, to_assistant_entry=_gemini_to_assistant_entry,
-        get_tool_uses=_gemini_get_tool_uses, get_text=_gemini_get_text,
-        to_tool_result_entries=_gemini_to_tool_result_entries,
-        to_native=lambda m: {"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["text"]}]}),
-}
-# Urutan SAMA PERSIS _ai_call() (ai_decision_open/close): Anthropic -> Alibaba -> Gemini.
-# Claude tetap di urutan PERTAMA walau saat ini pasti gagal (kredit habis, 18/10/2026) -- begitu
-# Mas Budi isi ulang kredit kapan pun, otomatis balik kepakai TANPA perlu ubah kode lagi (sama
-# logika kenapa Anthropic tetap primary di _ai_call() walau "Out of service" berminggu-minggu).
-AI_CHAT_PROVIDER_CHAIN = ["Claude", "Alibaba (Qwen)", "Gemini"]
-
-
-def _ai_chat_generic_tool_loop(call_fn, to_assistant_entry, get_tool_uses, get_text,
-                                to_tool_result_entries, native_messages):
-    """Loop tool GENERIK dipakai SEMUA provider lewat AI_CHAT_PROVIDER_ADAPTERS -- baca tool
-    dijalankan otomatis & lanjut loop, tool TULIS (AI_CHAT_WRITE_TOOLS) STOP minta konfirmasi
-    (TIDAK PERNAH dieksekusi otomatis apa pun instruksinya), batas putaran AI_CHAT_MAX_TOOL_ITERS.
-    Return (result_dict, native_messages_terbaru) -- native_messages WAJIB disimpan sbg
-    'pending_native' kalau result_dict type='confirm', provider yang SAMA butuh itu utk
-    melanjutkan stlh konfirmasi (lihat _ai_chat_generic_resume())."""
+def _ai_chat_run_loop(messages: list) -> dict:
+    """Loop utama AI Chat Assistant: panggil Claude, kalau minta tool BACA jalankan otomatis &
+    lanjut loop (model tidak pernah menunggu approval utk baca data), kalau minta tool TULIS
+    (AI_CHAT_WRITE_TOOLS) STOP & kembalikan ke frontend sbg 'perlu konfirmasi' -- TIDAK PERNAH
+    dieksekusi otomatis apa pun instruksinya (uang riil, permintaan eksplisit Mas Budi tetap
+    pakai konfirmasi berlapis). Claude kadang minta BEBERAPA tool sekaligus dlm satu turn
+    (parallel tool_use) -- kalau semuanya tool BACA, dijalankan semua & hasilnya dikirim
+    sekaligus (WAJIB, tiap tool_use butuh tool_result sebelum turn berikutnya); kalau ADA SATU
+    SAJA tool TULIS di turn itu, turn itu LANGSUNG dihentikan (tidak ada yang dieksekusi dulu,
+    termasuk tool baca yang mungkin ikut di turn yang sama) -- lihat _ai_chat_resume_after_
+    confirm() utk cara turn campuran itu dilanjutkan setelah konfirmasi. Return {type: 'text'|
+    'confirm'|'error', ..., contents: riwayat terbaru (dikirim balik ke frontend, dipakai lagi
+    giliran berikutnya)}."""
     for _ in range(AI_CHAT_MAX_TOOL_ITERS):
-        raw = call_fn(native_messages)
-        assistant_entry = to_assistant_entry(raw)
-        native_messages = native_messages + [assistant_entry]
-        tool_uses = get_tool_uses(assistant_entry)
-        if not tool_uses:
-            text = get_text(assistant_entry)
-            return {"type": "text", "text": text or "(AI tidak memberi jawaban teks)"}, native_messages
-        write_tool = next((t for t in tool_uses if t["name"] in AI_CHAT_WRITE_TOOLS), None)
-        if write_tool is not None:
-            return {"type": "confirm", "tool_name": write_tool["name"], "tool_args": write_tool["args"]}, native_messages
-        results = [{"id": t["id"], "name": t["name"], "result": _ai_chat_dispatch_tool(t["name"], t["args"])}
-                   for t in tool_uses]
-        native_messages = native_messages + to_tool_result_entries(results)
-    raise RuntimeError("terlalu banyak putaran tool tanpa jawaban akhir")
-
-
-def _ai_chat_generic_resume(call_fn, to_assistant_entry, get_tool_uses, get_text,
-                             to_tool_result_entries, native_state, approved):
-    """Lanjutan GENERIK setelah Mas Budi approve/tolak -- tool_name/args diambil ULANG dari turn
-    terakhir di `native_state` (BUKAN dipercaya dari field terpisah) -- defense-in-depth, supaya
-    aksi yang BENAR2 dieksekusi tidak bisa ditukar dari yang ditampilkan ke Mas Budi. Tool baca
-    LAIN yang mungkin ikut di turn campuran yang sama TETAP dijalankan (baca, tidak berisiko,
-    WAJIB dapat hasil juga supaya provider tidak menolak turn berikutnya) terlepas approved/tidak."""
-    last = native_state[-1]
-    tool_uses = get_tool_uses(last)
-    write_tool = next((t for t in tool_uses if t["name"] in AI_CHAT_WRITE_TOOLS), None)
-    if write_tool is None:
-        raise RuntimeError("tidak ada aksi yang menunggu konfirmasi")
-    results = []
-    for t in tool_uses:
-        if t["id"] == write_tool["id"]:
-            result = (_ai_chat_dispatch_tool(t["name"], t["args"]) if approved
-                      else {"ok": False, "cancelled_by_user": True, "note": "Mas Budi membatalkan aksi ini."})
-        else:
-            result = _ai_chat_dispatch_tool(t["name"], t["args"])
-        results.append({"id": t["id"], "name": t["name"], "result": result})
-    native_messages = native_state + to_tool_result_entries(results)
-    return _ai_chat_generic_tool_loop(call_fn, to_assistant_entry, get_tool_uses, get_text,
-                                       to_tool_result_entries, native_messages)
-
-
-def _ai_chat_provider_turn(provider: str, canonical_messages: list):
-    a = AI_CHAT_PROVIDER_ADAPTERS[provider]
-    native = [a["to_native"](m) for m in canonical_messages]
-    return _ai_chat_generic_tool_loop(a["call_fn"], a["to_assistant_entry"], a["get_tool_uses"],
-                                       a["get_text"], a["to_tool_result_entries"], native)
-
-
-def _ai_chat_provider_resume(provider: str, native_state: list, approved: bool):
-    a = AI_CHAT_PROVIDER_ADAPTERS[provider]
-    return _ai_chat_generic_resume(a["call_fn"], a["to_assistant_entry"], a["get_tool_uses"],
-                                    a["get_text"], a["to_tool_result_entries"], native_state, approved)
-
-
-def _ai_chat_run_loop(canonical_messages: list) -> dict:
-    """Orkestrator failover 3-provider: coba Claude dulu, diam2 lanjut Alibaba kalau gagal, diam2
-    lanjut Gemini kalau itu juga gagal -- Mas Budi TIDAK PERNAH lihat pesan error provider yang
-    gagal di tengah jalan (detailnya tetap tercatat di Railway log lewat log()), cuma lihat
-    jawaban akhir + "provider" (keterangan AI mana yang menjawab). Error ditampilkan ke Mas Budi
-    HANYA kalau SEMUA 3 provider gagal total. Return {type:'text'|'confirm'|'error', ...,
-    contents: riwayat kanonik terbaru (dikirim balik ke frontend)}."""
-    errors = []
-    for provider in AI_CHAT_PROVIDER_CHAIN:
         try:
-            result, native_messages = _ai_chat_provider_turn(provider, canonical_messages)
+            resp = _anthropic_chat_call(messages)
         except Exception as e:
-            log(f"WARN [AI-CHAT] provider {provider} gagal, coba provider berikutnya: {e}")
-            errors.append(f"{provider}: {e}")
-            continue
-        if result["type"] == "text":
-            new_canonical = canonical_messages + [{"role": "assistant", "text": result["text"], "provider": provider}]
-            return {"type": "text", "text": result["text"], "provider": provider, "contents": new_canonical}
-        return {"type": "confirm", "tool_name": result["tool_name"], "tool_args": result["tool_args"],
-                "provider": provider, "contents": canonical_messages,
-                "pending_provider": provider, "pending_native": native_messages}
-    log(f"WARN [AI-CHAT] SEMUA provider gagal: {'; '.join(errors)}")
-    return {"type": "error", "error": "Semua AI provider gagal dipanggil (Claude, Alibaba, Gemini) -- cek Railway log utk detail.",
-            "contents": canonical_messages}
+            log(f"WARN [AI-CHAT] Claude call gagal: {e}")
+            return {"type": "error", "error": f"AI sedang error: {e}", "contents": messages}
+        blocks = resp.get("content") or []
+        messages = messages + [{"role": "assistant", "content": blocks}]
+        tool_uses = [b for b in blocks if b.get("type") == "tool_use"]
+        if not tool_uses:
+            text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+            return {"type": "text", "text": text or "(AI tidak memberi jawaban teks)", "contents": messages}
+        write_tool_use = next((t for t in tool_uses if t.get("name") in AI_CHAT_WRITE_TOOLS), None)
+        if write_tool_use is not None:
+            return {"type": "confirm", "tool_name": write_tool_use.get("name"),
+                    "tool_args": write_tool_use.get("input", {}) or {}, "contents": messages}
+        result_blocks = []
+        for t in tool_uses:
+            result = _ai_chat_dispatch_tool(t.get("name", ""), t.get("input", {}) or {})
+            result_blocks.append({"type": "tool_result", "tool_use_id": t.get("id"), "content": json.dumps(result)})
+        messages = messages + [{"role": "user", "content": result_blocks}]
+    return {"type": "error", "error": "AI terlalu banyak putaran tool tanpa jawaban akhir -- coba pertanyaan lebih spesifik.", "contents": messages}
 
 
-def _ai_chat_resume_after_confirm(canonical_messages: list, pending_provider: str,
-                                   pending_native: list, approved: bool) -> dict:
-    """Lanjutkan SETELAH Mas Budi approve/tolak -- WAJIB provider YANG SAMA yang mengajukan aksi
-    itu (tool_use/functionCall/tool_calls-nya cuma dimengerti provider itu sendiri, tidak bisa
-    dioper provider lain). pending_native: riwayat native (format `pending_provider`) PERSIS yang
-    di-return _ai_chat_run_loop() saat minta konfirmasi -- sumber kebenaran aksi yang BENAR2
-    dieksekusi (bukan tool_name/tool_args terpisah kiriman frontend), defense-in-depth sama spt
-    sebelumnya."""
-    if pending_provider not in AI_CHAT_PROVIDER_ADAPTERS or not pending_native:
-        return {"type": "error", "error": "Sesi konfirmasi tidak valid (riwayat percakapan rusak).", "contents": canonical_messages}
-    try:
-        result, native_messages = _ai_chat_provider_resume(pending_provider, pending_native, approved)
-    except Exception as e:
-        log(f"WARN [AI-CHAT] provider {pending_provider} gagal melanjutkan konfirmasi: {e}")
-        return {"type": "error", "error": f"AI ({pending_provider}) gagal melanjutkan: {e}", "contents": canonical_messages}
-    if result["type"] == "text":
-        new_canonical = canonical_messages + [{"role": "assistant", "text": result["text"], "provider": pending_provider}]
-        return {"type": "text", "text": result["text"], "provider": pending_provider, "contents": new_canonical}
-    return {"type": "confirm", "tool_name": result["tool_name"], "tool_args": result["tool_args"],
-            "provider": pending_provider, "contents": canonical_messages,
-            "pending_provider": pending_provider, "pending_native": native_messages}
+def _ai_chat_resume_after_confirm(messages: list, approved: bool) -> dict:
+    """Lanjutkan loop SETELAH Mas Budi approve/tolak aksi tulis yang diajukan model. tool_name/
+    args diambil ULANG dari turn model terakhir di `messages` (BUKAN dipercaya dari field
+    terpisah kiriman frontend) -- defense-in-depth, supaya frontend/network tidak bisa menukar
+    aksi yang ditampilkan ke Mas Budi dgn aksi yang BENAR2 dieksekusi. Kalau turn itu ternyata
+    turn CAMPURAN (ada tool baca lain selain tool tulis yang dikonfirmasi -- lihat REMARK
+    _ai_chat_run_loop()), tool baca lain itu TETAP dijalankan normal (baca, tidak berisiko,
+    WAJIB dapat tool_result juga supaya Claude tidak menolak turn berikutnya) terlepas
+    approved/tidak -- itu bukan bagian dari aksi yang ditolak Mas Budi."""
+    if not messages or messages[-1].get("role") != "assistant":
+        return {"type": "error", "error": "Sesi konfirmasi tidak valid (riwayat percakapan rusak).", "contents": messages}
+    blocks = messages[-1].get("content") or []
+    tool_uses = [b for b in blocks if b.get("type") == "tool_use"]
+    write_tool_use = next((t for t in tool_uses if t.get("name") in AI_CHAT_WRITE_TOOLS), None)
+    if write_tool_use is None:
+        return {"type": "error", "error": "Tidak ada aksi yang menunggu konfirmasi.", "contents": messages}
+    result_blocks = []
+    for t in tool_uses:
+        if t.get("id") == write_tool_use.get("id"):
+            if approved:
+                result = _ai_chat_dispatch_tool(t.get("name", ""), t.get("input", {}) or {})
+            else:
+                result = {"ok": False, "cancelled_by_user": True, "note": "Mas Budi membatalkan aksi ini."}
+        else:
+            result = _ai_chat_dispatch_tool(t.get("name", ""), t.get("input", {}) or {})
+        result_blocks.append({"type": "tool_result", "tool_use_id": t.get("id"), "content": json.dumps(result)})
+    messages = messages + [{"role": "user", "content": result_blocks}]
+    return _ai_chat_run_loop(messages)
 
 
 def _classify_ai_error(error_text: str) -> str:
