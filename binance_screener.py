@@ -14243,7 +14243,21 @@ function selectDashTab(tab) {
             while (el && guard < 3000) {
                 guard++;
                 if (el !== startEl && el.classList && el.classList.contains('dash-section-start')) break;
-                el.style.display = show ? '' : 'none';
+                // 18/10/2026 (bug ditemukan Mas Budi -- AI Chat Assistant widget mengambang tidak
+                // pernah kelihatan sama sekali, padahal ditaruh SEBELUM marker dash-section-start
+                // pertama): asumsi "elemen sebelum marker pertama aman" SALAH -- convert-modal/
+                // addfundasset-modal (data-tab="__none__") JUGA marker dash-section-start, dan
+                // keduanya ada LEBIH AWAL di dokumen drpd dikira. Walk dari KEDUA modal itu (show
+                // SELALU false, __none__ tidak pernah match tab manapun) jalan terus lewat sibling
+                // manapun yang BUKAN dash-section-start -- termasuk widget AI Chat yang ditaruh
+                // persis setelah addfundasset-modal, ikut kena display:none paksa tiap kali tab
+                // diganti (bahkan pas load pertama). Fix: elemen ber-class "dash-tab-persistent"
+                // di-skip (display-nya TIDAK disentuh sama sekali oleh walk manapun) TANPA jadi
+                // titik berhenti baru (walk tetap lanjut ke sibling berikutnya spt biasa) -- dipakai
+                // widget AI Chat Assistant (lihat <div id="ai-chat-fab">/"ai-chat-panel").
+                if (!el.classList || !el.classList.contains('dash-tab-persistent')) {
+                    el.style.display = show ? '' : 'none';
+                }
                 el = el.nextElementSibling;
             }
         } catch (e) {}
@@ -14927,17 +14941,17 @@ refreshShadowChart();
        Lihat REMARK lengkap di _ai_chat_run_loop() (Python) utk desain konfirmasi berlapis.
        18/10/2026 (lanjutan, permintaan Mas Budi): SEMULA kartu biasa di tab TOOLS, dipindah jadi
        widget mengambang (FAB + panel) krn fiturnya lintas-domain (bisa soal Monitor/Control/
-       Strategies sekaligus) -- nggak pas digolongkan ke satu tab. SENGAJA ditaruh di sini, SEBELUM
-       section .dash-section-start PERTAMA (STRATEGY CONTROL, data-tab="control") -- fungsi JS
-       selectDashTab() (script tab-switcher di atas) jalan MAJU dari tiap marker .dash-section-start lewat
-       nextElementSibling sampai ketemu marker berikutnya, jadi elemen manapun SEBELUM marker
-       pertama TIDAK PERNAH kena sentuh/displaynya diubah tiap ganti tab -- tetap kelihatan di
-       SEMUA tab tanpa perlu trik lain. JANGAN dikasih class "dash-section-start" (beda dari pola
-       modal convert-modal/addfundasset-modal yang data-tab="__none__" -- itu SENGAJA default
-       tersembunyi & baru dibuka manual tiap kali, krn selectDashTab() ikut paksa display:none
-       elemen __none__ tiap ganti tab; widget ini maunya TETAP kelihatan/kebuka lintas tab). -->
-<div id="ai-chat-fab" onclick="toggleAiChatPanel()" title="AI Chat Assistant" style="position:fixed;bottom:20px;right:20px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.45);z-index:1000">🤖</div>
-<div id="ai-chat-panel" style="display:none;flex-direction:column;position:fixed;bottom:84px;right:20px;width:min(380px,calc(100vw - 32px));max-height:min(70vh,560px);background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 28px rgba(0,0,0,.5);z-index:1000;overflow:hidden">
+       Strategies sekaligus) -- nggak pas digolongkan ke satu tab.
+       18/10/2026 (bug ditemukan Mas Budi -- widget tidak pernah kelihatan sama sekali): percobaan
+       PERTAMA cuma taruh di sini (sebelum marker dash-section-start pertama) TANPA class khusus --
+       SALAH, convert-modal/addfundasset-modal (lihat di atas) JUGA dash-section-start & ada lebih
+       awal, walk dari keduanya (data-tab="__none__", selalu show=false) jalan terus lewat sibling
+       apa pun yang BUKAN dash-section-start, ikut maksa display:none widget ini tiap ganti tab.
+       Fix: class "dash-tab-persistent" di kedua div di bawah -- selectDashTab() (lihat script
+       tab-switcher di atas) SEKARANG skip elemen ber-class itu total (display-nya TIDAK disentuh
+       walk manapun), baru benar2 lepas dari sistem tab, kelihatan permanen di semua tab. -->
+<div id="ai-chat-fab" class="dash-tab-persistent" onclick="toggleAiChatPanel()" title="AI Chat Assistant" style="position:fixed;bottom:20px;right:20px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.45);z-index:1000">🤖</div>
+<div id="ai-chat-panel" class="dash-tab-persistent" style="display:none;flex-direction:column;position:fixed;bottom:84px;right:20px;width:min(380px,calc(100vw - 32px));max-height:min(70vh,560px);background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 28px rgba(0,0,0,.5);z-index:1000;overflow:hidden">
   <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
     <span style="font-size:12px;font-weight:600;color:var(--accent);letter-spacing:.06em">AI CHAT ASSISTANT</span>
     <div style="display:flex;align-items:center;gap:10px">
