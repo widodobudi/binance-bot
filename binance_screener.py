@@ -15192,14 +15192,23 @@ refreshPerfChart();
 // 26/09/2026: Shadow/Paper Test -- reuse endpoint /api/shadow_fwdtest_status yg SUDAH ADA
 // (sebelumnya cuma dicek manual/log), sekarang ditampilkan di dashboard.
 var SHADOW_LABELS = {
-  'akuma_all3': 'Akum all_three (ex-live)',
+  // 18/10/2026 (permintaan Mas Budi, ketahuan masih nongol padahal sudah TERMINATE 04/10/2026
+  // commit 310b5bc -- "fails walk-forward re-audit"): 'akuma_all3' DIHAPUS dari sini, baris
+  // ini SEMPAT ketinggalan waktu commit terminate itu sendiri (cuma matikan entry baru via
+  // SHADOW_AKUMA_ENABLED=False, lupa hapus dari tampilan). Data mentah TETAP ada, sama pola
+  // persis dipbuy_universe di bawah.
   'conf3_stochrsibb': 'Conf3 StochRSI+BB',
   // 11/10/2026 (permintaan Mas Budi): dipbuy_universe DIHAPUS dari tampilan panel ini --
   // formula-nya sudah live sejak 09/10/2026, baris ini cuma arsip RETIRED. Data mentahnya
   // (shadow_fwdtest.json) TIDAK disentuh sama sekali -- endpoint /api/shadow_fwdtest_status
   // tetap balikin datanya, cuma tidak lagi dirender di sini. Tetap tersedia via
   // /api/shadow_fwdtest_raw kalau suatu saat dibutuhkan lagi sbg dokumentasi.
-  'dipbuy_bluechip': 'Dip-Buy Bluechip'
+  'dipbuy_bluechip': 'Dip-Buy Bluechip',
+  // 18/10/2026: MomentumBreak-1h & RVolBreak-8h ditarik ke paper test (lihat REMARK
+  // PAPER_TEST_TARGET) -- ditambahkan di sini supaya progress-nya kelihatan di panel yg sama,
+  // bukan cuma di log Railway/Telegram.
+  'mombreak_1h': 'MomentumBreak-1h (paper)',
+  'rvolbreak_8h': 'RVolBreak-8h (paper)'
 };
 function refreshShadowChart() {
   fetch('/api/shadow_fwdtest_status')
@@ -28409,6 +28418,23 @@ def run_web_dashboard():
                 out[key] = {"target": target, "n_closed": n, "n_open": len(data[key]['open']),
                             "wr": round(wr, 1), "pf": (round(pf, 2) if pf != float('inf') else None),
                             "open": data[key]['open'], "closed": closed[-10:]}
+            # 18/10/2026: gabungkan _paper_test_state (mombreak_1h/rvolbreak_8h, mekanisme
+            # TERPISAH dari shadow_fwdtest.json -- lihat REMARK PAPER_TEST_TARGET) ke response
+            # yg SAMA, supaya panel dashboard yg sudah ada bisa langsung tampilkan keduanya tanpa
+            # endpoint/kartu baru.
+            with _paper_test_lock:
+                paper_snap = {k: {"open": list(v["open"]), "closed": list(v["closed"])} for k, v in _paper_test_state.items()}
+            for key in ("mombreak_1h", "rvolbreak_8h"):
+                closed = paper_snap[key]['closed']
+                n = len(closed)
+                wins = [c for c in closed if c['pct'] > 0]
+                wr = (len(wins) / n * 100) if n else 0
+                gross_win = sum(c['pct'] for c in closed if c['pct'] > 0)
+                gross_loss = -sum(c['pct'] for c in closed if c['pct'] <= 0)
+                pf = (gross_win / gross_loss) if gross_loss > 0 else (float('inf') if gross_win > 0 else 0)
+                out[key] = {"target": PAPER_TEST_TARGET, "n_closed": n, "n_open": len(paper_snap[key]['open']),
+                            "wr": round(wr, 1), "pf": (round(pf, 2) if pf != float('inf') else None),
+                            "open": paper_snap[key]['open'], "closed": closed[-10:]}
             return jsonify({"ok": True, **out})
 
         @app.route("/api/shadow_fwdtest_raw")
