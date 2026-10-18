@@ -10269,6 +10269,26 @@ def thread2_monitor():
         _bbupper_touched = strat != 'hunting_4h' and live_bb_upper is not None and peak >= live_bb_upper
         _bbupper_overshoot_pct = (peak / live_bb_upper - 1) * 100 if _bbupper_touched else 0.0
 
+        # Patch "dusk-bb12h-forced-close" (18/10/2026, permintaan Mas Budi KHUSUS deal DUSK/USDT
+        # yang SEDANG jalan saat ini -- KeltnerBreak-12h, entry 0.130028, dibuka 17/10 11:07 --
+        # BUKAN mekanisme umum, tidak berlaku simbol/strategi lain): begitu harga live cross up
+        # BB Upper 12h (live_bb_upper di atas, panjang 20/std 2, PERSIS sama parameter yg sudah
+        # dipakai arm-dini/trailing-tighten BB-Upper-touch) dari bawah ke atas, LANGSUNG close
+        # deal ini (bukan cuma ketatkan trailing spt _bbupper_touched normal di atas). DUSK saat
+        # diminta ini posisinya di BAWAH BB Upper (price<live_bb_upper) -- jadi `price>=
+        # live_bb_upper` pertama kali TRUE di siklus mana pun SUDAH otomatis = momen cross-up-nya,
+        # tidak perlu state "sebelumnya di bawah" terpisah. HAPUS blok ini kalau deal ini sudah
+        # closed (lewat trigger ini atau cara lain) -- khusus 1 deal ini, bukan permanen/general.
+        if sym == 'DUSKUSDT' and live_bb_upper is not None and price >= live_bb_upper:
+            _dusk_close_result = execute_close_now(
+                sym, f"BB Upper 12h cross-up (price {_fmt_price(price)} >= BB Upper {_fmt_price(live_bb_upper)}) -- permintaan khusus Mas Budi 18/10/2026",
+                telegram_header="CLOSE DUSK/USDT (BB12h cross-up, permintaan khusus)", log_tag="DUSK-BB12H-CLOSE")
+            if _dusk_close_result.get('ok'):
+                log(f"[T2] {sym} DITUTUP -- BB Upper 12h cross-up tercapai (price={price:.6g} bb_upper={live_bb_upper:.6g})")
+                continue  # deal sudah closed & dihapus dari active_deals -- lewati sisa pemrosesan siklus ini
+            else:
+                log(f"WARN [T2] {sym} BB12h-cross-up terdeteksi tapi close GAGAL: {_dusk_close_result.get('error')} -- dicoba lagi siklus berikutnya, lanjut proses normal siklus ini")
+
         # Trailing factor variatif untuk hunting_4h
         if strat == 'hunting_4h':
             _sk   = d.get('last_stoch_k', float('nan'))
