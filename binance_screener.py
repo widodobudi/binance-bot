@@ -1550,6 +1550,15 @@ STRATEGY_CONFIG_DEFAULTS = {
     # jejak live sama sekali. Belum ada gerbang BTC (belum pernah dibacktest utk strategi ini).
     "bbsnap_4h":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     "bbsnap_8h":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    # 18/10/2026 (permintaan Mas Budi, AI Chat Assistant): "ai_manual" -- identitas strategi KHUSUS
+    # utk deal yang dibuka insidental lewat tool open_long_deal AI Chat Assistant (BUKAN sinyal
+    # rule-based strategi mana pun) -- supaya tidak numpang di statistik strategi algoritmik lain,
+    # dan Mas Budi punya kill-switch sendiri ("Izinkan Open Long" row ini) khusus utk mematikan
+    # kemampuan AI buka posisi baru, tanpa menyentuh strategi lain. max_deals=5 sengaja longgar
+    # (ini aksi sadar/manual, bukan auto-scan berulang) -- base_usd di sini CUMA fallback display,
+    # eksekusi RIIL selalu pakai amount_usd yang Mas Budi/AI sepakati di chat (lihat
+    # ai_chat_write_open_long_deal(), usd_override ke send_open_long()).
+    "ai_manual":     {"strategy_enabled": True, "sizing_enabled": False, "base_usd": 20, "add_usd": None, "cooldown_enabled": False, "ai_call_open": False, "ai_call_close": False, "max_deals": 5, "close_sell_pct": 100},
 }
 # 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
 # default TRUE di semua strategi (kecuali mombreak_1h, sama seperti ai_call_open -- desain rule-based
@@ -14890,6 +14899,124 @@ refreshShadowChart();
         <div id="addfundasset-modal-body" style="font-size:11px;color:var(--muted)">Memuat...</div>
     </div>
 </div>
+  <!-- ═══════════════ AI CHAT ASSISTANT ═══════════════ -->
+  <!-- 18/10/2026 (permintaan Mas Budi, "pasang AI di web pacific-grace"): pengganti alur
+       TradingView alert+webhook manual (/tradingview_webhook) utk aksi insidental -- cukup
+       ketik maksudnya, Gemini yang panggil tool baca/tulis yang sesuai. Lihat REMARK lengkap
+       di _ai_chat_run_loop() (Python, dekat _gemini_ai_call()) utk desain konfirmasi berlapis. -->
+<div class="container dash-section-start" data-tab="tools">
+  <div class="section-title">AI Chat Assistant</div>
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header" onclick="toggleCard(this)" style="display:flex;justify-content:space-between;align-items:center">
+      <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">AI CHAT ASSISTANT</h2>
+      <span style="font-size:10px;color:var(--muted)">Powered by Gemini</span>
+    </div>
+    <div class="card-body">
+      <div style="font-size:10px;color:var(--muted);margin-bottom:10px">
+        Tanya soal posisi/strategi/performa, atau minta aksi (buka long baru/add fund/arm trailing/close/cancel/ubah setelan strategi) --
+        aksi nyata SELALU minta konfirmasi dulu sebelum benar-benar dieksekusi.
+      </div>
+      <div id="ai-chat-messages" style="display:flex;flex-direction:column;gap:8px;max-height:360px;overflow-y:auto;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:10px;font-size:12px"></div>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="ai-chat-input" placeholder="Contoh: posisi apa yang sedang aktif?" onkeydown="if(event.key==='Enter'){event.preventDefault();sendAiChatMessage();}" style="flex:1;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 10px;font-size:12px;font-family:var(--font)">
+        <button type="button" id="ai-chat-send-btn" onclick="sendAiChatMessage()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:8px 16px;font-size:12px;cursor:pointer;font-weight:600">Kirim</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+var _aiChatContents = [];
+var _aiChatBusy = false;
+
+function aiChatAppendBubble(role, html) {
+    var box = document.getElementById('ai-chat-messages');
+    if (!box) return null;
+    var div = document.createElement('div');
+    var isUser = role === 'user';
+    div.style.cssText = 'align-self:' + (isUser ? 'flex-end' : 'flex-start') + ';max-width:85%;padding:7px 10px;border-radius:8px;white-space:pre-wrap;word-break:break-word;background:' + (isUser ? 'var(--accent)' : 'var(--surface)') + ';color:' + (isUser ? '#000' : 'var(--text)') + ';border:1px solid var(--border)';
+    div.innerHTML = html;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+    return div;
+}
+
+function aiChatSetBusy(busy) {
+    _aiChatBusy = busy;
+    var btn = document.getElementById('ai-chat-send-btn');
+    var inp = document.getElementById('ai-chat-input');
+    if (btn) { btn.disabled = busy; btn.textContent = busy ? '...' : 'Kirim'; }
+    if (inp) inp.disabled = busy;
+}
+
+var AI_CHAT_ACTION_LABELS = {
+    open_long_deal: 'Buka Long BARU', add_fund: 'Add Fund', start_trailing: 'Aktifkan Trailing',
+    close_deal: 'Close Deal (jual sekarang)', cancel_deal: 'Cancel Deal (stop kelola, TIDAK dijual)',
+    update_strategy_setting: 'Ubah Setelan Strategi'
+};
+
+function aiChatActionSummary(name, args) {
+    args = args || {};
+    var label = AI_CHAT_ACTION_LABELS[name] || name;
+    var parts = [];
+    if (args.symbol) parts.push(String(args.symbol).replace('USDT', '/USDT'));
+    if (args.amount_usd !== undefined && args.amount_usd !== null && args.amount_usd !== '') parts.push('$' + args.amount_usd);
+    if (args.pct !== undefined && args.pct !== null && args.pct !== '') parts.push(args.pct + '%');
+    if (args.strategy) parts.push(args.strategy);
+    if (args.field) parts.push(args.field + ' -> ' + args.value);
+    return label + (parts.length ? ' (' + parts.join(', ') + ')' : '');
+}
+
+function aiChatHandleResult(result) {
+    aiChatSetBusy(false);
+    if (!result) { aiChatAppendBubble('model', '<span style="color:var(--red)">Tidak ada respons dari server.</span>'); return; }
+    _aiChatContents = result.contents || _aiChatContents;
+    if (result.type === 'text') {
+        aiChatAppendBubble('model', String(result.text || '').replace(/</g, '&lt;'));
+    } else if (result.type === 'confirm') {
+        var summary = aiChatActionSummary(result.tool_name, result.tool_args);
+        var bubble = aiChatAppendBubble('model',
+            '<div style="margin-bottom:8px">AI mau eksekusi:<br><b>' + summary + '</b></div>' +
+            '<button type="button" class="ai-chat-confirm-btn" style="background:var(--green);color:#000;border:none;border-radius:4px;padding:5px 12px;font-size:11px;cursor:pointer;margin-right:6px;font-weight:600">Konfirmasi</button>' +
+            '<button type="button" class="ai-chat-cancel-btn" style="background:rgba(255,100,100,.15);color:var(--red);border:1px solid var(--red);border-radius:4px;padding:5px 12px;font-size:11px;cursor:pointer">Batalkan</button>'
+        );
+        if (bubble) {
+            bubble.querySelector('.ai-chat-confirm-btn').addEventListener('click', function(){ aiChatConfirmAction(true, bubble); });
+            bubble.querySelector('.ai-chat-cancel-btn').addEventListener('click', function(){ aiChatConfirmAction(false, bubble); });
+        }
+    } else {
+        aiChatAppendBubble('model', '<span style="color:var(--red)">Error: ' + (result.error || 'tidak diketahui') + '</span>');
+    }
+}
+
+function sendAiChatMessage() {
+    if (_aiChatBusy) return;
+    var input = document.getElementById('ai-chat-input');
+    var text = input ? input.value.trim() : '';
+    if (!text) return;
+    aiChatAppendBubble('user', text.replace(/</g, '&lt;'));
+    input.value = '';
+    aiChatSetBusy(true);
+    fetch('/api/ai_chat', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({contents: _aiChatContents, message: text})})
+        .then(function(r){ return r.json(); })
+        .then(aiChatHandleResult)
+        .catch(function(e){ aiChatSetBusy(false); aiChatAppendBubble('model', '<span style="color:var(--red)">Error: ' + e + '</span>'); });
+}
+
+function aiChatConfirmAction(approved, bubble) {
+    if (bubble) {
+        var btns = bubble.querySelectorAll('button');
+        btns.forEach(function(b){ b.disabled = true; b.style.opacity = '0.5'; });
+    }
+    aiChatSetBusy(true);
+    fetch('/api/ai_chat/confirm', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({contents: _aiChatContents, approved: approved})})
+        .then(function(r){ return r.json(); })
+        .then(aiChatHandleResult)
+        .catch(function(e){ aiChatSetBusy(false); aiChatAppendBubble('model', '<span style="color:var(--red)">Error: ' + e + '</span>'); });
+}
+</script>
+
   <!-- ═══════════════ MANUAL SCAN ═══════════════ -->
 <div class="container dash-section-start" data-tab="tools">
   <div class="section-title">Manual Scan</div>
@@ -23958,6 +24085,30 @@ def run_web_dashboard():
             # apa pun hasilnya, seperti sebelumnya -- caller baca field "ok" di body).
             return jsonify(execute_close_now(sym, "manual_close (dashboard)"))
 
+        @app.route("/api/ai_chat", methods=["POST"])
+        def api_ai_chat():
+            """AI Chat Assistant dashboard -- lihat REMARK lengkap di _ai_chat_run_loop() dkk
+            (dekat _gemini_ai_call()). Tool TULIS TIDAK PERNAH langsung dieksekusi di sini,
+            selalu berhenti dulu minta konfirmasi (/api/ai_chat/confirm)."""
+            payload = request.get_json(force=True, silent=True) or {}
+            contents = payload.get("contents") or []
+            message = payload.get("message", "")
+            if message:
+                contents = contents + [{"role": "user", "parts": [{"text": message}]}]
+            if not contents:
+                return jsonify({"type": "error", "error": "Pesan kosong"}), 400
+            return jsonify(_ai_chat_run_loop(contents))
+
+        @app.route("/api/ai_chat/confirm", methods=["POST"])
+        def api_ai_chat_confirm():
+            """Konfirmasi/tolak aksi tulis yang diajukan AI Chat Assistant. Lihat
+            _ai_chat_resume_after_confirm() -- tool_name/args diambil ulang dari `contents`
+            kiriman frontend, bukan dari field terpisah (defense-in-depth)."""
+            payload = request.get_json(force=True, silent=True) or {}
+            contents = payload.get("contents") or []
+            approved = bool(payload.get("approved", False))
+            return jsonify(_ai_chat_resume_after_confirm(contents, approved))
+
         @app.route("/cancel_deal", methods=["POST"])
         def cancel_deal():
             """Cancel deal (dashboard button). Sama konsepnya dengan tombol Cancel di
@@ -27519,6 +27670,391 @@ def _ai_call(prompt: str, model: str = None) -> str:
         _err_summary = "; ".join(f"{p}={e[:80]}" for p, e in provider_errors.items())
         log(f"WARN [AI] fallback terakhir rule-based aktif; {_err_summary}")
     return ""
+
+
+# ── AI Chat Assistant dashboard (18/10/2026, permintaan Mas Budi "pasang AI di web pacific-grace")
+# Konteks: Mas Budi biasa eksekusi aksi insidental (open long/add fund/arm trailing/close/cancel
+# di luar sinyal strategi otomatis) lewat alert+webhook TradingView manual (lihat /tradingview_webhook
+# di bawah) -- maunya diganti chat, cukup ketik maksudnya, Gemini yang panggil tool yang sesuai.
+# Dibangun TERPISAH dari _gemini_ai_call()/_ai_call() di atas (itu single-prompt/200-token, khusus
+# ai_decision_open/close) krn butuh multi-turn + function-calling Gemini, bukan prompt sekali jalan.
+# Lingkup (persetujuan eksplisit Mas Budi, 2 pertanyaan terpisah): (a) BOLEH eksekusi aksi nyata
+# (bukan cuma baca), (b) provider Gemini (sudah aktif, reuse GEMINI_API_KEY/GEMINI_AI_MODEL yang
+# sama dgn ai_decision_*). Desain keamanan: SETIAP tool tulis (AI_CHAT_WRITE_TOOLS) WAJIB konfirmasi
+# eksplisit Mas Budi dulu (tombol di dashboard) -- model TIDAK PERNAH bisa mengeksekusi langsung,
+# apa pun instruksinya; tool baca jalan otomatis tanpa konfirmasi (tidak ada risiko). Endpoint
+# /api/ai_chat* ada di belakang login dashboard yang sama (TIDAK masuk daftar pengecualian
+# dashboard_login_required()), jadi cuma Mas Budi yang sudah login yang bisa pakai ini.
+AI_CHAT_TIMEOUT = 30  # detik -- lebih lama dari AI_DECISION_TIMEOUT (25s), chat kadang butuh
+                      # 1-2 putaran tool-call (baca) sebelum jawaban akhir keluar.
+AI_CHAT_MAX_OUTPUT_TOKENS = 1024
+AI_CHAT_MAX_TOOL_ITERS = 5  # jaga2 thd Gemini looping panggil tool berulang tanpa akhir
+
+AI_CHAT_SYSTEM_PROMPT = (
+    "Kamu adalah AI Assistant yang terpasang di dashboard bot trading Binance milik Mas Budi "
+    "(pacific-grace). Jawab SELALU dalam Bahasa Indonesia, singkat dan jelas. Gunakan tool baca "
+    "(list_active_deals/get_strategy_config/get_closed_trades_summary/get_daily_pnl) kalau "
+    "pertanyaan butuh data terkini -- JANGAN mengarang angka, selalu ambil dari tool. Kamu JUGA "
+    "boleh memanggil tool aksi nyata (open_long_deal/add_fund/start_trailing/close_deal/"
+    "cancel_deal/update_strategy_setting) begitu maksud Mas Budi jelas -- aksi itu TIDAK pernah "
+    "langsung jalan, sistem akan menahan & menampilkan konfirmasi ke Mas Budi dulu sebelum benar2 "
+    "dieksekusi, jadi kamu tidak perlu menahan diri atau tanya ulang kalau instruksinya sudah "
+    "jelas. TAPI kalau instruksinya AMBIGU (simbol tidak disebut, atau open_long_deal tanpa "
+    "nominal USD), tanya dulu sebelum memanggil tool aksi -- jangan menebak nominal uang."
+)
+
+AI_CHAT_STRATEGY_LABELS = {
+    "brkX2_12h_closed": "KeltnerBreak-12h", "brkX2_4h": "brkX2-4h",
+    "trend_confirm_4h": "TrenKonfirmasi-4h", "mombreak_1h": "MomentumBreak-1h",
+    "decouple_4h": "Decouple-4h", "rvolbreak_8h": "RVolBreak-8h",
+    "dipbuy_universe": "Dip-Buy Universe", "bbsnap_4h": "BBSnap-4h", "bbsnap_8h": "BBSnap-8h",
+    "ai_manual": "AI Manual (Insidental)",
+}
+
+AI_CHAT_TOOLS = [
+    {"name": "list_active_deals",
+     "description": "Daftar semua posisi yang SEDANG AKTIF sekarang (simbol, strategi, harga entry, profit% saat ini, kapan dibuka, status trailing).",
+     "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "get_strategy_config",
+     "description": "Setelan Strategy Control saat ini per strategi (aktif/tidak, max deals, base order USD, cooldown, dll). Strategi yang sudah terminated tidak ikut muncul.",
+     "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "get_closed_trades_summary",
+     "description": "Ringkasan performa (jumlah trade closed, win rate, total % kumulatif) per strategi dari histori.",
+     "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "get_daily_pnl",
+     "description": "P&L hari ini (realized+unrealized) dibandingkan Batas Rugi Harian, dan status tersulut/tidak.",
+     "parameters": {"type": "OBJECT", "properties": {}}},
+    {"name": "open_long_deal",
+     "description": ("Buka posisi long BARU secara manual/insidental (bukan dari sinyal strategi "
+                      "otomatis) -- dicatat di bawah strategi 'AI Manual (Insidental)'. AKSI NYATA, "
+                      "order beli sungguhan -- WAJIB konfirmasi Mas Budi dulu."),
+     "parameters": {"type": "OBJECT", "properties": {
+         "symbol": {"type": "STRING", "description": "Simbol pair, misal BTCUSDT atau BTC/USDT"},
+         "amount_usd": {"type": "NUMBER", "description": "Nominal modal USD -- WAJIB diisi, jangan menebak."},
+     }, "required": ["symbol", "amount_usd"]}},
+    {"name": "add_fund",
+     "description": "Tambah modal (add fund/average down) ke SATU posisi aktif yang sudah ada. AKSI NYATA -- WAJIB konfirmasi Mas Budi dulu.",
+     "parameters": {"type": "OBJECT", "properties": {
+         "symbol": {"type": "STRING", "description": "Simbol pair"},
+         "amount_usd": {"type": "NUMBER", "description": "Nominal USD ditambahkan. Kosongkan utk pakai nominal otomatis strategi."},
+     }, "required": ["symbol"]}},
+    {"name": "start_trailing",
+     "description": "Aktifkan (arm) trailing stop SEKARANG utk satu posisi aktif, tanpa menunggu ambang profit otomatis. AKSI NYATA -- WAJIB konfirmasi Mas Budi dulu.",
+     "parameters": {"type": "OBJECT", "properties": {
+         "symbol": {"type": "STRING", "description": "Simbol pair"},
+     }, "required": ["symbol"]}},
+    {"name": "close_deal",
+     "description": "Tutup/jual SEKARANG satu posisi aktif di harga market (exit penuh). AKSI NYATA -- WAJIB konfirmasi Mas Budi dulu.",
+     "parameters": {"type": "OBJECT", "properties": {
+         "symbol": {"type": "STRING", "description": "Simbol pair"},
+     }, "required": ["symbol"]}},
+    {"name": "cancel_deal",
+     "description": ("Berhenti kelola satu posisi aktif TANPA menjual apa pun -- koin tetap di "
+                      "wallet, bot cuma stop tracking (setara 'Stop bot'/quit 3Commas, BUKAN "
+                      "close/jual). AKSI NYATA -- WAJIB konfirmasi Mas Budi dulu."),
+     "parameters": {"type": "OBJECT", "properties": {
+         "symbol": {"type": "STRING", "description": "Simbol pair"},
+         "pct": {"type": "NUMBER", "description": "Persentase yang di-cancel, 1-100. Default 100 (cancel semua)."},
+     }, "required": ["symbol"]}},
+    {"name": "update_strategy_setting",
+     "description": "Ubah satu setelan Strategy Control utk satu strategi. AKSI NYATA -- WAJIB konfirmasi Mas Budi dulu.",
+     "parameters": {"type": "OBJECT", "properties": {
+         "strategy": {"type": "STRING", "description": "Key strategi persis spt di get_strategy_config, misal brkX2_12h_closed/trend_confirm_4h/dst."},
+         "field": {"type": "STRING", "enum": ["strategy_enabled", "base_usd", "max_deals", "cooldown_enabled", "close_sell_pct"]},
+         "value": {"type": "STRING", "description": "Nilai baru -- true/false utk field boolean, angka (sbg teks) utk field numerik."},
+     }, "required": ["strategy", "field", "value"]}},
+]
+AI_CHAT_WRITE_TOOLS = {"open_long_deal", "add_fund", "start_trailing", "close_deal", "cancel_deal", "update_strategy_setting"}
+
+
+def _ai_chat_normalize_symbol(raw: str) -> str:
+    return normalize_binance_symbol(raw or "")
+
+
+def ai_chat_read_list_active_deals(args: dict) -> dict:
+    with active_deals_lock:
+        deals = {sym: dict(d) for sym, d in active_deals.items()}
+    out = []
+    for sym, d in deals.items():
+        entry = float(d.get('entry_price', 0) or 0)
+        try:
+            price = get_price_now(sym)
+        except Exception:
+            price = 0
+        prof = (price / entry - 1) * 100 if entry > 0 and price > 0 else None
+        out.append({
+            "symbol": sym,
+            "strategy": AI_CHAT_STRATEGY_LABELS.get(d.get("strategy", "brkX2"), d.get("strategy", "brkX2")),
+            "entry_price": entry, "price_now": price,
+            "profit_pct": round(prof, 2) if prof is not None else None,
+            "opened_at": d.get("opened_at", ""),
+            "trailing_armed": bool(d.get("trailing_armed", False)),
+        })
+    return {"ok": True, "count": len(out), "deals": out}
+
+
+def ai_chat_read_get_strategy_config(args: dict) -> dict:
+    cfg = load_strategy_config()
+    terminated = get_terminated_strategies()
+    out = {AI_CHAT_STRATEGY_LABELS.get(k, k): v for k, v in cfg.items() if k not in terminated}
+    return {"ok": True, "strategies": out}
+
+
+def ai_chat_read_get_closed_trades_summary(args: dict) -> dict:
+    live_keys = [k for k in load_strategy_config().keys() if k not in get_terminated_strategies()]
+    recent = strategy_recent_close_stats()
+    out = []
+    for key in live_keys:
+        p = csv_progress(key) or {"n": 0, "win": 0, "loss": 0, "total_pct": 0.0}
+        if p["n"] == 0:
+            continue
+        out.append({
+            "strategy": AI_CHAT_STRATEGY_LABELS.get(key, key),
+            "n_closed": p["n"], "win": p["win"], "loss": p["loss"],
+            "total_pct": round(p["total_pct"], 2),
+            "win_rate_pct": round(p["win"] / p["n"] * 100, 1),
+        })
+    return {"ok": True, "strategies": out}
+
+
+def ai_chat_read_get_daily_pnl(args: dict) -> dict:
+    return {"ok": True, **get_daily_loss_status()}
+
+
+def ai_chat_write_open_long_deal(args: dict) -> dict:
+    sym = _ai_chat_normalize_symbol(args.get("symbol", ""))
+    if not sym.endswith("USDT"):
+        return {"ok": False, "error": "symbol harus pair USDT"}
+    try:
+        amount = float(args.get("amount_usd"))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "amount_usd wajib diisi dgn angka"}
+    if amount <= 0:
+        return {"ok": False, "error": "amount_usd harus lebih dari 0"}
+    with active_deals_lock:
+        if sym in active_deals:
+            return {"ok": False, "error": f"{sym} sudah ada di active_deals"}
+    ok = send_open_long(sym, "ai_manual", usd_override=amount)
+    if not ok:
+        return {"ok": False, "error": "Order beli ditolak/gagal (cek log server) -- cek symbol valid & saldo cukup"}
+    entry_price = get_price_now(sym)
+    ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+    add_to_active_deals(sym, {
+        "strategy": "ai_manual", "entry_price": entry_price, "peak": entry_price,
+        "signal_price": entry_price, "atr_pct": 3.0,
+        "opened_candle_ts": int(time.time() * 1000), "trailing_armed": False,
+        "opened_at": ts, "target_usd": amount, "add_usd": 0,
+        "source": "ai_chat_assistant",
+    })
+    csv_log_open({
+        'open_time_wib': ts, 'symbol': to_display_pair(sym), 'strategy': 'ai_manual',
+        'signal_price': f"{_fmt_price(entry_price)}", 'entry_price': f"{_fmt_price(entry_price)}",
+        'base_usd': amount, 'score': 0,
+    })
+    send_telegram(f"OPEN LONG (AI Chat Assistant)\nPair: {to_display_pair(sym)}\nModal: ${amount:.2f}\nEntry: {_fmt_price(entry_price)}")
+    return {"ok": True, "symbol": sym, "entry_price": entry_price, "amount_usd": amount}
+
+
+def ai_chat_write_add_fund(args: dict) -> dict:
+    sym = _ai_chat_normalize_symbol(args.get("symbol", ""))
+    with active_deals_lock:
+        d = dict(active_deals.get(sym, {}))
+    if not d:
+        return {"ok": False, "error": f"{sym} tidak ada di active_deals"}
+    amount = args.get("amount_usd")
+    try:
+        amount = float(amount) if amount not in (None, "") else None
+    except (TypeError, ValueError):
+        amount = None
+    if amount is None:
+        amount = d.get('add_usd') or get_strategy_base_usd(d.get('strategy', 'brkX2'))
+    return execute_add_fund(sym, float(amount))
+
+
+def ai_chat_write_start_trailing(args: dict) -> dict:
+    sym = _ai_chat_normalize_symbol(args.get("symbol", ""))
+    with active_deals_lock:
+        d = dict(active_deals.get(sym, {}))
+    if not d:
+        return {"ok": False, "error": f"{sym} tidak ada di active_deals"}
+    ok = send_start_trailing(sym, d.get('strategy', 'brkX2'))
+    if ok:
+        with active_deals_lock:
+            if sym in active_deals:
+                active_deals[sym]["trailing_armed"] = True
+        save_active_deals()
+    return {"ok": ok, "symbol": sym}
+
+
+def ai_chat_write_close_deal(args: dict) -> dict:
+    sym = _ai_chat_normalize_symbol(args.get("symbol", ""))
+    return execute_close_now(sym, "AI Chat Assistant (konfirmasi Mas Budi)",
+                              telegram_header="CLOSE AI CHAT ASSISTANT", log_tag="AI-CHAT-CLOSE")
+
+
+def ai_chat_write_cancel_deal(args: dict) -> dict:
+    sym = _ai_chat_normalize_symbol(args.get("symbol", ""))
+    try:
+        pct = float(args.get("pct", 100) or 100)
+    except (TypeError, ValueError):
+        pct = 100.0
+    pct = max(1.0, min(100.0, pct))
+    with active_deals_lock:
+        if sym not in active_deals:
+            return {"ok": False, "error": f"{sym} tidak ada di active_deals"}
+        removed_deal = dict(active_deals[sym])
+        if pct >= 100:
+            del active_deals[sym]
+        else:
+            keep_ratio = (100.0 - pct) / 100.0
+            dd = active_deals[sym]
+            dd['qty_coin'] = float(dd.get('qty_coin', 0) or 0) * keep_ratio
+            if dd.get('base_usd') is not None:
+                dd['base_usd'] = float(dd.get('base_usd', 0) or 0) * keep_ratio
+            if dd.get('add_usd') is not None:
+                dd['add_usd'] = float(dd.get('add_usd', 0) or 0) * keep_ratio
+    save_active_deals()
+    send_telegram(
+        f"CANCEL DEAL (AI Chat Assistant)\nPair: {to_display_pair(sym)}\nStrategi: {removed_deal.get('strategy', '-')}\n"
+        + ("Bot berhenti kelola pair ini. Koin TIDAK dijual, tetap di wallet." if pct >= 100
+           else f"Cancel sebagian {pct:.0f}%. Koin TIDAK dijual, tetap di wallet.")
+    )
+    return {"ok": True, "symbol": sym, "pct": pct}
+
+
+AI_CHAT_SETTING_FIELDS = {"strategy_enabled": bool, "base_usd": float, "max_deals": int,
+                          "cooldown_enabled": bool, "close_sell_pct": float}
+
+
+def ai_chat_write_update_strategy_setting(args: dict) -> dict:
+    strat = str(args.get("strategy", "")).strip()
+    field = str(args.get("field", "")).strip()
+    raw_value = args.get("value", "")
+    if field not in AI_CHAT_SETTING_FIELDS:
+        return {"ok": False, "error": f"field '{field}' tidak dikenal/tidak boleh diubah lewat chat"}
+    cfg = load_strategy_config()
+    if strat not in cfg or strat in get_terminated_strategies():
+        return {"ok": False, "error": f"strategi '{strat}' tidak ditemukan/sudah terminated -- cek get_strategy_config dulu"}
+    caster = AI_CHAT_SETTING_FIELDS[field]
+    try:
+        if caster is bool:
+            value = str(raw_value).strip().lower() in ("true", "1", "yes", "ya", "on")
+        else:
+            value = caster(raw_value)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": f"nilai '{raw_value}' tidak valid utk field '{field}'"}
+    save_strategy_config({strat: {field: value}})
+    sync_max_deals_globals()
+    return {"ok": True, "strategy": strat, "field": field, "value": value}
+
+
+AI_CHAT_TOOL_HANDLERS = {
+    "list_active_deals": ai_chat_read_list_active_deals,
+    "get_strategy_config": ai_chat_read_get_strategy_config,
+    "get_closed_trades_summary": ai_chat_read_get_closed_trades_summary,
+    "get_daily_pnl": ai_chat_read_get_daily_pnl,
+    "open_long_deal": ai_chat_write_open_long_deal,
+    "add_fund": ai_chat_write_add_fund,
+    "start_trailing": ai_chat_write_start_trailing,
+    "close_deal": ai_chat_write_close_deal,
+    "cancel_deal": ai_chat_write_cancel_deal,
+    "update_strategy_setting": ai_chat_write_update_strategy_setting,
+}
+
+
+def _gemini_chat_call(contents: list) -> dict:
+    """Panggil Gemini generateContent dgn dukungan multi-turn + function-calling, KHUSUS AI Chat
+    Assistant dashboard -- beda dari _gemini_ai_call() yg single-prompt/200-token (ai_decision_
+    open/close). Return candidates[0].content MENTAH (dict berisi 'role' & 'parts') -- caller yg
+    urai apakah isinya text atau functionCall."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY belum di-set")
+    import json as _json
+    payload = {
+        "contents": contents,
+        "systemInstruction": {"parts": [{"text": AI_CHAT_SYSTEM_PROMPT}]},
+        "tools": [{"functionDeclarations": AI_CHAT_TOOLS}],
+        "generationConfig": {"maxOutputTokens": AI_CHAT_MAX_OUTPUT_TOKENS, "temperature": 0.2},
+    }
+    endpoint = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        + GEMINI_AI_MODEL + ":generateContent?key=" + GEMINI_API_KEY
+    )
+    req = _urllib_req.Request(endpoint, data=_json.dumps(payload).encode(),
+                               headers={"Content-Type": "application/json"}, method="POST")
+    with _urllib_req.urlopen(req, timeout=AI_CHAT_TIMEOUT) as resp:
+        body = _json.loads(resp.read())
+    candidates = body.get("candidates") or []
+    if not candidates:
+        raise RuntimeError(f"Gemini tidak mengembalikan kandidat jawaban (raw: {str(body)[:300]})")
+    return candidates[0]["content"]
+
+
+def _ai_chat_dispatch_tool(name: str, args: dict) -> dict:
+    """Eksekutor MURNI satu tool (baca ATAU tulis) -- TIDAK tahu/peduli soal konfirmasi, itu
+    keputusan caller (_ai_chat_run_loop/_ai_chat_resume_after_confirm) supaya logic konfirmasi
+    tidak ke-duplikasi di 2 tempat berbeda."""
+    handler = AI_CHAT_TOOL_HANDLERS.get(name)
+    if handler is None:
+        return {"ok": False, "error": f"Tool '{name}' tidak dikenal"}
+    try:
+        return handler(args or {})
+    except Exception as e:
+        log(f"WARN [AI-CHAT] tool {name} error: {e}")
+        return {"ok": False, "error": f"Tool '{name}' gagal dieksekusi: {e}"}
+
+
+def _ai_chat_run_loop(contents: list) -> dict:
+    """Loop utama AI Chat Assistant: panggil Gemini, kalau minta tool BACA jalankan otomatis &
+    lanjut loop (model tidak pernah menunggu approval utk baca data), kalau minta tool TULIS
+    (AI_CHAT_WRITE_TOOLS) STOP & kembalikan ke frontend sbg 'perlu konfirmasi' -- TIDAK PERNAH
+    dieksekusi otomatis apa pun instruksinya (uang riil, permintaan eksplisit Mas Budi tetap
+    pakai konfirmasi berlapis). Return {type: 'text'|'confirm'|'error', ..., contents: riwayat
+    terbaru (dikirim balik ke frontend, dipakai lagi giliran berikutnya)}."""
+    for _ in range(AI_CHAT_MAX_TOOL_ITERS):
+        try:
+            model_content = _gemini_chat_call(contents)
+        except Exception as e:
+            log(f"WARN [AI-CHAT] Gemini call gagal: {e}")
+            return {"type": "error", "error": f"AI sedang error: {e}", "contents": contents}
+        parts = model_content.get("parts") or []
+        fn_call = next((p["functionCall"] for p in parts if "functionCall" in p), None)
+        contents = contents + [{"role": "model", "parts": parts}]
+        if fn_call is None:
+            text = "".join(p.get("text", "") for p in parts).strip()
+            return {"type": "text", "text": text or "(AI tidak memberi jawaban teks)", "contents": contents}
+        name = fn_call.get("name", "")
+        args = fn_call.get("args", {}) or {}
+        if name in AI_CHAT_WRITE_TOOLS:
+            return {"type": "confirm", "tool_name": name, "tool_args": args, "contents": contents}
+        result = _ai_chat_dispatch_tool(name, args)
+        contents = contents + [{"role": "function", "parts": [
+            {"functionResponse": {"name": name, "response": result}}
+        ]}]
+    return {"type": "error", "error": "AI terlalu banyak putaran tool tanpa jawaban akhir -- coba pertanyaan lebih spesifik.", "contents": contents}
+
+
+def _ai_chat_resume_after_confirm(contents: list, approved: bool) -> dict:
+    """Lanjutkan loop SETELAH Mas Budi approve/tolak aksi tulis yang diajukan model. tool_name/
+    args diambil ULANG dari turn model terakhir di `contents` (BUKAN dipercaya dari field
+    terpisah kiriman frontend) -- defense-in-depth, supaya frontend/network tidak bisa menukar
+    aksi yang ditampilkan ke Mas Budi dgn aksi yang BENAR2 dieksekusi."""
+    if not contents or contents[-1].get("role") != "model":
+        return {"type": "error", "error": "Sesi konfirmasi tidak valid (riwayat percakapan rusak).", "contents": contents}
+    parts = contents[-1].get("parts") or []
+    fn_call = next((p["functionCall"] for p in parts if "functionCall" in p), None)
+    if fn_call is None:
+        return {"type": "error", "error": "Tidak ada aksi yang menunggu konfirmasi.", "contents": contents}
+    name = fn_call.get("name", "")
+    args = fn_call.get("args", {}) or {}
+    if approved:
+        result = _ai_chat_dispatch_tool(name, args)
+    else:
+        result = {"ok": False, "cancelled_by_user": True, "note": "Mas Budi membatalkan aksi ini."}
+    contents = contents + [{"role": "function", "parts": [
+        {"functionResponse": {"name": name, "response": result}}
+    ]}]
+    return _ai_chat_run_loop(contents)
 
 
 def _classify_ai_error(error_text: str) -> str:
