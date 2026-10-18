@@ -20279,11 +20279,13 @@ def ai_decision_topgainers(candidates: list) -> dict:
         "MURNI menilai dari data teknikal di bawah, APAKAH ada yang layak dibuka long SEKARANG, "
         "atau TIDAK ADA SAMA SEKALI yang layak.\n\n"
         "PENTING -- entry ini modal KECIL (probe awal, risiko terbatas), BUKAN komitmen penuh. "
-        "Dana tambahan baru ditambahkan NANTI, terpisah, kalau rank-nya terbukti naik lebih jauh "
-        "-- jadi JANGAN jadikan RVOL/volume rendah SENDIRIAN sebagai alasan menolak, itu akan "
-        "dicek ulang objektif nanti sebelum nambah dana. Tolak HANYA kalau arah tren memang JELAS "
-        "melemah/bearish (mis. harga di bawah EMA20 DAN RSI/MACD/Stoch sama-sama mengarah turun) "
-        "-- bukan sekadar volume belum terkonfirmasi.\n\n"
+        "Dana tambahan baru ditambahkan NANTI, terpisah, kalau rank-nya terbukti naik lebih jauh.\n\n"
+        "RVOL (rasio volume candle ini vs rata-rata) < 1.0x adalah SINYAL PERINGATAN KUAT -- "
+        "kenaikan harga tanpa dukungan volume rawan koreksi balik cepat. TAPI jangan jadikan RVOL "
+        "rendah SENDIRIAN sebagai alasan menolak -- tolak hanya kalau RVOL < 1.0x ITU DIPADUKAN "
+        "dengan arah tren yang juga lemah (mis. harga di bawah EMA20, atau RSI/MACD/Stoch "
+        "mengarah turun). Kalau RVOL rendah TAPI arah tren masih sehat (harga di atas EMA20, "
+        "oscillator tidak mengarah turun), tetap boleh diterima.\n\n"
         + "\n\n".join(lines) +
         '\n\nBalas HANYA satu objek JSON, tanpa markdown/penjelasan tambahan, format PERSIS:\n'
         '{"choice": "<SYMBOL yang dipilih, atau \\"none\\" kalau tidak ada yang layak>", '
