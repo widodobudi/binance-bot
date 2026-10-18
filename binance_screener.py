@@ -1576,7 +1576,10 @@ STRATEGY_CONFIG_DEFAULTS = {
     # slot (testing phase, belum ada backtest sama sekali -- murni validasi live). ai_call_open
     # TIDAK relevan di sini (keputusan AI sudah inheren ke desain strategi, bukan toggle
     # opsional di atas filter rule-based) -- lihat SC_NO_AI di dash.js.
-    "topgainers_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    # 18/10/2026 (permintaan Mas Budi, setelah tahu minimum notional Binance cuma $5): base_usd
+    # diturunkan dari $10 ke $6 -- masih di atas minimum exchange ($5), probe makin kecil/makin
+    # murah risikonya per entry.
+    "topgainers_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 6, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
 }
 # 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
 # default TRUE di semua strategi (kecuali mombreak_1h, sama seperti ai_call_open -- desain rule-based
