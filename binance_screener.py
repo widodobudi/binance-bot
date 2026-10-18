@@ -28207,14 +28207,16 @@ def _gemini_chat_call_raw(contents: list) -> dict:
     return candidates[0]["content"]
 
 
-def _alibaba_chat_call_once(messages: list, model: str) -> dict:
-    """Satu panggilan Alibaba (Qwen) /chat/completions dgn tool-calling gaya OpenAI, 1 model
-    tertentu -- KHUSUS AI Chat Assistant (beda dari _alibaba_http_call() single-prompt/tanpa
-    tools dipakai ai_decision). Return choices[0].message MENTAH."""
+def _alibaba_chat_call_raw(messages: list) -> dict:
+    """Panggil Alibaba (Qwen) /chat/completions dgn tool-calling gaya OpenAI, KHUSUS AI Chat
+    Assistant -- beda dari _alibaba_http_call() single-prompt/tanpa tools dipakai ai_decision.
+    SENGAJA TIDAK ikut coba beberapa model cadangan spt _alibaba_ai_call() (_alibaba_model_list())
+    -- kompleksitas model-fallback DI DALAM provider-fallback belum perlu, satu model utama
+    (ALIBABA_AI_MODEL) dulu cukup. Return choices[0].message MENTAH."""
     if not ALIBABA_API_KEY:
         raise RuntimeError("ALIBABA_API_KEY belum di-set")
     body = {
-        "model": model,
+        "model": ALIBABA_AI_MODEL,
         "messages": [{"role": "system", "content": AI_CHAT_SYSTEM_PROMPT}] + messages,
         "tools": _ai_chat_tools_openai(),
         "max_tokens": AI_CHAT_MAX_OUTPUT_TOKENS,
@@ -28242,37 +28244,6 @@ def _alibaba_chat_call_once(messages: list, model: str) -> dict:
     if not choices:
         raise RuntimeError(f"Alibaba tidak mengembalikan choices (raw: {str(body_resp)[:300]})")
     return choices[0]["message"]
-
-
-def _alibaba_chat_call_raw(messages: list) -> dict:
-    """Patch "ai-chat-alibaba-model-fallback" (18/10/2026, ketahuan dari test live Mas Budi --
-    ketiga provider gagal sekaligus, Alibaba-nya sendiri ternyata 403 "free quota exhausted"):
-    SEMULA cuma coba ALIBABA_AI_MODEL (model utama) -- SALAH, model itu SUDAH DIKETAHUI sejak
-    27/09/2026 (lihat REMARK _alibaba_model_list()) TIDAK PUNYA kuota gratis nyata, SELALU 403
-    duluan. ai_decision_open/close selama ini "jalan terus" krn _alibaba_ai_call() otomatis coba
-    4 model cadangan (_2.._5) berurutan -- versi chat ini sekarang pola SAMA PERSIS, coba semua
-    model di _alibaba_model_list() sampai ada yg berhasil (skip ke model berikutnya kalau errornya
-    bentuk respons HTTP spt kuota habis, BUKAN network/auth/key-kosong -- itu pasti berulang
-    identik di semua model, percuma dicoba ulang, sama logika _alibaba_ai_call())."""
-    models = _alibaba_model_list()
-    if not models:
-        raise RuntimeError("ALIBABA_AI_MODEL belum di-set")
-    last_error = None
-    for i, model in enumerate(models):
-        try:
-            message = _alibaba_chat_call_once(messages, model)
-            if i > 0:
-                log(f"[AI-CHAT] Alibaba model cadangan #{i+1} ({model}) berhasil setelah model sebelumnya gagal")
-            return message
-        except RuntimeError as e:
-            last_error = e
-            msg = str(e)
-            got_response = msg.startswith("HTTP ") and not msg.startswith("HTTP 401")
-            if not got_response:
-                raise
-            log(f"WARN [AI-CHAT] Alibaba model {model} gagal ({msg[:100]}), coba cadangan berikutnya" if i + 1 < len(models)
-                else f"WARN [AI-CHAT] Alibaba model {model} gagal ({msg[:100]}), tidak ada cadangan lagi")
-    raise last_error if last_error else RuntimeError("Semua model Alibaba gagal")
 
 
 # Adapter Claude: tool_use blocks, id eksplisit per panggilan, hasil tool jadi SATU pesan
