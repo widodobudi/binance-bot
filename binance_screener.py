@@ -1788,10 +1788,15 @@ def total_max_deals_all_strategies() -> int:
 # 28-29/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE dan SEMUA deal-nya disembunyikan dari tampilan dashboard default
 # (Closed Trades + kartu Performance per Strategi). Data tetap ada di CSV / counter fase / batas rugi harian; tampil lagi kalau
 # strategi dipilih eksplisit di filter Closed Trades atau ?show_paused=1. Satu sumber kebenaran utk kedua endpoint.
-PAUSED_HIDDEN_STRATEGIES = ('brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h', 'rvolbreak_1h')
-# 04/10/2026: 'mombreak_1h' DIKELUARKAN -- "Izinkan Open Long" di-unlock hari ini (fd0fe3d),
+PAUSED_HIDDEN_STRATEGIES = ('brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h', 'rvolbreak_1h', 'mombreak_1h', 'rvolbreak_8h')
+# 04/10/2026: 'mombreak_1h' SEMPAT DIKELUARKAN -- "Izinkan Open Long" di-unlock hari ini (fd0fe3d),
 # strategi aktif live lagi (ada deal riil, IOTA/USDT 21:21 WIB), sama pola persis spt 'reversal'
 # 02/10/2026 di bawah -- daftar ini sempat tidak ikut di-sync saat unlock-nya dikerjakan.
+# 18/10/2026 (ketahuan lewat pertanyaan Mas Budi "kenapa RVolBreak/MomentumBreak masih ada di
+# Performance"): 'mombreak_1h' DIMASUKKAN LAGI + 'rvolbreak_8h' BARU ditambahkan -- keduanya
+# ditarik ke PAPER TEST hari ini (lihat REMARK PAPER_TEST_TARGET), riwayat deal REAL lama tetap
+# ada di CSV/performa, cuma disembunyikan dari tampilan default spt strategi paused lainnya --
+# tetap kelihatan lewat filter eksplisit atau ?show_paused=1.
 # 03/10/2026: 'hunting_4h' DITAMBAHKAN -- Hunting-4h di-TERMINATE (lihat REMARK di
 # HUNTING_ENABLED). 'brkX2_crossema' SUDAH ada di daftar ini sejak 28-29/09/2026 (pause lama)
 # dan TIDAK PERNAH dikeluarkan lagi meski STRAT_CROSSEMA_ENABLED sempat True -- kebetulan
