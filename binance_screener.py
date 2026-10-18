@@ -1550,6 +1550,14 @@ STRATEGY_CONFIG_DEFAULTS = {
     # jejak live sama sekali. Belum ada gerbang BTC (belum pernah dibacktest utk strategi ini).
     "bbsnap_4h":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     "bbsnap_8h":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    # 18/10/2026 (permintaan Mas Budi, fitur Conditional Rules "open_long_deal" -- lihat REMARK
+    # CONDITIONAL_RULES_FILE): identitas strategi KHUSUS utk deal yang dibuka otomatis oleh
+    # aturan tersimpan (symbol belum/tidak sedang jadi deal aktif, dipicu kondisi harga/BB) --
+    # SAMA alasannya spt 'ai_manual' yang sempat dibangun utk AI Chat Assistant lalu dihapus lagi
+    # bareng fitur itu: supaya tidak numpang statistik strategi algoritmik lain, dan Mas Budi
+    # punya kill-switch sendiri ("Izinkan Open Long" row ini) khusus fitur ini. base_usd di sini
+    # CUMA fallback display -- eksekusi RIIL selalu pakai amount_usd dari aturan itu sendiri.
+    "rule_triggered": {"strategy_enabled": True, "sizing_enabled": False, "base_usd": 20, "add_usd": None, "cooldown_enabled": False, "ai_call_open": False, "ai_call_close": False, "max_deals": 10, "close_sell_pct": 100},
 }
 # 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
 # default TRUE di semua strategi (kecuali mombreak_1h, sama seperti ai_call_open -- desain rule-based
@@ -10003,6 +10011,10 @@ def thread2_monitor():
         expire_stale_conditional_rules(syms)
     except Exception as error:
         log(f"WARN [RULES] expire_stale_conditional_rules error: {error}")
+    try:
+        check_pending_open_rules()
+    except Exception as error:
+        log(f"WARN [RULES] check_pending_open_rules error: {error}")
     for sym in syms:
         with active_deals_lock:
             d = dict(active_deals.get(sym, {}))
@@ -14055,6 +14067,7 @@ CONDITIONAL_RULE_ACTION_TYPES = {
     "cancel_deal": "Berhenti kelola deal ini TANPA menjual -- koin tetap di wallet (parameter opsional: pct, 1-100, default 100)",
     "add_fund": "Tambah modal ke deal ini (parameter opsional: amount_usd -- kosongkan utk nominal otomatis strategi)",
     "start_trailing": "Aktifkan trailing stop sekarang, tanpa menunggu ambang profit otomatis",
+    "open_long_deal": "Buka posisi long BARU (simbol BELUM/TIDAK sedang jadi deal aktif -- beda dari 4 aksi di atas yang mengelola deal yang SUDAH ada). Parameter WAJIB: amount_usd (nominal modal USD, tidak ada nominal otomatis krn belum ada konteks strategi apa pun).",
 }
 
 
@@ -14161,6 +14174,35 @@ def _conditional_rule_execute_action(rule: dict, sym: str) -> dict:
                     active_deals[sym]["trailing_armed"] = True
             save_active_deals()
         return {"ok": ok, "symbol": sym}
+    if atype == "open_long_deal":
+        with active_deals_lock:
+            if sym in active_deals:
+                return {"ok": False, "error": f"{sym} sudah ada di active_deals"}
+        try:
+            amount = float(action.get("amount_usd"))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "amount_usd wajib diisi dgn angka"}
+        if amount <= 0:
+            return {"ok": False, "error": "amount_usd harus lebih dari 0"}
+        ok = send_open_long(sym, "rule_triggered", usd_override=amount)
+        if not ok:
+            return {"ok": False, "error": "Order beli ditolak/gagal (cek log server) -- cek symbol valid & saldo cukup"}
+        entry_price = get_price_now(sym)
+        ts = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+        add_to_active_deals(sym, {
+            "strategy": "rule_triggered", "entry_price": entry_price, "peak": entry_price,
+            "signal_price": entry_price, "atr_pct": 3.0,
+            "opened_candle_ts": int(time.time() * 1000), "trailing_armed": False,
+            "opened_at": ts, "target_usd": amount, "add_usd": 0,
+            "source": "conditional_rule",
+        })
+        csv_log_open({
+            'open_time_wib': ts, 'symbol': to_display_pair(sym), 'strategy': 'rule_triggered',
+            'signal_price': f"{_fmt_price(entry_price)}", 'entry_price': f"{_fmt_price(entry_price)}",
+            'base_usd': amount, 'score': 0,
+        })
+        send_telegram(f"OPEN LONG (Conditional Rule)\nPair: {to_display_pair(sym)}\nAturan: {note}\nModal: ${amount:.2f}\nEntry: {_fmt_price(entry_price)}")
+        return {"ok": True, "symbol": sym, "entry_price": entry_price, "amount_usd": amount}
     return {"ok": False, "error": f"Aksi '{atype}' tidak dikenal"}
 
 
@@ -14192,11 +14234,13 @@ def check_conditional_rules_for_symbol(sym: str, price: float, entry: float):
         save_conditional_rules(rules)
 
 
-# Semua 4 tipe aksi SAAT INI (close_deal/cancel_deal/add_fund/start_trailing) butuh deal yang
-# SEDANG aktif -- kalau nanti ditambah tipe aksi yang TIDAK butuh itu (mis. "buka long baru kalau
-# harga turun ke X", dibahas 18/10/2026 tapi belum diimplementasi), KELUARKAN tipe itu dari set
-# ini, supaya aturannya TIDAK ikut kena expire di bawah cuma krn simbolnya memang belum/tidak
-# sedang jadi deal aktif (itu situasi NORMAL utk aksi semacam itu, bukan tanda sudah basi).
+# 4 dari 5 tipe aksi (close_deal/cancel_deal/add_fund/start_trailing) butuh deal yang SEDANG
+# aktif -- 'open_long_deal' SENGAJA TIDAK masuk sini (lihat permintaan Mas Budi 18/10/2026
+# "bukan hanya deal yang sedang open saja"): simbolnya MEMANG belum/tidak sedang jadi deal aktif,
+# itu situasi NORMAL utk aksi ini, bukan tanda sudah basi -- jangan ikut di-expire.
+# check_pending_open_rules() (di bawah) yang mengurus evaluasi aturan open_long_deal, TERPISAH
+# dari check_conditional_rules_for_symbol() (itu hanya dipanggil per simbol yang SUDAH jadi deal
+# aktif, lewat loop thread2_monitor() yang memang cuma iterasi active_deals.keys()).
 CONDITIONAL_RULE_ACTIONS_REQUIRE_ACTIVE_DEAL = {"close_deal", "cancel_deal", "add_fund", "start_trailing"}
 
 
@@ -14223,6 +14267,43 @@ def expire_stale_conditional_rules(active_syms: list):
         r["result"] = {"ok": False, "note": "Deal sudah tidak aktif lagi sebelum kondisi terpenuhi"}
         changed = True
         log(f"[RULES] {r.get('symbol')} aturan '{r.get('note', '')}' EXPIRED -- deal sudah tidak aktif lagi")
+    if changed:
+        save_conditional_rules(rules)
+
+
+def check_pending_open_rules():
+    """Dipanggil SEKALI tiap siklus thread2_monitor() (BUKAN per-deal) -- cek aturan 'open_long_
+    deal' (simbol BELUM/TIDAK sedang jadi deal aktif, lihat permintaan Mas Budi 18/10/2026 "bukan
+    hanya deal yang sedang open saja"). Jalur evaluasi TERPISAH dari check_conditional_rules_for_
+    symbol() krn fungsi itu hanya dipanggil per simbol yang SUDAH ada di active_deals -- simbol
+    yang belum/tidak punya deal tidak akan pernah lewat jalur itu sama sekali."""
+    rules = load_conditional_rules()
+    pending = [r for r in rules if r.get("status") == "active" and r.get("action", {}).get("type") == "open_long_deal"]
+    if not pending:
+        return
+    with active_deals_lock:
+        active_syms_now = set(active_deals.keys())
+    changed = False
+    for rule in pending:
+        sym = rule.get("symbol", "")
+        if sym in active_syms_now:
+            continue  # sudah ada deal aktif di simbol ini (manual/strategi lain) -- jangan ditimpa, tetap 'active' tunggu simbol itu kosong lagi
+        try:
+            price = get_price_now(sym)
+        except Exception:
+            continue
+        if price is None or price <= 0:
+            continue
+        if not _conditional_rule_condition_met(rule, sym, price, entry=0):
+            continue
+        result = _conditional_rule_execute_action(rule, sym)
+        log(f"[RULES] {sym} aturan open_long_deal '{rule.get('note', '')}' terpicu -- hasil: {result}")
+        for r2 in rules:
+            if r2.get("id") == rule.get("id"):
+                r2["status"] = "triggered" if result.get("ok") else "failed"
+                r2["triggered_at"] = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+                r2["result"] = result
+        changed = True
     if changed:
         save_conditional_rules(rules)
 
@@ -14519,7 +14600,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <button type="button" onclick="toggleRulesPanel()" style="background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer;line-height:1;padding:0">✕</button>
   </div>
   <div style="padding:8px 14px;font-size:10px;color:var(--muted);border-bottom:1px solid var(--border);flex-shrink:0">
-    Tulis aturan "kalau X terjadi, lakukan Y" utk deal yang SEDANG AKTIF -- AI cuma menerjemahkan jadi aturan, TIDAK pernah eksekusi langsung. Eksekusi selalu lewat pemantauan bot (~15 detik), baru jalan setelah Mas Budi konfirmasi.
+    Tulis aturan "kalau X terjadi, lakukan Y" -- buat deal yang SEDANG AKTIF (close/cancel/add fund/trailing), ATAU buat simbol yang BELUM punya deal (buka long baru). AI cuma menerjemahkan jadi aturan, TIDAK pernah eksekusi langsung. Eksekusi selalu lewat pemantauan bot (~15 detik), baru jalan setelah Mas Budi konfirmasi.
   </div>
   <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
     <textarea id="rules-input" rows="2" placeholder="Contoh: DUSK/USDT, kalau harga cross up BB Upper 12h, close deal" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 10px;font-size:12px;font-family:var(--font);resize:vertical;box-sizing:border-box"></textarea>
@@ -14551,9 +14632,10 @@ function ruleConditionText(cond) {
 
 function ruleActionText(action) {
     action = action || {};
-    var labels = {close_deal: 'Close Deal', cancel_deal: 'Cancel Deal', add_fund: 'Add Fund', start_trailing: 'Aktifkan Trailing'};
+    var labels = {close_deal: 'Close Deal', cancel_deal: 'Cancel Deal', add_fund: 'Add Fund', start_trailing: 'Aktifkan Trailing', open_long_deal: 'Buka Long BARU'};
     var label = labels[action.type] || action.type || '?';
     if (action.type === 'add_fund' && action.amount_usd) label += ' ($' + action.amount_usd + ')';
+    if (action.type === 'open_long_deal' && action.amount_usd) label += ' ($' + action.amount_usd + ')';
     if (action.type === 'cancel_deal' && action.pct && action.pct != 100) label += ' (' + action.pct + '%)';
     return label;
 }
@@ -24410,15 +24492,27 @@ def run_web_dashboard():
             symbol = normalize_binance_symbol(parsed.get("symbol", ""))
             if not symbol.endswith("USDT"):
                 return jsonify({"ok": False, "error": "Simbol tidak valid/tidak disebutkan"})
-            with active_deals_lock:
-                if symbol not in active_deals:
-                    return jsonify({"ok": False, "error": f"{to_display_pair(symbol)} tidak ada di Active Deals -- aturan cuma berlaku utk deal yang sedang aktif"})
             cond = parsed.get("condition", {}) or {}
             action = parsed.get("action", {}) or {}
             if cond.get("type") not in CONDITIONAL_RULE_CONDITION_TYPES:
                 return jsonify({"ok": False, "error": f"Tipe kondisi tidak dikenal: {cond.get('type')}"})
             if action.get("type") not in CONDITIONAL_RULE_ACTION_TYPES:
                 return jsonify({"ok": False, "error": f"Tipe aksi tidak dikenal: {action.get('type')}"})
+            # 18/10/2026 (permintaan Mas Budi "bukan hanya deal yang sedang open saja"): open_long_deal
+            # BUTUH simbol BELUM jadi deal aktif (kebalikan 4 aksi lain) + amount_usd wajib diisi
+            # (tidak ada nominal otomatis krn belum ada konteks strategi apa pun utk simbol ini).
+            with active_deals_lock:
+                symbol_has_deal = symbol in active_deals
+            if action.get("type") == "open_long_deal":
+                if symbol_has_deal:
+                    return jsonify({"ok": False, "error": f"{to_display_pair(symbol)} sudah ada di Active Deals -- open_long_deal cuma utk simbol yang belum punya deal"})
+                try:
+                    if float(action.get("amount_usd")) <= 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    return jsonify({"ok": False, "error": "amount_usd wajib diisi dgn angka > 0 utk aksi open_long_deal"})
+            elif not symbol_has_deal:
+                return jsonify({"ok": False, "error": f"{to_display_pair(symbol)} tidak ada di Active Deals -- aturan ini cuma berlaku utk deal yang sedang aktif"})
             return jsonify({"ok": True, "symbol": symbol, "condition": cond, "action": action,
                             "note": parsed.get("note", text)})
 
@@ -24438,8 +24532,17 @@ def run_web_dashboard():
                     or action.get("type") not in CONDITIONAL_RULE_ACTION_TYPES):
                 return jsonify({"ok": False, "error": "Data aturan tidak valid"}), 400
             with active_deals_lock:
-                if symbol not in active_deals:
-                    return jsonify({"ok": False, "error": f"{to_display_pair(symbol)} tidak ada di Active Deals"}), 400
+                symbol_has_deal = symbol in active_deals
+            if action.get("type") == "open_long_deal":
+                if symbol_has_deal:
+                    return jsonify({"ok": False, "error": f"{to_display_pair(symbol)} sudah ada di Active Deals"}), 400
+                try:
+                    if float(action.get("amount_usd")) <= 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    return jsonify({"ok": False, "error": "amount_usd wajib diisi dgn angka > 0"}), 400
+            elif not symbol_has_deal:
+                return jsonify({"ok": False, "error": f"{to_display_pair(symbol)} tidak ada di Active Deals"}), 400
             rule = {
                 "id": str(int(time.time() * 1000)),
                 "symbol": symbol, "condition": condition, "action": action, "note": note,
