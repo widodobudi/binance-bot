@@ -14986,7 +14986,15 @@ function aiChatActionSummary(name, args) {
     return label + (parts.length ? ' (' + parts.join(', ') + ')' : '');
 }
 
-function aiChatHandleResult(result) {
+function aiChatAppendThinking() {
+    // 18/10/2026 (ketahuan dari test live Mas Budi -- "KOK GAK ADA TANGGAPAN" padahal cuma
+    // sedang nunggu Gemini, tidak ada indikasi apa pun sedang jalan di layar): bubble placeholder
+    // sementara, dihapus begitu respons (apa pun jenisnya) datang -- lihat aiChatHandleResult().
+    return aiChatAppendBubble('model', '<span style="color:var(--muted);font-style:italic">AI sedang berpikir...</span>');
+}
+
+function aiChatHandleResult(result, thinkingBubble) {
+    if (thinkingBubble && thinkingBubble.parentNode) thinkingBubble.parentNode.removeChild(thinkingBubble);
     aiChatSetBusy(false);
     if (!result) { aiChatAppendBubble('model', '<span style="color:var(--red)">Tidak ada respons dari server.</span>'); return; }
     _aiChatContents = result.contents || _aiChatContents;
@@ -15016,11 +15024,12 @@ function sendAiChatMessage() {
     aiChatAppendBubble('user', text.replace(/</g, '&lt;'));
     input.value = '';
     aiChatSetBusy(true);
+    var thinkingBubble = aiChatAppendThinking();
     fetch('/api/ai_chat', {method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({contents: _aiChatContents, message: text})})
         .then(function(r){ return r.json(); })
-        .then(aiChatHandleResult)
-        .catch(function(e){ aiChatSetBusy(false); aiChatAppendBubble('model', '<span style="color:var(--red)">Error: ' + e + '</span>'); });
+        .then(function(result){ aiChatHandleResult(result, thinkingBubble); })
+        .catch(function(e){ if (thinkingBubble && thinkingBubble.parentNode) thinkingBubble.parentNode.removeChild(thinkingBubble); aiChatSetBusy(false); aiChatAppendBubble('model', '<span style="color:var(--red)">Error: ' + e + '</span>'); });
 }
 
 function aiChatConfirmAction(approved, bubble) {
@@ -15029,11 +15038,12 @@ function aiChatConfirmAction(approved, bubble) {
         btns.forEach(function(b){ b.disabled = true; b.style.opacity = '0.5'; });
     }
     aiChatSetBusy(true);
+    var thinkingBubble = aiChatAppendThinking();
     fetch('/api/ai_chat/confirm', {method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({contents: _aiChatContents, approved: approved})})
         .then(function(r){ return r.json(); })
-        .then(aiChatHandleResult)
-        .catch(function(e){ aiChatSetBusy(false); aiChatAppendBubble('model', '<span style="color:var(--red)">Error: ' + e + '</span>'); });
+        .then(function(result){ aiChatHandleResult(result, thinkingBubble); })
+        .catch(function(e){ if (thinkingBubble && thinkingBubble.parentNode) thinkingBubble.parentNode.removeChild(thinkingBubble); aiChatSetBusy(false); aiChatAppendBubble('model', '<span style="color:var(--red)">Error: ' + e + '</span>'); });
 }
 </script>
 
@@ -27705,8 +27715,10 @@ def _ai_call(prompt: str, model: str = None) -> str:
 # apa pun instruksinya; tool baca jalan otomatis tanpa konfirmasi (tidak ada risiko). Endpoint
 # /api/ai_chat* ada di belakang login dashboard yang sama (TIDAK masuk daftar pengecualian
 # dashboard_login_required()), jadi cuma Mas Budi yang sudah login yang bisa pakai ini.
-AI_CHAT_TIMEOUT = 30  # detik -- lebih lama dari AI_DECISION_TIMEOUT (25s), chat kadang butuh
-                      # 1-2 putaran tool-call (baca) sebelum jawaban akhir keluar.
+AI_CHAT_TIMEOUT = 45  # detik -- 18/10/2026, dinaikkan dari 30 (lihat REMARK "ai-chat-timeout-
+                      # hardening" di _gemini_chat_call()): request systemInstruction+tools lebih
+                      # berat dari _gemini_ai_call polos (AI_DECISION_TIMEOUT=25s), + chat kadang
+                      # butuh 1-2 putaran tool-call (baca) sebelum jawaban akhir keluar.
 AI_CHAT_MAX_OUTPUT_TOKENS = 1024
 AI_CHAT_MAX_TOOL_ITERS = 5  # jaga2 thd Gemini looping panggil tool berulang tanpa akhir
 
@@ -27986,10 +27998,17 @@ def _gemini_chat_call(contents: list) -> dict:
     """Panggil Gemini generateContent dgn dukungan multi-turn + function-calling, KHUSUS AI Chat
     Assistant dashboard -- beda dari _gemini_ai_call() yg single-prompt/200-token (ai_decision_
     open/close). Return candidates[0].content MENTAH (dict berisi 'role' & 'parts') -- caller yg
-    urai apakah isinya text atau functionCall."""
+    urai apakah isinya text atau functionCall.
+    Patch "ai-chat-timeout-hardening" (18/10/2026, ketahuan dari test live pertama Mas Budi --
+    "posisi apa yang sedang aktif" timeout 30 detik, log: "The read operation timed out"):
+    request pertama dgn systemInstruction+tools (lebih berat dari _gemini_ai_call polos) butuh
+    margin lebih longgar -- AI_CHAT_TIMEOUT naik 30->45s, DAN 1x retry otomatis thd timeout/error
+    jaringan (bukan error dari Gemini sendiri spt 400/403, itu pasti berulang persis, percuma
+    retry) -- kedubanya transient network hiccup, bukan tanda GEMINI_API_KEY/model salah."""
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY belum di-set")
     import json as _json
+    import urllib.error as _urllib_error
     payload = {
         "contents": contents,
         "systemInstruction": {"parts": [{"text": AI_CHAT_SYSTEM_PROMPT}]},
@@ -28000,10 +28019,28 @@ def _gemini_chat_call(contents: list) -> dict:
         "https://generativelanguage.googleapis.com/v1beta/models/"
         + GEMINI_AI_MODEL + ":generateContent?key=" + GEMINI_API_KEY
     )
-    req = _urllib_req.Request(endpoint, data=_json.dumps(payload).encode(),
-                               headers={"Content-Type": "application/json"}, method="POST")
-    with _urllib_req.urlopen(req, timeout=AI_CHAT_TIMEOUT) as resp:
-        body = _json.loads(resp.read())
+    req_body = _json.dumps(payload).encode()
+    last_error = None
+    for attempt in range(2):
+        try:
+            req = _urllib_req.Request(endpoint, data=req_body,
+                                       headers={"Content-Type": "application/json"}, method="POST")
+            with _urllib_req.urlopen(req, timeout=AI_CHAT_TIMEOUT) as resp:
+                body = _json.loads(resp.read())
+            break
+        except _urllib_error.HTTPError as e:
+            # Error BERBALAS dari Gemini (400/403/429/dst) -- pasti berulang persis, jangan retry.
+            try:
+                detail = e.read().decode(errors="replace")[:300]
+            except Exception:
+                detail = str(e)
+            raise RuntimeError(f"HTTP {e.code}: {detail}")
+        except Exception as e:
+            last_error = e
+            if attempt == 0:
+                log(f"WARN [AI-CHAT] Gemini call percobaan 1 gagal ({e}), coba ulang 1x...")
+                continue
+            raise last_error
     candidates = body.get("candidates") or []
     if not candidates:
         raise RuntimeError(f"Gemini tidak mengembalikan kandidat jawaban (raw: {str(body)[:300]})")
