@@ -27117,7 +27117,17 @@ def run_web_dashboard():
             return jsonify({"ok": True, "shadow_fwdtest": fwdtest, "shadow_hsconfirm": hsconfirm})
 
         log(f"[WEB] Dashboard jalan di port {WEB_PORT}")
-        app.run(host="0.0.0.0", port=WEB_PORT, debug=False, use_reloader=False)
+        # Patch "dashboard-threaded-server" (18/10/2026, permintaan Mas Budi "bikin berat pacific
+        # grace?" -- jawabannya YA sebelum patch ini): Flask dev server defaultnya SATU thread --
+        # SEMUA request dashboard (termasuk refresh Active Deals/Strategy Control/dst dari tab lain)
+        # antre di belakang request mana pun yang sedang diproses. Sebelum ada AI Chat Assistant ini
+        # tidak kerasa krn tidak ada satu route pun yang nunggu lama (semua AI call -- ai_decision_
+        # open/close -- jalan di background thread thread2_monitor dkk, BUKAN di dalam request Flask).
+        # /api/ai_chat PERTAMA KALI bikin satu request Flask nunggu sampai AI_CHAT_TIMEOUT (45 detik,
+        # bisa 2x krn retry) -- tanpa threaded=True, SELURUH dashboard freeze total selama itu utk
+        # SIAPA PUN yang buka. threaded=True = tiap request dapat thread sendiri, aman krn semua state
+        # bersama (active_deals dkk) sudah dilindungi lock yang sama dipakai background thread bot.
+        app.run(host="0.0.0.0", port=WEB_PORT, debug=False, use_reloader=False, threaded=True)
     except Exception as e:
         log(f"WARN web dashboard error: {e}")
 
