@@ -20555,6 +20555,11 @@ def thread_topgainers_scan() -> None:
         'symbol': to_display_pair(chosen['symbol']), 'strategy': 'topgainers_4h',
         'signal_price': f"{_fmt_price(chosen['price'])}", 'entry_price': f"{_fmt_price(entry_price)}",
         'base_usd': target_usd, 'score': 1,
+        # 18/10/2026 (permintaan Mas Budi, kolom RSI@Open kosong di History): RSI sudah dihitung
+        # di candidates (compute_indicators_4h()) tapi tidak pernah diteruskan ke CSV -- sama pola
+        # persis "INFO-ONLY" yg sudah dipakai decouple_4h/rvolbreak_8h/dipbuy_universe (RSI dicatat
+        # cuma biar kolomnya tidak kosong, TIDAK dipakai sbg syarat open/add-fund/trailing/close).
+        'rsi_open': f"{chosen['rsi']:.1f}" if chosen.get('rsi') is not None else '',
     })
     send_telegram(
         f"Top Gainers-4h | OPEN LONG\n"
