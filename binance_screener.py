@@ -14919,55 +14919,35 @@ refreshShadowChart();
         <div id="addfundasset-modal-body" style="font-size:11px;color:var(--muted)">Memuat...</div>
     </div>
 </div>
-  <!-- ═══════════════ AI CHAT ASSISTANT (WIDGET MENGAMBANG) ═══════════════ -->
+  <!-- ═══════════════ AI CHAT ASSISTANT ═══════════════ -->
   <!-- 18/10/2026 (permintaan Mas Budi, "pasang AI di web pacific-grace"): pengganti alur
        TradingView alert+webhook manual (/tradingview_webhook) utk aksi insidental -- cukup
        ketik maksudnya, Claude yang panggil tool baca/tulis yang sesuai (semula Gemini, diganti
        sama hari krn akses GEMINI_API_KEY ternyata 403 -- lihat REMARK _anthropic_chat_call()).
-       Lihat REMARK lengkap di _ai_chat_run_loop() (Python) utk desain konfirmasi berlapis.
-       18/10/2026 (lanjutan, permintaan Mas Budi): SEMULA kartu biasa di tab TOOLS, dipindah jadi
-       widget mengambang (FAB + panel) krn fiturnya lintas-domain (bisa soal Monitor/Control/
-       Strategies sekaligus) -- nggak pas digolongkan ke satu tab. SENGAJA ditaruh di sini, SEBELUM
-       section .dash-section-start PERTAMA (STRATEGY CONTROL, data-tab="control") -- fungsi JS
-       selectDashTab() (script tab-switcher di atas) jalan MAJU dari tiap marker .dash-section-start lewat
-       nextElementSibling sampai ketemu marker berikutnya, jadi elemen manapun SEBELUM marker
-       pertama TIDAK PERNAH kena sentuh/displaynya diubah tiap ganti tab -- tetap kelihatan di
-       SEMUA tab tanpa perlu trik lain. JANGAN dikasih class "dash-section-start" (beda dari pola
-       modal convert-modal/addfundasset-modal yang data-tab="__none__" -- itu SENGAJA default
-       tersembunyi & baru dibuka manual tiap kali, krn selectDashTab() ikut paksa display:none
-       elemen __none__ tiap ganti tab; widget ini maunya TETAP kelihatan/kebuka lintas tab). -->
-<div id="ai-chat-fab" onclick="toggleAiChatPanel()" title="AI Chat Assistant" style="position:fixed;bottom:20px;right:20px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.45);z-index:1000">🤖</div>
-<div id="ai-chat-panel" style="display:none;flex-direction:column;position:fixed;bottom:84px;right:20px;width:min(380px,calc(100vw - 32px));max-height:min(70vh,560px);background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 28px rgba(0,0,0,.5);z-index:1000;overflow:hidden">
-  <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
-    <span style="font-size:12px;font-weight:600;color:var(--accent);letter-spacing:.06em">AI CHAT ASSISTANT</span>
-    <div style="display:flex;align-items:center;gap:10px">
-      <span style="font-size:9px;color:var(--muted)">Powered by Claude</span>
-      <button type="button" onclick="toggleAiChatPanel()" style="background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer;line-height:1;padding:0">✕</button>
+       Lihat REMARK lengkap di _ai_chat_run_loop() (Python) utk desain konfirmasi berlapis. -->
+<div class="container dash-section-start" data-tab="tools">
+  <div class="section-title">AI Chat Assistant</div>
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header" onclick="toggleCard(this)" style="display:flex;justify-content:space-between;align-items:center">
+      <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">AI CHAT ASSISTANT</h2>
+      <span style="font-size:10px;color:var(--muted)">Powered by Claude</span>
     </div>
-  </div>
-  <div style="padding:8px 14px;font-size:10px;color:var(--muted);border-bottom:1px solid var(--border);flex-shrink:0">
-    Tanya soal posisi/strategi/performa, atau minta aksi -- aksi nyata SELALU minta konfirmasi dulu sebelum benar-benar dieksekusi.
-  </div>
-  <div id="ai-chat-messages" style="flex:1;display:flex;flex-direction:column;gap:8px;overflow-y:auto;padding:10px 14px;font-size:12px;min-height:160px"></div>
-  <div style="display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--border);flex-shrink:0">
-    <input type="text" id="ai-chat-input" placeholder="Contoh: posisi apa yang sedang aktif?" onkeydown="if(event.key==='Enter'){event.preventDefault();sendAiChatMessage();}" style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 10px;font-size:12px;font-family:var(--font)">
-    <button type="button" id="ai-chat-send-btn" onclick="sendAiChatMessage()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:8px 14px;font-size:12px;cursor:pointer;font-weight:600">Kirim</button>
+    <div class="card-body">
+      <div style="font-size:10px;color:var(--muted);margin-bottom:10px">
+        Tanya soal posisi/strategi/performa, atau minta aksi (buka long baru/add fund/arm trailing/close/cancel/ubah setelan strategi) --
+        aksi nyata SELALU minta konfirmasi dulu sebelum benar-benar dieksekusi.
+      </div>
+      <div id="ai-chat-messages" style="display:flex;flex-direction:column;gap:8px;max-height:360px;overflow-y:auto;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:10px;font-size:12px"></div>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="ai-chat-input" placeholder="Contoh: posisi apa yang sedang aktif?" onkeydown="if(event.key==='Enter'){event.preventDefault();sendAiChatMessage();}" style="flex:1;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 10px;font-size:12px;font-family:var(--font)">
+        <button type="button" id="ai-chat-send-btn" onclick="sendAiChatMessage()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:8px 16px;font-size:12px;cursor:pointer;font-weight:600">Kirim</button>
+      </div>
+    </div>
   </div>
 </div>
 <script>
 var _aiChatContents = [];
 var _aiChatBusy = false;
-var _aiChatPanelOpen = false;
-
-function toggleAiChatPanel() {
-    _aiChatPanelOpen = !_aiChatPanelOpen;
-    var panel = document.getElementById('ai-chat-panel');
-    if (panel) panel.style.display = _aiChatPanelOpen ? 'flex' : 'none';
-    if (_aiChatPanelOpen) {
-        var input = document.getElementById('ai-chat-input');
-        if (input) input.focus();
-    }
-}
 
 function aiChatAppendBubble(role, html) {
     var box = document.getElementById('ai-chat-messages');
