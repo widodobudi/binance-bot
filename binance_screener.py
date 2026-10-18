@@ -20155,12 +20155,16 @@ TOPGAINERS_ENABLED = True  # kill-switch permanen thread-nya (pola sama DECOUPLE
                             # dicek sekali saat start thread) -- TERPISAH dari is_strategy_enabled
                             # ('topgainers_4h', toggle Strategy Control runtime, dicek tiap siklus
                             # DI DALAM thread_topgainers_scan()).
-TOPGAINERS_SCAN_INTERVAL = 180  # detik (3 menit, 18/10/2026 -- diperpendek dari 15 menit krn
-                                 # ranking sekarang rolling-live (lihat REMARK di ranking loop),
-                                 # jadi butuh dicek lebih rapat; Mas Budi amati sendiri rank Top
-                                 # Gainers bergerak dlm hitungan menit. Cek bobot API Binance
-                                 # (18/10/2026): 1 siklus ~450 bobot dari budget 6000/menit utk
-                                 # thread ini sendiri -- 3 menit kasih marjin aman vs 17 thread lain.
+TOPGAINERS_SCAN_INTERVAL = 30  # detik (18/10/2026, diperpendek lagi dari 180 -- sejak ranking
+                                # dipasok WebSocket !ticker_4h@arr (lihat TOPGAINERS_WS_URL),
+                                # cuma 2 panggilan REST TETAP per siklus (exchangeInfo bobot 20 +
+                                # ticker/24hr bobot 80 = 100 bobot/siklus, dipakai buat universe/
+                                # volume filter, BUKAN ranking lagi). Di 30 detik = ~200 bobot/
+                                # menit dari budget 6000/menit -- cukup rapat (6x dari 180s lama)
+                                # tanpa nambah beban berarti ke 19 thread lain. 5 detik (~1200
+                                # bobot/menit) DITOLAK Mas Budi -- manfaat deteksi tidak sebanding
+                                # tambahan beban, kejadian "kelewat tangkap" sudah disepakati
+                                # diabaikan saja (bukan prioritas dikejar lebih jauh).
 # 18/10/2026 (permintaan Mas Budi, analisis rank-mobility per-rank 1-10): digeser dari 8-10 ke
 # 6-8 -- data 50 hari (899 kejadian/rank) tunjukkan rank 6 & 7 jauh lebih sering lanjut sampai
 # top-5 dlm 48 jam (44,0% keduanya) dibanding rank 8-10 lama (33-36%). Opsi B dipilih (bukan cuma
