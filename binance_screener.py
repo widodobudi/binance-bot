@@ -20042,8 +20042,13 @@ def ai_decision_topgainers(candidates: list) -> dict:
         "Kamu menilai kandidat koin USDT yang masuk rank 8-10 'Top Gainers' (kenaikan harga 4 "
         "jam terakhir) di Binance. TIDAK ADA filter rule-based lain yang sudah lolos -- tugasmu "
         "MURNI menilai dari data teknikal di bawah, APAKAH ada yang layak dibuka long SEKARANG, "
-        "atau TIDAK ADA SAMA SEKALI yang layak (lebih baik skip kalau ragu -- rank 8-10 Top "
-        "Gainers rawan koreksi balik cepat krn sudah naik tajam dlm 4 jam terakhir).\n\n"
+        "atau TIDAK ADA SAMA SEKALI yang layak.\n\n"
+        "PENTING -- entry ini modal KECIL (probe awal, risiko terbatas), BUKAN komitmen penuh. "
+        "Dana tambahan baru ditambahkan NANTI, terpisah, kalau rank-nya terbukti naik lebih jauh "
+        "-- jadi JANGAN jadikan RVOL/volume rendah SENDIRIAN sebagai alasan menolak, itu akan "
+        "dicek ulang objektif nanti sebelum nambah dana. Tolak HANYA kalau arah tren memang JELAS "
+        "melemah/bearish (mis. harga di bawah EMA20 DAN RSI/MACD/Stoch sama-sama mengarah turun) "
+        "-- bukan sekadar volume belum terkonfirmasi.\n\n"
         + "\n\n".join(lines) +
         '\n\nBalas HANYA satu objek JSON, tanpa markdown/penjelasan tambahan, format PERSIS:\n'
         '{"choice": "<SYMBOL yang dipilih, atau \\"none\\" kalau tidak ada yang layak>", '
