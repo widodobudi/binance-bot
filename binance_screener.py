@@ -9999,6 +9999,10 @@ def thread2_monitor():
         log(f"WARN [AUTO-SELL] monitor error: {error}")
     with active_deals_lock:
         syms = list(active_deals.keys())
+    try:
+        expire_stale_conditional_rules(syms)
+    except Exception as error:
+        log(f"WARN [RULES] expire_stale_conditional_rules error: {error}")
     for sym in syms:
         with active_deals_lock:
             d = dict(active_deals.get(sym, {}))
@@ -14187,6 +14191,42 @@ def check_conditional_rules_for_symbol(sym: str, price: float, entry: float):
     if changed:
         save_conditional_rules(rules)
 
+
+# Semua 4 tipe aksi SAAT INI (close_deal/cancel_deal/add_fund/start_trailing) butuh deal yang
+# SEDANG aktif -- kalau nanti ditambah tipe aksi yang TIDAK butuh itu (mis. "buka long baru kalau
+# harga turun ke X", dibahas 18/10/2026 tapi belum diimplementasi), KELUARKAN tipe itu dari set
+# ini, supaya aturannya TIDAK ikut kena expire di bawah cuma krn simbolnya memang belum/tidak
+# sedang jadi deal aktif (itu situasi NORMAL utk aksi semacam itu, bukan tanda sudah basi).
+CONDITIONAL_RULE_ACTIONS_REQUIRE_ACTIVE_DEAL = {"close_deal", "cancel_deal", "add_fund", "start_trailing"}
+
+
+def expire_stale_conditional_rules(active_syms: list):
+    """Dipanggil SEKALI tiap siklus thread2_monitor() (BUKAN per-deal, lihat pemanggilnya) --
+    permintaan Mas Budi 18/10/2026: aturan status='active' yang deal-nya closed lewat jalur LAIN
+    (hard-stop/manual/dst) SEBELUM sempat terpicu sendiri harus otomatis nonaktif, bukan tersimpan
+    selamanya menunggu deal BARU di simbol yang sama muncul lagi (konteksnya sudah beda, mis.
+    entry price). HANYA berlaku utk aturan yang tipe aksinya butuh deal aktif (lihat
+    CONDITIONAL_RULE_ACTIONS_REQUIRE_ACTIVE_DEAL) -- tipe aksi lain (kalau ada nanti) sengaja
+    dikecualikan."""
+    rules = load_conditional_rules()
+    active_set = set(active_syms)
+    changed = False
+    for r in rules:
+        if r.get("status") != "active":
+            continue
+        if r.get("action", {}).get("type") not in CONDITIONAL_RULE_ACTIONS_REQUIRE_ACTIVE_DEAL:
+            continue
+        if r.get("symbol") in active_set:
+            continue
+        r["status"] = "expired"
+        r["triggered_at"] = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+        r["result"] = {"ok": False, "note": "Deal sudah tidak aktif lagi sebelum kondisi terpenuhi"}
+        changed = True
+        log(f"[RULES] {r.get('symbol')} aturan '{r.get('note', '')}' EXPIRED -- deal sudah tidak aktif lagi")
+    if changed:
+        save_conditional_rules(rules)
+
+
 TP_TIER_MODES = ("price", "usd", "pct")
 TP_TIER_MAX = 2
 
@@ -14522,6 +14562,7 @@ function ruleStatusLabel(status) {
     if (status === 'active') return '<span style="color:var(--accent)">Aktif</span>';
     if (status === 'triggered') return '<span style="color:var(--green)">Terpicu</span>';
     if (status === 'failed') return '<span style="color:var(--red)">Gagal</span>';
+    if (status === 'expired') return '<span style="color:var(--muted)">Kedaluwarsa (deal sudah tidak aktif)</span>';
     return status || '?';
 }
 
