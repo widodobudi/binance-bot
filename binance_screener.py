@@ -14922,14 +14922,15 @@ refreshShadowChart();
   <!-- ═══════════════ AI CHAT ASSISTANT ═══════════════ -->
   <!-- 18/10/2026 (permintaan Mas Budi, "pasang AI di web pacific-grace"): pengganti alur
        TradingView alert+webhook manual (/tradingview_webhook) utk aksi insidental -- cukup
-       ketik maksudnya, Gemini yang panggil tool baca/tulis yang sesuai. Lihat REMARK lengkap
-       di _ai_chat_run_loop() (Python, dekat _gemini_ai_call()) utk desain konfirmasi berlapis. -->
+       ketik maksudnya, Claude yang panggil tool baca/tulis yang sesuai (semula Gemini, diganti
+       sama hari krn akses GEMINI_API_KEY ternyata 403 -- lihat REMARK _anthropic_chat_call()).
+       Lihat REMARK lengkap di _ai_chat_run_loop() (Python) utk desain konfirmasi berlapis. -->
 <div class="container dash-section-start" data-tab="tools">
   <div class="section-title">AI Chat Assistant</div>
   <div class="card" style="margin-bottom:16px">
     <div class="card-header" onclick="toggleCard(this)" style="display:flex;justify-content:space-between;align-items:center">
       <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">AI CHAT ASSISTANT</h2>
-      <span style="font-size:10px;color:var(--muted)">Powered by Gemini</span>
+      <span style="font-size:10px;color:var(--muted)">Powered by Claude</span>
     </div>
     <div class="card-body">
       <div style="font-size:10px;color:var(--muted);margin-bottom:10px">
@@ -24118,13 +24119,13 @@ def run_web_dashboard():
         @app.route("/api/ai_chat", methods=["POST"])
         def api_ai_chat():
             """AI Chat Assistant dashboard -- lihat REMARK lengkap di _ai_chat_run_loop() dkk
-            (dekat _gemini_ai_call()). Tool TULIS TIDAK PERNAH langsung dieksekusi di sini,
+            (dekat _anthropic_chat_call()). Tool TULIS TIDAK PERNAH langsung dieksekusi di sini,
             selalu berhenti dulu minta konfirmasi (/api/ai_chat/confirm)."""
             payload = request.get_json(force=True, silent=True) or {}
             contents = payload.get("contents") or []
             message = payload.get("message", "")
             if message:
-                contents = contents + [{"role": "user", "parts": [{"text": message}]}]
+                contents = contents + [{"role": "user", "content": [{"type": "text", "text": message}]}]
             if not contents:
                 return jsonify({"type": "error", "error": "Pesan kosong"}), 400
             return jsonify(_ai_chat_run_loop(contents))
@@ -27715,22 +27716,27 @@ def _ai_call(prompt: str, model: str = None) -> str:
 # ── AI Chat Assistant dashboard (18/10/2026, permintaan Mas Budi "pasang AI di web pacific-grace")
 # Konteks: Mas Budi biasa eksekusi aksi insidental (open long/add fund/arm trailing/close/cancel
 # di luar sinyal strategi otomatis) lewat alert+webhook TradingView manual (lihat /tradingview_webhook
-# di bawah) -- maunya diganti chat, cukup ketik maksudnya, Gemini yang panggil tool yang sesuai.
-# Dibangun TERPISAH dari _gemini_ai_call()/_ai_call() di atas (itu single-prompt/200-token, khusus
-# ai_decision_open/close) krn butuh multi-turn + function-calling Gemini, bukan prompt sekali jalan.
-# Lingkup (persetujuan eksplisit Mas Budi, 2 pertanyaan terpisah): (a) BOLEH eksekusi aksi nyata
-# (bukan cuma baca), (b) provider Gemini (sudah aktif, reuse GEMINI_API_KEY/GEMINI_AI_MODEL yang
-# sama dgn ai_decision_*). Desain keamanan: SETIAP tool tulis (AI_CHAT_WRITE_TOOLS) WAJIB konfirmasi
+# di bawah) -- maunya diganti chat, cukup ketik maksudnya, Claude yang panggil tool yang sesuai.
+# Dibangun TERPISAH dari _anthropic_ai_call()/_ai_call() di atas (itu single-prompt/1024-token,
+# khusus ai_decision_open/close, tanpa tools) krn butuh multi-turn + tool-use, bukan prompt sekali
+# jalan. Provider SEMULA Gemini (persetujuan eksplisit Mas Budi), diganti Claude SAMA HARI --
+# ternyata akses GEMINI_API_KEY 403 PERMISSION_DENIED (baru ketahuan krn fitur ini yg PERTAMA
+# benar2 memanggil Gemini lagi setelah berminggu2, Alibaba selalu menang duluan di fallback chain
+# ai_decision_*) -- Mas Budi eksplisit minta "pakai claude aja", fallback 2 akun (widodobudi@/
+# vassistbywbudi@) -- lihat REMARK lengkap di _anthropic_chat_call(). Lingkup eksekusi aksi nyata
+# (bukan cuma baca) tetap sama, persetujuan eksplisit Mas Budi (pertanyaan terpisah sebelum
+# Gemini dipasang). Desain keamanan: SETIAP tool tulis (AI_CHAT_WRITE_TOOLS) WAJIB konfirmasi
 # eksplisit Mas Budi dulu (tombol di dashboard) -- model TIDAK PERNAH bisa mengeksekusi langsung,
 # apa pun instruksinya; tool baca jalan otomatis tanpa konfirmasi (tidak ada risiko). Endpoint
 # /api/ai_chat* ada di belakang login dashboard yang sama (TIDAK masuk daftar pengecualian
 # dashboard_login_required()), jadi cuma Mas Budi yang sudah login yang bisa pakai ini.
-AI_CHAT_TIMEOUT = 45  # detik -- 18/10/2026, dinaikkan dari 30 (lihat REMARK "ai-chat-timeout-
-                      # hardening" di _gemini_chat_call()): request systemInstruction+tools lebih
-                      # berat dari _gemini_ai_call polos (AI_DECISION_TIMEOUT=25s), + chat kadang
-                      # butuh 1-2 putaran tool-call (baca) sebelum jawaban akhir keluar.
+AI_CHAT_TIMEOUT = 45  # detik -- 18/10/2026: request system+tools lebih berat dari _anthropic_ai_call
+                      # polos (AI_DECISION_TIMEOUT=25s), + chat kadang butuh 1-2 putaran tool-call
+                      # (baca) sebelum jawaban akhir keluar. Angka ini sendiri dari era Gemini
+                      # (timeout 30s kena "read operation timed out" di test live pertama) --
+                      # dipertahankan apa adanya stlh pindah Claude, margin lebih longgar tetap aman.
 AI_CHAT_MAX_OUTPUT_TOKENS = 1024
-AI_CHAT_MAX_TOOL_ITERS = 5  # jaga2 thd Gemini looping panggil tool berulang tanpa akhir
+AI_CHAT_MAX_TOOL_ITERS = 5  # jaga2 thd Claude looping panggil tool berulang tanpa akhir
 
 AI_CHAT_SYSTEM_PROMPT = (
     "Kamu adalah AI Assistant yang terpasang di dashboard bot trading Binance milik Mas Budi "
@@ -27753,57 +27759,61 @@ AI_CHAT_STRATEGY_LABELS = {
     "ai_manual": "AI Manual (Insidental)",
 }
 
+# Patch "ai-chat-anthropic-switch" (18/10/2026, permintaan Mas Budi "pakai claude aja" --
+# menggantikan Gemini, lihat REMARK di _anthropic_chat_call()): skema tool di bawah pakai format
+# NATIF Claude Messages API (input_schema, tipe JSON-Schema huruf kecil) -- BUKAN lagi format
+# Gemini (parameters, tipe huruf besar "OBJECT"/"STRING").
 AI_CHAT_TOOLS = [
     {"name": "list_active_deals",
      "description": "Daftar semua posisi yang SEDANG AKTIF sekarang (simbol, strategi, harga entry, profit% saat ini, kapan dibuka, status trailing).",
-     "parameters": {"type": "OBJECT", "properties": {}}},
+     "input_schema": {"type": "object", "properties": {}}},
     {"name": "get_strategy_config",
      "description": "Setelan Strategy Control saat ini per strategi (aktif/tidak, max deals, base order USD, cooldown, dll). Strategi yang sudah terminated tidak ikut muncul.",
-     "parameters": {"type": "OBJECT", "properties": {}}},
+     "input_schema": {"type": "object", "properties": {}}},
     {"name": "get_closed_trades_summary",
      "description": "Ringkasan performa (jumlah trade closed, win rate, total % kumulatif) per strategi dari histori.",
-     "parameters": {"type": "OBJECT", "properties": {}}},
+     "input_schema": {"type": "object", "properties": {}}},
     {"name": "get_daily_pnl",
      "description": "P&L hari ini (realized+unrealized) dibandingkan Batas Rugi Harian, dan status tersulut/tidak.",
-     "parameters": {"type": "OBJECT", "properties": {}}},
+     "input_schema": {"type": "object", "properties": {}}},
     {"name": "open_long_deal",
      "description": ("Buka posisi long BARU secara manual/insidental (bukan dari sinyal strategi "
                       "otomatis) -- dicatat di bawah strategi 'AI Manual (Insidental)'. AKSI NYATA, "
                       "order beli sungguhan -- WAJIB konfirmasi Mas Budi dulu."),
-     "parameters": {"type": "OBJECT", "properties": {
-         "symbol": {"type": "STRING", "description": "Simbol pair, misal BTCUSDT atau BTC/USDT"},
-         "amount_usd": {"type": "NUMBER", "description": "Nominal modal USD -- WAJIB diisi, jangan menebak."},
+     "input_schema": {"type": "object", "properties": {
+         "symbol": {"type": "string", "description": "Simbol pair, misal BTCUSDT atau BTC/USDT"},
+         "amount_usd": {"type": "number", "description": "Nominal modal USD -- WAJIB diisi, jangan menebak."},
      }, "required": ["symbol", "amount_usd"]}},
     {"name": "add_fund",
      "description": "Tambah modal (add fund/average down) ke SATU posisi aktif yang sudah ada. AKSI NYATA -- WAJIB konfirmasi Mas Budi dulu.",
-     "parameters": {"type": "OBJECT", "properties": {
-         "symbol": {"type": "STRING", "description": "Simbol pair"},
-         "amount_usd": {"type": "NUMBER", "description": "Nominal USD ditambahkan. Kosongkan utk pakai nominal otomatis strategi."},
+     "input_schema": {"type": "object", "properties": {
+         "symbol": {"type": "string", "description": "Simbol pair"},
+         "amount_usd": {"type": "number", "description": "Nominal USD ditambahkan. Kosongkan utk pakai nominal otomatis strategi."},
      }, "required": ["symbol"]}},
     {"name": "start_trailing",
      "description": "Aktifkan (arm) trailing stop SEKARANG utk satu posisi aktif, tanpa menunggu ambang profit otomatis. AKSI NYATA -- WAJIB konfirmasi Mas Budi dulu.",
-     "parameters": {"type": "OBJECT", "properties": {
-         "symbol": {"type": "STRING", "description": "Simbol pair"},
+     "input_schema": {"type": "object", "properties": {
+         "symbol": {"type": "string", "description": "Simbol pair"},
      }, "required": ["symbol"]}},
     {"name": "close_deal",
      "description": "Tutup/jual SEKARANG satu posisi aktif di harga market (exit penuh). AKSI NYATA -- WAJIB konfirmasi Mas Budi dulu.",
-     "parameters": {"type": "OBJECT", "properties": {
-         "symbol": {"type": "STRING", "description": "Simbol pair"},
+     "input_schema": {"type": "object", "properties": {
+         "symbol": {"type": "string", "description": "Simbol pair"},
      }, "required": ["symbol"]}},
     {"name": "cancel_deal",
      "description": ("Berhenti kelola satu posisi aktif TANPA menjual apa pun -- koin tetap di "
                       "wallet, bot cuma stop tracking (setara 'Stop bot'/quit 3Commas, BUKAN "
                       "close/jual). AKSI NYATA -- WAJIB konfirmasi Mas Budi dulu."),
-     "parameters": {"type": "OBJECT", "properties": {
-         "symbol": {"type": "STRING", "description": "Simbol pair"},
-         "pct": {"type": "NUMBER", "description": "Persentase yang di-cancel, 1-100. Default 100 (cancel semua)."},
+     "input_schema": {"type": "object", "properties": {
+         "symbol": {"type": "string", "description": "Simbol pair"},
+         "pct": {"type": "number", "description": "Persentase yang di-cancel, 1-100. Default 100 (cancel semua)."},
      }, "required": ["symbol"]}},
     {"name": "update_strategy_setting",
      "description": "Ubah satu setelan Strategy Control utk satu strategi. AKSI NYATA -- WAJIB konfirmasi Mas Budi dulu.",
-     "parameters": {"type": "OBJECT", "properties": {
-         "strategy": {"type": "STRING", "description": "Key strategi persis spt di get_strategy_config, misal brkX2_12h_closed/trend_confirm_4h/dst."},
-         "field": {"type": "STRING", "enum": ["strategy_enabled", "base_usd", "max_deals", "cooldown_enabled", "close_sell_pct"]},
-         "value": {"type": "STRING", "description": "Nilai baru -- true/false utk field boolean, angka (sbg teks) utk field numerik."},
+     "input_schema": {"type": "object", "properties": {
+         "strategy": {"type": "string", "description": "Key strategi persis spt di get_strategy_config, misal brkX2_12h_closed/trend_confirm_4h/dst."},
+         "field": {"type": "string", "enum": ["strategy_enabled", "base_usd", "max_deals", "cooldown_enabled", "close_sell_pct"]},
+         "value": {"type": "string", "description": "Nilai baru -- true/false utk field boolean, angka (sbg teks) utk field numerik."},
      }, "required": ["strategy", "field", "value"]}},
 ]
 AI_CHAT_WRITE_TOOLS = {"open_long_deal", "add_fund", "start_trailing", "close_deal", "cancel_deal", "update_strategy_setting"}
@@ -28004,57 +28014,65 @@ AI_CHAT_TOOL_HANDLERS = {
 }
 
 
-def _gemini_chat_call(contents: list) -> dict:
-    """Panggil Gemini generateContent dgn dukungan multi-turn + function-calling, KHUSUS AI Chat
-    Assistant dashboard -- beda dari _gemini_ai_call() yg single-prompt/200-token (ai_decision_
-    open/close). Return candidates[0].content MENTAH (dict berisi 'role' & 'parts') -- caller yg
-    urai apakah isinya text atau functionCall.
-    Patch "ai-chat-timeout-hardening" (18/10/2026, ketahuan dari test live pertama Mas Budi --
-    "posisi apa yang sedang aktif" timeout 30 detik, log: "The read operation timed out"):
-    request pertama dgn systemInstruction+tools (lebih berat dari _gemini_ai_call polos) butuh
-    margin lebih longgar -- AI_CHAT_TIMEOUT naik 30->45s, DAN 1x retry otomatis thd timeout/error
-    jaringan (bukan error dari Gemini sendiri spt 400/403, itu pasti berulang persis, percuma
-    retry) -- kedubanya transient network hiccup, bukan tanda GEMINI_API_KEY/model salah."""
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY belum di-set")
+def _anthropic_chat_call_once(messages: list, api_key: str) -> dict:
+    """Satu panggilan HTTP mentah Claude Messages API dgn tool-use, 1 API key tertentu -- KHUSUS
+    AI Chat Assistant dashboard (beda dari _anthropic_http_call() yg single-prompt/tanpa tools,
+    dipakai ai_decision_open/close). Return dict respons Anthropic MENTAH -- caller yg urai
+    content blocks (text/tool_use). Reuse AI_DECISION_MODEL (Sonnet 5) + output_config effort=low
+    utk model adaptive-thinking, pola identik _anthropic_http_call()."""
     import json as _json
-    import urllib.error as _urllib_error
-    payload = {
-        "contents": contents,
-        "systemInstruction": {"parts": [{"text": AI_CHAT_SYSTEM_PROMPT}]},
-        "tools": [{"functionDeclarations": AI_CHAT_TOOLS}],
-        "generationConfig": {"maxOutputTokens": AI_CHAT_MAX_OUTPUT_TOKENS, "temperature": 0.2},
+    body = {
+        "model": AI_DECISION_MODEL,
+        "max_tokens": AI_CHAT_MAX_OUTPUT_TOKENS,
+        "system": AI_CHAT_SYSTEM_PROMPT,
+        "messages": messages,
+        "tools": AI_CHAT_TOOLS,
     }
-    endpoint = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        + GEMINI_AI_MODEL + ":generateContent?key=" + GEMINI_API_KEY
-    )
-    req_body = _json.dumps(payload).encode()
-    last_error = None
-    for attempt in range(2):
+    if AI_DECISION_MODEL in _ADAPTIVE_THINKING_MODELS:
+        body["output_config"] = {"effort": "low"}
+    req = _urllib_req.Request(
+        "https://api.anthropic.com/v1/messages", data=_json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
+        method="POST")
+    try:
+        with _urllib_req.urlopen(req, timeout=AI_CHAT_TIMEOUT) as resp:
+            return _json.loads(resp.read())
+    except _urllib_err.HTTPError as e:
         try:
-            req = _urllib_req.Request(endpoint, data=req_body,
-                                       headers={"Content-Type": "application/json"}, method="POST")
-            with _urllib_req.urlopen(req, timeout=AI_CHAT_TIMEOUT) as resp:
-                body = _json.loads(resp.read())
-            break
-        except _urllib_error.HTTPError as e:
-            # Error BERBALAS dari Gemini (400/403/429/dst) -- pasti berulang persis, jangan retry.
-            try:
-                detail = e.read().decode(errors="replace")[:300]
-            except Exception:
-                detail = str(e)
-            raise RuntimeError(f"HTTP {e.code}: {detail}")
-        except Exception as e:
-            last_error = e
-            if attempt == 0:
-                log(f"WARN [AI-CHAT] Gemini call percobaan 1 gagal ({e}), coba ulang 1x...")
-                continue
-            raise last_error
-    candidates = body.get("candidates") or []
-    if not candidates:
-        raise RuntimeError(f"Gemini tidak mengembalikan kandidat jawaban (raw: {str(body)[:300]})")
-    return candidates[0]["content"]
+            err_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            err_body = ""
+        err_msg = ""
+        try:
+            err_msg = _json.loads(err_body).get("error", {}).get("message", "")
+        except Exception:
+            pass
+        raise RuntimeError(f"HTTP {e.code}: {err_msg or err_body or e.reason}")
+
+
+def _anthropic_chat_call(messages: list) -> dict:
+    """Patch "ai-chat-anthropic-switch" (18/10/2026, permintaan Mas Budi "pakai claude aja"
+    sebagai pengganti Gemini -- akses GEMINI_API_KEY ternyata 403 PERMISSION_DENIED, baru
+    ketahuan krn fitur ini pertama kalinya benar2 memanggil Gemini lagi setelah berminggu2
+    (Alibaba selalu menang duluan di fallback chain ai_decision_open/close)): panggil Claude
+    dgn fallback 2-akun (ANTHROPIC_API_KEY=widodobudi@ utama, ANTHROPIC_API_KEY_2=vassistbywbudi@
+    cadangan) -- pola fallback-nya IDENTIK _anthropic_ai_call() (23/09/2026), TAPI SENGAJA
+    fungsi terpisah: TIDAK ikut kirim notifikasi Telegram "AI Decision ON/OFF" atau ikut update
+    state _ai_provider_health -- gagal di SINI bukan berarti ai_decision_open/close ikut gagal
+    (atau sebaliknya), dan chat ini interaktif (Mas Budi langsung lihat hasilnya di layar,
+    tidak perlu notifikasi Telegram terpisah). Return dict respons Anthropic MENTAH dari akun
+    mana pun yang berhasil."""
+    if not ANTHROPIC_API_KEY:
+        raise RuntimeError("ANTHROPIC_API_KEY belum di-set")
+    try:
+        return _anthropic_chat_call_once(messages, ANTHROPIC_API_KEY)
+    except RuntimeError as e:
+        _msg = str(e).lower()
+        _is_credit_error = "credit" in _msg or "billing" in _msg or "insufficient" in _msg
+        if _is_credit_error and ANTHROPIC_API_KEY_2:
+            log("WARN [AI-CHAT] Akun utama (widodobudi@) kehabisan kredit -- coba akun cadangan (vassistbywbudi@)")
+            return _anthropic_chat_call_once(messages, ANTHROPIC_API_KEY_2)
+        raise
 
 
 def _ai_chat_dispatch_tool(name: str, args: dict) -> dict:
@@ -28071,57 +28089,71 @@ def _ai_chat_dispatch_tool(name: str, args: dict) -> dict:
         return {"ok": False, "error": f"Tool '{name}' gagal dieksekusi: {e}"}
 
 
-def _ai_chat_run_loop(contents: list) -> dict:
-    """Loop utama AI Chat Assistant: panggil Gemini, kalau minta tool BACA jalankan otomatis &
+def _ai_chat_run_loop(messages: list) -> dict:
+    """Loop utama AI Chat Assistant: panggil Claude, kalau minta tool BACA jalankan otomatis &
     lanjut loop (model tidak pernah menunggu approval utk baca data), kalau minta tool TULIS
     (AI_CHAT_WRITE_TOOLS) STOP & kembalikan ke frontend sbg 'perlu konfirmasi' -- TIDAK PERNAH
     dieksekusi otomatis apa pun instruksinya (uang riil, permintaan eksplisit Mas Budi tetap
-    pakai konfirmasi berlapis). Return {type: 'text'|'confirm'|'error', ..., contents: riwayat
-    terbaru (dikirim balik ke frontend, dipakai lagi giliran berikutnya)}."""
+    pakai konfirmasi berlapis). Claude kadang minta BEBERAPA tool sekaligus dlm satu turn
+    (parallel tool_use) -- kalau semuanya tool BACA, dijalankan semua & hasilnya dikirim
+    sekaligus (WAJIB, tiap tool_use butuh tool_result sebelum turn berikutnya); kalau ADA SATU
+    SAJA tool TULIS di turn itu, turn itu LANGSUNG dihentikan (tidak ada yang dieksekusi dulu,
+    termasuk tool baca yang mungkin ikut di turn yang sama) -- lihat _ai_chat_resume_after_
+    confirm() utk cara turn campuran itu dilanjutkan setelah konfirmasi. Return {type: 'text'|
+    'confirm'|'error', ..., contents: riwayat terbaru (dikirim balik ke frontend, dipakai lagi
+    giliran berikutnya)}."""
     for _ in range(AI_CHAT_MAX_TOOL_ITERS):
         try:
-            model_content = _gemini_chat_call(contents)
+            resp = _anthropic_chat_call(messages)
         except Exception as e:
-            log(f"WARN [AI-CHAT] Gemini call gagal: {e}")
-            return {"type": "error", "error": f"AI sedang error: {e}", "contents": contents}
-        parts = model_content.get("parts") or []
-        fn_call = next((p["functionCall"] for p in parts if "functionCall" in p), None)
-        contents = contents + [{"role": "model", "parts": parts}]
-        if fn_call is None:
-            text = "".join(p.get("text", "") for p in parts).strip()
-            return {"type": "text", "text": text or "(AI tidak memberi jawaban teks)", "contents": contents}
-        name = fn_call.get("name", "")
-        args = fn_call.get("args", {}) or {}
-        if name in AI_CHAT_WRITE_TOOLS:
-            return {"type": "confirm", "tool_name": name, "tool_args": args, "contents": contents}
-        result = _ai_chat_dispatch_tool(name, args)
-        contents = contents + [{"role": "function", "parts": [
-            {"functionResponse": {"name": name, "response": result}}
-        ]}]
-    return {"type": "error", "error": "AI terlalu banyak putaran tool tanpa jawaban akhir -- coba pertanyaan lebih spesifik.", "contents": contents}
+            log(f"WARN [AI-CHAT] Claude call gagal: {e}")
+            return {"type": "error", "error": f"AI sedang error: {e}", "contents": messages}
+        blocks = resp.get("content") or []
+        messages = messages + [{"role": "assistant", "content": blocks}]
+        tool_uses = [b for b in blocks if b.get("type") == "tool_use"]
+        if not tool_uses:
+            text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+            return {"type": "text", "text": text or "(AI tidak memberi jawaban teks)", "contents": messages}
+        write_tool_use = next((t for t in tool_uses if t.get("name") in AI_CHAT_WRITE_TOOLS), None)
+        if write_tool_use is not None:
+            return {"type": "confirm", "tool_name": write_tool_use.get("name"),
+                    "tool_args": write_tool_use.get("input", {}) or {}, "contents": messages}
+        result_blocks = []
+        for t in tool_uses:
+            result = _ai_chat_dispatch_tool(t.get("name", ""), t.get("input", {}) or {})
+            result_blocks.append({"type": "tool_result", "tool_use_id": t.get("id"), "content": json.dumps(result)})
+        messages = messages + [{"role": "user", "content": result_blocks}]
+    return {"type": "error", "error": "AI terlalu banyak putaran tool tanpa jawaban akhir -- coba pertanyaan lebih spesifik.", "contents": messages}
 
 
-def _ai_chat_resume_after_confirm(contents: list, approved: bool) -> dict:
+def _ai_chat_resume_after_confirm(messages: list, approved: bool) -> dict:
     """Lanjutkan loop SETELAH Mas Budi approve/tolak aksi tulis yang diajukan model. tool_name/
-    args diambil ULANG dari turn model terakhir di `contents` (BUKAN dipercaya dari field
+    args diambil ULANG dari turn model terakhir di `messages` (BUKAN dipercaya dari field
     terpisah kiriman frontend) -- defense-in-depth, supaya frontend/network tidak bisa menukar
-    aksi yang ditampilkan ke Mas Budi dgn aksi yang BENAR2 dieksekusi."""
-    if not contents or contents[-1].get("role") != "model":
-        return {"type": "error", "error": "Sesi konfirmasi tidak valid (riwayat percakapan rusak).", "contents": contents}
-    parts = contents[-1].get("parts") or []
-    fn_call = next((p["functionCall"] for p in parts if "functionCall" in p), None)
-    if fn_call is None:
-        return {"type": "error", "error": "Tidak ada aksi yang menunggu konfirmasi.", "contents": contents}
-    name = fn_call.get("name", "")
-    args = fn_call.get("args", {}) or {}
-    if approved:
-        result = _ai_chat_dispatch_tool(name, args)
-    else:
-        result = {"ok": False, "cancelled_by_user": True, "note": "Mas Budi membatalkan aksi ini."}
-    contents = contents + [{"role": "function", "parts": [
-        {"functionResponse": {"name": name, "response": result}}
-    ]}]
-    return _ai_chat_run_loop(contents)
+    aksi yang ditampilkan ke Mas Budi dgn aksi yang BENAR2 dieksekusi. Kalau turn itu ternyata
+    turn CAMPURAN (ada tool baca lain selain tool tulis yang dikonfirmasi -- lihat REMARK
+    _ai_chat_run_loop()), tool baca lain itu TETAP dijalankan normal (baca, tidak berisiko,
+    WAJIB dapat tool_result juga supaya Claude tidak menolak turn berikutnya) terlepas
+    approved/tidak -- itu bukan bagian dari aksi yang ditolak Mas Budi."""
+    if not messages or messages[-1].get("role") != "assistant":
+        return {"type": "error", "error": "Sesi konfirmasi tidak valid (riwayat percakapan rusak).", "contents": messages}
+    blocks = messages[-1].get("content") or []
+    tool_uses = [b for b in blocks if b.get("type") == "tool_use"]
+    write_tool_use = next((t for t in tool_uses if t.get("name") in AI_CHAT_WRITE_TOOLS), None)
+    if write_tool_use is None:
+        return {"type": "error", "error": "Tidak ada aksi yang menunggu konfirmasi.", "contents": messages}
+    result_blocks = []
+    for t in tool_uses:
+        if t.get("id") == write_tool_use.get("id"):
+            if approved:
+                result = _ai_chat_dispatch_tool(t.get("name", ""), t.get("input", {}) or {})
+            else:
+                result = {"ok": False, "cancelled_by_user": True, "note": "Mas Budi membatalkan aksi ini."}
+        else:
+            result = _ai_chat_dispatch_tool(t.get("name", ""), t.get("input", {}) or {})
+        result_blocks.append({"type": "tool_result", "tool_use_id": t.get("id"), "content": json.dumps(result)})
+    messages = messages + [{"role": "user", "content": result_blocks}]
+    return _ai_chat_run_loop(messages)
 
 
 def _classify_ai_error(error_text: str) -> str:
