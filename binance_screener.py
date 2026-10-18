@@ -1525,7 +1525,12 @@ STRATEGY_CONFIG_DEFAULTS = {
     # valid). Default 100 (candle HARUS closed penuh) -- SATU2NYA nilai yg terbukti backtest
     # 10/10/2026 (n=1.010, WR+4,43pp/avg+0,063pp); nilai 33%/67% hasilnya acak, jangan dipakai
     # tanpa data baru. Dibaca live di mombreak_btc_gate_ok() (Tahap 2, thread_mombreak_scan()).
-    "mombreak_1h":     {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 2, "close_sell_pct": 100, "btc_gate_enabled": True, "btc_gate_elapsed_pct": 100},
+    # 18/10/2026 (permintaan Mas Budi): ditarik dari LIVE balik ke PAPER TEST -- strategy_enabled
+    # DIMATIKAN di sini (thread_mombreak_scan() langsung return di baris pertama, tidak akan buka
+    # deal REAL baru lagi; posisi lama yg masih terbuka tetap dikelola normal oleh thread2_monitor()
+    # spt biasa). Entry paralel paper-only via _paper_test_scan_mombreak() -- lihat REMARK
+    # PAPER_TEST_TARGET. Target 15 deal closed sebelum dipertimbangkan balik live lagi.
+    "mombreak_1h":     {"strategy_enabled": False, "sizing_enabled": True, "base_usd": 10, "add_usd": None, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 2, "close_sell_pct": 100, "btc_gate_enabled": True, "btc_gate_elapsed_pct": 100},
     # 09/10/2026 (Tahap 1/4, permintaan Mas Budi): decouple_4h naik dari shadow ke live, lulus
     # target 24/20 (18W/6L, +56.9%). max_deals di sini cuma utk tampilan dashboard -- enforcement
     # sungguhan tetap pakai konstanta DECOUPLE_4H_MAX_DEALS di thread_decouple_scan().
@@ -1538,7 +1543,10 @@ STRATEGY_CONFIG_DEFAULTS = {
     # 12/10/2026 (permintaan Mas Budi): pengganti langsung rvolbreak_1h (lihat REMARK RVOLBREAK_8H_*
     # di sekitar baris 18095) -- langsung LIVE tanpa fase shadow krn formula & exit sudah
     # tervalidasi penuh lewat sweep timeframe (rvolbreak_tf_sweep.py).
-    "rvolbreak_8h":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    # 18/10/2026 (permintaan Mas Budi): sama spt mombreak_1h di atas -- ditarik balik ke PAPER
+    # TEST, target 15 deal closed via _paper_test_scan_rvolbreak8h() sebelum dipertimbangkan
+    # balik live lagi.
+    "rvolbreak_8h":  {"strategy_enabled": False, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     # 09/10/2026 (Tahap 3/4): dipbuy_universe naik dari shadow ke live, lulus target 50/50 (43W/7L,
     # +85.5%) -- exit DIGANTI ke trailing (lihat REMARK DIPBUY_UNIVERSE_* di sekitar baris 16424).
     "dipbuy_universe": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
@@ -13947,6 +13955,121 @@ _dashboard_state = {
 }
 _dashboard_lock = threading.Lock()
 
+# ── PAPER TEST STATE (18/10/2026, permintaan Mas Budi -- MomentumBreak-1h & RVolBreak-8h
+# ditarik dari LIVE balik ke PAPER sampai 15 deal closed) ───────────────────────────────
+# TERISOLASI PENUH dari active_deals/send_open_long/order Binance asli manapun -- posisi
+# paper HANYA hidup di _paper_test_state (JSON terpisah), harga dicek via get_price_now()
+# (read-only), exit disimulasikan sendiri (hard-stop + timeout, TANPA trailing dulu --
+# simplifikasi sengaja, sama preseden dipbuy_universe shadow sebelum upgrade ke trailing).
+PAPER_TEST_TARGET = 15
+PAPER_TEST_MAX_HOLD_HOURS = 48
+PAPER_TEST_FILE = os.path.join(DATA_DIR, "paper_test.json")
+PAPER_TEST_LABELS = {"mombreak_1h": "MomentumBreak-1h", "rvolbreak_8h": "RVolBreak-8h"}
+_paper_test_lock = threading.Lock()
+_paper_test_state = {"mombreak_1h": {"open": [], "closed": []},
+                      "rvolbreak_8h": {"open": [], "closed": []}}
+
+def load_paper_test_state():
+    global _paper_test_state
+    try:
+        if os.path.exists(PAPER_TEST_FILE):
+            with open(PAPER_TEST_FILE, encoding='utf-8') as f:
+                loaded = json.load(f)
+            with _paper_test_lock:
+                for k in _paper_test_state:
+                    if k in loaded:
+                        _paper_test_state[k] = loaded[k]
+            log(f"   Loaded paper_test.json: " + ", ".join(
+                f"{k}={len(v['closed'])}/{PAPER_TEST_TARGET} closed, {len(v['open'])} open"
+                for k, v in _paper_test_state.items()))
+    except Exception as e:
+        log(f"WARN gagal load paper_test.json: {e}")
+
+def _save_paper_test_state():
+    try:
+        with _paper_test_lock:
+            snap = {k: {"open": list(v["open"]), "closed": list(v["closed"])} for k, v in _paper_test_state.items()}
+        with open(PAPER_TEST_FILE, 'w', encoding='utf-8') as f:
+            json.dump(snap, f, indent=2, default=str)
+    except Exception as e:
+        log(f"WARN gagal simpan paper_test.json: {e}")
+
+def _paper_test_open(strategy: str, sym: str, entry_price: float, atr_pct: float):
+    label = PAPER_TEST_LABELS.get(strategy, strategy)
+    with _paper_test_lock:
+        if any(p['sym'] == sym for p in _paper_test_state[strategy]['open']):
+            return  # sudah ada posisi paper terbuka di symbol ini, jangan dobel
+        _paper_test_state[strategy]['open'].append({
+            "sym": sym, "entry_price": entry_price, "atr_pct": atr_pct,
+            "opened_ts": int(time.time() * 1000), "opened_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+        })
+    _save_paper_test_state()
+    log(f"[PAPER-{label}] OPEN (paper, bukan order asli) {sym} @ {entry_price:.8g}")
+
+def paper_test_check_exits(strategy: str):
+    """Dipanggil periodik (lihat run_thread_paper_test()) -- cek posisi paper strategy ini,
+    tutup kalau kena hard-stop atau timeout. Read-only thd Binance (get_price_now), TIDAK
+    PERNAH memanggil order/sell asli."""
+    label = PAPER_TEST_LABELS.get(strategy, strategy)
+    with _paper_test_lock:
+        open_list = list(_paper_test_state[strategy]['open'])
+        n_closed_before = len(_paper_test_state[strategy]['closed'])
+    if not open_list or n_closed_before >= PAPER_TEST_TARGET:
+        return
+    now_ms = int(time.time() * 1000)
+    still_open = []
+    for pos in open_list:
+        sym = pos['sym']
+        price_now = get_price_now(sym)
+        if price_now <= 0:
+            still_open.append(pos)
+            continue
+        entry = pos['entry_price']
+        pct = (price_now / entry - 1) * 100
+        _, _, hs_pct = hard_stop_pct(pos.get('atr_pct', 3.0) or 3.0, strategy)
+        elapsed_h = (now_ms - pos['opened_ts']) / 3_600_000
+        reason = None
+        if pct <= -hs_pct:
+            reason = f"hard-stop {hs_pct:.1f}%"
+        elif elapsed_h >= PAPER_TEST_MAX_HOLD_HOURS:
+            reason = f"timeout {PAPER_TEST_MAX_HOLD_HOURS}j"
+        if reason is None:
+            still_open.append(pos)
+            continue
+        with _paper_test_lock:
+            _paper_test_state[strategy]['closed'].append({**pos, "exit_price": price_now, "pct": pct,
+                "reason": reason, "closed_at": now_wib().strftime('%Y-%m-%d %H:%M:%S')})
+            n_done = len(_paper_test_state[strategy]['closed'])
+            wins = sum(1 for c in _paper_test_state[strategy]['closed'] if c['pct'] > 0)
+        log(f"[PAPER-{label}] CLOSE (paper) {sym} @ {price_now:.8g} ({pct:+.2f}%) -- {reason} -- #{n_done}/{PAPER_TEST_TARGET} (WR {100*wins/n_done:.0f}%)")
+        send_telegram(
+            f"{label} (PAPER) | CLOSE\n"
+            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Pair  : {to_display_pair(sym)}\n"
+            f"P&L   : {pct:+.2f}% -- {reason}\n"
+            f"Progress: #{n_done}/{PAPER_TEST_TARGET} (WR {100*wins/n_done:.0f}%)"
+            + (f"\n\nTarget {PAPER_TEST_TARGET} deal tercapai -- siap dievaluasi apakah layak balik LIVE." if n_done >= PAPER_TEST_TARGET else "")
+        )
+    with _paper_test_lock:
+        _paper_test_state[strategy]['open'] = still_open
+    _save_paper_test_state()
+
+def run_thread_paper_test() -> None:
+    """Thread T-PaperTest: cek exit posisi paper (mombreak_1h + rvolbreak_8h) tiap 60 detik.
+    Entry paper masing2 strategi dipanggil dari scan thread live-nya sendiri (lihat
+    _paper_test_scan_mombreak() di thread_mombreak_scan(), _paper_test_scan_rvolbreak8h()
+    di thread_rvolbreak8h_scan()) -- thread ini KHUSUS exit, supaya cek harga tetap jalan
+    walau scan entry masing2 strategi beda interval."""
+    while True:
+        try:
+            _paper_test_scan_mombreak()
+            _paper_test_scan_rvolbreak8h()
+            for strat in ("mombreak_1h", "rvolbreak_8h"):
+                paper_test_check_exits(strat)
+        except Exception as e:
+            log(f"WARN T-PaperTest: {e}")
+        time.sleep(60)
+
 # ── MANUAL SCAN STATE (KeltnerBreak-12h on-demand) ──────────────────────────────────
 _manual_filters = {
     "vol":   True,
@@ -20021,8 +20144,12 @@ TOPGAINERS_SCAN_INTERVAL = 180  # detik (3 menit, 18/10/2026 -- diperpendek dari
                                  # Gainers bergerak dlm hitungan menit. Cek bobot API Binance
                                  # (18/10/2026): 1 siklus ~450 bobot dari budget 6000/menit utk
                                  # thread ini sendiri -- 3 menit kasih marjin aman vs 17 thread lain.
-TOPGAINERS_RANK_START = 8   # 1-indexed
-TOPGAINERS_RANK_END   = 10  # rank 8,9,10 = 3 kandidat
+# 18/10/2026 (permintaan Mas Budi, analisis rank-mobility per-rank 1-10): digeser dari 8-10 ke
+# 6-8 -- data 50 hari (899 kejadian/rank) tunjukkan rank 6 & 7 jauh lebih sering lanjut sampai
+# top-5 dlm 48 jam (44,0% keduanya) dibanding rank 8-10 lama (33-36%). Opsi B dipilih (bukan cuma
+# rank 6-7 / 2 kandidat) supaya pola "3 kandidat per siklus" yg sudah ada di prompt AI tetap sama.
+TOPGAINERS_RANK_START = 6   # 1-indexed
+TOPGAINERS_RANK_END   = 8   # rank 6,7,8 = 3 kandidat
 
 TOPGAINERS_LAST_RANK = {}  # 18/10/2026: {symbol: rank siklus sebelumnya} -- dipakai deteksi
                             # "baru saja masuk band 8-10" (crossing), BUKAN sekadar masih
@@ -20032,15 +20159,87 @@ TOPGAINERS_LAST_RANK = {}  # 18/10/2026: {symbol: rank siklus sebelumnya} -- dip
                             # Hanya disentuh oleh T_TOPGAINERS sendiri, jadi tidak perlu lock.
 
 TOPGAINERS_ADDFUND_STEPS = [
-    {"rank_threshold": 6, "window_hours": 48, "add_usd": 10},
+    {"rank_threshold": 5, "window_hours": 48, "add_usd": 10},
 ]  # 18/10/2026 (permintaan Mas Budi): "tambah dana saat momentum TERBUKTI MENGUAT" --
    # kebalikan dari add-fund strategi lain di bot ini (yg nambah saat floating RUGI/DCA
    # turun). Base order kecil dulu sbg probe, begitu rank-nya naik sampai ambang, add-fund
    # sekali. Sengaja berbentuk STEP-LIST (bukan 1 nilai tetap) biar gampang nambah langkah
    # lanjutan nanti (mis. top-3 dlm 72 jam, add lebih besar lagi) tanpa bongkar ulang logic --
-   # tinggal tambah dict baru ke list ini. Ambang top-6/48 jam dipilih dari analisis rank-
-   # mobility data historis 50 hari (lihat percakapan 18/10/2026): ~39% kejadian rank 8-10
-   # berhasil capai top-6 dlm 48 jam -- cukup sering kepakai, cukup selektif.
+   # tinggal tambah dict baru ke list ini.
+   # Ambang top-5 (SEBELUMNYA top-6, saat entry window masih 8-10): setelah entry window digeser
+   # ke 6-8 (lihat REMARK TOPGAINERS_RANK_START), ambang top-6 akan LANGSUNG kena di hari pertama
+   # utk kandidat yg entry persis di rank 6 (tidak ada "naik" sama sekali) -- dinaikkan jadi top-5
+   # spy tetap jadi bukti genuine climbing dari manapun entry-nya (rank 6/7/8). Data rank-mobility
+   # 50 hari: rank 6&7 masing2 ~44,0% capai top-5 dlm 48 jam, rank 8 ~36,2% -- trigger rate
+   # keseluruhan diperkirakan mirip ambang top-6/window-lama (~39%), jadi frekuensi kepakainya
+   # tidak banyak berubah.
+
+# 18/10/2026 (permintaan Mas Budi, "streaming real time saja" setelah kasus AMP yg lewat
+# band 8-10 tanpa tertangkap scan 3-menitan): rank 4h sekarang DIPASOK oleh WebSocket
+# !ticker_4h@arr (dorongan live ~1x/detik utk SEMUA symbol yg berubah, dari Binance sendiri)
+# -- lihat run_thread_topgainers_ws() dekat thread_topgainers_scan(). Ini TIDAK masuk hitungan
+# request weight REST sama sekali (jalur terpisah), jadi scan interval bisa jauh lebih rapat
+# tanpa nambah beban API. thread_topgainers_scan() BACA dict ini (murni dict lookup, instan),
+# TIDAK lagi panggil get_ohlcv_4h() per-symbol utk ranking -- fallback ke jalur REST lama
+# otomatis kalau datanya basi/kosong (WS belum konek/baru putus), lihat REMARK di loop ranking.
+TOPGAINERS_WS_URL = "wss://stream.binance.com:9443/ws/!ticker_4h@arr"
+TOPGAINERS_WS_STALE_SEC = 30  # data WS dianggap basi kalau tidak ada update >30 detik -> fallback REST
+LIVE_RANK_4H = {}       # {symbol: pct_change_4h (float, dari field "P" stream)}
+LIVE_RANK_4H_TS = 0     # ms epoch, kapan LIVE_RANK_4H terakhir diupdate (0 = belum pernah)
+LIVE_RANK_4H_LOCK = threading.Lock()
+
+
+def _topgainers_ws_on_message(ws, message):
+    global LIVE_RANK_4H_TS
+    try:
+        data = json.loads(message)
+        if not isinstance(data, list):
+            return
+        now_ms = int(time.time() * 1000)
+        with LIVE_RANK_4H_LOCK:
+            for t in data:
+                sym = t.get('s'); pct = t.get('P')
+                if not sym or pct is None:
+                    continue
+                try:
+                    LIVE_RANK_4H[sym] = float(pct)
+                except (TypeError, ValueError):
+                    continue
+            LIVE_RANK_4H_TS = now_ms
+    except Exception as e:
+        log(f"WARN [T_TOPGAINERS_WS] gagal parse pesan: {e}")
+
+def _topgainers_ws_on_error(ws, error):
+    log(f"WARN [T_TOPGAINERS_WS] koneksi error: {error}")
+
+def _topgainers_ws_on_close(ws, close_status_code, close_msg):
+    log(f"[T_TOPGAINERS_WS] koneksi tertutup (code={close_status_code}) -- auto-reconnect via run_forever")
+
+def _topgainers_ws_on_open(ws):
+    log("[T_TOPGAINERS_WS] tersambung ke !ticker_4h@arr (rolling 4h, live)")
+
+def run_thread_topgainers_ws() -> None:
+    """Thread T_TOPGAINERS_WS: pegang 1 koneksi WebSocket terus-menerus ke Binance, isi
+    LIVE_RANK_4H. Murni feeder data -- TIDAK melakukan crossing-detection/AI decision di sini
+    (supaya callback pesan tetap ringan & cepat, tidak pernah ketahan nunggu AI call). Loop luar
+    + reconnect=5 di run_forever() jaga koneksi tetap hidup walau putus (limit koneksi Binance,
+    shutdown server, dll)."""
+    if not TOPGAINERS_ENABLED:
+        return
+    import websocket as _ws_lib
+    while True:
+        try:
+            app = _ws_lib.WebSocketApp(
+                TOPGAINERS_WS_URL,
+                on_open=_topgainers_ws_on_open,
+                on_message=_topgainers_ws_on_message,
+                on_error=_topgainers_ws_on_error,
+                on_close=_topgainers_ws_on_close,
+            )
+            app.run_forever(ping_interval=180, ping_timeout=10, reconnect=5)
+        except Exception as e:
+            log(f"WARN [T_TOPGAINERS_WS] run_forever crash: {e}")
+        time.sleep(5)
 
 
 def ai_decision_topgainers(candidates: list) -> dict:
@@ -20179,21 +20378,37 @@ def thread_topgainers_scan() -> None:
     # rank symbol yang sudah py deal tetap kebaca (perlu utk cek add-fund di bawah). Exclusion
     # "jangan buka deal baru di symbol yang sudah py deal (strategi apapun)" sekarang diterapkan
     # belakangan, saat milih fresh_picks, bukan di loop ranking ini.
+    # 18/10/2026: sumber rank sekarang diutamakan dari LIVE_RANK_4H (WS !ticker_4h@arr, lihat
+    # REMARK TOPGAINERS_WS_URL) -- dict lookup instan, nol biaya REST. Fallback ke jalur REST
+    # lama (get_ohlcv_4h per-symbol) hanya kalau WS basi/belum pernah konek (>30 detik tanpa
+    # update), supaya strategi ini tetap jalan normal walau koneksi WS lagi bermasalah.
+    now_ms_rank = int(time.time() * 1000)
+    with LIVE_RANK_4H_LOCK:
+        ws_fresh = LIVE_RANK_4H_TS > 0 and (now_ms_rank - LIVE_RANK_4H_TS) <= TOPGAINERS_WS_STALE_SEC * 1000
+        ws_snapshot = dict(LIVE_RANK_4H) if ws_fresh else {}
+
     ranked = []
-    for sym in universe:
-        try:
-            df = get_ohlcv_4h(sym, limit=10)
-            if df is None or len(df) < 1:
+    if ws_fresh:
+        for sym in universe:
+            pct = ws_snapshot.get(sym)
+            if pct is not None:
+                ranked.append((pct, sym))
+    else:
+        log("[T_TOPGAINERS] WS basi/belum konek -- fallback REST siklus ini")
+        for sym in universe:
+            try:
+                df = get_ohlcv_4h(sym, limit=10)
+                if df is None or len(df) < 1:
+                    continue
+                o = float(df.iloc[-1]['open'])
+                if o <= 0:
+                    continue
+                price_now = pricemap.get(sym, 0)
+                if price_now <= 0:
+                    continue
+                ranked.append(((price_now / o - 1) * 100, sym))
+            except Exception:
                 continue
-            o = float(df.iloc[-1]['open'])
-            if o <= 0:
-                continue
-            price_now = pricemap.get(sym, 0)
-            if price_now <= 0:
-                continue
-            ranked.append(((price_now / o - 1) * 100, sym))
-        except Exception:
-            continue
 
     if len(ranked) < TOPGAINERS_RANK_END:
         log(f"[T_TOPGAINERS] Kandidat terlalu sedikit ({len(ranked)}) utk rank {TOPGAINERS_RANK_START}-{TOPGAINERS_RANK_END}, skip siklus ini")
@@ -20713,6 +20928,53 @@ def thread_rvolbreak8h_scan() -> None:
             parse_mode=None
         )
         log(f"[T_RVOLBREAK8H] OPEN {sym} @ {fill_price:.8g} (sinyal {signal_price:.8g}, ATR%={atr_now:.2f}, RVOL={rvol_now:.2f}x)")
+
+
+def _paper_test_scan_rvolbreak8h():
+    """18/10/2026: entry PAPER RVolBreak-8h -- replika PERSIS syarat live (Donchian24 breakout +
+    RVOL, lihat thread_rvolbreak8h_scan()), cuma _paper_test_open() dipanggil, bukan order asli."""
+    now_s = time.time()
+    if now_s - _paper_test_last_scan['rvolbreak_8h'] < PAPER_TEST_SCAN_INTERVAL['rvolbreak_8h']:
+        return
+    _paper_test_last_scan['rvolbreak_8h'] = now_s
+    with _paper_test_lock:
+        if len(_paper_test_state['rvolbreak_8h']['closed']) >= PAPER_TEST_TARGET:
+            return
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST]
+    except Exception as e:
+        log(f"WARN [PAPER-RVOLBREAK8H] gagal ambil universe: {e}")
+        return
+    with _paper_test_lock:
+        paper_open_syms = {p['sym'] for p in _paper_test_state['rvolbreak_8h']['open']}
+    for sym in universe:
+        if sym in paper_open_syms:
+            continue
+        try:
+            df = get_ohlcv(sym, interval="8h", limit=80)
+            if df is None or len(df) < 50: continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) < 46: continue
+            df = _rvolbreak8h_compute(df)
+            i = len(df) - 1
+            close_now = float(df['close'].iloc[i])
+            dh = df['donchian_high'].iloc[i]; rvol_now = df['rvol'].iloc[i]
+            atr_now = df['atr_pct'].iloc[i]
+            if any(pd.isna(x) for x in [dh, rvol_now, atr_now]) or atr_now <= 0:
+                continue
+            if not (close_now > dh and rvol_now >= RVOLBREAK_RVOL_MIN):
+                continue
+            _paper_test_open('rvolbreak_8h', sym, close_now, float(atr_now))
+        except Exception:
+            continue
 
 
 def run_thread_rvolbreak8h() -> None:
@@ -24418,6 +24680,55 @@ def thread_mombreak_scan():
         record_scan_blockers("MomentumBreak-1h", scanned, len(display), blockers)
     except Exception as e:
         log(f"WARN [MOMBREAK] scan error: {e}")
+
+
+_paper_test_last_scan = {"mombreak_1h": 0, "rvolbreak_8h": 0}
+PAPER_TEST_SCAN_INTERVAL = {"mombreak_1h": MOMBREAK_SCAN_INTERVAL, "rvolbreak_8h": 300}
+
+def _paper_test_scan_mombreak():
+    """18/10/2026: entry PAPER MomentumBreak-1h -- replika PERSIS syarat live (check_mombreak_signal()
+    + Gate0 BTC, supaya hasil paper ini benar2 sebanding dgn yg akan terjadi kalau live lagi), cuma
+    _paper_test_open() dipanggil, BUKAN open_mombreak_if_signal() (tidak ada order asli)."""
+    now_s = time.time()
+    if now_s - _paper_test_last_scan['mombreak_1h'] < PAPER_TEST_SCAN_INTERVAL['mombreak_1h']:
+        return
+    _paper_test_last_scan['mombreak_1h'] = now_s
+    with _paper_test_lock:
+        if len(_paper_test_state['mombreak_1h']['closed']) >= PAPER_TEST_TARGET:
+            return
+    if not mombreak_btc_gate_ok():
+        return
+    try:
+        ticker = get_ticker_24h()
+        if not ticker:
+            return
+        volmap = {}
+        for t in ticker:
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        pairs_all = [s for s in volmap if s.endswith('USDT') and s not in SYMBOL_BLACKLIST]
+        pairs = sorted(pairs_all, key=lambda s: volmap[s], reverse=True)[:MOMBREAK_UNIVERSE_SIZE]
+        with _paper_test_lock:
+            paper_open_syms = {p['sym'] for p in _paper_test_state['mombreak_1h']['open']}
+        for sym in pairs:
+            if sym in paper_open_syms:
+                continue
+            try:
+                df = get_ohlcv(sym, interval="1h", limit=60)
+                if df is None or len(df) < 40:
+                    continue
+                if len(df) > 1 and df['ct'].iloc[-1] >= int(time.time() * 1000):
+                    df = df.iloc[:-1]
+                if len(df) < 40:
+                    continue
+                sig = check_mombreak_signal(df, sym)
+                if sig is None or sig.get('tertiary_block'):
+                    continue
+                _paper_test_open('mombreak_1h', sym, sig['close'], sig.get('atr_pct', 1.0))
+            except Exception:
+                continue
+    except Exception as e:
+        log(f"WARN [PAPER-MOMBREAK] scan error: {e}")
 
 
 def run_thread_mombreak():
@@ -30178,6 +30489,7 @@ if __name__ == '__main__':
     mcap_refresh_async(force=True)   # 20/09/2026: siapkan cache peringkat CoinGecko sebelum OPEN pertama
     threading.Thread(target=earn_selfcheck, daemon=True).start()   # 20/09/2026: cek read-only akses Simple Earn
     sync_max_deals_globals()
+    load_paper_test_state()
     load_scan_blockers()
     load_daily_loss_limit()
     load_trail_reentry()
@@ -30224,9 +30536,20 @@ if __name__ == '__main__':
         t_rv = threading.Thread(target=run_thread_rvolbreak8h, daemon=True, name="T-RVolBreak8h")
         threads.append(t_rv)
         n_threads += 1
+    # 18/10/2026: T-PaperTest selalu jalan (tidak digembok ENABLED flag spt yg lain) -- isinya
+    # cuma jalan efektif kalau ada strategi dgn status paper & belum capai PAPER_TEST_TARGET.
+    t_paper = threading.Thread(target=run_thread_paper_test, daemon=True, name="T-PaperTest")
+    threads.append(t_paper)
+    n_threads += 1
     if TOPGAINERS_ENABLED:
         t_tg = threading.Thread(target=run_thread_topgainers, daemon=True, name="T-TopGainers")
         threads.append(t_tg)
+        n_threads += 1
+        # 18/10/2026: feeder WebSocket terpisah (lihat REMARK TOPGAINERS_WS_URL) -- thread
+        # sendiri krn run_forever() itu blocking selama koneksi hidup, tidak bisa digabung ke
+        # loop sleep-based T-TopGainers yang ada.
+        t_tg_ws = threading.Thread(target=run_thread_topgainers_ws, daemon=True, name="T-TopGainers-WS")
+        threads.append(t_tg_ws)
         n_threads += 1
     if DIPBUY_UNIVERSE_ENABLED:
         t_db = threading.Thread(target=run_thread_dipbuy_universe, daemon=True, name="T-DipBuy")
