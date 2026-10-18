@@ -19991,11 +19991,32 @@ TOPGAINERS_ENABLED = True  # kill-switch permanen thread-nya (pola sama DECOUPLE
                             # dicek sekali saat start thread) -- TERPISAH dari is_strategy_enabled
                             # ('topgainers_4h', toggle Strategy Control runtime, dicek tiap siklus
                             # DI DALAM thread_topgainers_scan()).
-TOPGAINERS_SCAN_INTERVAL = 900  # detik (15 menit, persetujuan Mas Budi) -- ranking 4h-change
-                                 # sendiri tidak berubah makna kalau dicek lebih sering dari itu,
-                                 # dan ini scan universe PENUH (ratusan pair), jangan tiap siklus T2.
+TOPGAINERS_SCAN_INTERVAL = 180  # detik (3 menit, 18/10/2026 -- diperpendek dari 15 menit krn
+                                 # ranking sekarang rolling-live (lihat REMARK di ranking loop),
+                                 # jadi butuh dicek lebih rapat; Mas Budi amati sendiri rank Top
+                                 # Gainers bergerak dlm hitungan menit. Cek bobot API Binance
+                                 # (18/10/2026): 1 siklus ~450 bobot dari budget 6000/menit utk
+                                 # thread ini sendiri -- 3 menit kasih marjin aman vs 17 thread lain.
 TOPGAINERS_RANK_START = 8   # 1-indexed
 TOPGAINERS_RANK_END   = 10  # rank 8,9,10 = 3 kandidat
+
+TOPGAINERS_LAST_RANK = {}  # 18/10/2026: {symbol: rank siklus sebelumnya} -- dipakai deteksi
+                            # "baru saja masuk band 8-10" (crossing), BUKAN sekadar masih
+                            # nangkring di situ dari siklus lalu. In-memory saja (reset saat
+                            # restart = siklus pertama pasca-restart dianggap semua "baru",
+                            # sama spt perilaku sebelum fitur ini ada -- bukan regresi).
+                            # Hanya disentuh oleh T_TOPGAINERS sendiri, jadi tidak perlu lock.
+
+TOPGAINERS_ADDFUND_STEPS = [
+    {"rank_threshold": 6, "window_hours": 48, "add_usd": 10},
+]  # 18/10/2026 (permintaan Mas Budi): "tambah dana saat momentum TERBUKTI MENGUAT" --
+   # kebalikan dari add-fund strategi lain di bot ini (yg nambah saat floating RUGI/DCA
+   # turun). Base order kecil dulu sbg probe, begitu rank-nya naik sampai ambang, add-fund
+   # sekali. Sengaja berbentuk STEP-LIST (bukan 1 nilai tetap) biar gampang nambah langkah
+   # lanjutan nanti (mis. top-3 dlm 72 jam, add lebih besar lagi) tanpa bongkar ulang logic --
+   # tinggal tambah dict baru ke list ini. Ambang top-6/48 jam dipilih dari analisis rank-
+   # mobility data historis 50 hari (lihat percakapan 18/10/2026): ~39% kejadian rank 8-10
+   # berhasil capai top-6 dlm 48 jam -- cukup sering kepakai, cukup selektif.
 
 
 def ai_decision_topgainers(candidates: list) -> dict:
@@ -20046,6 +20067,46 @@ def ai_decision_topgainers(candidates: list) -> dict:
     return {"choice": choice, "reasoning": parsed.get("reasoning", "")}
 
 
+def _topgainers_check_addfund(topgainers_deals: dict, rank_lookup: dict) -> None:
+    """18/10/2026: cek tiap deal topgainers_4h yang masih aktif -- kalau rank live-nya SEKARANG
+    sudah capai ambang langkah add-fund berikutnya (TOPGAINERS_ADDFUND_STEPS), eksekusi add-fund
+    via execute_add_fund() (reuse -- sudah urus order Binance, update active_deals, CSV/Telegram).
+    Kalau jendela waktu langkah itu lewat tanpa pernah capai ambang, langkah itu ditandai lewat
+    (TIDAK retry lagi) supaya tidak terus dicek selamanya."""
+    if not TOPGAINERS_ADDFUND_STEPS:
+        return
+    now_ms = int(time.time() * 1000)
+    for sym, deal in topgainers_deals.items():
+        steps_done = int(deal.get('addfund_steps_done', 0) or 0)
+        if steps_done >= len(TOPGAINERS_ADDFUND_STEPS):
+            continue
+        step = TOPGAINERS_ADDFUND_STEPS[steps_done]
+        opened_ts = deal.get('opened_candle_ts') or now_ms
+        elapsed_h = (now_ms - opened_ts) / 3_600_000
+        cur_rank = rank_lookup.get(sym)
+
+        if elapsed_h > step['window_hours']:
+            log(f"[T_TOPGAINERS] {sym} lewat jendela {step['window_hours']}j tanpa capai top-{step['rank_threshold']} -- langkah add-fund ini dilewati")
+            with active_deals_lock:
+                if sym in active_deals:
+                    active_deals[sym]['addfund_steps_done'] = steps_done + 1
+            save_active_deals()
+            continue
+
+        if cur_rank is None:
+            continue  # symbol tidak ketemu di universe siklus ini (vol turun/dll) -- tunggu siklus berikutnya
+
+        if cur_rank <= step['rank_threshold']:
+            log(f"[T_TOPGAINERS] {sym} naik ke rank #{cur_rank} (ambang top-{step['rank_threshold']}) -- trigger add-fund ${step['add_usd']}")
+            result = execute_add_fund(sym, step['add_usd'])
+            with active_deals_lock:
+                if sym in active_deals:
+                    active_deals[sym]['addfund_steps_done'] = steps_done + 1
+            save_active_deals()
+            if not result.get('ok'):
+                log(f"WARN [T_TOPGAINERS] add-fund {sym} gagal: {result.get('error')}")
+
+
 def thread_topgainers_scan() -> None:
     """Scan Top Gainers-4h -- lihat REMARK panjang di atas TOPGAINERS_SCAN_INTERVAL."""
     if not is_strategy_enabled('topgainers_4h'):
@@ -20062,8 +20123,11 @@ def thread_topgainers_scan() -> None:
         pairs = get_usdt_spot_pairs()
         ticker = get_ticker_24h()
         volmap = {}
+        pricemap = {}
         for t in (ticker or []):
-            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            try:
+                volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+                pricemap[t['symbol']] = float(t.get('lastPrice', 0) or 0)
             except Exception: pass
         universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
                     and p not in SYMBOL_BLACKLIST and not is_bstock_symbol(p)]
@@ -20073,27 +20137,32 @@ def thread_topgainers_scan() -> None:
 
     with active_deals_lock:
         existing = set(active_deals.keys())
+        topgainers_deals = {s: dict(d) for s, d in active_deals.items() if d.get('strategy') == 'topgainers_4h'}
 
+    # 18/10/2026 (permintaan Mas Budi, rolling-live ranking): SEBELUMNYA rank dihitung dari
+    # open/close candle 4h yang SUDAH TERTUTUP -- angkanya statis sampai 4 jam penuh, padahal
+    # Mas Budi amati sendiri rank Top Gainers di Binance bergerak dlm hitungan menit. Sekarang:
+    # bandingkan harga LIVE (pricemap, dari ticker/24hr yang sudah ditarik di atas, TANPA call
+    # tambahan) terhadap open candle 4h yang SEDANG BERJALAN (candle terakhir, TIDAK dibuang lagi
+    # spt sebelumnya) -- angkanya ikut bergerak tiap kali disurvei, bukan cuma pas candle tutup.
+    # Loop ini SEKARANG mencakup SELURUH universe (termasuk symbol yang sudah py deal
+    # topgainers_4h) -- beda dari sebelumnya yang skip `if sym in existing` di sini -- supaya
+    # rank symbol yang sudah py deal tetap kebaca (perlu utk cek add-fund di bawah). Exclusion
+    # "jangan buka deal baru di symbol yang sudah py deal (strategi apapun)" sekarang diterapkan
+    # belakangan, saat milih fresh_picks, bukan di loop ranking ini.
     ranked = []
     for sym in universe:
-        if sym in existing:
-            continue
         try:
-            # 18/10/2026: get_ohlcv_4h() punya floor keras len(raw)<10 -> return None (line ~8527);
-            # limit=3 (cukup buat butuh 1 candle closed) SELALU kena floor itu dan SELALU None,
-            # bikin ranked kosong tiap siklus -- limit=10 pas floor-nya, tetap payload ringan.
             df = get_ohlcv_4h(sym, limit=10)
-            if df is None or len(df) < 2:
+            if df is None or len(df) < 1:
                 continue
-            if df['ct'].iloc[-1] >= int(time.time() * 1000):
-                df = df.iloc[:-1]  # buang candle yang masih berjalan
-            if len(df) < 1:
-                continue
-            last = df.iloc[-1]
-            o, c = float(last['open']), float(last['close'])
+            o = float(df.iloc[-1]['open'])
             if o <= 0:
                 continue
-            ranked.append(((c / o - 1) * 100, sym))
+            price_now = pricemap.get(sym, 0)
+            if price_now <= 0:
+                continue
+            ranked.append(((price_now / o - 1) * 100, sym))
         except Exception:
             continue
 
@@ -20102,10 +20171,35 @@ def thread_topgainers_scan() -> None:
         return
 
     ranked.sort(key=lambda x: x[0], reverse=True)
-    picks = ranked[TOPGAINERS_RANK_START - 1:TOPGAINERS_RANK_END]
+    rank_lookup = {sym: idx + 1 for idx, (chg, sym) in enumerate(ranked)}
+
+    # Add-fund: cek SEBELUM update TOPGAINERS_LAST_RANK (urutan tidak penting di sini, tapi
+    # dipisah biar jelas 2 concern beda: deal yang SUDAH ada vs deteksi entry BARU di bawah).
+    if topgainers_deals:
+        _topgainers_check_addfund(topgainers_deals, rank_lookup)
+
+    # 18/10/2026 (permintaan Mas Budi, deteksi crossing): band rank 8-10 SEKARANG di-saring lagi
+    # -- cuma symbol yang BARU SAJA masuk band ini (rank sebelumnya DI LUAR 8-10, atau belum
+    # pernah kebaca) yang jadi kandidat. Symbol yang dari siklus lalu SUDAH di band ini (sekadar
+    # masih nangkring, bukan baru masuk) TIDAK ditawarkan ulang ke AI tiap siklus.
+    band = ranked[TOPGAINERS_RANK_START - 1:TOPGAINERS_RANK_END]
+    fresh_picks = []
+    for rank_idx, (chg_pct, sym) in enumerate(band, start=TOPGAINERS_RANK_START):
+        if sym in existing:
+            continue
+        prev_rank = TOPGAINERS_LAST_RANK.get(sym)
+        if prev_rank is not None and TOPGAINERS_RANK_START <= prev_rank <= TOPGAINERS_RANK_END:
+            continue
+        fresh_picks.append((rank_idx, chg_pct, sym))
+
+    TOPGAINERS_LAST_RANK.clear()
+    TOPGAINERS_LAST_RANK.update(rank_lookup)
+
+    if not fresh_picks:
+        return
 
     candidates = []
-    for rank_idx, (chg_pct, sym) in enumerate(picks, start=TOPGAINERS_RANK_START):
+    for rank_idx, chg_pct, sym in fresh_picks:
         if is_cooldown_enabled('topgainers_4h') and cooldown_remaining(sym) > 0:
             continue
         try:
@@ -20177,6 +20271,7 @@ def thread_topgainers_scan() -> None:
         "opened_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
         "target_usd": target_usd, "add_usd": add_usd,
         "rank_open": chosen['rank'], "chg_4h_pct_open": chosen['chg_4h_pct'],
+        "addfund_steps_done": 0,
     })
     csv_log_open({
         'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
