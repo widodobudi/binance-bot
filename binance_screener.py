@@ -1558,6 +1558,17 @@ STRATEGY_CONFIG_DEFAULTS = {
     # punya kill-switch sendiri ("Izinkan Open Long" row ini) khusus fitur ini. base_usd di sini
     # CUMA fallback display -- eksekusi RIIL selalu pakai amount_usd dari aturan itu sendiri.
     "rule_triggered": {"strategy_enabled": True, "sizing_enabled": False, "base_usd": 20, "add_usd": None, "cooldown_enabled": False, "ai_call_open": False, "ai_call_close": False, "max_deals": 10, "close_sell_pct": 100},
+    # 18/10/2026 (permintaan Mas Budi): Top Gainers-4h -- strategi BARU, TIDAK pakai syarat
+    # teknikal rule-based sama sekali (beda dari strategi lain) -- kandidatnya murni rank 8-10
+    # "Top Gainers" 4h-change (dihitung bot sendiri dari candle 4h seluruh universe USDT, BUKAN
+    # scrape widget web Binance), lalu AI (dedicated, lihat ai_decision_topgainers()) yang
+    # memilih mana (kalau ada) yang layak dibuka -- SENGAJA independen dari Gate0 BTC-HTF
+    # (beda dari brkX2_12h_closed/decouple_4h/trend_confirm_4h/mombreak_1h), justru dimaksudkan
+    # mengisi kekosongan deal saat BTC-HTF sedang memblokir strategi lain. base_usd $10 + max 2
+    # slot (testing phase, belum ada backtest sama sekali -- murni validasi live). ai_call_open
+    # TIDAK relevan di sini (keputusan AI sudah inheren ke desain strategi, bukan toggle
+    # opsional di atas filter rule-based) -- lihat SC_NO_AI di dash.js.
+    "topgainers_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 10, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
 }
 # 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
 # default TRUE di semua strategi (kecuali mombreak_1h, sama seperti ai_call_open -- desain rule-based
@@ -7183,6 +7194,15 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
         target  = float(_cfg_base if _cfg_base else 50.0)
         add_usd = 0
     elif strategy in ('bbsnap_4h', 'bbsnap_8h'):
+        target  = float(_cfg_base if _cfg_base else 10.0)
+        add_usd = 0
+    # Top Gainers-4h LIVE (18/10/2026, permintaan Mas Budi): base_usd TETAP $10, TANPA
+    # add-fund/conviction-tier -- SENGAJA dikasih cabang sendiri di sini, BUKAN dibiarkan jatuh
+    # ke cabang umum `else` (score_to_target_usd()) -- itu persis bug "generic-sizing-gap-fix"
+    # yang baru ditemukan & diperbaiki hari yang sama utk rvolbreak_8h/bbsnap_4h/bbsnap_8h
+    # (strategi tanpa cabang sendiri SELALU jatuh ke fallback $60, bukan base_usd Strategy
+    # Control yang sebenarnya diminta) -- jangan sampai topgainers_4h kena lubang yang sama.
+    elif strategy == 'topgainers_4h':
         target  = float(_cfg_base if _cfg_base else 10.0)
         add_usd = 0
     # brkX2_4h di Binance direct: pakai base_usd dari Strategy Control, KECUALI tier
@@ -15872,7 +15892,8 @@ var SC_LABELS = {
     rvolbreak_8h: 'RVolBreak-8h',
     dipbuy_universe: 'Dip-Buy Universe',
     bbsnap_4h: 'BBSnap-4h',
-    bbsnap_8h: 'BBSnap-8h'
+    bbsnap_8h: 'BBSnap-8h',
+    topgainers_4h: 'Top Gainers-4h'
 };
 // 24/09/2026 (permintaan Mas Budi): Entry A & Entry B sekarang baris terpisah supaya base_usd
 // masing-masing kelihatan & bisa diedit sendiri-sendiri (base_usd MEMANG sudah independen di
@@ -15900,6 +15921,13 @@ var SC_ADDFUND_LABEL = {brkX2: 'auto (score-based)', trend_confirm_4h: 'auto (sc
 var SC_BASE_NOTE = {brkX2_4h: '/ $100 conviction'};
 var SC_NO_PARTIAL = {mombreak_1h: true};  // MomentumBreak selalu jual 100% saat close (kolom Jual % dimmed)
 var SC_NO_AI = {mombreak_1h: true};  // strategi full rule-based, checkbox AI-call tidak berlaku
+// 18/10/2026: topgainers_4h -- checkbox "Open" SAJA tidak relevan (AI SELALU dipanggil wajib,
+// lihat ai_decision_topgainers() Python -- bukan toggle opsional di atas filter rule-based, krn
+// tidak ada filter rule-based lain di strategi ini). BEDA dari mombreak_1h (SC_NO_AI, di atas --
+// itu TIDAK PERNAH pakai AI sama sekali utk open MAUPUN close): checkbox "Close" topgainers_4h
+// TETAP berlaku normal (AI-confirm close/trailing/timeout sama persis strategi lain), jadi TIDAK
+// masuk SC_NO_AI (itu akan ikut sembunyikan "Close" juga, padahal itu toggle yang nyata).
+var SC_NO_AI_OPEN = {topgainers_4h: true};
 // 01/10/2026 (permintaan Mas Budi): strategi yg di-PAUSE atas keputusan Mas Budi (sama dgn PAUSED_HIDDEN_STRATEGIES di Python,
 // baris ~1369 -- kalau daftar itu berubah, ubah juga di sini) barisnya di-DIM + DIKUNCI (tidak bisa diklik) selama flag OFF.
 // 02/10/2026: 'reversal' dikeluarkan -- direaktivasi (reversal_resumed_20261002), tidak lagi dikunci.
@@ -15931,7 +15959,8 @@ var SC_BTC_GATE_TOOLTIP_OFF_TESTED = {
     rvolbreak_1h: 'Sudah diuji 10/10/2026 -- hasilnya TIDAK membantu, rata-rata profit/trade cenderung turun meski win-rate naik tipis. Tidak direkomendasikan. (Data BTC menit cuma meng-cover 35% kandidat yang diuji.)'
 };
 var SC_BTC_GATE_TOOLTIP_UNTESTED_SPECIFIC = {
-    brkX2: 'Varian "legacy" (brkx2-12h) sudah tidak buka deal baru sama sekali (cuma arsip deal lama) -- tidak relevan diuji.'
+    brkX2: 'Varian "legacy" (brkx2-12h) sudah tidak buka deal baru sama sekali (cuma arsip deal lama) -- tidak relevan diuji.',
+    topgainers_4h: 'Sengaja didesain TANPA gerbang BTC-HTF sama sekali -- tujuan strategi ini justru mengisi kekosongan deal saat BTC-HTF sedang memblokir strategi lain, jadi tidak relevan diuji/dipasangi gerbang yang sama.'
 };
 var SC_BTC_GATE_TOOLTIP_UNTESTED = 'Belum pernah diuji -- backtest Gate0 10/10/2026 cuma mencakup 7 strategi (KeltnerBreak-12h, decouple_4h, dipbuy_universe, trend_confirm_4h, mombreak_1h, rvolbreak_1h, brkX2-4h). Strategi ini belum ada datanya sama sekali.';
 function btcGateCellHtml(k, cfg) {
@@ -16045,7 +16074,9 @@ function loadStrategyConfig() {
                     + (SC_NO_AI[k]
                         ? '<td style="text-align:center;padding:5px 8px"><span style="color:var(--muted);font-size:10px;font-style:italic" title="Strategi full rule-based, tidak pernah memanggil AI sama sekali (desain permanen)">N/A</span></td>'
                         : '<td style="text-align:center;padding:3px 8px">'
-                          + '<label style="display:flex;align-items:center;gap:4px;justify-content:center;cursor:pointer" title="Kandidat OPEN yang lolos semua filter rule-based masih dikonsultasikan ke AI dulu sebelum dibuka."><input type="checkbox" id="sc-aicall-open-' + k + '" ' + (aiCallOpenEnabled ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer"><span style="font-size:9px;color:var(--muted)">Open</span></label>'
+                          + (SC_NO_AI_OPEN[k]
+                              ? '<div style="font-size:9px;color:var(--muted);font-style:italic" title="AI SELALU dipanggil wajib utk strategi ini (bukan toggle opsional di atas filter rule-based lain)">Open: selalu AI</div>'
+                              : '<label style="display:flex;align-items:center;gap:4px;justify-content:center;cursor:pointer" title="Kandidat OPEN yang lolos semua filter rule-based masih dikonsultasikan ke AI dulu sebelum dibuka."><input type="checkbox" id="sc-aicall-open-' + k + '" ' + (aiCallOpenEnabled ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer"><span style="font-size:9px;color:var(--muted)">Open</span></label>')
                           + '<label style="display:flex;align-items:center;gap:4px;justify-content:center;cursor:pointer;margin-top:2px" title="Armed/near-timeout/close (trailing dkk) masih dikonsultasikan ke AI dulu sebelum benar-benar closing. Default ON sejak 26/09/2026 (insiden JTO/USDT)."><input type="checkbox" id="sc-aicall-close-' + k + '" ' + (aiCallCloseEnabled ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer"><span style="font-size:9px;color:var(--muted)">Close</span></label>'
                           + '</td>')
                     + '<td style="text-align:center;padding:5px 8px"><input type="checkbox" id="sc-size-' + k + '" ' + (sizingEnabled ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer"></td>'
@@ -16638,6 +16669,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <option value="dipbuy_universe">Dip-Buy Universe</option>
         <option value="bbsnap_4h">BBSnap-4h</option>
         <option value="bbsnap_8h">BBSnap-8h</option>
+        <option value="topgainers_4h">Top Gainers-4h</option>
         <option value="__exclude_hardstop__">Semua strategi, exclude hardstop volatilitas</option>
       </select>
     <select id="ct-filter-pair" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
@@ -16713,7 +16745,7 @@ function sortClosedTrades(key) {
 
 function renderClosedTradesRows() {
     var rows = closedTradesRows.slice();
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var searchBox = document.getElementById('ct-filter-search');
     var searchTerm = searchBox ? searchBox.value.trim().toUpperCase() : '';
     if (searchTerm) {
@@ -16774,7 +16806,7 @@ function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
     if (!el) return;
     if (!rows.length) { el.innerHTML = ''; return; }
-    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h'};
+    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     // 10/10/2026 (permintaan Mas Budi): KeltnerBreak-12h digabung BALIK jadi SATU kartu lagi (balik
     // seperti sebelum 09/10/2026) -- raw strategy value 'brkX2' (legacy, sebelum split 1-hari),
     // 'brkX2_closed'/'brkX2_intrabar' (era split), DAN 'brkX2_12h_closed' (key baru skrg) SEMUA
@@ -16837,7 +16869,7 @@ function renderCtEquityCurve(rows) {
 function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var headers = ['Pair','Strategi','Opened','Entry','Closed','Exit','RSI@Open','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
@@ -19938,6 +19970,237 @@ def _shadow_newstrat_check_exits(data: dict, combo: str, target: int) -> None:
             pos['peak_price'] = peak; pos['armed'] = armed
             still_open.append(pos)
     data[combo]['open'] = still_open
+
+
+# ── Top Gainers-4h (18/10/2026, permintaan Mas Budi) ────────────────────────────────────────
+# Strategi BARU, BEDA TOTAL dari semua strategi lain di bot ini: TIDAK ADA syarat teknikal
+# rule-based sama sekali utk masuk jadi kandidat -- kandidatnya murni posisi rank 8-10 di
+# ranking "Top Gainers" (4h-change, USDT market) yang DIHITUNG SENDIRI oleh bot dari candle 4h
+# seluruh universe (BUKAN scrape widget web Binance -- lebih stabil, tidak tergantung tampilan
+# web). SENGAJA rank 8-10 (bukan 1-3) -- permintaan eksplisit Mas Budi, rank teratas biasanya
+# sudah paling "panas"/overextended, rawan koreksi balik cepat begitu listing itu diketahui
+# banyak orang. 3 kandidat itu lalu dibawa SEKALIGUS (bukan satu-satu spt ai_decision_open())
+# ke AI (ai_decision_topgainers(), dedicated) yang memilih mana (kalau ada) yang layak dibuka
+# long. SENGAJA TIDAK ada gerbang BTC-HTF (Gate0) -- beda dari brkX2_12h_closed/decouple_4h/
+# trend_confirm_4h/mombreak_1h, justru dimaksudkan Mas Budi utk mengisi kekosongan deal saat
+# BTC-HTF sedang memblokir strategi lain. Modal $10/deal, maks 2 slot (testing phase, belum ada
+# backtest sama sekali -- murni validasi live). Exit pakai mekanisme GENERIK yang sama dipakai
+# strategi "tak dikenal" lain (hard-stop ATR% + trailing + batas waktu) -- SENGAJA tidak dikasih
+# exit custom, supaya cuma 1 hal baru yang belum teruji (entry-nya) dalam satu waktu.
+TOPGAINERS_ENABLED = True  # kill-switch permanen thread-nya (pola sama DECOUPLE_4H_ENABLED dkk,
+                            # dicek sekali saat start thread) -- TERPISAH dari is_strategy_enabled
+                            # ('topgainers_4h', toggle Strategy Control runtime, dicek tiap siklus
+                            # DI DALAM thread_topgainers_scan()).
+TOPGAINERS_SCAN_INTERVAL = 900  # detik (15 menit, persetujuan Mas Budi) -- ranking 4h-change
+                                 # sendiri tidak berubah makna kalau dicek lebih sering dari itu,
+                                 # dan ini scan universe PENUH (ratusan pair), jangan tiap siklus T2.
+TOPGAINERS_RANK_START = 8   # 1-indexed
+TOPGAINERS_RANK_END   = 10  # rank 8,9,10 = 3 kandidat
+
+
+def ai_decision_topgainers(candidates: list) -> dict:
+    """AI decision KHUSUS Top Gainers-4h -- BEDA dari ai_decision_open() yang menilai 1 kandidat
+    sekaligus (sudah lolos filter rule-based, AI tinggal konfirmasi ya/tidak). Di sini TIDAK ADA
+    filter rule-based sama sekali -- candidates (list dict, 1-3 kandidat rank 8-10 Top Gainers)
+    dikirim SEKALIGUS, AI yang pilih mana (kalau ada) yang layak dibuka long. Reuse _ai_call()
+    (failover Anthropic->Alibaba->Gemini yang sama dipakai semua keputusan AI lain di bot ini) --
+    SENGAJA TIDAK bikin mesin pemanggilan AI terpisah spt yang sempat dibangun AI Chat Assistant
+    (lalu dibatalkan) -- kebutuhan di sini cuma prompt-sekali-jawab, bukan tool-calling."""
+    lines = []
+    for c in candidates:
+        ema20 = c.get('ema20') or c['price']
+        vs_ema20_pct = (c['price'] / ema20 - 1) * 100 if ema20 else 0
+        lines.append(
+            f"- {c['symbol']} (rank #{c['rank']} Top Gainers, naik {c['chg_4h_pct']:+.2f}% dlm 4h terakhir):\n"
+            f"  Harga: {c['price']:.8g} | ATR%: {c['atr_pct']:.2f} | RVOL: {c['rvol']:.2f}x\n"
+            f"  RSI: {c['rsi']:.1f} | Stoch K/D: {c['stoch_k']:.1f}/{c['stoch_d']:.1f} | MACD hist: {c['macd_hist']:.6f}\n"
+            f"  BB%b: {c['bb_pct']:.3f} | Williams %R: {c['williams_r']:.1f} | CCI: {c['cci']:.1f}\n"
+            f"  OBV: {c['obv']:.0f} | harga vs EMA20: {vs_ema20_pct:+.2f}%"
+        )
+    prompt = (
+        "Kamu menilai kandidat koin USDT yang masuk rank 8-10 'Top Gainers' (kenaikan harga 4 "
+        "jam terakhir) di Binance. TIDAK ADA filter rule-based lain yang sudah lolos -- tugasmu "
+        "MURNI menilai dari data teknikal di bawah, APAKAH ada yang layak dibuka long SEKARANG, "
+        "atau TIDAK ADA SAMA SEKALI yang layak (lebih baik skip kalau ragu -- rank 8-10 Top "
+        "Gainers rawan koreksi balik cepat krn sudah naik tajam dlm 4 jam terakhir).\n\n"
+        + "\n\n".join(lines) +
+        '\n\nBalas HANYA satu objek JSON, tanpa markdown/penjelasan tambahan, format PERSIS:\n'
+        '{"choice": "<SYMBOL yang dipilih, atau \\"none\\" kalau tidak ada yang layak>", '
+        '"reasoning": "<1-2 kalimat Bahasa Indonesia>"}'
+    )
+    raw = _ai_call(prompt)
+    if not raw:
+        return {"choice": "none", "reasoning": "Semua AI provider gagal dipanggil"}
+    match = re.search(r'\{.*\}', raw, re.S)
+    if not match:
+        return {"choice": "none", "reasoning": f"AI tidak menghasilkan JSON valid: {raw[:150]}"}
+    try:
+        parsed = json.loads(match.group(0))
+    except Exception as e:
+        return {"choice": "none", "reasoning": f"AI menghasilkan JSON rusak: {e}"}
+    raw_choice = str(parsed.get("choice", "none")).strip()
+    if raw_choice.lower() in ("none", "tidak ada", "", "null"):
+        choice = "none"
+    else:
+        choice = normalize_binance_symbol(raw_choice)
+    return {"choice": choice, "reasoning": parsed.get("reasoning", "")}
+
+
+def thread_topgainers_scan() -> None:
+    """Scan Top Gainers-4h -- lihat REMARK panjang di atas TOPGAINERS_SCAN_INTERVAL."""
+    if not is_strategy_enabled('topgainers_4h'):
+        return
+    if is_daily_loss_limit_breached():
+        log("[T_TOPGAINERS] Scan di-skip -- batas rugi harian tersulut")
+        return
+    n_active = deal_count_by_strategy('topgainers_4h')
+    _max_deals = int(load_strategy_config().get('topgainers_4h', {}).get('max_deals', 2))
+    if n_active >= _max_deals:
+        return
+
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST and not is_bstock_symbol(p)]
+    except Exception as e:
+        log(f"WARN [T_TOPGAINERS] gagal ambil universe: {e}")
+        return
+
+    with active_deals_lock:
+        existing = set(active_deals.keys())
+
+    ranked = []
+    for sym in universe:
+        if sym in existing:
+            continue
+        try:
+            df = get_ohlcv_4h(sym, limit=3)
+            if df is None or len(df) < 2:
+                continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]  # buang candle yang masih berjalan
+            if len(df) < 1:
+                continue
+            last = df.iloc[-1]
+            o, c = float(last['open']), float(last['close'])
+            if o <= 0:
+                continue
+            ranked.append(((c / o - 1) * 100, sym))
+        except Exception:
+            continue
+
+    if len(ranked) < TOPGAINERS_RANK_END:
+        log(f"[T_TOPGAINERS] Kandidat terlalu sedikit ({len(ranked)}) utk rank {TOPGAINERS_RANK_START}-{TOPGAINERS_RANK_END}, skip siklus ini")
+        return
+
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    picks = ranked[TOPGAINERS_RANK_START - 1:TOPGAINERS_RANK_END]
+
+    candidates = []
+    for rank_idx, (chg_pct, sym) in enumerate(picks, start=TOPGAINERS_RANK_START):
+        if is_cooldown_enabled('topgainers_4h') and cooldown_remaining(sym) > 0:
+            continue
+        try:
+            df4 = get_ohlcv_4h(sym, limit=60)
+            if df4 is None or len(df4) < 30:
+                continue
+            if df4['ct'].iloc[-1] >= int(time.time() * 1000):
+                df4 = df4.iloc[:-1]
+            df4 = compute_indicators_4h(df4)
+            row = df4.iloc[-1]
+            vol_ma = float(row['vol_ma']) if not pd.isna(row.get('vol_ma')) and row['vol_ma'] > 0 else 0
+            rvol = float(row['vol']) / vol_ma if vol_ma > 0 else 0
+            price_now = get_price_now(sym)
+            if price_now <= 0:
+                continue
+            candidates.append({
+                "symbol": sym, "rank": rank_idx, "chg_4h_pct": chg_pct, "price": price_now,
+                "atr_pct": float(row['atr_pct']) if not pd.isna(row.get('atr_pct')) else 0,
+                "rvol": rvol,
+                "rsi": float(row['rsi']) if not pd.isna(row.get('rsi')) else 50,
+                "stoch_k": float(row['stoch_k']) if not pd.isna(row.get('stoch_k')) else 50,
+                "stoch_d": float(row['stoch_d']) if not pd.isna(row.get('stoch_d')) else 50,
+                "macd_hist": float(row['macd_hist']) if not pd.isna(row.get('macd_hist')) else 0,
+                "bb_pct": float(row['bb_pct']) if not pd.isna(row.get('bb_pct')) else 0.5,
+                "williams_r": float(row['williams_r']) if not pd.isna(row.get('williams_r')) else -50,
+                "cci": float(row['cci']) if not pd.isna(row.get('cci')) else 0,
+                "obv": float(row['obv']) if not pd.isna(row.get('obv')) else 0,
+                "ema20": float(row['ema20']) if not pd.isna(row.get('ema20')) else price_now,
+            })
+        except Exception as e:
+            log(f"WARN [T_TOPGAINERS] gagal hitung indikator {sym}: {e}")
+            continue
+
+    if not candidates:
+        log("[T_TOPGAINERS] Tidak ada kandidat valid siklus ini (semua kena cooldown/data gagal)")
+        return
+
+    log(f"[T_TOPGAINERS] {len(candidates)} kandidat (rank {TOPGAINERS_RANK_START}-{TOPGAINERS_RANK_END}): "
+        + ", ".join(f"{c['symbol']}(#{c['rank']},{c['chg_4h_pct']:+.1f}%)" for c in candidates))
+
+    decision = ai_decision_topgainers(candidates)
+    choice = decision.get("choice", "none")
+    if choice == "none" or not choice:
+        log(f"[T_TOPGAINERS] AI tidak memilih kandidat manapun -- alasan: {decision.get('reasoning', '')}")
+        return
+
+    chosen = next((c for c in candidates if c['symbol'] == choice), None)
+    if chosen is None:
+        log(f"WARN [T_TOPGAINERS] AI pilih '{choice}' tapi itu bukan salah satu kandidat yang dikirim -- diabaikan")
+        return
+
+    _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=get_strategy_base_usd('topgainers_4h'))
+    if not _glob_ok:
+        log(f"[T_TOPGAINERS] {chosen['symbol']} dipilih AI tapi kapasitas gabungan penuh ({_glob_reason}) -- skip")
+        return
+
+    ok, target_usd, add_usd = open_deal_with_sizing(chosen['symbol'], 1, 'topgainers_4h')
+    if not ok:
+        log(f"[T_TOPGAINERS] {chosen['symbol']} dipilih AI tapi order gagal (cek log sizing di atas)")
+        return
+
+    entry_price = get_price_now(chosen['symbol'])
+    if entry_price <= 0:
+        entry_price = chosen['price']
+    add_to_active_deals(chosen['symbol'], {
+        "strategy": "topgainers_4h", "entry_price": entry_price, "peak": entry_price,
+        "signal_price": chosen['price'], "atr_pct": chosen['atr_pct'] or 3.0,
+        "opened_candle_ts": int(time.time() * 1000), "trailing_armed": False,
+        "opened_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+        "target_usd": target_usd, "add_usd": add_usd,
+        "rank_open": chosen['rank'], "chg_4h_pct_open": chosen['chg_4h_pct'],
+    })
+    csv_log_open({
+        'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+        'symbol': to_display_pair(chosen['symbol']), 'strategy': 'topgainers_4h',
+        'signal_price': f"{_fmt_price(chosen['price'])}", 'entry_price': f"{_fmt_price(entry_price)}",
+        'base_usd': target_usd, 'score': 1,
+    })
+    send_telegram(
+        f"Top Gainers-4h | OPEN LONG\n"
+        f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+        f"Pair  : {to_display_pair(chosen['symbol'])}\n"
+        f"Rank Top Gainers (4h): #{chosen['rank']} ({chosen['chg_4h_pct']:+.2f}%)\n"
+        f"Entry : {_fmt_price(entry_price)} | Modal: ${target_usd:.0f}\n"
+        f"ATR%={chosen['atr_pct']:.2f} | RVOL={chosen['rvol']:.2f}x | RSI={chosen['rsi']:.1f}\n"
+        f"Alasan AI: {decision.get('reasoning', '')}"
+    )
+    log(f"[T_TOPGAINERS] {chosen['symbol']} DIBUKA -- rank #{chosen['rank']}, modal ${target_usd:.0f}, alasan AI: {decision.get('reasoning', '')}")
+
+
+def run_thread_topgainers() -> None:
+    """Thread T_TOPGAINERS: scan Top Gainers-4h tiap TOPGAINERS_SCAN_INTERVAL detik."""
+    while True:
+        try:
+            thread_topgainers_scan()
+        except Exception as e:
+            log(f"WARN T_TOPGAINERS error: {e}")
+        time.sleep(TOPGAINERS_SCAN_INTERVAL)
 
 
 def thread_decouple_scan() -> None:
@@ -27035,6 +27298,7 @@ def run_web_dashboard():
                 ("dipbuy_universe", "Dip-Buy Universe"),
                 ("bbsnap_4h", "BBSnap-4h"),
                 ("bbsnap_8h", "BBSnap-8h"),
+                ("topgainers_4h", "Top Gainers-4h"),
             ]
             # 26/09/2026 (permintaan Mas Budi): "kecepatan closing" PROFIT POSITIF -- tier
             # adaptif hari/minggu/bulan (lihat strategy_recent_close_stats()) + interval rata2
@@ -29656,6 +29920,10 @@ if __name__ == '__main__':
     if RVOLBREAK_8H_ENABLED:
         t_rv = threading.Thread(target=run_thread_rvolbreak8h, daemon=True, name="T-RVolBreak8h")
         threads.append(t_rv)
+        n_threads += 1
+    if TOPGAINERS_ENABLED:
+        t_tg = threading.Thread(target=run_thread_topgainers, daemon=True, name="T-TopGainers")
+        threads.append(t_tg)
         n_threads += 1
     if DIPBUY_UNIVERSE_ENABLED:
         t_db = threading.Thread(target=run_thread_dipbuy_universe, daemon=True, name="T-DipBuy")
