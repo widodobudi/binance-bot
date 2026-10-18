@@ -8390,6 +8390,39 @@ def get_live_bb_upper(symbol: str, strategy: str):
         _live_bbupper_cache[cache_key] = (now, bb_upper)
     return bb_upper
 
+_live_bb_band_cache = {}
+_live_bb_band_cache_lock = threading.Lock()
+LIVE_BB_BAND_CACHE_SECONDS = 300
+
+def get_live_bb_band(symbol: str, timeframe: str, band: str = 'upper'):
+    """BB(20,2) live dari candle TERTUTUP TERAKHIR -- versi GENERIK get_live_bb_upper() (18/10/2026,
+    fitur Conditional Rules): timeframe & band ('upper'/'lower') BEBAS, bukan terikat strategi
+    tertentu (BB_UPPER_TF_BY_STRATEGY). Return None kalau fetch/hitung gagal -- caller WAJIB
+    treat None sbg 'data tidak tersedia', bukan 0."""
+    now = time.time()
+    cache_key = (symbol, timeframe, band)
+    with _live_bb_band_cache_lock:
+        cached = _live_bb_band_cache.get(cache_key)
+        if cached and now - cached[0] < LIVE_BB_BAND_CACHE_SECONDS:
+            return cached[1]
+    val_out = None
+    try:
+        frame = get_ohlcv_4h(symbol, limit=35) if timeframe == '4h' else get_ohlcv(symbol, interval=timeframe, limit=35)
+        if frame is not None and len(frame) >= 22:
+            closed = frame.iloc[:-1]
+            bb = ta.bbands(closed['close'], length=20, std=2.0)
+            col_prefix = 'BBU_' if band == 'upper' else 'BBL_'
+            col = next((c for c in bb.columns if c.startswith(col_prefix)), None)
+            if col is not None:
+                v = bb[col].iloc[-1]
+                if not pd.isna(v):
+                    val_out = float(v)
+    except Exception as error:
+        log(f"[RULES] live BB {band} {symbol} ({timeframe}) gagal: {error}")
+    with _live_bb_band_cache_lock:
+        _live_bb_band_cache[cache_key] = (now, val_out)
+    return val_out
+
 def current_volatility_guard(symbol: str, strategy: str, entry_atr: float) -> tuple:
     """Return (allowed, atr_pct) for add-fund; unavailable data fails closed."""
     try:
@@ -10259,6 +10292,13 @@ def thread2_monitor():
         live_bb_upper = get_live_bb_upper(sym, strat)
         _bbupper_touched = strat != 'hunting_4h' and live_bb_upper is not None and peak >= live_bb_upper
         _bbupper_overshoot_pct = (peak / live_bb_upper - 1) * 100 if _bbupper_touched else 0.0
+
+        # Conditional Rules (18/10/2026, permintaan Mas Budi "kalau X terjadi, lakukan Y" --
+        # lihat REMARK panjang di CONDITIONAL_RULES_FILE) -- generalisasi dari DUSK/USDT BB12h
+        # yang dibangun & dihapus lagi hari ini (digantikan mekanisme ini, bisa simbol/kondisi/
+        # aksi apa saja tanpa perlu kode baru tiap kali). Aturan disimpan lewat bubble dashboard,
+        # dicek di SINI tiap siklus, sama persis persis pola DUSK (bukan proses terpisah).
+        check_conditional_rules_for_symbol(sym, price, entry)
 
         # Patch "dusk-bb12h-forced-close" (18/10/2026, permintaan Mas Budi KHUSUS deal DUSK/USDT
         # yang SEDANG jalan saat ini -- KeltnerBreak-12h, entry 0.130028, dibuka 17/10 11:07 --
@@ -13985,6 +14025,168 @@ def save_deal_overrides(overrides: dict):
     except Exception as e:
         log(f"WARN save_deal_overrides: {e}")
 
+# ── Conditional Rules (18/10/2026, permintaan Mas Budi "kalau X terjadi, lakukan Y") ───────────
+# Konteks: AI Chat Assistant (dipasang & DIBATALKAN sama hari, lihat git log) TIDAK bisa
+# menjalankan ini -- chat cuma request-response, tidak ada yang "nunggu" kondisi di masa depan.
+# Pola yang BENAR (dibuktikan pertama lewat DUSK/USDT BB12h, sekarang digeneralisir): aturan
+# TERSIMPAN (bukan kode hardcode per-kasus lagi) dicek tiap siklus thread2_monitor() (~15 detik,
+# loop yang SUDAH jalan 24 jam, bukan proses baru). Bubble mengambang di dashboard cuma alat buat
+# MENULIS aturan ini (lewat AI parse teks bebas -> JSON terstruktur, DIKONFIRMASI dulu sebelum
+# aktif) -- AI TIDAK PERNAH eksekusi langsung dari bubble, eksekusi selalu lewat jalur permanen
+# ini. Reuse _ai_call() (satu-satunya pemanggil AI yg SUDAH failover Anthropic->Alibaba->Gemini,
+# dipakai ai_decision_open/close) -- SENGAJA TIDAK bikin ulang mesin multi-provider terpisah spt
+# punya AI Chat Assistant yg baru dibatalkan, krn kebutuhan di sini jauh lebih simpel (satu kali
+# prompt -> JSON, bukan multi-turn tool-calling).
+CONDITIONAL_RULES_FILE = os.path.join(DATA_DIR, "conditional_rules.json")
+
+CONDITIONAL_RULE_CONDITION_TYPES = {
+    "price_cross_above_bb": "Harga live >= Bollinger Band (parameter: band='upper'/'lower', timeframe bebas spt '4h'/'8h'/'12h'/'1d'). Posisi SEBELUM aturan dibuat biasanya di sisi berlawanan band, jadi syarat pertama kali TRUE otomatis = momen cross.",
+    "price_above": "Harga live >= value (angka harga mutlak)",
+    "price_below": "Harga live <= value (angka harga mutlak)",
+    "profit_pct_above": "Profit bersih dari entry >= value (persen)",
+    "profit_pct_below": "Profit bersih dari entry <= value (persen)",
+}
+CONDITIONAL_RULE_ACTION_TYPES = {
+    "close_deal": "Tutup/jual deal ini sekarang (exit penuh)",
+    "cancel_deal": "Berhenti kelola deal ini TANPA menjual -- koin tetap di wallet (parameter opsional: pct, 1-100, default 100)",
+    "add_fund": "Tambah modal ke deal ini (parameter opsional: amount_usd -- kosongkan utk nominal otomatis strategi)",
+    "start_trailing": "Aktifkan trailing stop sekarang, tanpa menunggu ambang profit otomatis",
+}
+
+
+def load_conditional_rules() -> list:
+    try:
+        if os.path.exists(CONDITIONAL_RULES_FILE):
+            with open(CONDITIONAL_RULES_FILE) as f:
+                return json.load(f)
+    except Exception as e:
+        log(f"WARN load_conditional_rules: {e}")
+    return []
+
+
+def save_conditional_rules(rules: list):
+    try:
+        with open(CONDITIONAL_RULES_FILE, "w") as f:
+            json.dump(rules, f, indent=2)
+    except Exception as e:
+        log(f"WARN save_conditional_rules: {e}")
+
+
+def _conditional_rule_condition_met(rule: dict, sym: str, price: float, entry: float) -> bool:
+    cond = rule.get("condition", {}) or {}
+    ctype = cond.get("type", "")
+    try:
+        if ctype == "price_cross_above_bb":
+            band_val = get_live_bb_band(sym, cond.get("timeframe", "4h"), cond.get("band", "upper"))
+            return band_val is not None and price >= band_val
+        if ctype == "price_above":
+            return price >= float(cond.get("value", 0))
+        if ctype == "price_below":
+            return price <= float(cond.get("value", 0))
+        if ctype == "profit_pct_above":
+            if entry <= 0:
+                return False
+            return ((price / entry) - 1) * 100 >= float(cond.get("value", 0))
+        if ctype == "profit_pct_below":
+            if entry <= 0:
+                return False
+            return ((price / entry) - 1) * 100 <= float(cond.get("value", 0))
+    except Exception as e:
+        log(f"WARN [RULES] evaluasi kondisi gagal utk {sym}: {e}")
+    return False
+
+
+def cancel_deal_action(sym: str, pct: float = 100, reason: str = "") -> dict:
+    """Logic SAMA PERSIS route /cancel_deal (dashboard), diekstrak jadi fungsi reusable (18/10/2026)
+    supaya Conditional Rules bisa panggil cancel tanpa duplikasi logic."""
+    pct = max(1.0, min(100.0, float(pct or 100)))
+    with active_deals_lock:
+        if sym not in active_deals:
+            return {"ok": False, "error": f"{sym} tidak ada di active_deals"}
+        removed_deal = dict(active_deals[sym])
+        if pct >= 100:
+            del active_deals[sym]
+        else:
+            keep_ratio = (100.0 - pct) / 100.0
+            dd = active_deals[sym]
+            dd['qty_coin'] = float(dd.get('qty_coin', 0) or 0) * keep_ratio
+            if dd.get('base_usd') is not None:
+                dd['base_usd'] = float(dd.get('base_usd', 0) or 0) * keep_ratio
+            if dd.get('add_usd') is not None:
+                dd['add_usd'] = float(dd.get('add_usd', 0) or 0) * keep_ratio
+    save_active_deals()
+    send_telegram(
+        f"CANCEL DEAL ({reason or 'otomatis'})\nPair: {to_display_pair(sym)}\nStrategi: {removed_deal.get('strategy', '-')}\n"
+        + ("Bot berhenti kelola pair ini. Koin TIDAK dijual, tetap di wallet." if pct >= 100
+           else f"Cancel sebagian {pct:.0f}%. Koin TIDAK dijual, tetap di wallet.")
+    )
+    return {"ok": True, "symbol": sym, "pct": pct}
+
+
+def _conditional_rule_execute_action(rule: dict, sym: str) -> dict:
+    action = rule.get("action", {}) or {}
+    atype = action.get("type", "")
+    note = rule.get("note", "")
+    if atype == "close_deal":
+        return execute_close_now(sym, f"Conditional Rule: {note}",
+                                  telegram_header="CLOSE (Conditional Rule)", log_tag="RULE-CLOSE")
+    if atype == "cancel_deal":
+        return cancel_deal_action(sym, action.get("pct", 100), reason=f"Conditional Rule: {note}")
+    if atype == "add_fund":
+        with active_deals_lock:
+            d = dict(active_deals.get(sym, {}))
+        if not d:
+            return {"ok": False, "error": f"{sym} tidak ada di active_deals"}
+        amount = action.get("amount_usd")
+        try:
+            amount = float(amount) if amount not in (None, "") else None
+        except (TypeError, ValueError):
+            amount = None
+        if amount is None:
+            amount = d.get('add_usd') or get_strategy_base_usd(d.get('strategy', 'brkX2'))
+        return execute_add_fund(sym, float(amount))
+    if atype == "start_trailing":
+        with active_deals_lock:
+            d = dict(active_deals.get(sym, {}))
+        if not d:
+            return {"ok": False, "error": f"{sym} tidak ada di active_deals"}
+        ok = send_start_trailing(sym, d.get('strategy', 'brkX2'))
+        if ok:
+            with active_deals_lock:
+                if sym in active_deals:
+                    active_deals[sym]["trailing_armed"] = True
+            save_active_deals()
+        return {"ok": ok, "symbol": sym}
+    return {"ok": False, "error": f"Aksi '{atype}' tidak dikenal"}
+
+
+def check_conditional_rules_for_symbol(sym: str, price: float, entry: float):
+    """Dipanggil tiap siklus thread2_monitor() (per simbol aktif) -- lihat REMARK panjang di atas
+    CONDITIONAL_RULES_FILE. Cek SEMUA aturan status='active' milik simbol ini, eksekusi begitu
+    kondisinya terpenuhi, lalu tandai hasilnya (one-shot -- TIDAK dicek lagi setelah tereksekusi,
+    baik berhasil maupun gagal; kalau gagal Mas Budi akan lihat status 'failed' di panel, bisa
+    diulang manual lewat bubble lagi)."""
+    rules = load_conditional_rules()
+    my_rules = [r for r in rules if r.get("symbol") == sym and r.get("status") == "active"]
+    if not my_rules:
+        return
+    changed = False
+    for rule in my_rules:
+        if not _conditional_rule_condition_met(rule, sym, price, entry):
+            continue
+        result = _conditional_rule_execute_action(rule, sym)
+        log(f"[RULES] {sym} aturan '{rule.get('note', '')}' terpicu -- hasil: {result}")
+        for r2 in rules:
+            if r2.get("id") == rule.get("id"):
+                r2["status"] = "triggered" if result.get("ok") else "failed"
+                r2["triggered_at"] = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+                r2["result"] = result
+        changed = True
+        if result.get("ok") and rule.get("action", {}).get("type") in ("close_deal", "cancel_deal"):
+            break  # deal ini sudah tidak ada lagi di active_deals -- aturan lain simbol ini percuma dicek siklus ini
+    if changed:
+        save_conditional_rules(rules)
+
 TP_TIER_MODES = ("price", "usd", "pct")
 TP_TIER_MAX = 2
 
@@ -14234,7 +14436,16 @@ function selectDashTab(tab) {
             while (el && guard < 3000) {
                 guard++;
                 if (el !== startEl && el.classList && el.classList.contains('dash-section-start')) break;
-                el.style.display = show ? '' : 'none';
+                // Elemen ber-class "dash-tab-persistent" (widget mengambang lintas-tab, mis.
+                // bubble Conditional Rules) di-SKIP total -- display-nya TIDAK disentuh walk
+                // manapun, TANPA jadi titik berhenti baru (walk tetap lanjut ke sibling
+                // berikutnya spt biasa). Lihat bug 18/10/2026 "AI Chat Assistant tidak pernah
+                // kelihatan" -- taruh widget sebelum marker pertama saja TIDAK CUKUP, soalnya
+                // convert-modal/addfundasset-modal (data-tab="__none__") JUGA marker yg walk-nya
+                // selalu show=false dan bisa menyapu sibling sesudahnya kalau tidak di-skip.
+                if (!el.classList || !el.classList.contains('dash-tab-persistent')) {
+                    el.style.display = show ? '' : 'none';
+                }
                 el = el.nextElementSibling;
             }
         } catch (e) {}
@@ -14251,6 +14462,146 @@ document.addEventListener('DOMContentLoaded', function() {
     try { saved = _getCookie('dash_active_tab') || 'strategies'; } catch (e) {}
     selectDashTab(saved);
 });
+</script>
+
+<!-- ═══════════════ CONDITIONAL RULES (WIDGET MENGAMBANG) ═══════════════ -->
+<!-- 18/10/2026 (permintaan Mas Budi, "kalau X terjadi, lakukan Y"): AI Chat Assistant dipasang
+     lalu DIBATALKAN sama hari krn structurally tidak bisa "nunggu" kondisi masa depan (chat
+     cuma request-response). Bubble ini BEDA PERAN total -- AI di sini CUMA menerjemahkan teks
+     bebas jadi aturan terstruktur (symbol/condition/action), TIDAK PERNAH eksekusi langsung;
+     eksekusi SELALU lewat check_conditional_rules_for_symbol() di thread2_monitor() (Python,
+     loop yang sudah jalan 24 jam, ~15 detik/siklus) -- generalisasi dari DUSK/USDT BB12h yang
+     sempat dibangun hardcode lalu dihapus lagi, sekarang jadi mekanisme umum lewat bubble. -->
+<div id="rules-fab" class="dash-tab-persistent" onclick="toggleRulesPanel()" title="Conditional Rules" style="position:fixed;bottom:20px;right:20px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.45);z-index:1000">⚡</div>
+<div id="rules-panel" class="dash-tab-persistent" style="display:none;flex-direction:column;position:fixed;bottom:84px;right:20px;width:min(400px,calc(100vw - 32px));max-height:min(75vh,620px);background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 28px rgba(0,0,0,.5);z-index:1000;overflow:hidden">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
+    <span style="font-size:12px;font-weight:600;color:var(--accent);letter-spacing:.06em">CONDITIONAL RULES</span>
+    <button type="button" onclick="toggleRulesPanel()" style="background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer;line-height:1;padding:0">✕</button>
+  </div>
+  <div style="padding:8px 14px;font-size:10px;color:var(--muted);border-bottom:1px solid var(--border);flex-shrink:0">
+    Tulis aturan "kalau X terjadi, lakukan Y" utk deal yang SEDANG AKTIF -- AI cuma menerjemahkan jadi aturan, TIDAK pernah eksekusi langsung. Eksekusi selalu lewat pemantauan bot (~15 detik), baru jalan setelah Mas Budi konfirmasi.
+  </div>
+  <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
+    <textarea id="rules-input" rows="2" placeholder="Contoh: DUSK/USDT, kalau harga cross up BB Upper 12h, close deal" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 10px;font-size:12px;font-family:var(--font);resize:vertical;box-sizing:border-box"></textarea>
+    <button type="button" id="rules-parse-btn" onclick="parseRuleText()" style="margin-top:6px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:7px 14px;font-size:12px;cursor:pointer;font-weight:600">Buat Aturan</button>
+  </div>
+  <div id="rules-parse-result"></div>
+  <div style="padding:8px 14px;font-size:10px;color:var(--muted);border-top:1px solid var(--border);border-bottom:1px solid var(--border);flex-shrink:0">Aturan Tersimpan</div>
+  <div id="rules-list" style="flex:1;overflow-y:auto;padding:8px 14px;font-size:11px"></div>
+</div>
+<script>
+var _rulesPanelOpen = false;
+
+function toggleRulesPanel() {
+    _rulesPanelOpen = !_rulesPanelOpen;
+    var panel = document.getElementById('rules-panel');
+    if (panel) panel.style.display = _rulesPanelOpen ? 'flex' : 'none';
+    if (_rulesPanelOpen) loadRulesList();
+}
+
+function ruleConditionText(cond) {
+    cond = cond || {};
+    if (cond.type === 'price_cross_above_bb') return 'harga cross-up BB ' + (cond.band || 'upper') + ' (' + (cond.timeframe || '4h') + ')';
+    if (cond.type === 'price_above') return 'harga >= ' + cond.value;
+    if (cond.type === 'price_below') return 'harga <= ' + cond.value;
+    if (cond.type === 'profit_pct_above') return 'profit >= ' + cond.value + '%';
+    if (cond.type === 'profit_pct_below') return 'profit <= ' + cond.value + '%';
+    return cond.type || '?';
+}
+
+function ruleActionText(action) {
+    action = action || {};
+    var labels = {close_deal: 'Close Deal', cancel_deal: 'Cancel Deal', add_fund: 'Add Fund', start_trailing: 'Aktifkan Trailing'};
+    var label = labels[action.type] || action.type || '?';
+    if (action.type === 'add_fund' && action.amount_usd) label += ' ($' + action.amount_usd + ')';
+    if (action.type === 'cancel_deal' && action.pct && action.pct != 100) label += ' (' + action.pct + '%)';
+    return label;
+}
+
+function ruleStatusLabel(status) {
+    if (status === 'active') return '<span style="color:var(--accent)">Aktif</span>';
+    if (status === 'triggered') return '<span style="color:var(--green)">Terpicu</span>';
+    if (status === 'failed') return '<span style="color:var(--red)">Gagal</span>';
+    return status || '?';
+}
+
+function loadRulesList() {
+    var box = document.getElementById('rules-list');
+    if (!box) return;
+    box.innerHTML = '<span style="color:var(--muted)">Memuat...</span>';
+    fetch('/api/conditional_rules').then(function(r){ return r.json(); }).then(function(d){
+        var rules = (d && d.rules) || [];
+        if (!rules.length) { box.innerHTML = '<span style="color:var(--muted)">Belum ada aturan.</span>'; return; }
+        box.innerHTML = rules.slice().reverse().map(function(r){
+            return '<div style="padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.06)">'
+                + '<div><b>' + String(r.symbol || '').replace('USDT', '/USDT') + '</b> &mdash; ' + ruleStatusLabel(r.status) + '</div>'
+                + '<div style="color:var(--muted);font-size:10px;margin-top:2px">Kalau ' + ruleConditionText(r.condition) + ' &rarr; ' + ruleActionText(r.action) + '</div>'
+                + (r.note ? '<div style="color:var(--muted);font-size:10px;font-style:italic;margin-top:2px">&quot;' + r.note + '&quot;</div>' : '')
+                + '<button type="button" onclick="deleteRule(\\'' + r.id + '\\')" style="margin-top:4px;background:rgba(255,100,100,.15);color:var(--red);border:1px solid var(--red);border-radius:3px;padding:2px 8px;font-size:10px;cursor:pointer">Hapus</button>'
+                + '</div>';
+        }).join('');
+    }).catch(function(e){ box.innerHTML = '<span style="color:var(--red)">Error: ' + e + '</span>'; });
+}
+
+function deleteRule(id) {
+    if (!confirm('Hapus aturan ini?')) return;
+    fetch('/api/conditional_rules/delete', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: id})})
+        .then(function(r){ return r.json(); }).then(function(){ loadRulesList(); });
+}
+
+function parseRuleText() {
+    var input = document.getElementById('rules-input');
+    var text = input ? input.value.trim() : '';
+    if (!text) return;
+    var btn = document.getElementById('rules-parse-btn');
+    var resultBox = document.getElementById('rules-parse-result');
+    if (btn) { btn.disabled = true; btn.textContent = '...'; }
+    resultBox.innerHTML = '<div style="padding:8px 14px;color:var(--muted);font-style:italic;font-size:11px">AI sedang menerjemahkan...</div>';
+    fetch('/api/conditional_rules/parse', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text})})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            if (btn) { btn.disabled = false; btn.textContent = 'Buat Aturan'; }
+            if (!d || !d.ok) {
+                resultBox.innerHTML = '<div style="padding:8px 14px;color:var(--red);font-size:11px">Error: ' + ((d && d.error) || 'tidak diketahui') + '</div>';
+                return;
+            }
+            resultBox.innerHTML =
+                '<div style="padding:8px 14px;border-top:1px solid var(--border);font-size:11px">'
+                + '<div style="margin-bottom:6px">Aturan yang dipahami AI:<br>'
+                + '<b>' + String(d.symbol || '').replace('USDT', '/USDT') + '</b> &mdash; kalau ' + ruleConditionText(d.condition) + ', ' + ruleActionText(d.action)
+                + '</div>'
+                + '<button type="button" id="rules-confirm-btn" style="background:var(--green);color:#000;border:none;border-radius:4px;padding:5px 12px;font-size:11px;cursor:pointer;margin-right:6px;font-weight:600">Konfirmasi &amp; Aktifkan</button>'
+                + '<button type="button" id="rules-cancel-btn" style="background:rgba(255,100,100,.15);color:var(--red);border:1px solid var(--red);border-radius:4px;padding:5px 12px;font-size:11px;cursor:pointer">Batalkan</button>'
+                + '</div>';
+            document.getElementById('rules-confirm-btn').addEventListener('click', function(){ confirmRule(d); });
+            document.getElementById('rules-cancel-btn').addEventListener('click', function(){ resultBox.innerHTML = ''; if (input) input.value = ''; });
+        })
+        .catch(function(e){
+            if (btn) { btn.disabled = false; btn.textContent = 'Buat Aturan'; }
+            resultBox.innerHTML = '<div style="padding:8px 14px;color:var(--red);font-size:11px">Error: ' + e + '</div>';
+        });
+}
+
+function confirmRule(parsed) {
+    fetch('/api/conditional_rules', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({symbol: parsed.symbol, condition: parsed.condition, action: parsed.action, note: parsed.note})})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            var resultBox = document.getElementById('rules-parse-result');
+            var input = document.getElementById('rules-input');
+            if (d && d.ok) {
+                resultBox.innerHTML = '<div style="padding:8px 14px;color:var(--green);font-size:11px">Aturan diaktifkan.</div>';
+                if (input) input.value = '';
+                loadRulesList();
+            } else {
+                resultBox.innerHTML = '<div style="padding:8px 14px;color:var(--red);font-size:11px">Gagal simpan: ' + ((d && d.error) || 'tidak diketahui') + '</div>';
+            }
+        })
+        .catch(function(e){
+            var resultBox = document.getElementById('rules-parse-result');
+            if (resultBox) resultBox.innerHTML = '<div style="padding:8px 14px;color:var(--red);font-size:11px">Error: ' + e + '</div>';
+        });
+}
 </script>
 
 <!-- ═══════════════ STRATEGY CONTROL ═══════════════ -->
@@ -23977,6 +24328,98 @@ def run_web_dashboard():
             # ai_decision_capacity_swap()) -- perilaku endpoint ini TIDAK berubah (tetap HTTP 200
             # apa pun hasilnya, seperti sebelumnya -- caller baca field "ok" di body).
             return jsonify(execute_close_now(sym, "manual_close (dashboard)"))
+
+        @app.route("/api/conditional_rules/parse", methods=["POST"])
+        def api_conditional_rules_parse():
+            """Terjemahkan teks bebas jadi aturan terstruktur (BELUM disimpan/aktif) -- lihat
+            REMARK panjang di CONDITIONAL_RULES_FILE (Python, dekat load_conditional_rules()).
+            Reuse _ai_call() (sudah failover Anthropic->Alibaba->Gemini)."""
+            payload = request.get_json(force=True, silent=True) or {}
+            text = (payload.get("text") or "").strip()
+            if not text:
+                return jsonify({"ok": False, "error": "Teks kosong"}), 400
+            cond_list = "\n".join(f"- {k}: {v}" for k, v in CONDITIONAL_RULE_CONDITION_TYPES.items())
+            action_list = "\n".join(f"- {k}: {v}" for k, v in CONDITIONAL_RULE_ACTION_TYPES.items())
+            prompt = (
+                "Kamu penerjemah perintah trading Mas Budi jadi ATURAN TERSTRUKTUR (JSON). "
+                "JANGAN eksekusi apa pun, JANGAN jawab di luar JSON -- balas SATU objek JSON saja, "
+                "tanpa markdown/backtick, tanpa penjelasan tambahan.\n\n"
+                f"Tipe kondisi yang tersedia:\n{cond_list}\n\n"
+                f"Tipe aksi yang tersedia:\n{action_list}\n\n"
+                "Format output WAJIB persis:\n"
+                '{"symbol": "<PAIR USDT, misal DUSKUSDT>", "condition": {"type": "<salah satu tipe kondisi>", '
+                '...parameter lain sesuai tipe...}, "action": {"type": "<salah satu tipe aksi>", '
+                '...parameter lain kalau perlu...}, "note": "<ringkasan 1 kalimat Bahasa Indonesia>"}\n\n'
+                "Kalau instruksi TIDAK bisa diterjemahkan ke kondisi/aksi di atas, balas PERSIS: "
+                '{"error": "<alasan singkat>"}\n\n'
+                f'Instruksi Mas Budi: "{text}"'
+            )
+            raw = _ai_call(prompt)
+            if not raw:
+                return jsonify({"ok": False, "error": "Semua AI provider gagal dipanggil -- cek Railway log"}), 502
+            match = re.search(r'\{.*\}', raw, re.S)
+            if not match:
+                return jsonify({"ok": False, "error": f"AI tidak menghasilkan JSON valid: {raw[:200]}"})
+            try:
+                parsed = json.loads(match.group(0))
+            except Exception as e:
+                return jsonify({"ok": False, "error": f"AI menghasilkan JSON rusak: {e}"})
+            if "error" in parsed:
+                return jsonify({"ok": False, "error": parsed["error"]})
+            symbol = normalize_binance_symbol(parsed.get("symbol", ""))
+            if not symbol.endswith("USDT"):
+                return jsonify({"ok": False, "error": "Simbol tidak valid/tidak disebutkan"})
+            with active_deals_lock:
+                if symbol not in active_deals:
+                    return jsonify({"ok": False, "error": f"{to_display_pair(symbol)} tidak ada di Active Deals -- aturan cuma berlaku utk deal yang sedang aktif"})
+            cond = parsed.get("condition", {}) or {}
+            action = parsed.get("action", {}) or {}
+            if cond.get("type") not in CONDITIONAL_RULE_CONDITION_TYPES:
+                return jsonify({"ok": False, "error": f"Tipe kondisi tidak dikenal: {cond.get('type')}"})
+            if action.get("type") not in CONDITIONAL_RULE_ACTION_TYPES:
+                return jsonify({"ok": False, "error": f"Tipe aksi tidak dikenal: {action.get('type')}"})
+            return jsonify({"ok": True, "symbol": symbol, "condition": cond, "action": action,
+                            "note": parsed.get("note", text)})
+
+        @app.route("/api/conditional_rules", methods=["GET", "POST"])
+        def api_conditional_rules():
+            """GET: daftar semua aturan (aktif/triggered/failed). POST: simpan aturan BARU yang
+            SUDAH dikonfirmasi Mas Budi (hasil dari /api/conditional_rules/parse) -- baru dari
+            titik ini aturan benar2 mulai dicek tiap siklus thread2_monitor()."""
+            if request.method == "GET":
+                return jsonify({"ok": True, "rules": load_conditional_rules()})
+            payload = request.get_json(force=True, silent=True) or {}
+            symbol = normalize_binance_symbol(payload.get("symbol", ""))
+            condition = payload.get("condition", {}) or {}
+            action = payload.get("action", {}) or {}
+            note = payload.get("note", "")
+            if (not symbol.endswith("USDT") or condition.get("type") not in CONDITIONAL_RULE_CONDITION_TYPES
+                    or action.get("type") not in CONDITIONAL_RULE_ACTION_TYPES):
+                return jsonify({"ok": False, "error": "Data aturan tidak valid"}), 400
+            with active_deals_lock:
+                if symbol not in active_deals:
+                    return jsonify({"ok": False, "error": f"{to_display_pair(symbol)} tidak ada di Active Deals"}), 400
+            rule = {
+                "id": str(int(time.time() * 1000)),
+                "symbol": symbol, "condition": condition, "action": action, "note": note,
+                "status": "active", "created_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            rules = load_conditional_rules()
+            rules.append(rule)
+            save_conditional_rules(rules)
+            log(f"[RULES] Aturan baru disimpan: {symbol} -- {note}")
+            return jsonify({"ok": True, "rule": rule})
+
+        @app.route("/api/conditional_rules/delete", methods=["POST"])
+        def api_conditional_rules_delete():
+            payload = request.get_json(force=True, silent=True) or {}
+            rule_id = str(payload.get("id", ""))
+            rules = load_conditional_rules()
+            new_rules = [r for r in rules if str(r.get("id")) != rule_id]
+            if len(new_rules) == len(rules):
+                return jsonify({"ok": False, "error": "Aturan tidak ditemukan"}), 404
+            save_conditional_rules(new_rules)
+            return jsonify({"ok": True})
 
         @app.route("/cancel_deal", methods=["POST"])
         def cancel_deal():
