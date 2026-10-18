@@ -13941,6 +13941,7 @@ _dashboard_state = {
         "MomentumBreak-1h": [],
         "BBSnap-4h": [],
         "BBSnap-8h": [],
+        "Top Gainers-4h": [],
     },
     "last_scan": {},
 }
@@ -15419,18 +15420,41 @@ refreshShadowChart();
              kandidat (.nm-opt, diisi dari near_miss dict) SELALU kosong kalau dipilih -- bukan
              "belum ada data", tidak akan pernah ada lagi. Entry STRAT_SECONDARY (dash.js) utk
              'Reversal-8h T1'/'Reversal-8h T3-REV'/'CrossEMA-4h'/'Akumulasi-4h' JUGA dihapus
-             sekalian -- sudah tidak terjangkau lagi sejak opsi dropdown-nya hilang. -->
+             sekalian -- sudah tidak terjangkau lagi sejak opsi dropdown-nya hilang.
+             18/10/2026 (lanjutan, permintaan Mas Budi "kok masih tetap hanya 3 padahal sudah
+             ada begitu banyak strategies"): 7 strategi live BARU ditambahkan di sini --
+             TrenKonfirmasi-4h/Decouple-4h/RVolBreak-8h/Dip-Buy Universe/BBSnap-4h/BBSnap-8h
+             (near_miss-nya SUDAH otomatis terisi tiap siklus scan masing2 thread, cuma belum
+             pernah ditampilkan di dropdown ini) + Top Gainers-4h (TIDAK ada near_miss dict
+             sejak awal krn tidak ada konsep lolos/gagal rule-based -- update_dashboard_near_miss()
+             sekarang DIPANGGIL JUGA dari thread_topgainers_scan() tiap siklus dgn n_pass=rank
+             biar tampil "(rank/10)", lihat REMARK di sana). /api/strategy_detail JUGA dapat
+             7 cabang baru yg match nama-nama ini -- lihat REMARK di situ. -->
         <select id="strat-select" onchange="onStratSelect(this.value)" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 10px;font-size:12px;font-family:var(--font);cursor:pointer;min-width:180px">
           <option value="KeltnerBreak-12h">KeltnerBreak-12h</option>
           <option value="brkX2-4h">brkX2-4h</option>
           <option value="MomentumBreak-1h">MomentumBreak-1h ⚡</option>
+          <option value="TrenKonfirmasi-4h">TrenKonfirmasi-4h</option>
+          <option value="Decouple-4h">Decouple-4h</option>
+          <option value="RVolBreak-8h">RVolBreak-8h</option>
+          <option value="Dip-Buy Universe">Dip-Buy Universe</option>
+          <option value="BBSnap-4h">BBSnap-4h</option>
+          <option value="BBSnap-8h">BBSnap-8h</option>
+          <option value="Top Gainers-4h">Top Gainers-4h ⚡</option>
         </select>
       </div>
       <!-- Dropdown kandidat dinamis per strategi -->
       {% set all_nm = {
         "KeltnerBreak-12h": near_miss.get("KeltnerBreak-12h", []),
         "brkX2-4h": near_miss.get("brkX2-4h", []),
-        "MomentumBreak-1h": near_miss.get("MomentumBreak-1h", [])
+        "MomentumBreak-1h": near_miss.get("MomentumBreak-1h", []),
+        "TrenKonfirmasi-4h": near_miss.get("TrenKonfirmasi-4h", []),
+        "Decouple-4h": near_miss.get("Decouple-4h", []),
+        "RVolBreak-8h": near_miss.get("RVolBreak-8h", []),
+        "Dip-Buy Universe": near_miss.get("Dip-Buy Universe", []),
+        "BBSnap-4h": near_miss.get("BBSnap-4h", []),
+        "BBSnap-8h": near_miss.get("BBSnap-8h", []),
+        "Top Gainers-4h": near_miss.get("Top Gainers-4h", [])
       } %}
       <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <label style="font-size:11px;color:var(--muted)">Pilih item hasil scan:</label>
@@ -20188,6 +20212,16 @@ def thread_topgainers_scan() -> None:
     # pernah kebaca) yang jadi kandidat. Symbol yang dari siklus lalu SUDAH di band ini (sekadar
     # masih nangkring, bukan baru masuk) TIDAK ditawarkan ulang ke AI tiap siklus.
     band = ranked[TOPGAINERS_RANK_START - 1:TOPGAINERS_RANK_END]
+
+    # 18/10/2026 (permintaan Mas Budi, Manual Scan dropdown "kok masih tetap hanya 3"): isi
+    # near_miss dict jg utk strategi ini (dulu SENGAJA tidak ada krn tidak ada konsep lolos/
+    # gagal rule-based) -- n_pass dipakai utk nyimpen RANK (bukan jumlah syarat lolos) biar
+    # dropdown "Pilih item hasil scan" tampilkan "AMPUSDT (9/10)" = rank #9. Diisi dari band
+    # (3 occupant rank 8-10 SAAT INI), bukan fresh_picks -- Mas Budi mau lihat siapa yg lagi
+    # duduk di situ, terlepas dari sudah pernah ditawarkan ke AI atau belum.
+    update_dashboard_near_miss("Top Gainers-4h",
+        [(rank_idx, sym, [], TOPGAINERS_RANK_END) for rank_idx, (chg_pct, sym) in enumerate(band, start=TOPGAINERS_RANK_START)])
+
     fresh_picks = []
     for rank_idx, (chg_pct, sym) in enumerate(band, start=TOPGAINERS_RANK_START):
         if sym in existing:
@@ -25883,6 +25917,172 @@ def run_web_dashboard():
                         "primary": primary_labels,
                         "secondary": secondary_labels,
                         "primary_ok": hit is not None,
+                    }))
+
+                # 18/10/2026 (permintaan Mas Budi, Manual Scan multi-strategi): 7 cabang baru di
+                # bawah ini -- SETIAP cabang READ-ONLY, menghitung ulang kondisi yg SAMA PERSIS
+                # dgn scan thread live-nya (angka/konstanta disalin apa adanya, bukan ditulis
+                # ulang/ditebak) TAPI tidak memanggil fungsi live itu sendiri -- nol risiko ke
+                # jalur trading yg sedang jalan.
+                elif strat == "TrenKonfirmasi-4h":
+                    df = get_ohlcv_4h(sym, limit=max(TRENDCONFIRM_ATR_MEDIAN_WINDOW + 20, 200))
+                    if df is None or len(df) < TRENDCONFIRM_ATR_MEDIAN_WINDOW + 20:
+                        return jsonify(_s({"error": "Data kurang"}))
+                    if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
+                    df = compute_indicators_4h(df)
+                    r = df.iloc[-1]
+                    ema20 = r.get('ema20')
+                    if pd.isna(ema20) or ema20 <= 0: return jsonify(_s({"error": "EMA20 belum tersedia"}))
+                    atrp = r.get('atr_pct'); rsi = r.get('rsi')
+                    vol_ma20 = df['vol'].rolling(20).mean().iloc[-1]
+                    if pd.isna(atrp) or pd.isna(vol_ma20) or vol_ma20<=0 or pd.isna(rsi):
+                        return jsonify(_s({"error": "Indikator belum lengkap"}))
+                    rvol = float(r['vol']) / float(vol_ma20)
+                    atr_med = df['atr_pct'].rolling(TRENDCONFIRM_ATR_MEDIAN_WINDOW).median().iloc[-1]
+                    if pd.isna(atr_med): return jsonify(_s({"error": "ATR median belum tersedia"}))
+                    gap_ema20 = (float(r['close'])/float(ema20)-1)*100
+                    p = [float(atrp)>=float(atr_med), gap_ema20>=0.0, rvol>=TRENDCONFIRM_RVOL_MIN, float(rsi)<TRENDCONFIRM_RSI_MAX]
+                    return jsonify(_s({"strat": strat, "sym": sym,
+                        "primary": [
+                            {"label":f"ATR% >= median{TRENDCONFIRM_ATR_MEDIAN_WINDOW}","ok":p[0],"actual":f"{atrp:.2f}% vs med {atr_med:.2f}%"},
+                            {"label":"close >= EMA20","ok":p[1],"actual":f"{gap_ema20:+.2f}%"},
+                            {"label":f"RVOL >= {TRENDCONFIRM_RVOL_MIN:g}x","ok":p[2],"actual":f"{rvol:.2f}x"},
+                            {"label":f"RSI < {TRENDCONFIRM_RSI_MAX:g}","ok":p[3],"actual":f"{float(rsi):.1f}"},
+                        ],
+                        "secondary": [],
+                        "primary_ok": all(p),
+                    }))
+
+                elif strat == "Decouple-4h":
+                    import pandas_ta as _pta_dc2
+                    btc_df = get_ohlcv_4h('BTCUSDT', limit=SQUIZED_BB_LOOKBACK + 50)
+                    if btc_df is not None and len(btc_df) and btc_df['ct'].iloc[-1] >= int(time.time()*1000):
+                        btc_df = btc_df.iloc[:-1]
+                    if btc_df is None or len(btc_df) <= DECOUPLE_LOOKBACK+1:
+                        return jsonify(_s({"error": "Data BTC kurang"}))
+                    df = get_ohlcv_4h(sym, limit=SQUIZED_BB_LOOKBACK + 50)
+                    if df is None or len(df) < SQUIZED_BB_LOOKBACK + 25:
+                        return jsonify(_s({"error": "Data kurang"}))
+                    if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
+                    if len(df) <= DECOUPLE_LOOKBACK+1: return jsonify(_s({"error": "Data kurang"}))
+                    bc = btc_df['close'].values; cc = df['close'].values
+                    btc_ret20 = bc[-1]/bc[-1-DECOUPLE_LOOKBACK]-1
+                    btc_ret20_prev = bc[-2]/bc[-2-DECOUPLE_LOOKBACK]-1
+                    coin_ret20 = cc[-1]/cc[-1-DECOUPLE_LOOKBACK]-1
+                    coin_ret20_prev = cc[-2]/cc[-2-DECOUPLE_LOOKBACK]-1
+                    rel_now = (coin_ret20-btc_ret20)*100
+                    rel_prev = (coin_ret20_prev-btc_ret20_prev)*100
+                    p = [rel_now>=DECOUPLE_REL_MIN_PCT, rel_prev<DECOUPLE_REL_MIN_PCT]
+                    return jsonify(_s({"strat": strat, "sym": sym,
+                        "primary": [
+                            {"label":f"Selisih vs BTC >= {DECOUPLE_REL_MIN_PCT:g}pp","ok":p[0],"actual":f"{rel_now:+.1f}pp"},
+                            {"label":"Fresh crossing (blm unggul candle lalu)","ok":p[1],"actual":f"candle lalu {rel_prev:+.1f}pp"},
+                        ],
+                        "secondary": [],
+                        "primary_ok": all(p),
+                    }))
+
+                elif strat == "RVolBreak-8h":
+                    import pandas_ta as _pta_rv2
+                    df = get_ohlcv(sym, interval="8h", limit=80)
+                    if df is None or len(df) < 50: return jsonify(_s({"error": "Data kurang"}))
+                    if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
+                    if len(df) < 46: return jsonify(_s({"error": "Data kurang"}))
+                    df = _rvolbreak8h_compute(df)
+                    i = len(df)-1
+                    close_now = float(df['close'].iloc[i])
+                    dh = df['donchian_high'].iloc[i]; rvol_now = df['rvol'].iloc[i]
+                    if pd.isna(dh) or pd.isna(rvol_now): return jsonify(_s({"error": "Indikator belum lengkap"}))
+                    p = [close_now>dh, float(rvol_now)>=RVOLBREAK_RVOL_MIN]
+                    return jsonify(_s({"strat": strat, "sym": sym,
+                        "primary": [
+                            {"label":"close > Donchian High24","ok":p[0],"actual":f"{close_now:.6g} vs {float(dh):.6g}"},
+                            {"label":f"RVOL >= {RVOLBREAK_RVOL_MIN:g}x","ok":p[1],"actual":f"{float(rvol_now):.2f}x"},
+                        ],
+                        "secondary": [],
+                        "primary_ok": all(p),
+                    }))
+
+                elif strat == "Dip-Buy Universe":
+                    df = get_ohlcv_4h(sym, limit=40)
+                    if df is None or len(df) < 20: return jsonify(_s({"error": "Data kurang"}))
+                    if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
+                    if len(df) < 16: return jsonify(_s({"error": "Data kurang"}))
+                    close_now, close_prev = float(df['close'].iloc[-1]), float(df['close'].iloc[-2])
+                    if close_prev<=0: return jsonify(_s({"error": "Harga sebelumnya 0"}))
+                    chg_4h = (close_now/close_prev-1)*100
+                    p = [chg_4h <= SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN]
+                    return jsonify(_s({"strat": strat, "sym": sym,
+                        "primary": [
+                            {"label":f"Drop 1 candle 4h <= {SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN:g}%","ok":p[0],"actual":f"{chg_4h:+.2f}%"},
+                        ],
+                        "secondary": [],
+                        "primary_ok": all(p),
+                    }))
+
+                elif strat in ("BBSnap-4h", "BBSnap-8h"):
+                    import pandas_ta as _pta_bbs2
+                    tf_label = '4h' if strat == "BBSnap-4h" else '8h'
+                    cfg = _BBSNAP_TF_CONFIG[tf_label]
+                    df = get_ohlcv(sym, interval=cfg['interval'], limit=cfg['limit'])
+                    if df is None or len(df) < 60: return jsonify(_s({"error": "Data kurang"}))
+                    if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
+                    if len(df) < 46: return jsonify(_s({"error": "Data kurang"}))
+                    c, h, l, v = df['close'], df['high'], df['low'], df['vol']
+                    bb = _pta_bbs2.bbands(c, length=20, std=2)
+                    bb_lower = bb.iloc[:,0]; bb_mid = bb.iloc[:,1]; bb_upper = bb.iloc[:,2]
+                    bb_width_pct = (bb_upper-bb_lower)/bb_mid*100
+                    vol_ma20 = v.rolling(20).mean(); rvol = v/vol_ma20
+                    n = len(df); i = n-1
+                    close_ = c.values; bbl_ = bb_lower.values; bbw_ = bb_width_pct.values; rvol_ = rvol.values
+                    if any(pd.isna(x) for x in [bbl_[i], bbl_[i-1], rvol_[i]]):
+                        return jsonify(_s({"error": "Indikator belum lengkap"}))
+                    below = close_ <= bbl_
+                    cross_up_ok = bool(below[i-1] and not below[i])
+                    rvol_now = float(rvol_[i])
+                    j = i-1
+                    while j > 25 and below[j-1]: j -= 1
+                    bbw_breakdown = float(bbw_[j]) if not pd.isna(bbw_[j]) else None
+                    p = [cross_up_ok,
+                         bbw_breakdown is not None and bbw_breakdown > cfg['bbwidth_min'],
+                         rvol_now >= BBSNAP_RVOL_MIN]
+                    return jsonify(_s({"strat": strat, "sym": sym,
+                        "primary": [
+                            {"label":"Cross-up BB Lower stlh breakdown","ok":p[0],"actual":"Ya" if cross_up_ok else "Belum"},
+                            {"label":f"BB-width saat breakdown > {cfg['bbwidth_min']:g}%","ok":p[1],"actual":f"{bbw_breakdown:.2f}%" if bbw_breakdown is not None else "n/a"},
+                            {"label":f"RVOL >= {BBSNAP_RVOL_MIN:g}x","ok":p[2],"actual":f"{rvol_now:.2f}x"},
+                        ],
+                        "secondary": [],
+                        "primary_ok": all(p),
+                    }))
+
+                elif strat == "Top Gainers-4h":
+                    # Informasional -- strategi ini TIDAK punya gerbang rule-based (AI menilai
+                    # murni dari data teknikal, lihat ai_decision_topgainers()), jadi "ok" di
+                    # sini cuma indikasi arah per-indikator, BUKAN syarat lolos/gagal sungguhan.
+                    df = get_ohlcv_4h(sym, limit=60)
+                    if df is None or len(df) < 30: return jsonify(_s({"error": "Data kurang"}))
+                    if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
+                    df = compute_indicators_4h(df)
+                    row = df.iloc[-1]
+                    price_now = get_price_now(sym)
+                    ema20 = float(row['ema20']) if not pd.isna(row.get('ema20')) else price_now
+                    vs_ema20 = (price_now/ema20-1)*100 if ema20 else 0
+                    rsi = float(row['rsi']) if not pd.isna(row.get('rsi')) else None
+                    macd_h = float(row['macd_hist']) if not pd.isna(row.get('macd_hist')) else None
+                    stoch_k = float(row['stoch_k']) if not pd.isna(row.get('stoch_k')) else None
+                    vol_ma = float(row['vol_ma']) if not pd.isna(row.get('vol_ma')) and row['vol_ma']>0 else 0
+                    rvol = float(row['vol'])/vol_ma if vol_ma>0 else None
+                    return jsonify(_s({"strat": strat, "sym": sym,
+                        "primary": [
+                            {"label":"Harga vs EMA20","ok":vs_ema20>=0,"actual":f"{vs_ema20:+.2f}%"},
+                            {"label":"MACD histogram","ok":macd_h is not None and macd_h>0,"actual":f"{macd_h:.6f}" if macd_h is not None else "n/a"},
+                            {"label":"RSI","ok":rsi is not None and 30<=rsi<=70,"actual":f"{rsi:.1f}" if rsi is not None else "n/a"},
+                            {"label":"Stoch %K","ok":stoch_k is not None and stoch_k<80,"actual":f"{stoch_k:.1f}" if stoch_k is not None else "n/a"},
+                            {"label":"RVOL","ok":rvol is not None and rvol>=1.0,"actual":f"{rvol:.2f}x" if rvol is not None else "n/a"},
+                        ],
+                        "secondary": [],
+                        "primary_ok": vs_ema20>=0,
                     }))
 
                 else:
