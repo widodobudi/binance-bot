@@ -20079,7 +20079,10 @@ def thread_topgainers_scan() -> None:
         if sym in existing:
             continue
         try:
-            df = get_ohlcv_4h(sym, limit=3)
+            # 18/10/2026: get_ohlcv_4h() punya floor keras len(raw)<10 -> return None (line ~8527);
+            # limit=3 (cukup buat butuh 1 candle closed) SELALU kena floor itu dan SELALU None,
+            # bikin ranked kosong tiap siklus -- limit=10 pas floor-nya, tetap payload ringan.
+            df = get_ohlcv_4h(sym, limit=10)
             if df is None or len(df) < 2:
                 continue
             if df['ct'].iloc[-1] >= int(time.time() * 1000):
