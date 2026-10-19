@@ -10458,6 +10458,10 @@ def thread2_monitor():
                     active_deals[sym]['armed_prof_pct'] = prof_peak
                     active_deals[sym]['armed_since_ts'] = time.time()
                     active_deals[sym]['armed_live_atr']  = live_atrp
+                    # 19/10/2026 (patch "tc4h-armdini-short-cooldown"): dicatat supaya cooldown AI
+                    # close (di bawah, titik close_ai_hold_until) bisa tahu apakah arm ini lewat
+                    # BB Upper arm-dini dgn cushion tipis -- lihat REMARK di titik itu.
+                    active_deals[sym]['armed_via_bbupper'] = bool(_bbupper_touched and prof_peak < _cur_arm_pct)
             save_active_deals()
             log_oac('ARMED', sym, d.get('strategy', 'brkX2'), {
                 'peak_profit':  f"{prof_peak:.2f}%",
@@ -10938,9 +10942,27 @@ def thread2_monitor():
                 _last_notified_kind = d.get('close_ai_last_notified_kind')
                 _should_notify = (_reason_kind != _last_notified_kind)
                 if not ai_decision_close(sym, d.get('strategy', 'brkX2'), d, price, peak, reason, notify=_should_notify):
+                    # 19/10/2026 (permintaan Mas Budi, patch "tc4h-armdini-short-cooldown"): data
+                    # live 19/10 (SOLV -2,66%, OSMO -3,71%) -- trailing trend_confirm_4h yg armed
+                    # via BB Upper arm-dini dgn profit cushion ~0% (entry SUDAH di atas BB Upper
+                    # saat open) lalu kena cooldown 10 menit ini, posisi longsor TANPA proteksi
+                    # jauh melebihi jarak trailing yg didesain (dev 0,6%/0,45% -> realisasi
+                    # -2,66%/-3,71%). Backtest counterfactual (tc4h_armdini_counterfactual.py):
+                    # exit di trigger PERTAMA (tanpa delay cooldown) akan -0,81%/-0,87% -- jauh
+                    # lebih baik. KHUSUS kondisi ini (trend_confirm_4h + armed via BB Upper +
+                    # cushion <0,5%) cooldown dipersingkat 10 menit -> 1 menit. SEMUA kondisi lain
+                    # (strategi lain yg jg pakai BB-Upper arm-dini tapi SUDAH backtest net positif,
+                    # trend_confirm_4h armed normal/cushion >=0,5%, hard-stop/timeout/dll) TETAP
+                    # 10 menit, SENGAJA tidak disentuh -- tidak ada bukti kondisi itu bermasalah.
+                    _tc4h_short_cd = (
+                        strat == 'trend_confirm_4h'
+                        and bool(d.get('armed_via_bbupper', False))
+                        and float(d.get('armed_prof_pct', 999) or 999) < 0.5
+                    )
+                    _close_ai_hold_minutes = 1 if _tc4h_short_cd else 10
                     with active_deals_lock:
                         if sym in active_deals:
-                            active_deals[sym]['close_ai_hold_until'] = time.time() + 10 * 60
+                            active_deals[sym]['close_ai_hold_until'] = time.time() + _close_ai_hold_minutes * 60
                             if _should_notify:
                                 active_deals[sym]['close_ai_last_notified_kind'] = _reason_kind
                     save_active_deals()
