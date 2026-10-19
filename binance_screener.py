@@ -17286,7 +17286,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
       </span>
       <button onclick="loadSizecutSummary()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reload</button>
     </div>
-    <div id="sc-cards" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;align-items:start"></div>
+    <div id="sc-cards" style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;align-items:start"></div>
   </div>
   <div style="overflow-x:auto">
     <table id="ct-table" style="width:100%;border-collapse:collapse;font-size:11px">
