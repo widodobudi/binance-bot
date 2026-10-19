@@ -306,7 +306,17 @@ BE_TRIGGER_BY_STRATEGY = {'brkX2_4h': BRKX2_4H_BE_TRIGGER_PCT, 'trend_confirm_4h
 # SEMUA level buffer yg diuji (harga jatuh ke persis entry sebelum sempat kecek bot), jadi hasilnya
 # akan sama buruknya di buffer berapa pun -- bukan argumen utk tetap di 0.5. Detail: scratchpad
 # tc4h_be_buffer_backtest2.py.
-BE_EXIT_BUFFER_PCT_BY_STRATEGY = {'brkX2_4h': 0.1, 'trend_confirm_4h': 0.99}
+# 19/10/2026 (permintaan Mas Budi): bbsnap_4h/bbsnap_8h SAMA SEKALI TIDAK ADA di dict ini sejak
+# ditambahkan ke BE_TRIGGER_BY_STRATEGY (16/10) -- diam2 jatuh ke default .get(strat,0.1)=0.1%,
+# PERSIS bug yg sudah ditemukan+diperbaiki utk trend_confirm_4h 11/10 (buffer 0.1% < biaya
+# round-trip 0.2%, SELALU minus walau harga sudah balik naik -- bukti: PUMP/USDT entry
+# 0.00445900->exit 0.00446000, harga NAIK +0.02% tapi hasil -0.18%, selisih ~0.20% = persis
+# FEE_ROUND_TRIP_PCT). Dinaikkan ke 0.5% -- angka LANGKAH PERTAMA yg sama dipakai utk
+# trend_confirm_4h sebelum di-backtest-sweep lebih lanjut jadi 0.99% (lihat REMARK di atas) --
+# BBSnap baru 5 hari jalan (16/10), belum cukup data live/backtest sendiri utk sweep serupa,
+# jadi dipakai angka konservatif yg sudah terbukti aman dulu, bukan hasil optimasi penuh.
+BE_EXIT_BUFFER_PCT_BY_STRATEGY = {'brkX2_4h': 0.1, 'trend_confirm_4h': 0.99,
+                                   'bbsnap_4h': 0.5, 'bbsnap_8h': 0.5}
 # TrenKonfirmasi-4h K1.5 + cap 10.8% (permintaan Mas Budi, prioritas: hard-stop lebih jarang & untung terjaga):
 # hard-stop 18.2% -> 14.0% dari trade, rugi terburuk -12.3% -> -11.0%, avg +1.80% -> +1.85% (2025+: 20.6% -> 16.2%,
 # +1.52% -> +1.53%). Stop per tier ATR: <1% 6.0%, <2% 8.25%, <4% 10.5%, >=4% 10.8% (cap). REMARK nilai lama (rollback):
