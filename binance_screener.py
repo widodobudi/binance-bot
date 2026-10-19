@@ -17269,22 +17269,29 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
   <div id="ct-equity" style="margin-bottom:14px"></div>
   <div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:14px">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-      <b style="font-size:12px">Size-Cut per Strategi</b>
-      <select id="sc-filter-time" onchange="onScTimeFilterChange()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
-        <option value="">Semua waktu</option>
-        <option value="today">Hari ini</option>
-        <option value="yesterday">Kemarin</option>
-        <option value="week">Minggu ini</option>
-        <option value="7d">7 hari terakhir</option>
-        <option value="30d">30 hari terakhir</option>
-        <option value="custom">Custom</option>
+      <b style="font-size:12px">Analisis per Strategi</b>
+      <select id="sc-mode" onchange="onScModeChange()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+        <option value="sizecut">Size Cut</option>
+        <option value="profit">Klasifikasi Profit</option>
       </select>
-      <span id="sc-filter-custom-range" style="display:none;gap:4px;align-items:center">
-        <input type="date" id="sc-filter-from" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
-        <span style="color:var(--muted);font-size:11px">s/d</span>
-        <input type="date" id="sc-filter-to" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+      <span id="sc-filter-time-wrap" style="display:inline-flex;gap:10px;align-items:center">
+        <select id="sc-filter-time" onchange="onScTimeFilterChange()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+          <option value="">Semua waktu</option>
+          <option value="today">Hari ini</option>
+          <option value="yesterday">Kemarin</option>
+          <option value="week">Minggu ini</option>
+          <option value="7d">7 hari terakhir</option>
+          <option value="30d">30 hari terakhir</option>
+          <option value="custom">Custom</option>
+        </select>
+        <span id="sc-filter-custom-range" style="display:none;gap:4px;align-items:center">
+          <input type="date" id="sc-filter-from" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+          <span style="color:var(--muted);font-size:11px">s/d</span>
+          <input type="date" id="sc-filter-to" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+        </span>
       </span>
-      <button onclick="loadSizecutSummary()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reload</button>
+      <span id="sc-profit-note" style="display:none;color:var(--muted);font-size:10.5px">(trade sebelum fitur size-cut ada, close &lt; 16/10/2026 -- periode tetap, tidak ikut filter waktu)</span>
+      <button onclick="loadScActiveMode()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reload</button>
     </div>
     <div id="sc-cards" style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;align-items:start"></div>
   </div>
@@ -17446,6 +17453,100 @@ function renderCtEquityCurve(rows) {
 // ── Size-Cut per Strategi (20/10/2026, permintaan Mas Budi) ──────────────────────
 var SC_STRAT_MAP = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
 var SC_CAT_COLOR = {volatil:'#2a78d6', ekstrem:'#1baf7a', st_turun:'#eb6834', lainnya:'#898781'};
+// Klasifikasi Profit (20/10/2026, permintaan Mas Budi): skala diverging rugi->impas->untung,
+// dipetakan dari token --red/--green dashboard yg sudah ada (bukan palet kategori baru) --
+// konsisten dgn warna profit/loss yg sudah dipakai di tabel History.
+var PC_CAT_COLOR = {rugi_besar:'#ff4f6a', rugi_kecil:'#ff9eb0', impas:'#8892a4', untung_sedang:'#6fe0c0', untung_besar:'#00c896'};
+var PC_BUCKETS = [
+  {key:'rugi_besar',    label:'Rugi besar (< -5%)',        test:function(p){ return p < -5; }},
+  {key:'rugi_kecil',    label:'Rugi kecil (-5% s/d 0%)',    test:function(p){ return p >= -5 && p < 0; }},
+  {key:'impas',         label:'Impas/untung tipis (0-1%)',  test:function(p){ return p >= 0 && p < 1; }},
+  {key:'untung_sedang', label:'Untung sedang (1-3%)',       test:function(p){ return p >= 1 && p < 3; }},
+  {key:'untung_besar',  label:'Untung besar (> 3%)',        test:function(p){ return p >= 3; }},
+];
+var PC_CUTOFF_DATE = '2026-10-15';  // date_to -- close_time sebelum fitur size-cut ada (16/10)
+
+function onScModeChange() {
+  var mode = document.getElementById('sc-mode').value;
+  var timeWrap = document.getElementById('sc-filter-time-wrap');
+  var note = document.getElementById('sc-profit-note');
+  if (timeWrap) timeWrap.style.display = (mode === 'profit') ? 'none' : 'inline-flex';
+  if (note) note.style.display = (mode === 'profit') ? 'inline' : 'none';
+}
+
+function loadScActiveMode() {
+  var mode = document.getElementById('sc-mode').value;
+  if (mode === 'profit') loadProfitClassification();
+  else loadSizecutSummary();
+}
+
+function loadProfitClassification() {
+  fetch('/api/closed_trades?date_to=' + PC_CUTOFF_DATE)
+    .then(function(r){ return r.json(); })
+    .then(function(data){ renderProfitClassificationCards(data.trades || data.rows || []); })
+    .catch(function(){ var el = document.getElementById('sc-cards'); if (el) el.innerHTML = '<span style="color:var(--muted);font-size:11px">Gagal muat data klasifikasi profit.</span>'; });
+}
+
+function renderProfitClassificationCards(trades) {
+  var el = document.getElementById('sc-cards');
+  if (!el) return;
+  var byStrategy = {};
+  trades.forEach(function(r){
+    var strat = r.strategy || '?';
+    var node = byStrategy[strat] || (byStrategy[strat] = {total:0, categories:{}, rows:[]});
+    var pct = parseFloat(r.profit_pct || 0);
+    var usd = parseFloat(r.profit_usd || 0);
+    var bucket = PC_BUCKETS.filter(function(b){ return b.test(pct); })[0] || PC_BUCKETS[2];
+    node.total++;
+    var cat = node.categories[bucket.key] || (node.categories[bucket.key] = {label:bucket.label, count:0, usd_sum:0});
+    cat.count++;
+    cat.usd_sum += usd;
+    node.rows.push({wib:r.close_time, symbol:r.symbol, category:bucket.key, label:bucket.label, profit_pct:pct.toFixed(2), profit_usd:usd.toFixed(2)});
+  });
+  var keys = Object.keys(byStrategy).sort();
+  if (!keys.length) { el.innerHTML = '<span style="color:var(--muted);font-size:11px">Tidak ada trade pada periode ini.</span>'; return; }
+  el.innerHTML = keys.map(function(key){
+    var node = byStrategy[key];
+    var label = SC_STRAT_MAP[key] || key;
+    // urutan tetap sesuai PC_BUCKETS (rugi besar -> untung besar), bukan Object.keys bebas
+    var orderedCats = {};
+    PC_BUCKETS.forEach(function(b){ if (node.categories[b.key]) orderedCats[b.key] = Object.assign({pct: Math.round(1000*node.categories[b.key].count/node.total)/10}, node.categories[b.key]); });
+    var pieSvg = _scBuildPieSvgColored(orderedCats, node.total, PC_CAT_COLOR, 'trade');
+    var legend = Object.keys(orderedCats).map(function(ck){
+      var c = orderedCats[ck];
+      var color = PC_CAT_COLOR[ck];
+      return '<div style="display:flex;align-items:center;gap:6px;font-size:11px">'+
+        '<span style="width:9px;height:9px;border-radius:2px;background:'+color+';flex:0 0 auto"></span>'+
+        '<span style="flex:1">'+c.label+'</span>'+
+        '<b style="font-variant-numeric:tabular-nums">'+c.count+'</b>'+
+        '<span style="color:var(--muted);font-size:10px;width:36px;text-align:right">'+c.pct+'%</span>'+
+        '<span style="color:' + (c.usd_sum>=0?'var(--green)':'var(--red)') + ';font-size:10px;width:52px;text-align:right">' + (c.usd_sum>=0?'+':'') + c.usd_sum.toFixed(2) + '</span>'+
+        '</div>';
+    }).join('');
+    var rows = node.rows.slice().sort(function(a,b){ return (b.wib||'').localeCompare(a.wib||''); }).map(function(r){
+      var color = PC_CAT_COLOR[r.category];
+      var pctColor = parseFloat(r.profit_pct) >= 0 ? 'var(--green)' : 'var(--red)';
+      return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">'+
+        '<td style="padding:3px 6px;white-space:nowrap">'+(r.wib||'').substring(0,16)+'</td>'+
+        '<td style="padding:3px 6px;font-weight:600">'+r.symbol+'</td>'+
+        '<td style="padding:3px 6px"><span style="display:inline-block;width:7px;height:7px;border-radius:2px;background:'+color+';margin-right:5px"></span>'+r.label+'</td>'+
+        '<td style="padding:3px 6px;text-align:right;color:'+pctColor+'">'+(r.profit_pct>=0?'+':'')+r.profit_pct+'%</td>'+
+        '<td style="padding:3px 6px;text-align:right;color:'+pctColor+'">'+(r.profit_usd>=0?'+':'')+r.profit_usd+'</td>'+
+        '</tr>';
+    }).join('');
+    return '<div style="border:1px solid var(--border);border-radius:6px;padding:10px">'+
+      '<div style="font-size:12px;font-weight:600;margin-bottom:8px">'+label+' <span style="color:var(--muted);font-weight:400">('+node.total+' trade)</span></div>'+
+      '<div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'+
+        '<div>'+pieSvg+'</div>'+
+        '<div style="display:flex;flex-direction:column;gap:5px;min-width:220px;flex:1">'+legend+'</div>'+
+      '</div>'+
+      '<details><summary style="cursor:pointer;color:var(--muted);font-size:10.5px;margin-bottom:4px">Rincian per deal</summary>'+
+      '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10.5px">'+
+      '<thead><tr style="color:var(--muted);text-align:left"><th style="padding:3px 6px">Closed</th><th style="padding:3px 6px">Coin</th><th style="padding:3px 6px">Kelas</th><th style="padding:3px 6px;text-align:right">Profit%</th><th style="padding:3px 6px;text-align:right">Profit$</th></tr></thead>'+
+      '<tbody>'+rows+'</tbody></table></div></details>'+
+      '</div>';
+  }).join('');
+}
 
 function onScTimeFilterChange() {
   var sel = document.getElementById('sc-filter-time');
@@ -17495,19 +17596,24 @@ function _scArcPath(cx,cy,r,rInner,a0,a1) {
 }
 
 function _scBuildPieSvg(categories, total) {
+  return _scBuildPieSvgColored(categories, total, SC_CAT_COLOR, 'cut');
+}
+
+function _scBuildPieSvgColored(categories, total, colorMap, centerLabel) {
+  centerLabel = centerLabel || 'cut';
   var cx=55, cy=55, r=50, rInner=28, gap=2.5, angle=0;
   var paths = '', labels = '';
   Object.keys(categories).forEach(function(key){
     var c = categories[key];
     var sweep = c.count/total*360;
     var a0 = angle+gap/2, a1 = angle+sweep-gap/2;
-    var color = SC_CAT_COLOR[key] || SC_CAT_COLOR.lainnya;
+    var color = colorMap[key] || colorMap.lainnya || '#898781';
     paths += '<path d="'+_scArcPath(cx,cy,r,rInner,a0,a1)+'" fill="'+color+'"><title>'+c.label+': '+c.count+'/'+total+' ('+c.pct+'%)</title></path>';
     angle += sweep;
   });
   return '<svg width="110" height="110" viewBox="0 0 110 110">'+paths+
     '<text x="'+cx+'" y="'+(cy-1)+'" text-anchor="middle" style="font-size:19px;font-weight:700;fill:var(--fg)">'+total+'</text>'+
-    '<text x="'+cx+'" y="'+(cy+13)+'" text-anchor="middle" style="font-size:8px;fill:var(--muted)">cut</text>'+
+    '<text x="'+cx+'" y="'+(cy+13)+'" text-anchor="middle" style="font-size:8px;fill:var(--muted)">'+centerLabel+'</text>'+
     '</svg>';
 }
 
@@ -17772,7 +17878,7 @@ function restoreCtFilters() {
         if (box) box.style.display = (timeSel && timeSel.value === 'custom') ? 'inline-flex' : 'none';
     } catch (e) {}
 }
-window.addEventListener('load', function(){ restoreCtFilters(); loadClosedTrades(); loadSizecutSummary(); });
+window.addEventListener('load', function(){ restoreCtFilters(); loadClosedTrades(); loadScActiveMode(); });
 </script>
 <div class="container dash-section-start" data-tab="tools" style="margin-top:12px">
     <div class="card">
