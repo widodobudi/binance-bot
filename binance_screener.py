@@ -2080,6 +2080,59 @@ def _notify_orphan_reclaim_once(key: str, message: str):
     send_telegram(message)
 
 
+# ── SIZE-CUT EVENTS (20/10/2026, permintaan Mas Budi -- pie chart distribusi size-cut per
+# strategi di dashboard History) ────────────────────────────────────────────────
+# Sebelum ini, "[SIZING] ... modal dikecilkan" cuma teks di log Railway -- tidak ada yg
+# disimpan terstruktur, jadi dashboard tidak bisa menampilkannya ulang. File ini append-only,
+# satu baris per event size-cut (bukan per-deal -- kalau deal yg sama suatu saat add-fund yg
+# JUGA kena cut, itu event terpisah), dibaca ulang oleh /api/sizecut_summary dgn filter tanggal.
+SIZECUT_EVENTS_FILE = os.path.join(DATA_DIR, "sizecut_events.json")
+sizecut_events = []   # list of {"ts","wib","symbol","strategy","category","cut_pct","modal_usd","reason"}
+sizecut_events_lock = threading.Lock()
+
+def load_sizecut_events():
+    global sizecut_events
+    if not os.path.exists(SIZECUT_EVENTS_FILE):
+        return
+    try:
+        with open(SIZECUT_EVENTS_FILE, 'r') as f: data = json.load(f)
+        with sizecut_events_lock:
+            sizecut_events = data
+        log(f"   Loaded sizecut_events: {len(sizecut_events)} event.")
+    except Exception as e:
+        log(f"WARN gagal baca sizecut_events.json: {e}")
+
+def save_sizecut_events():
+    try:
+        with sizecut_events_lock: data = list(sizecut_events)
+        with open(SIZECUT_EVENTS_FILE, 'w') as f: json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan sizecut_events.json: {e}")
+
+def _sizecut_category_from_reason(reason: str) -> str:
+    """Klasifikasi 3 kategori dari teks alasan ekstrem_supertrend_size_mult() -- SALING
+    EKSKLUSIF by construction (lihat REMARK fungsi itu: ATR Volatil/Ekstrem saling eksklusif,
+    dan hasil akhirnya cuma SATU alasan menang lewat min(), tidak pernah gabungan)."""
+    if "Ekstrem" in reason:
+        return "ekstrem"
+    if "Volatil" in reason:
+        return "volatil"
+    if "Supertrend" in reason:
+        return "st_turun"
+    return "lainnya"
+
+def record_sizecut_event(symbol: str, strategy: str, cut_pct: float, modal_usd: float, reason: str):
+    event = {
+        "ts": time.time(), "wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+        "symbol": symbol, "strategy": strategy,
+        "category": _sizecut_category_from_reason(reason),
+        "cut_pct": round(cut_pct, 1), "modal_usd": round(modal_usd, 2), "reason": reason,
+    }
+    with sizecut_events_lock:
+        sizecut_events.append(event)
+    save_sizecut_events()
+
+
 # ── BLOCK PAIR (29/08/2026) ────────────────────────────────────────────────
 # User bisa blok/unblok pair lewat dashboard (menu "Block Pair", terpisah dari
 # Strategy Control -- itu per-strategi, ini per-symbol lintas semua strategi).
@@ -3032,6 +3085,70 @@ def backfill_orphaned_coin_price_once():
         )
     except Exception as e:
         log(f"WARN backfill_orphaned_coin_price_once: {e}")
+
+
+def backfill_sizecut_events_once():
+    """Sekali jalan (marker di config_migrations_done.json): fitur pie chart size-cut per
+    strategi (20/10/2026, permintaan Mas Budi) baru mulai mencatat ke sizecut_events.json
+    SEJAK record_sizecut_event() dipatch -- event lama cuma ada sbg teks log Railway. Backfill
+    manual dari log "[SIZING] ... dikecilkan" sejak 01/09/2026 (cek log sampai tanggal itu
+    kosong -- fitur ekstrem-supertrend-sizing sendiri baru ada 17/10/2026, jadi 16/10 adalah
+    event PALING AWAL yg benar2 ada, bukan kelewat lebih jauh ke belakang). 2 format log yg
+    coexist (format lama brkX2_12h_closed "tier Ekstrem (ATR%=X) -> dikecilkan Y% jadi $Z",
+    format baru "(strategi) dikecilkan Y% jadi $Z -- alasan") -- disatukan manual di sini jadi
+    satu skema event, bukan di-parse regex di kode (lebih mudah diaudit)."""
+    key = "backfill_sizecut_events_20261020"
+    try:
+        done = {}
+        if os.path.exists(CONFIG_MIGRATIONS_FILE):
+            with open(CONFIG_MIGRATIONS_FILE) as f:
+                done = json.load(f)
+        if key in done:
+            return
+        # (wib, symbol, strategy, cut_pct, modal_usd, reason)
+        backfill_rows = [
+            ("2026-10-16 14:26:16", "INJUSDT",    "brkX2_12h_closed", 25, 15.00, "ATR%=7.13 Ekstrem (>=7%)"),
+            ("2026-10-16 14:58:22", "INJUSDT",    "brkX2_12h_closed", 25, 15.00, "ATR%=7.13 Ekstrem (>=7%)"),
+            ("2026-10-16 19:37:02", "TIAUSDT",    "brkX2_12h_closed", 25, 15.00, "ATR%=8.02 Ekstrem (>=7%)"),
+            ("2026-10-17 07:45:30", "TIAUSDT",    "brkX2_12h_closed", 25, 15.00, "ATR%=8.23 Ekstrem (>=7%)"),
+            ("2026-10-17 11:07:48", "DUSKUSDT",   "brkX2_12h_closed", 25, 15.00, "ATR%=7.52 Ekstrem (>=7%)"),
+            ("2026-10-18 00:42:38", "PROMUSDT",   "bbsnap_8h",        26, 2.60,  "ATR%=8.48 Ekstrem (>=7%)"),
+            ("2026-10-18 01:13:28", "PROMUSDT",   "bbsnap_8h",        26, 2.60,  "ATR%=8.48 Ekstrem (>=7%)"),
+            ("2026-10-18 02:45:53", "PROMUSDT",   "bbsnap_8h",        26, 2.60,  "ATR%=8.48 Ekstrem (>=7%)"),
+            ("2026-10-18 03:37:11", "PROMUSDT",   "bbsnap_8h",        26, 2.60,  "ATR%=8.48 Ekstrem (>=7%)"),
+            ("2026-10-18 05:50:48", "PROMUSDT",   "bbsnap_8h",        26, 2.60,  "ATR%=8.48 Ekstrem (>=7%)"),
+            ("2026-10-19 14:37:31", "LSKUSDT",    "trend_confirm_4h", 32, 16.00, "ATR%=5.58 Volatil (4-7%)"),
+            ("2026-10-19 14:47:54", "ARBUSDT",    "trend_confirm_4h", 23, 11.50, "Supertrend 4h downtrend"),
+            ("2026-10-19 16:20:01", "OSMOUSDT",   "trend_confirm_4h", 38, 19.00, "ATR%=7.58 Ekstrem (>=7%)"),
+            ("2026-10-19 19:54:24", "OSMOUSDT",   "trend_confirm_4h", 38, 19.00, "ATR%=7.70 Ekstrem (>=7%)"),
+            ("2026-10-19 20:00:39", "GTCUSDT",    "brkX2_12h_closed", 28, 16.80, "ATR%=15.06 Ekstrem (>=7%)"),
+            ("2026-10-19 20:25:20", "SOLVUSDT",   "trend_confirm_4h", 32, 16.00, "ATR%=4.18 Volatil (4-7%)"),
+            ("2026-10-19 21:06:53", "WLDUSDT",    "trend_confirm_4h", 23, 11.50, "Supertrend 4h downtrend"),
+            ("2026-10-19 21:38:53", "SUSDT",      "trend_confirm_4h", 32, 16.00, "ATR%=4.60 Volatil (4-7%)"),
+            ("2026-10-19 22:00:35", "DOTUSDT",    "trend_confirm_4h", 23, 11.50, "Supertrend 4h downtrend"),
+            ("2026-10-20 05:30:24", "PHAUSDT",    "trend_confirm_4h", 32, 16.00, "ATR%=4.72 Volatil (4-7%)"),
+        ]
+        with sizecut_events_lock:
+            for wib, symbol, strat, cut_pct, modal_usd, reason in backfill_rows:
+                ts = datetime.strptime(wib, "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=timezone(timedelta(hours=7))).timestamp()
+                sizecut_events.append({
+                    "ts": ts, "wib": wib, "symbol": symbol, "strategy": strat,
+                    "category": _sizecut_category_from_reason(reason),
+                    "cut_pct": cut_pct, "modal_usd": modal_usd, "reason": reason,
+                })
+        save_sizecut_events()
+        done[key] = {"applied_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "rows": len(backfill_rows)}
+        with open(CONFIG_MIGRATIONS_FILE, "w") as f:
+            json.dump(done, f, indent=2)
+        log(f"[MIGRASI] backfill sizecut_events: {len(backfill_rows)} event lama (16-20/10)")
+        send_telegram(
+            f"MIGRASI -- Backfill Size-Cut Events\n"
+            f"{len(backfill_rows)} event size-cut lama (16-20/10, dari log Railway sebelum "
+            f"fitur pie chart ada) sekarang tercatat terstruktur."
+        )
+    except Exception as e:
+        log(f"WARN backfill_sizecut_events_once: {e}")
 
 
 def migrate_trim_reversal_2nd3rd_once():
@@ -7484,6 +7601,11 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
         # add_to_active_deals() lalu ditempel ke deal (field 'size_cut_reason') supaya
         # dashboard bisa tampilkan teks "kenapa modal ini lebih kecil dari base normal".
         _pending_size_cut_reason[symbol] = _ess_reason
+        # 20/10/2026 (permintaan Mas Budi -- pie chart size-cut per strategi di History):
+        # catat event-nya (kategori Volatil/Ekstrem/ST turun + % potongan asli _ess_mult,
+        # BUKAN dibatalkan kalau target sempat dipaksa naik ke floor Binance di atas -- itu
+        # cuma mengubah $ akhir, keputusan size-cut-nya sendiri tetap sama).
+        record_sizecut_event(symbol, strategy, _ess_mult * 100, target, _ess_reason)
     # 17/10/2026 (patch "sizing-disconnect-fix"): usd_override=target -- lihat REMARK di
     # send_open_long(). Sebelum patch ini, 'target' yang dihitung di atas (termasuk potongan
     # size-cut apa pun) TIDAK PERNAH dipakai order BELI yang sesungguhnya.
@@ -17145,6 +17267,27 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
   </div>
   <div id="ct-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px"></div>  <div id="ct-stats-all" style="display:none;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px;color:var(--muted)"></div>  <div id="ct-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:10px"></div>
   <div id="ct-equity" style="margin-bottom:14px"></div>
+  <div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:14px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+      <b style="font-size:12px">Size-Cut per Strategi</b>
+      <select id="sc-filter-time" onchange="onScTimeFilterChange()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+        <option value="">Semua waktu</option>
+        <option value="today">Hari ini</option>
+        <option value="yesterday">Kemarin</option>
+        <option value="week">Minggu ini</option>
+        <option value="7d">7 hari terakhir</option>
+        <option value="30d">30 hari terakhir</option>
+        <option value="custom">Custom</option>
+      </select>
+      <span id="sc-filter-custom-range" style="display:none;gap:4px;align-items:center">
+        <input type="date" id="sc-filter-from" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+        <span style="color:var(--muted);font-size:11px">s/d</span>
+        <input type="date" id="sc-filter-to" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+      </span>
+      <button onclick="loadSizecutSummary()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reload</button>
+    </div>
+    <div id="sc-cards" style="display:flex;flex-direction:column;gap:14px"></div>
+  </div>
   <div style="overflow-x:auto">
     <table id="ct-table" style="width:100%;border-collapse:collapse;font-size:11px">
       <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
@@ -17298,6 +17441,118 @@ function renderCtEquityCurve(rows) {
             '<line x1="0" y1="' + zeroY + '" x2="' + W + '" y2="' + zeroY + '" stroke="var(--border)" stroke-dasharray="4,3" stroke-width="1"></line>' +
             '<polyline points="' + pathPts + '" fill="none" stroke="' + lineColor + '" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>' +
         '</svg>';
+}
+
+// ── Size-Cut per Strategi (20/10/2026, permintaan Mas Budi) ──────────────────────
+var SC_STRAT_MAP = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+var SC_CAT_COLOR = {volatil:'#2a78d6', ekstrem:'#1baf7a', st_turun:'#eb6834', lainnya:'#898781'};
+
+function onScTimeFilterChange() {
+  var sel = document.getElementById('sc-filter-time');
+  var box = document.getElementById('sc-filter-custom-range');
+  if (box) box.style.display = (sel && sel.value === 'custom') ? 'inline-flex' : 'none';
+}
+
+function scTimeFilterRange() {
+  var sel = document.getElementById('sc-filter-time');
+  var mode = sel ? sel.value : '';
+  if (!mode) return null;
+  var now = new Date();
+  if (mode === 'today') { var s = _ctDateStr(now); return {from: s, to: s}; }
+  if (mode === 'yesterday') { var y = new Date(now); y.setDate(now.getDate()-1); var s = _ctDateStr(y); return {from: s, to: s}; }
+  if (mode === 'week') {
+    var dow = now.getDay(); var diffToMon = (dow === 0) ? 6 : dow - 1;
+    var monday = new Date(now); monday.setDate(now.getDate() - diffToMon);
+    return {from: _ctDateStr(monday), to: _ctDateStr(now)};
+  }
+  if (mode === '7d') { var d7 = new Date(now); d7.setDate(now.getDate()-6); return {from: _ctDateStr(d7), to: _ctDateStr(now)}; }
+  if (mode === '30d') { var d30 = new Date(now); d30.setDate(now.getDate()-29); return {from: _ctDateStr(d30), to: _ctDateStr(now)}; }
+  if (mode === 'custom') {
+    var f = document.getElementById('sc-filter-from'), t = document.getElementById('sc-filter-to');
+    var fv = f ? f.value : '', tv = t ? t.value : '';
+    if (!fv && !tv) return null;
+    return {from: fv || null, to: tv || null};
+  }
+  return null;
+}
+
+function loadSizecutSummary() {
+  var range = scTimeFilterRange();
+  var params = [];
+  if (range) { if (range.from) params.push('date_from=' + range.from); if (range.to) params.push('date_to=' + range.to); }
+  fetch('/api/sizecut_summary' + (params.length ? '?' + params.join('&') : ''))
+    .then(function(r){ return r.json(); })
+    .then(function(data){ renderSizecutCards(data.by_strategy || {}); })
+    .catch(function(){ var el = document.getElementById('sc-cards'); if (el) el.innerHTML = '<span style="color:var(--muted);font-size:11px">Gagal muat data size-cut.</span>'; });
+}
+
+function _scArcPath(cx,cy,r,rInner,a0,a1) {
+  function polar(angle) { var rad=(angle-90)*Math.PI/180; return [cx+r*Math.cos(rad), cy+r*Math.sin(rad)]; }
+  function polarInner(angle) { var rad=(angle-90)*Math.PI/180; return [cx+rInner*Math.cos(rad), cy+rInner*Math.sin(rad)]; }
+  var large = (a1-a0) > 180 ? 1 : 0;
+  var p0=polar(a0), p1=polar(a1), pi1=polarInner(a1), pi0=polarInner(a0);
+  return 'M '+p0[0]+' '+p0[1]+' A '+r+' '+r+' 0 '+large+' 1 '+p1[0]+' '+p1[1]+' L '+pi1[0]+' '+pi1[1]+' A '+rInner+' '+rInner+' 0 '+large+' 0 '+pi0[0]+' '+pi0[1]+' Z';
+}
+
+function _scBuildPieSvg(categories, total) {
+  var cx=55, cy=55, r=50, rInner=28, gap=2.5, angle=0;
+  var paths = '', labels = '';
+  Object.keys(categories).forEach(function(key){
+    var c = categories[key];
+    var sweep = c.count/total*360;
+    var a0 = angle+gap/2, a1 = angle+sweep-gap/2;
+    var color = SC_CAT_COLOR[key] || SC_CAT_COLOR.lainnya;
+    paths += '<path d="'+_scArcPath(cx,cy,r,rInner,a0,a1)+'" fill="'+color+'"><title>'+c.label+': '+c.count+'/'+total+' ('+c.pct+'%)</title></path>';
+    angle += sweep;
+  });
+  return '<svg width="110" height="110" viewBox="0 0 110 110">'+paths+
+    '<text x="'+cx+'" y="'+(cy-1)+'" text-anchor="middle" style="font-size:19px;font-weight:700;fill:var(--fg)">'+total+'</text>'+
+    '<text x="'+cx+'" y="'+(cy+13)+'" text-anchor="middle" style="font-size:8px;fill:var(--muted)">cut</text>'+
+    '</svg>';
+}
+
+function renderSizecutCards(byStrategy) {
+  var el = document.getElementById('sc-cards');
+  if (!el) return;
+  var keys = Object.keys(byStrategy).sort();
+  if (!keys.length) { el.innerHTML = '<span style="color:var(--muted);font-size:11px">Tidak ada event size-cut pada periode ini.</span>'; return; }
+  el.innerHTML = keys.map(function(key){
+    var node = byStrategy[key];
+    var label = SC_STRAT_MAP[key] || key;
+    var pieSvg = _scBuildPieSvg(node.categories, node.total);
+    var legend = Object.keys(node.categories).map(function(ck){
+      var c = node.categories[ck];
+      var color = SC_CAT_COLOR[ck] || SC_CAT_COLOR.lainnya;
+      return '<div style="display:flex;align-items:center;gap:6px;font-size:11px">'+
+        '<span style="width:9px;height:9px;border-radius:2px;background:'+color+';flex:0 0 auto"></span>'+
+        '<span style="flex:1">'+c.label+'</span>'+
+        '<b style="font-variant-numeric:tabular-nums">'+c.count+'</b>'+
+        '<span style="color:var(--muted);font-size:10px;width:36px;text-align:right">'+c.pct+'%</span>'+
+        '</div>';
+    }).join('');
+    var rows = node.rows.map(function(r){
+      var color = SC_CAT_COLOR[r.category] || SC_CAT_COLOR.lainnya;
+      return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">'+
+        '<td style="padding:3px 6px;white-space:nowrap">'+(r.wib||'').substring(0,16)+'</td>'+
+        '<td style="padding:3px 6px;font-weight:600">'+r.symbol+'</td>'+
+        '<td style="padding:3px 6px"><span style="display:inline-block;width:7px;height:7px;border-radius:2px;background:'+color+';margin-right:5px"></span>'+r.label+'</td>'+
+        '<td style="padding:3px 6px;text-align:right">'+r.cut_pct+'%</td>'+
+        '<td style="padding:3px 6px;text-align:right">$'+r.modal_usd+'</td>'+
+        '<td style="padding:3px 6px;color:var(--muted);font-size:10px">'+(r.reason||'')+'</td>'+
+        '</tr>';
+    }).join('');
+    return '<div style="border:1px solid var(--border);border-radius:6px;padding:10px">'+
+      '<div style="font-size:12px;font-weight:600;margin-bottom:8px">'+label+' <span style="color:var(--muted);font-weight:400">('+node.total+' deal size-cut)</span></div>'+
+      '<div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'+
+        '<div>'+pieSvg+'</div>'+
+        '<div style="display:flex;flex-direction:column;gap:5px;min-width:200px;flex:1">'+legend+'</div>'+
+      '</div>'+
+      '<details><summary style="cursor:pointer;color:var(--muted);font-size:10.5px;margin-bottom:4px">Rincian per deal</summary>'+
+      '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10.5px">'+
+      '<thead><tr style="color:var(--muted);text-align:left"><th style="padding:3px 6px">Waktu</th><th style="padding:3px 6px">Coin</th><th style="padding:3px 6px">Kategori</th><th style="padding:3px 6px;text-align:right">Potongan</th><th style="padding:3px 6px;text-align:right">Modal</th><th style="padding:3px 6px">Alasan</th></tr></thead>'+
+      '<tbody>'+rows+'</tbody></table></div></details>'+
+      '</div>';
+  }).join('');
 }
 
 function exportCtCsv() {
@@ -17517,7 +17772,7 @@ function restoreCtFilters() {
         if (box) box.style.display = (timeSel && timeSel.value === 'custom') ? 'inline-flex' : 'none';
     } catch (e) {}
 }
-window.addEventListener('load', function(){ restoreCtFilters(); loadClosedTrades(); });
+window.addEventListener('load', function(){ restoreCtFilters(); loadClosedTrades(); loadSizecutSummary(); });
 </script>
 <div class="container dash-section-start" data-tab="tools" style="margin-top:12px">
     <div class="card">
@@ -28553,6 +28808,45 @@ def run_web_dashboard():
             except Exception as e:
                 return jsonify({"trades": [], "stats": {}, "error": str(e)})
 
+        @app.route("/api/sizecut_summary")
+        def api_sizecut_summary():
+            """20/10/2026 (permintaan Mas Budi -- pie chart size-cut per strategi di History):
+            agregat sizecut_events.json per strategi x kategori (Volatil/Ekstrem/ST turun),
+            filter tanggal via date_from/date_to ("YYYY-MM-DD", WIB, inklusif) -- sama pola
+            dgn /api/closed_trades. Sumber data: record_sizecut_event() (live) + backfill
+            16-20/10 (lihat backfill_sizecut_events_once())."""
+            try:
+                date_from = request.args.get("date_from", "").strip()
+                date_to   = request.args.get("date_to", "").strip()
+                with sizecut_events_lock:
+                    events = list(sizecut_events)
+                if date_from:
+                    events = [e for e in events if (e.get("wib") or "")[:10] >= date_from]
+                if date_to:
+                    events = [e for e in events if (e.get("wib") or "")[:10] <= date_to]
+                CAT_LABELS = {"volatil": "Volatil (ATR 4-7%)", "ekstrem": "Ekstrem (ATR ≥7%)",
+                              "st_turun": "ST turun (Supertrend downtrend)", "lainnya": "Lainnya"}
+                by_strategy = {}
+                for e in events:
+                    strat = e.get("strategy") or "?"
+                    node = by_strategy.setdefault(strat, {"total": 0, "categories": {}, "rows": []})
+                    node["total"] += 1
+                    cat = e.get("category", "lainnya")
+                    node["categories"].setdefault(cat, {"label": CAT_LABELS.get(cat, cat), "count": 0})
+                    node["categories"][cat]["count"] += 1
+                    node["rows"].append({
+                        "wib": e.get("wib"), "symbol": e.get("symbol"), "category": cat,
+                        "label": CAT_LABELS.get(cat, cat), "cut_pct": e.get("cut_pct"),
+                        "modal_usd": e.get("modal_usd"), "reason": e.get("reason"),
+                    })
+                for node in by_strategy.values():
+                    node["rows"].sort(key=lambda r: r["wib"], reverse=True)
+                    for cat_node in node["categories"].values():
+                        cat_node["pct"] = round(100 * cat_node["count"] / node["total"], 1) if node["total"] else 0
+                return jsonify({"by_strategy": by_strategy, "date_from": date_from, "date_to": date_to})
+            except Exception as e:
+                return jsonify({"by_strategy": {}, "error": str(e)})
+
         @app.route("/api/tax_recap")
         def api_tax_recap():
             """12/10/2026 (permintaan Mas Budi): rekap total nilai beli/jual per bulan dari
@@ -30796,6 +31090,7 @@ if __name__ == '__main__':
     load_hold_no_sell_closed()
     load_hold_no_sell_price()
     load_cancelled_deal_price()
+    load_sizecut_events()
     load_blocked_pairs()
     load_delisting_seen()
     # 24/09/2026 (permintaan Mas Budi): STG/USDT diblok manual -- LayerZero mengakuisisi Stargate,
@@ -30808,6 +31103,7 @@ if __name__ == '__main__':
     apply_one_time_config_migrations()
     migrate_csv_hold_remark_once()
     backfill_orphaned_coin_price_once()   # 19/10/2026: catat entry_price TIA/RUNE/MANTRA (orphan sebelum fitur ini ada)
+    backfill_sizecut_events_once()   # 20/10/2026: catat 20 event size-cut lama (16-20/10) sebelum fitur pie chart ada
     migrate_trim_reversal_2nd3rd_once()   # 02/10/2026: hapus closed deals "2nd"/"3rd" reversal-8h, permintaan Mas Budi
     threading.Thread(target=backfill_mombreak_rsi_once, daemon=True).start()   # 21/09/2026: isi RSI@Open MomentumBreak lama
     threading.Thread(target=recompute_shadow_levels_once, daemon=True).start()   # 21/09/2026: hitung ulang paper test ber-level tetap
