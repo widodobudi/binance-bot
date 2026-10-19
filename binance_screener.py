@@ -2017,6 +2017,69 @@ def get_hold_no_sell_price(asset: str):
         return hold_no_sell_price.get(str(asset).upper() + "USDT")
 
 
+# ── CANCELLED-DEAL PRICE (19/10/2026, permintaan Mas Budi -- "orphaned coin reclaim") ──
+# Pola PERSIS hold_no_sell_price.json di atas, tapi sumbernya beda: ini utk koin yang
+# lepas dari active_deals lewat cancel_deal_action() (TIDAK dijual, tetap di wallet --
+# lihat REMARK cancel_deal_action()), bukan lewat hard-stop hold-no-sell. entry_price yang
+# disimpan di sini SUDAH rata-rata tertimbang yang benar (dihitung send_add_funds() setiap
+# kali add-fund, lihat REMARK execute_add_fund()) -- jadi otomatis benar walau deal yang
+# di-cancel itu sempat kena add-fund berkali-kali, tidak perlu dihitung ulang di sini.
+CANCELLED_DEAL_PRICE_FILE = os.path.join(DATA_DIR, "cancelled_deal_price.json")
+cancelled_deal_price = {}   # symbol -> {'entry_price':, 'strategy':, 'ts':, 'cancelled_wib':}
+cancelled_deal_price_lock = threading.Lock()
+
+def load_cancelled_deal_price():
+    global cancelled_deal_price
+    if not os.path.exists(CANCELLED_DEAL_PRICE_FILE):
+        return
+    try:
+        with open(CANCELLED_DEAL_PRICE_FILE, 'r') as f: data = json.load(f)
+        with cancelled_deal_price_lock:
+            cancelled_deal_price = data
+        log(f"   Loaded cancelled_deal_price: {len(cancelled_deal_price)} symbol.")
+    except Exception as e:
+        log(f"WARN gagal baca cancelled_deal_price.json: {e}")
+
+def save_cancelled_deal_price():
+    try:
+        with cancelled_deal_price_lock: data = dict(cancelled_deal_price)
+        with open(CANCELLED_DEAL_PRICE_FILE, 'w') as f: json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"WARN gagal simpan cancelled_deal_price.json: {e}")
+
+def record_cancelled_deal_price(symbol: str, entry_price: float, strategy: str):
+    if not entry_price or float(entry_price) <= 0:
+        return
+    with cancelled_deal_price_lock:
+        cancelled_deal_price[symbol] = {"entry_price": float(entry_price), "strategy": strategy,
+                                         "ts": time.time(), "cancelled_wib": now_wib().strftime('%d/%m/%Y %H:%M')}
+    save_cancelled_deal_price()
+
+def get_cancelled_deal_price(asset: str):
+    """Return {'entry_price','strategy','ts','cancelled_wib'} kalau asset ini pernah lepas dari
+    active_deals lewat cancel (TIDAK dijual), else None."""
+    with cancelled_deal_price_lock:
+        return cancelled_deal_price.get(str(asset).upper() + "USDT")
+
+
+# 19/10/2026 (permintaan Mas Budi -- "5 proses" fitur orphan-reclaim perlu notif Telegram):
+# helper notif ber-throttle, dipakai titik "di-skip krn Auto-Sell-Crossing" dan "tidak ada
+# orphan untung yg cukup" -- supaya tidak spam tiap siklus ~15 detik selama kondisinya
+# menetap, sama pola spt notif "HOLD" ber-reason_kind di ai_decision_close().
+ORPHAN_RECLAIM_NOTIFY_COOLDOWN_SEC = 6 * 3600
+_orphan_reclaim_last_notify = {}
+_orphan_reclaim_notify_lock = threading.Lock()
+
+def _notify_orphan_reclaim_once(key: str, message: str):
+    now = time.time()
+    with _orphan_reclaim_notify_lock:
+        last = _orphan_reclaim_last_notify.get(key, 0)
+        if now - last < ORPHAN_RECLAIM_NOTIFY_COOLDOWN_SEC:
+            return
+        _orphan_reclaim_last_notify[key] = now
+    send_telegram(message)
+
+
 # ── BLOCK PAIR (29/08/2026) ────────────────────────────────────────────────
 # User bisa blok/unblok pair lewat dashboard (menu "Block Pair", terpisah dari
 # Strategy Control -- itu per-strategi, ini per-symbol lintas semua strategi).
@@ -2930,6 +2993,45 @@ def migrate_csv_hold_remark_once():
             sync_trades_csv_to_drive()
     except Exception as e:
         log(f"WARN migrate_csv_hold_remark_once: {e}")
+
+
+def backfill_orphaned_coin_price_once():
+    """Sekali jalan (marker di config_migrations_done.json): fitur "orphaned coin reclaim"
+    (19/10/2026) cuma mulai mencatat entry_price ke cancelled_deal_price.json SEJAK
+    cancel_deal_action() dipatch -- koin yang SUDAH orphan (cancel terjadi SEBELUM patch ini)
+    tidak kecatat otomatis. Backfill manual utk 3 koin yang dicek Mas Budi langsung (TIA/RUNE/
+    MANTRA/USDT, topgainers_4h, cancel sebelum hari ini) -- harga diambil dari log Railway
+    BUY asli (masing-masing cuma 1x beli, tidak ada add-fund, jadi tidak perlu dihitung rata-rata):
+    TIA 0.639900 (BUY 19/10 07:06:25 WIB), RUNE 0.662000 (07:07:35 WIB),
+    MANTRA 0.004040 (07:08:11 WIB). PEPE/GTC/JST/STX yg sempat dikira orphan TERNYATA masih
+    Active Deal (dicek ulang via /fragment/active_deals sebelum backfill ini) -- SENGAJA
+    TIDAK diikutkan, supaya tidak ada catatan cancel palsu utk deal yg masih berjalan."""
+    key = "backfill_orphaned_coin_price_20261019"
+    try:
+        done = {}
+        if os.path.exists(CONFIG_MIGRATIONS_FILE):
+            with open(CONFIG_MIGRATIONS_FILE) as f:
+                done = json.load(f)
+        if key in done:
+            return
+        backfill_data = {
+            "TIAUSDT":    (0.639900, "topgainers_4h"),
+            "RUNEUSDT":   (0.662000, "topgainers_4h"),
+            "MANTRAUSDT": (0.004040, "topgainers_4h"),
+        }
+        for symbol, (entry_price, strat) in backfill_data.items():
+            record_cancelled_deal_price(symbol, entry_price, strat)
+        done[key] = {"applied_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "symbols": list(backfill_data.keys())}
+        with open(CONFIG_MIGRATIONS_FILE, "w") as f:
+            json.dump(done, f, indent=2)
+        log(f"[MIGRASI] backfill cancelled_deal_price utk {len(backfill_data)} koin lama: {list(backfill_data.keys())}")
+        send_telegram(
+            f"MIGRASI -- Backfill Orphaned Coin Price\n"
+            f"{len(backfill_data)} koin lama (TIA/RUNE/MANTRA, dari cancel topgainers_4h sebelum "
+            f"fitur orphan-reclaim ada) sekarang dikenali floating PNL-nya: {', '.join(backfill_data.keys())}"
+        )
+    except Exception as e:
+        log(f"WARN backfill_orphaned_coin_price_once: {e}")
 
 
 def migrate_trim_reversal_2nd3rd_once():
@@ -6557,18 +6659,13 @@ def execute_add_fund(sym: str, add_usd: float) -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-def get_idle_wallet_assets(min_value_usdt: float = 5.0) -> list:
-    """Daftar aset nganggur (BUKAN Active Deal, atau kelebihan saldo di luar yang
-    ditrack aktif) senilai >= min_value_usdt. Diekstrak dari /api/addfund_source_assets
-    (05/09/2026) supaya bisa dipakai ulang oleh auto_fund_addfund_from_idle_asset()
-    (15/09/2026) tanpa duplikasi logic. Return list of {"asset","free","value_usdt",
-    "floating_pct"} -- floating_pct None kalau asal-usul harga beli-nya tidak diketahui
-    (mis. dust sisa Convert Aset manual), atau angka kalau riwayatnya ada di
-    hold_no_sell_price.json (16/09/2026, permintaan Mas Budi -- dipakai buat pilih
-    "jual yang paling jelek dulu" di auto_fund_addfund_from_idle_asset()). Diurutkan
-    dari nilai terbesar (urutan lama, TIDAK dipakai lagi oleh auto_fund_addfund_from_idle_asset
-    yang sekarang punya sorting sendiri, tapi dipertahankan di sini krn masih dipakai
-    /api/addfund_source_assets buat tampilan dashboard)."""
+def _wallet_excess_assets_raw(min_value_usdt: float) -> list:
+    """19/10/2026: diekstrak dari get_idle_wallet_assets() (dulu badannya sendiri) supaya bisa
+    dipakai ulang oleh get_orphaned_cancelled_assets() di bawah tanpa duplikasi logic "saldo
+    wallet dikurangi yang ditrack active_deals". TIDAK mengubah perilaku get_idle_wallet_assets()
+    sama sekali -- murni pemindahan kode, hasilnya identik seperti sebelum refactor ini.
+    Return list of {"asset","free","value_usdt"} (BELUM ada floating_pct, itu urusan caller
+    masing-masing, sumbernya beda: hold_no_sell_price.json vs cancelled_deal_price.json)."""
     with active_deals_lock:
         tracked_qty = {}
         for s, dd in active_deals.items():
@@ -6587,13 +6684,72 @@ def get_idle_wallet_assets(min_value_usdt: float = 5.0) -> list:
         value_usdt = excess_qty * price
         if value_usdt < min_value_usdt:
             continue
+        out.append({"asset": asset, "free": excess_qty, "value_usdt": round(value_usdt, 2), "price": price})
+    return out
+
+
+def get_idle_wallet_assets(min_value_usdt: float = 5.0) -> list:
+    """Daftar aset nganggur (BUKAN Active Deal, atau kelebihan saldo di luar yang
+    ditrack aktif) senilai >= min_value_usdt. Diekstrak dari /api/addfund_source_assets
+    (05/09/2026) supaya bisa dipakai ulang oleh auto_fund_addfund_from_idle_asset()
+    (15/09/2026) tanpa duplikasi logic. Return list of {"asset","free","value_usdt",
+    "floating_pct"} -- floating_pct None kalau asal-usul harga beli-nya tidak diketahui
+    (mis. dust sisa Convert Aset manual), atau angka kalau riwayatnya ada di
+    hold_no_sell_price.json (16/09/2026, permintaan Mas Budi -- dipakai buat pilih
+    "jual yang paling jelek dulu" di auto_fund_addfund_from_idle_asset()). Diurutkan
+    dari nilai terbesar (urutan lama, TIDAK dipakai lagi oleh auto_fund_addfund_from_idle_asset
+    yang sekarang punya sorting sendiri, tapi dipertahankan di sini krn masih dipakai
+    /api/addfund_source_assets buat tampilan dashboard).
+    19/10/2026: badan fungsi dipindah ke _wallet_excess_assets_raw() (lihat REMARK di sana) --
+    perilaku fungsi ini SENGAJA tidak diubah, tetap cuma pakai hold_no_sell_price.json."""
+    out = []
+    for a in _wallet_excess_assets_raw(min_value_usdt):
         floating_pct = None
-        origin = get_hold_no_sell_price(asset)
+        origin = get_hold_no_sell_price(a["asset"])
         if origin and float(origin.get("entry_price", 0) or 0) > 0:
-            floating_pct = (price / float(origin["entry_price"]) - 1) * 100 - FEE_ROUND_TRIP_PCT
-        out.append({"asset": asset, "free": excess_qty, "value_usdt": round(value_usdt, 2),
+            floating_pct = (a["price"] / float(origin["entry_price"]) - 1) * 100 - FEE_ROUND_TRIP_PCT
+        out.append({"asset": a["asset"], "free": a["free"], "value_usdt": a["value_usdt"],
                     "floating_pct": round(floating_pct, 2) if floating_pct is not None else None})
     out.sort(key=lambda a: -a["value_usdt"])
+    return out
+
+
+def get_orphaned_cancelled_assets(min_value_usdt: float = 5.0) -> list:
+    """19/10/2026 (permintaan Mas Budi, fitur "orphaned coin reclaim"): versi
+    get_idle_wallet_assets() yang sumber floating_pct-nya cancelled_deal_price.json (koin
+    lepas dari active_deals lewat cancel_deal_action(), BUKAN hold_no_sell) -- mekanisme
+    TERPISAH dari auto_fund_addfund_from_idle_asset(), SENGAJA tidak disatukan supaya logika
+    lama ("jual yg paling jelek dulu") sama sekali tidak tersentuh/berubah perilakunya.
+    Asset yang PUNYA rule Auto-Sell-Crossing aktif (load_auto_sell_config) DIKECUALIKAN --
+    permintaan Mas Budi 19/10/2026: jangan sampai mekanisme ini rebutan sama rule manual yg
+    sudah dia pasang sendiri di menu Auto Sell Asset, biar tidak ada 2 mekanisme otomatis
+    beda sama-sama incar koin yg sama. Return list of {"asset","free","value_usdt",
+    "floating_pct"} -- floating_pct None kalau asset itu TIDAK ada riwayat cancel (jangan
+    dianggap "tidak diketahui = boleh dijual" di sisi caller, caller WAJIB filter None keluar,
+    beda dgn get_idle_wallet_assets() yg punya fallback utk None).
+    19/10/2026: notif Telegram "di-skip krn Auto-Sell-Crossing" dikirim, tapi di-throttle
+    ORPHAN_RECLAIM_NOTIFY_COOLDOWN_SEC per asset -- supaya tidak spam tiap siklus selama rule
+    auto-sell itu masih aktif (sama pola spt notif "HOLD" di ai_decision_close())."""
+    try:
+        auto_sell_assets = load_auto_sell_config().get("assets", {})
+    except Exception as e:
+        log(f"WARN get_orphaned_cancelled_assets gagal baca auto_sell_config: {e}")
+        auto_sell_assets = {}
+    out = []
+    for a in _wallet_excess_assets_raw(min_value_usdt):
+        if auto_sell_assets.get(a["asset"], {}).get("enabled", False):
+            _notify_orphan_reclaim_once(
+                f"auto_sell_skip:{a['asset']}",
+                f"Orphan Reclaim -- {a['asset']} DI-SKIP\n"
+                f"{a['asset']} punya rule Auto-Sell-Crossing aktif di menu Auto Sell Asset -- "
+                f"dilewati supaya tidak rebutan dgn rule manual itu (nilai ${a['value_usdt']:.2f}).")
+            continue
+        floating_pct = None
+        origin = get_cancelled_deal_price(a["asset"])
+        if origin and float(origin.get("entry_price", 0) or 0) > 0:
+            floating_pct = (a["price"] / float(origin["entry_price"]) - 1) * 100 - FEE_ROUND_TRIP_PCT
+        out.append({"asset": a["asset"], "free": a["free"], "value_usdt": a["value_usdt"],
+                    "floating_pct": round(floating_pct, 2) if floating_pct is not None else None})
     return out
 
 
@@ -6642,6 +6798,51 @@ def auto_fund_addfund_from_idle_asset(target_symbol: str, needed_usd: float) -> 
             f"🔁 AUTO-CONVERT utk Add Fund (otomatis, tanpa konfirmasi dashboard)\n"
             f"{chosen['asset']} dijual ${result.get('proceeds_usdt', 0):.2f} "
             f"({pct:.0f}% dari ${chosen['value_usdt']:.2f} nganggur, {_perf_note}) -- ditambahkan ke "
+            f"{to_display_pair(target_symbol)} (butuh ${needed_usd:.2f})",
+            parse_mode=None)
+    return result
+
+
+def auto_fund_addfund_from_orphaned_profit(target_symbol: str, needed_usd: float) -> dict:
+    """19/10/2026 (permintaan Mas Budi, fitur "orphaned coin reclaim"): mekanisme TERPISAH
+    dari auto_fund_addfund_from_idle_asset() di atas -- SENGAJA tidak digabung, logika lama
+    itu tidak disentuh sama sekali. Dipanggil dari titik yang SAMA (_pending_addfund_queue di
+    thread2_monitor()) tapi DICOBA LEBIH DULU, sebelum jatuh ke mekanisme lama.
+
+    Sumbernya koin yang lepas dari active_deals lewat cancel_deal_action() (TIDAK pernah
+    dijual, lihat REMARK fungsi itu) -- "orphan". Berbeda arah dari mekanisme lama: di sini
+    PRIORITASNYA KEBALIKANNYA -- pilih yang floating profit PALING BAGUS dulu (bukan paling
+    jelek), dan HANYA yang floating-nya POSITIF (yg masih rugi dibiarkan, permintaan Mas Budi
+    eksplisit "yang masih negatif biarkan"). Rasionalnya beda dari mekanisme lama: itu untuk
+    "cut loss aset yg lagi jelek, redeploy ke deal yg lebih menjanjikan" (keputusan aktif),
+    ini untuk "koin yg SUDAH ditinggalkan bot (cancelled) & SUDAH untung, pakai saja modalnya,
+    tidak ada alasan dibiarkan nganggur" (bukan cut-loss, murni reaktivasi modal nganggur).
+    Asset tanpa riwayat cancel (floating_pct None) dan asset dgn rule Auto-Sell-Crossing aktif
+    SENGAJA dikecualikan total (lihat get_orphaned_cancelled_assets) -- tidak ada fallback ke
+    "tidak diketahui" spt mekanisme lama, krn tujuan fitur ini spesifik "pakai yg SUDAH TAHU
+    untung", bukan sekadar cari dana apa pun yg cukup.
+
+    OTOMATIS PENUH sama seperti mekanisme lama, kirim notifikasi Telegram terpisah."""
+    needed_with_buffer = needed_usd * (1 + AUTOFUND_IDLE_ASSET_BUFFER_PCT / 100)
+    all_assets = get_orphaned_cancelled_assets(min_value_usdt=needed_with_buffer)
+    candidates = [a for a in all_assets if a['value_usdt'] >= needed_with_buffer and (a['floating_pct'] or 0) > 0]
+    if not candidates:
+        _notify_orphan_reclaim_once(
+            f"no_candidate:{target_symbol}",
+            f"Orphan Reclaim -- tidak ada yang cukup utk {to_display_pair(target_symbol)}\n"
+            f"Butuh ${needed_with_buffer:.2f}, tidak ada koin orphan (cancelled, floating "
+            f"positif) senilai itu -- jatuh ke mekanisme lama (jual aset nganggur).")
+        return {"ok": False, "error": f"tidak ada koin orphan untung senilai >= ${needed_with_buffer:.2f} utk dikonversi"}
+    candidates.sort(key=lambda a: -a['floating_pct'])  # paling untung dulu
+    chosen = candidates[0]
+    pct = min(100.0, needed_with_buffer / chosen['value_usdt'] * 100.0)
+    result = execute_add_fund_from_asset(chosen['asset'], target_symbol, pct)
+    if result.get("ok"):
+        send_telegram(
+            f"🔁 AUTO-CONVERT Orphan Untung utk Add Fund (otomatis, tanpa konfirmasi dashboard)\n"
+            f"{chosen['asset']} (koin yang sudah di-cancel dari active_deals, floating "
+            f"{chosen['floating_pct']:+.2f}%) dijual ${result.get('proceeds_usdt', 0):.2f} "
+            f"({pct:.0f}% dari ${chosen['value_usdt']:.2f}) -- ditambahkan ke "
             f"{to_display_pair(target_symbol)} (butuh ${needed_usd:.2f})",
             parse_mode=None)
     return result
@@ -11210,6 +11411,16 @@ def thread2_monitor():
             ", ".join(f"{it['sym']}({it['floating_pct']:+.2f}%)" for it in _pending_addfund_queue))
         for item in _pending_addfund_queue:
             _sym_q = item["sym"]
+            # 19/10/2026 (permintaan Mas Budi, fitur "orphaned coin reclaim"): coba dulu modal
+            # dari koin orphan yang SUDAH untung (tidak ada regret -- modal nganggur yg memang
+            # sudah ditinggalkan bot), SEBELUM jatuh ke mekanisme lama yg jual aset nganggur
+            # paling jelek. auto_fund_addfund_from_idle_asset() di bawah TIDAK diubah sama
+            # sekali -- cuma dicoba belakangan sekarang, bukan satu-satunya jalur lagi.
+            _auto_conv = auto_fund_addfund_from_orphaned_profit(_sym_q, item["needed"])
+            if _auto_conv.get("ok"):
+                log(f"[T2] {_sym_q} auto-convert ORPHAN UNTUNG BERHASIL ({_auto_conv.get('source_asset')} -> "
+                    f"${_auto_conv.get('proceeds_usdt', 0):.2f})")
+                continue
             _auto_conv = auto_fund_addfund_from_idle_asset(_sym_q, item["needed"])
             if _auto_conv.get("ok"):
                 log(f"[T2] {_sym_q} auto-convert BERHASIL ({_auto_conv.get('source_asset')} -> "
@@ -14336,6 +14547,13 @@ def cancel_deal_action(sym: str, pct: float = 100, reason: str = "") -> dict:
             if dd.get('add_usd') is not None:
                 dd['add_usd'] = float(dd.get('add_usd', 0) or 0) * keep_ratio
     save_active_deals()
+    # 19/10/2026 (permintaan Mas Budi, fitur "orphaned coin reclaim"): koin yang lepas dari
+    # active_deals lewat cancel TETAP di wallet (lihat REMARK docstring) tapi jadi "orphan"
+    # -- tidak ada lagi yang mencatat harga beli aslinya. Simpan di sini (entry_price dari
+    # removed_deal SUDAH rata-rata tertimbang yang benar, termasuk kalau sempat add-fund
+    # berkali-kali -- lihat REMARK record_cancelled_deal_price/execute_add_fund) supaya nanti
+    # floating P&L-nya bisa dihitung kalau wallet masih menyimpannya.
+    record_cancelled_deal_price(sym, removed_deal.get('entry_price', 0), removed_deal.get('strategy', '-'))
     send_telegram(
         f"CANCEL DEAL ({reason or 'otomatis'})\nPair: {to_display_pair(sym)}\nStrategi: {removed_deal.get('strategy', '-')}\n"
         + ("Bot berhenti kelola pair ini. Koin TIDAK dijual, tetap di wallet." if pct >= 100
@@ -30577,6 +30795,7 @@ if __name__ == '__main__':
     load_last_closed()
     load_hold_no_sell_closed()
     load_hold_no_sell_price()
+    load_cancelled_deal_price()
     load_blocked_pairs()
     load_delisting_seen()
     # 24/09/2026 (permintaan Mas Budi): STG/USDT diblok manual -- LayerZero mengakuisisi Stargate,
@@ -30588,6 +30807,7 @@ if __name__ == '__main__':
         log("[MIGRASI] STG/USDT ditambahkan ke blacklist manual (delisting Binance 6/10/2026)")
     apply_one_time_config_migrations()
     migrate_csv_hold_remark_once()
+    backfill_orphaned_coin_price_once()   # 19/10/2026: catat entry_price TIA/RUNE/MANTRA (orphan sebelum fitur ini ada)
     migrate_trim_reversal_2nd3rd_once()   # 02/10/2026: hapus closed deals "2nd"/"3rd" reversal-8h, permintaan Mas Budi
     threading.Thread(target=backfill_mombreak_rsi_once, daemon=True).start()   # 21/09/2026: isi RSI@Open MomentumBreak lama
     threading.Thread(target=recompute_shadow_levels_once, daemon=True).start()   # 21/09/2026: hitung ulang paper test ber-level tetap
