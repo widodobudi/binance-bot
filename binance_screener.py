@@ -7987,6 +7987,8 @@ def compute_deal_urgency(sym: str, d: dict):
         hold_limit_sec = HUNTING_MAX_HOLD_CANDLES * STRAT4H_SECONDS
     elif is_akum:
         hold_limit_sec = (d.get("timeout_candles", AKUM_ENTRY_TIMEOUT) or AKUM_ENTRY_TIMEOUT) * STRAT4H_SECONDS
+    elif strat == "topgainers_4h":
+        hold_limit_sec = TOPGAINERS_TIMEOUT_HOURS * 3600  # 19/10/2026 -- lihat REMARK di thread2_monitor()
     else:
         hold_limit_sec = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
     hours_to_timeout = max(0.0, (hold_limit_sec - (now - opened_ts)) / 3600) if opened_ts > 0 else None
@@ -10715,6 +10717,14 @@ def thread2_monitor():
         elif d.get('strategy','brkX2') == 'bbsnap_8h':
             hold_limit_sec = BBSNAP_8H_MAX_HOLD_CANDLES * BBSNAP_8H_SECONDS
             hold_label = f"batas {BBSNAP_8H_MAX_HOLD_CANDLES} candle 8h (bbsnap)"
+        elif d.get('strategy','brkX2') == 'topgainers_4h':
+            # 19/10/2026 (permintaan Mas Budi): sebelumnya jatuh ke fallback generik MAX_HOLD_DAYS
+            # (5 "candle" 12h = 60 jam, warisan era KeltnerBreak-12h, tidak pernah sengaja dipilih
+            # utk strategi ini). Diturunkan ke 24 jam, angka dari analisis rank-mobility yg sama
+            # dipakai add-fund -- window ini juga yg dipakai mengubah TINDAKAN saat tercapai jadi
+            # CANCEL (bukan jual), lihat REMARK di titik do_close di bawah.
+            hold_limit_sec = TOPGAINERS_TIMEOUT_HOURS * 3600
+            hold_label = f"batas {TOPGAINERS_TIMEOUT_HOURS} jam (topgainers, cancel bukan jual)"
         elif d.get('strategy','brkX2') == 'mombreak_1h':
             hold_limit_sec = MOMBREAK_LIVE_TIMEOUT_CANDLES * 3600
             hold_label = f"batas {MOMBREAK_LIVE_TIMEOUT_CANDLES} candle 1h (mombreak)"
@@ -10822,6 +10832,16 @@ def thread2_monitor():
             hold_limit_sec = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
             hold_label = f"batas {MAX_HOLD_DAYS} candle"
         if opened_ts>0 and (time.time()-opened_ts) >= hold_limit_sec:
+            # 19/10/2026 (permintaan Mas Budi): topgainers_4h timeout -> CANCEL (lepas tracking,
+            # koin TETAP di wallet, TIDAK dijual paksa) -- beda dari semua strategi lain yg timeout
+            # -> jual biasa. Probe kecil yg momentumnya tidak terbukti dlm TOPGAINERS_TIMEOUT_HOURS
+            # dikembalikan ke keputusan manual Mas Budi, bukan direalisasi rugi otomatis di titik
+            # waktu yg agak sembarang. cancel_deal_action() sudah hapus dari active_deals + save +
+            # Telegram sendiri -- continue skip sisa body (aman, blok2 di bawah sudah None-guarded
+            # `if sym in active_deals`, tapi continue hindari kerja sia2 utk deal yg sudah hilang).
+            if strat == 'topgainers_4h' and not _be_forced_close:
+                cancel_deal_action(sym, 100, reason=f"{hold_label} tercapai")
+                continue
             do_close=True
             # 06/10/2026: penutupan impas brkX2-4h tidak boleh diubah jadi timeout, karena timeout + profit
             # negatif memicu hold-no-sell dan koinnya tertahan 96 jam. Alasan impas tetap dipakai.
@@ -20215,6 +20235,11 @@ TOPGAINERS_ADDFUND_STEPS = [
 # otomatis kalau datanya basi/kosong (WS belum konek/baru putus), lihat REMARK di loop ranking.
 TOPGAINERS_WS_URL = "wss://stream.binance.com:9443/ws/!ticker_4h@arr"
 TOPGAINERS_WS_STALE_SEC = 30  # data WS dianggap basi kalau tidak ada update >30 detik -> fallback REST
+TOPGAINERS_TIMEOUT_HOURS = 24  # 19/10/2026 (permintaan Mas Budi): batas tahan sebelum di-CANCEL
+                                # (lepas tracking, koin TETAP di wallet -- BUKAN dijual paksa, lihat
+                                # REMARK di titik do_close/thread2_monitor()). Awalnya diusulkan 48j
+                                # (sama jendela add-fund), diturunkan ke 24j krn slot cuma 2 & sering
+                                # penuh -- "cancel" (bukan jual) meringankan risiko kepotong kecepetan.
 LIVE_RANK_4H = {}       # {symbol: pct_change_4h (float, dari field "P" stream)}
 LIVE_RANK_4H_TS = 0     # ms epoch, kapan LIVE_RANK_4H terakhir diupdate (0 = belum pernah)
 LIVE_RANK_4H_LOCK = threading.Lock()
