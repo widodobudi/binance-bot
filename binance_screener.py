@@ -27042,6 +27042,37 @@ def run_web_dashboard():
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)})
 
+        @app.route("/admin/annotate_trade_reason", methods=["POST"])
+        def admin_annotate_trade_reason():
+            """19/10/2026 (permintaan Mas Budi): tambah catatan ke exit_reason baris CSV historis
+            yang SUDAH closed -- TIDAK mengubah profit_pct/harga/field lain sama sekali, murni
+            anotasi teks biar jelas di History kalau hasil negatif itu dari bug yang SUDAH
+            diperbaiki (lihat bbsnap-impas-buffer-fee-gap, c4c71ba), bukan cerminan strategi yang
+            sedang berjalan sekarang. Match by symbol + close_time_wib + status=CLOSED (persis,
+            bukan open_time -- lebih presisi krn tidak ada 2 close di menit yg sama)."""
+            data = request.get_json(force=True, silent=True) or {}
+            sym = data.get("symbol", "").upper().strip()
+            close_t = data.get("close_time_wib", "").strip()
+            note = data.get("note", "").strip()
+            if not sym or not close_t or not note:
+                return jsonify({"ok": False, "error": "symbol, close_time_wib, note required"})
+            try:
+                with trades_csv_lock:
+                    with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                        rows = list(csv.DictReader(f))
+                    matched = 0
+                    for r in rows:
+                        if r.get('symbol') == sym and r.get('close_time_wib') == close_t and r.get('status') == 'CLOSED':
+                            r['exit_reason'] = (r.get('exit_reason') or '').strip() + ' ' + note
+                            matched += 1
+                    if matched:
+                        with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
+                            w = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction='ignore'); w.writeheader(); w.writerows(rows)
+                log(f"[ADMIN] annotate_trade_reason: {sym} @ {close_t} -> matched={matched}")
+                return jsonify({"ok": True, "matched": matched})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)})
+
         # 06/09/2026: decorator route ini HILANG dari kode sejak awal (dicek via git log -S,
         # string "/manual_scan" tidak pernah ada di riwayat git manapun) -- akibatnya POST
         # /manual_scan selalu 404, Flask balikin halaman error HTML, dan tombol "Scan Sekarang"
