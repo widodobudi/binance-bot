@@ -6604,7 +6604,15 @@ def execute_close_now(sym: str, reason: str, telegram_header: str = "CLOSE MANUA
                 'total_usd':     d.get('target_usd', ''),
             })
             remove_from_active_deals(sym)
-            if strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'mombreak_1h'): record_closed(sym)
+            # 20/10/2026 (permintaan Mas Budi, insiden AXL/USDT Decouple-4h -- buka ulang di coin
+            # sama cuma 40 menit setelah closed rugi, krn cooldown 8 jam TIDAK PERNAH aktif):
+            # whitelist strategi hardcoded di sini SENGAJA DIHAPUS -- daftar lama ketinggalan
+            # setiap kali ada strategi baru (decouple_4h/topgainers_4h/dipbuy_universe/bbsnap_4h/
+            # bbsnap_8h/rvolbreak_8h semua pernah tidak tercatat cooldown-nya akibat ini). Toggle
+            # per-strategi "Cooldown" di dashboard (is_cooldown_enabled()) sudah jadi satu-satunya
+            # gate yang relevan di titik SCAN/entry -- mencatat waktu close di sini aman & wajib
+            # untuk SEMUA strategi tanpa kecuali, supaya whitelist basi seperti ini tidak terulang.
+            record_closed(sym)
             # 12/10/2026 (Fase 1 task #3/10, audit ulang): jalur close INI (manual_close dashboard
             # + ai_decision_capacity_swap) tadinya TIDAK update status rantai reentry-on-impas --
             # kalau deal yg lagi hop 1/2 ditutup lewat sini (bukan auto thread2_monitor), catatan
@@ -8674,12 +8682,19 @@ def get_live_atr_pct(symbol: str, strategy: str, fallback: float) -> float:
             return cached[1]
     atrp = fallback
     try:
-        if strategy in ('brkX2_4h', 'brkX2_crossema', 'hunting_4h'):
+        # 20/10/2026 (permintaan Mas Budi, insiden AXL/USDT Decouple-4h): dulu cabang if/elif di
+        # sini TIDAK lengkap -- strategi yg ditambah belakangan (decouple_4h/trend_confirm_4h/
+        # bbsnap_4h/bbsnap_8h/rvolbreak_8h/dipbuy_universe/topgainers_4h) jatuh ke "else" TIMEFRAME
+        # global 12h, padahal TF asli mereka 4h/8h -- trailing distance & arm_pct LIVE jadi
+        # dihitung dari ATR candle yang salah. Celah ini sudah pernah terdokumentasi (lihat REMARK
+        # BB_UPPER_TF_BY_STRATEGY, dibangun 17/10 TAPI sengaja tidak dipakai untuk menutup celah
+        # ini) -- sekarang dipakai sebagai satu sumber kebenaran, supaya strategi baru berikutnya
+        # otomatis benar begitu didaftarkan di sana, tidak perlu ingat update cabang ini lagi.
+        _tf = BB_UPPER_TF_BY_STRATEGY.get(strategy, TIMEFRAME)
+        if _tf == '4h':
             frame = get_ohlcv_4h(symbol, limit=30)
-        elif strategy == 'reversal':
-            frame = get_ohlcv(symbol, interval=REVERSAL_TIMEFRAME, limit=30)
         else:
-            frame = get_ohlcv(symbol, interval=TIMEFRAME, limit=30)
+            frame = get_ohlcv(symbol, interval=_tf, limit=30)
         if frame is not None and len(frame) >= 20:
             atr = ta.atr(frame['high'], frame['low'], frame['close'], length=14)
             val = atr.iloc[-1] / frame['close'].iloc[-1] * 100
@@ -8731,6 +8746,7 @@ BB_UPPER_TF_BY_STRATEGY = {
     'reversal': REVERSAL_TIMEFRAME,
     'mombreak_1h': '1h',
     'hunting_4h': '4h',
+    'topgainers_4h': '4h',  # 20/10/2026: ditambahkan sekalian saat celah get_live_atr_pct() ditutup
 }
 
 LIVE_BBUPPER_CACHE_SECONDS = 300  # 5 menit -- TTL pola sama dgn LIVE_ATR_CACHE_SECONDS
@@ -11490,7 +11506,10 @@ def thread2_monitor():
                     'st_dir':       str(d.get('last_st_dir'))     if d.get('last_st_dir')     is not None else "—",
                 })
                 remove_from_active_deals(sym)
-                if strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h', 'mombreak_1h'): record_closed(sym)
+                # 20/10/2026: whitelist strategi hardcoded DIHAPUS, lihat REMARK lengkap di
+                # call-site pertama (~line 6607, insiden AXL/USDT Decouple-4h) -- cooldown wajib
+                # tercatat utk SEMUA strategi, bukan cuma yang kebetulan masuk daftar lama.
+                record_closed(sym)
                 if strat == 'brkX2_4h' and trail_stop_triggered: record_trail_close(sym, price)
                 if strat == 'trend_confirm_4h': handle_tc4h_chain_close(sym, price, d.get('quick_reentry_hop', 0), _be_forced_close)
                 if strat == 'brkX2_4h' and d.get('quick_reentry_open'): record_quick_reentry_close(sym, prof_from_entry)
@@ -26139,8 +26158,8 @@ def run_web_dashboard():
                           strategy=strat, base_usd=total_usd)
             tp_tier_clear(sym)
             remove_from_active_deals(sym)
-            if strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
-                record_closed(sym)
+            # 20/10/2026: whitelist strategi hardcoded DIHAPUS, lihat REMARK di ~line 6607.
+            record_closed(sym)
             log(f"[RECONCILE] {sym} dibersihkan dari active_deals + dicatat ke Closed Trades (harga estimasi {price}, profit {prof_pct:+.2f}%)")
             send_telegram(
                 f"RECONCILE DEAL (dashboard)\n"
@@ -28002,8 +28021,8 @@ def run_web_dashboard():
                     csv_log_close(symbol, now_wib().strftime('%Y-%m-%d %H:%M:%S'), wh_price, wh_prof_pct,
                                   "close via TradingView webhook", strategy=strategy, base_usd=wh_total_usd)
                     remove_from_active_deals(symbol)
-                    if strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'hunting_4h', 'reversal', 'brkX2_4h', 'brkX2_crossema', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h'):
-                        record_closed(symbol)
+                    # 20/10/2026: whitelist strategi hardcoded DIHAPUS, lihat REMARK di ~line 6607.
+                    record_closed(symbol)
                     # 12/10/2026 (Fase 1 task #3/10, audit ulang): jalur close INI jg perlu update
                     # status rantai reentry-on-impas -- was_impas selalu False (close via webhook
                     # bukan mekanisme impas strategi, selalu mengakhiri rantai).
