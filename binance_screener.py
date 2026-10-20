@@ -31117,6 +31117,20 @@ def ai_decision_breakdown_check(symbol: str, strategy: str, d: dict, price: floa
     profit_after_fee = profit_gross - FEE_ROUND_TRIP
     drop_below_low_pct = (price/entry_candle_low - 1)*100 if entry_candle_low > 0 else 0
 
+    # 20/10/2026 (permintaan Mas Budi): sertakan rank Top Gainers live -- jantung strategi ini
+    # (dasar open LONG-nya sendiri "rank 6-8 by rolling 4h change"), rank turun jauh sejak open
+    # = sinyal momentum breakout sudah hilang, bukan cuma soal harga semata. TOPGAINERS_LAST_RANK
+    # di-refresh tiap siklus scan topgainers (~30 detik, lihat thread_topgainers_scan()) -- dibaca
+    # di sini TANPA hitungan baru, murni lookup dari cache yg sudah ada.
+    _rank_open = d.get('rank_open')
+    _rank_now = TOPGAINERS_LAST_RANK.get(symbol)
+    if _rank_open is not None and _rank_now is not None:
+        rank_str = f"Rank saat open: #{_rank_open} | Rank sekarang: #{_rank_now} ({'turun ' + str(_rank_now-_rank_open) + ' peringkat' if _rank_now > _rank_open else ('naik ' + str(_rank_open-_rank_now) + ' peringkat' if _rank_now < _rank_open else 'tetap')})"
+    elif _rank_open is not None:
+        rank_str = f"Rank saat open: #{_rank_open} | Rank sekarang: tidak diketahui (simbol tidak masuk hitungan Top Gainers siklus terakhir)"
+    else:
+        rank_str = ""
+
     ind_live_str = ""
     candle_str = ""
     try:
@@ -31191,6 +31205,7 @@ def ai_decision_breakdown_check(symbol: str, strategy: str, d: dict, price: floa
         f"Low candle 4h saat deal dibuka: {_fmt_price(entry_candle_low)} -- harga BARU SAJA tembus "
         f"ke bawah level ini ({drop_below_low_pct:+.2f}% dari level itu), posisi BELUM PERNAH armed "
         f"(belum sempat untung cukup untuk trailing aktif).\n"
+        f"{rank_str}\n"
         f"{ind_live_str}\n"
         f"{candle_str}\n"
         f"{htf_section}\n\n"
