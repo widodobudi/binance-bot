@@ -17293,7 +17293,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
       <span id="sc-profit-note" style="display:none;color:var(--muted);font-size:10.5px">(trade sebelum fitur size-cut ada, close &lt; 16/10/2026 -- periode tetap, tidak ikut filter waktu)</span>
       <button onclick="loadScActiveMode()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reload</button>
     </div>
-    <div id="sc-cards" style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;align-items:start"></div>
+    <div id="sc-cards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;align-items:start"></div>
   </div>
   <div style="overflow-x:auto">
     <table id="ct-table" style="width:100%;border-collapse:collapse;font-size:11px">
