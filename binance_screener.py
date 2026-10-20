@@ -10960,6 +10960,27 @@ def thread2_monitor():
                               f"{_ec_candles * 12}j, masih rugi): price {_fmt_price(price)} < entry {_fmt_price(entry)}")
                     # SENGAJA TIDAK set hard_stop_triggered, pola sama spt BTC-dump di atas --
                     # ini exit dini sukarela, bukan hard-stop volatilitas sungguhan.
+            # 20/10/2026 (permintaan Mas Budi, kasus STX/USDT -6,88% -- rugi besarnya sudah
+            # kejadian di 2 jam pertama, tapi baru keluar 19 jam kemudian lewat near-timeout):
+            # sinyal breakdown dini KHUSUS topgainers_4h -- begitu harga tembus LOW candle 4h
+            # tempat deal ini dibuka (snapshot entry_candle_low, diambil SEKALI saat open, lihat
+            # REMARK di titik open-nya) SEBELUM sempat armed, TANYA AI (bukan auto-cut langsung --
+            # backtest 6 trade historis 20/10/2026 nunjukkin sinyal mentah ini 1x benar (STX,
+            # breakdown nyata) tapi 1x false-positive ringan (KAT, sempat -1,21% lalu pulih
+            # +0,77%) -- makanya AI yg putuskan pakai indikator live, bukan auto-jual buta).
+            # Dicek SEKALI per deal (flag breakdown_check_done), supaya tidak nanya AI berulang
+            # tiap siklus ~15 detik selama harga masih di bawah level itu.
+            if not do_close and (not armed) and strat == 'topgainers_4h' and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
+                _ecl = float(d.get('entry_candle_low', 0) or 0)
+                if _ecl > 0 and price < _ecl and not d.get('breakdown_check_done', False):
+                    with active_deals_lock:
+                        if sym in active_deals:
+                            active_deals[sym]['breakdown_check_done'] = True
+                    save_active_deals()
+                    log(f"[T2] {sym} breakdown dini terdeteksi (harga {_fmt_price(price)} < low candle pembukaan {_fmt_price(_ecl)}) → tanya AI")
+                    if ai_decision_breakdown_check(sym, strat, d, price, _ecl):
+                        do_close = True
+                        reason = f"AI decision: breakdown dini (harga tembus low candle pembukaan {_fmt_price(_ecl)})"
             if not do_close:
                 _hs_label, _hs_base, _hs_pct = mombreak_hard_stop_pct() if strat == 'mombreak_1h' else hard_stop_pct(atrp, strat)
                 _be_trig = BE_TRIGGER_BY_STRATEGY.get(strat, 0)
@@ -21203,6 +21224,18 @@ def thread_topgainers_scan() -> None:
     entry_price = get_price_now(chosen['symbol'])
     if entry_price <= 0:
         entry_price = chosen['price']
+    # 20/10/2026 (permintaan Mas Budi, fitur "breakdown dini" -- lihat REMARK lengkap di
+    # thread2_monitor()): snapshot low candle 4h yg SEDANG terbentuk saat ini, SEKALI saat open --
+    # dipakai SEBAGAI PATOKAN TETAP nanti (bukan baca ulang low candle yg terus berubah, krn low
+    # candle yg masih berjalan otomatis ikut turun kalau harga turun -- jadi "ditembus" tidak akan
+    # pernah berarti apa-apa kalau dibaca live terus-menerus).
+    _entry_candle_low = 0.0
+    try:
+        _df4_open = get_ohlcv_4h(chosen['symbol'], limit=2)
+        if _df4_open is not None and len(_df4_open) >= 1:
+            _entry_candle_low = float(_df4_open.iloc[-1]['low'])
+    except Exception as _e:
+        log(f"WARN [T_TOPGAINERS] gagal ambil low candle pembukaan {chosen['symbol']}: {_e}")
     add_to_active_deals(chosen['symbol'], {
         "strategy": "topgainers_4h", "entry_price": entry_price, "peak": entry_price,
         "signal_price": chosen['price'], "atr_pct": chosen['atr_pct'] or 3.0,
@@ -21210,7 +21243,7 @@ def thread_topgainers_scan() -> None:
         "opened_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
         "target_usd": target_usd, "add_usd": add_usd,
         "rank_open": chosen['rank'], "chg_4h_pct_open": chosen['chg_4h_pct'],
-        "addfund_steps_done": 0,
+        "addfund_steps_done": 0, "entry_candle_low": _entry_candle_low,
     })
     csv_log_open({
         'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
@@ -31056,6 +31089,145 @@ def ai_decision_near_timeout(symbol: str, strategy: str, d: dict, price: float, 
         f"Event    : NEAR TIMEOUT (candle {hold_now}/{max_candle})\n"
         f"Profit   : {profit_after_fee:+.2f}% (setelah fee)\n"
         f"Keputusan: {'⚡ CLOSE' if decision else '▶️ EXTEND'}\n"
+        f"{reasoning}",
+        parse_mode=None
+    )
+    return decision
+
+
+def ai_decision_breakdown_check(symbol: str, strategy: str, d: dict, price: float, entry_candle_low: float) -> bool:
+    """
+    20/10/2026 (permintaan Mas Budi, kasus STX/USDT -6,88% -- lihat REMARK pemanggil di
+    thread2_monitor()): AI decide begitu harga tembus LOW candle 4h tempat deal dibuka, SEBELUM
+    sempat armed -- sinyal breakdown dini, jauh lebih cepat dari near-timeout (yg nunggu 4/5 dari
+    batas hold penuh, bisa belasan jam). Backtest 6 trade historis topgainers_4h (20/10/2026):
+    sinyal mentah (tanpa AI) kena 1 true-positive (STX, breakdown nyata, -6,88% jadi bisa
+    -1,35% kalau dipotong di titik ini) + 1 false-positive RINGAN (KAT, sempat -1,21% lalu
+    pulih +0,77%) -- karena ada false-positive, sinyal ini SENGAJA jadi pemicu TANYA AI dulu,
+    BUKAN auto-cut langsung, supaya AI bisa bedakan noise sesaat dari breakdown beneran pakai
+    indikator live (sama kualitas bahan dgn ai_decision_near_timeout()).
+    Return True = CLOSE sekarang, False = HOLD (sinyal dianggap noise, biarkan jalan terus).
+    Default False kalau AI tidak tersedia/error -- fail-open ke arah HOLD (bukan CLOSE), karena
+    sinyal ini baru INDIKASI dini, bukan kepastian breakdown spt hard-stop/trailing/impas asli
+    yg sudah tervalidasi -- beda dari ai_decision_close() yg default True.
+    """
+    FEE_ROUND_TRIP = 0.3
+    entry = d.get('entry_price', 0)
+    profit_gross = (price/entry - 1)*100 if entry > 0 else 0
+    profit_after_fee = profit_gross - FEE_ROUND_TRIP
+    drop_below_low_pct = (price/entry_candle_low - 1)*100 if entry_candle_low > 0 else 0
+
+    ind_live_str = ""
+    candle_str = ""
+    try:
+        df4 = get_ohlcv_4h(symbol, limit=60)
+        if df4 is not None and len(df4) >= 20:
+            df4 = compute_indicators_4h(df4)
+            r4 = df4.iloc[-1]
+            r4p = df4.iloc[-2]
+            rsi_live  = float(r4.get('rsi', float('nan'))) if 'rsi' in r4.index and not pd.isna(r4.get('rsi')) else None
+            sk_live   = float(r4.get('stoch_k', float('nan'))) if 'stoch_k' in r4.index and not pd.isna(r4.get('stoch_k')) else None
+            sd_live   = float(r4.get('stoch_d', float('nan'))) if 'stoch_d' in r4.index and not pd.isna(r4.get('stoch_d')) else None
+            macd_h    = float(r4.get('macd_hist', float('nan'))) if 'macd_hist' in r4.index and not pd.isna(r4.get('macd_hist')) else None
+            vol_ratio = float(r4.get('vol')/r4.get('vol_ma')) if 'vol' in r4.index and 'vol_ma' in r4.index and r4.get('vol_ma',0)>0 else None
+            st_dir    = int(r4.get('st_dir', 0)) if 'st_dir' in r4.index and not pd.isna(r4.get('st_dir')) else None
+            bb_pct    = float(r4.get('bb_pct', float('nan'))) if 'bb_pct' in r4.index and not pd.isna(r4.get('bb_pct')) else None
+            wr_live   = float(r4.get('williams_r', float('nan'))) if 'williams_r' in r4.index and not pd.isna(r4.get('williams_r')) else None
+            cci_live  = float(r4.get('cci', float('nan'))) if 'cci' in r4.index and not pd.isna(r4.get('cci')) else None
+            obv_now   = float(r4.get('obv', float('nan'))) if 'obv' in r4.index and not pd.isna(r4.get('obv')) else None
+            obv_prev  = float(r4p.get('obv', float('nan'))) if 'obv' in r4p.index and not pd.isna(r4p.get('obv')) else None
+
+            ind_parts = []
+            if rsi_live  is not None: ind_parts.append(f"RSI={rsi_live:.1f}")
+            if sk_live   is not None: ind_parts.append(f"Stoch%K={sk_live:.1f}")
+            if sd_live   is not None: ind_parts.append(f"Stoch%D={sd_live:.1f}")
+            if macd_h    is not None: ind_parts.append(f"MACD hist={macd_h:+.6f}")
+            if vol_ratio is not None: ind_parts.append(f"Vol={vol_ratio:.2f}xMA")
+            if st_dir    is not None: ind_parts.append(f"ST={'Up' if st_dir==1 else 'Down'}trend")
+            if bb_pct    is not None: ind_parts.append(f"BB%b={bb_pct:.2f}")
+            if wr_live   is not None: ind_parts.append(f"Williams%R={wr_live:.1f}")
+            if cci_live  is not None: ind_parts.append(f"CCI={cci_live:.1f}")
+            if obv_now is not None and obv_prev is not None:
+                obv_dir = "naik" if obv_now > obv_prev else "turun"
+                ind_parts.append(f"OBV={obv_dir}")
+            if ind_parts: ind_live_str = "Indikator 4h live: " + " | ".join(ind_parts)
+
+            c_now  = float(r4['close']); o_now = float(r4['open'])
+            h_now  = float(r4['high']);  l_now = float(r4['low'])
+            c_prev = float(r4p['close']); o_prev = float(r4p['open'])
+            body   = abs(c_now - o_now)
+            full_range = h_now - l_now if h_now > l_now else 1e-10
+            body_ratio = body / full_range
+            patterns = []
+            if body_ratio < 0.15:
+                patterns.append("Doji (indecision)")
+            if c_now > o_now and c_now > c_prev:
+                patterns.append("Candle hijau (bullish)")
+            elif c_now < o_now and c_now < c_prev:
+                patterns.append("Candle merah (bearish)")
+            upper_wick = h_now - max(c_now, o_now)
+            lower_wick = min(c_now, o_now) - l_now
+            if upper_wick > body * 2:
+                patterns.append("Upper shadow panjang (penolakan harga tinggi)")
+            if lower_wick > body * 2:
+                patterns.append("Lower shadow panjang (support kuat)")
+            if c_now > o_prev and o_now < c_prev and c_now > c_prev:
+                patterns.append("Bullish engulfing")
+            if c_now < o_prev and o_now > c_prev and c_now < c_prev:
+                patterns.append("Bearish engulfing")
+            if patterns:
+                candle_str = "Pattern candle: " + ", ".join(patterns)
+    except Exception:
+        pass
+
+    htf_str = fetch_htf_context_for_ai(symbol)
+    htf_section = f"\nKonteks HTF:\n{htf_str}" if htf_str else ""
+
+    prompt = (
+        f"Kamu adalah AI analyst trading crypto. Berikan analisis singkat.\n\n"
+        f"Deal: {to_display_pair(symbol)} | Strategi: {strategy}\n"
+        f"Entry: {_fmt_price(entry)} | Harga skrg: {_fmt_price(price)}\n"
+        f"Profit gross: {profit_gross:+.2f}% | Setelah fee (0.3%): {profit_after_fee:+.2f}%\n"
+        f"Low candle 4h saat deal dibuka: {_fmt_price(entry_candle_low)} -- harga BARU SAJA tembus "
+        f"ke bawah level ini ({drop_below_low_pct:+.2f}% dari level itu), posisi BELUM PERNAH armed "
+        f"(belum sempat untung cukup untuk trailing aktif).\n"
+        f"{ind_live_str}\n"
+        f"{candle_str}\n"
+        f"{htf_section}\n\n"
+        f"Breakdown dini terdeteksi -- harga jebol support level pembukaan sebelum posisi sempat "
+        f"untung. Apakah ini sinyal breakdown beneran (sebaiknya keluar sekarang sebelum rugi lebih "
+        f"dalam) atau cuma noise/wick sesaat yang wajar (sebaiknya ditahan)?\n\n"
+        f"Format jawaban (ikuti persis):\n"
+        f"CLOSE atau HOLD\n"
+        f"Alasan: penjelasan singkat keputusan berdasarkan semua indikator\n\n"
+        f"Baris pertama HARUS hanya kata CLOSE atau HOLD."
+    )
+    result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
+    if not result:
+        return False
+    lines = result.strip().split("\n")
+    first_line = lines[0].strip().upper()
+    decision = "CLOSE" in first_line
+    reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+    log(f"[AI] BREAKDOWN-CHECK decision {symbol}: {first_line} → {'CLOSE' if decision else 'HOLD'}")
+    log_ai_decision(
+        f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] BREAKDOWN-CHECK-DECISION | {strategy} | "
+        f"{to_display_pair(symbol)} | {'CLOSE' if decision else 'HOLD'} | profit_after_fee={profit_after_fee:+.2f}% "
+        f"low_pembukaan={_fmt_price(entry_candle_low)}\n"
+        f"{ind_live_str + chr(10) if ind_live_str else ''}"
+        f"{candle_str + chr(10) if candle_str else ''}"
+        f"{('Konteks HTF:' + chr(10) + htf_str + chr(10)) if htf_str else ''}"
+        f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
+        f"{'─'*36}\n"
+    )
+    send_telegram(
+        f"🤖 AI Decision | {to_display_pair(symbol)}\n"
+        f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+        f"{ai_provider_note()}\n"
+        f"Strategi : {strategy}\n"
+        f"Event    : BREAKDOWN DINI (harga tembus low candle pembukaan)\n"
+        f"Profit   : {profit_after_fee:+.2f}% (setelah fee)\n"
+        f"Keputusan: {'⚡ CLOSE' if decision else '▶️ HOLD'}\n"
         f"{reasoning}",
         parse_mode=None
     )
