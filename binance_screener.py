@@ -11006,6 +11006,25 @@ def thread2_monitor():
                         active_deals[sym].pop('trail_htf_grace_started_at', None)
                 d.pop('trail_htf_grace_started_at', None)
 
+        # 20/10/2026 (permintaan Mas Budi, "mekanisme ketiga" koin-tetap-di-wallet, berlaku
+        # SEMUA strategi): trailing-stop atau impas yang hasilnya RUGI USDT -- CANCEL (lepas
+        # tracking, koin TETAP di wallet), BUKAN dijual. Beda dari hold_no_sell (khusus hard-
+        # stop/timeout-rugi, tetap tercatat closed di CSV + cooldown 96j): cancel di sini TIDAK
+        # tercatat closed sama sekali, TIDAK ada cooldown, dan SENGAJA TIDAK ada batas kerugian
+        # lanjutan apa pun -- disepakati eksplisit sama Mas Budi setelah didiskusikan risikonya
+        # ("seburuk-buruknya harga jatuh, saya akan biarkan dulu sampai naik lagi atau bisa juga
+        # saya manual sell... kamu jangan sell"): bot TIDAK PERNAH jual balik koin ini sendiri,
+        # tidak ada hard-stop/alert/floor pengganti apa pun -- murni keputusan manual Mas Budi.
+        # Reuse cancel_deal_action() yg sama dipakai 3 sumber cancel lain (manual dashboard,
+        # topgainers_4h 24h-timeout, Conditional Rules) -- otomatis tercatat ke
+        # cancelled_deal_price.json, jadi otomatis eligible auto_fund_addfund_from_orphaned_profit()
+        # kalau nanti floating-nya balik positif (fungsi itu sendiri sengaja tidak menyentuh yg
+        # masih negatif, lihat REMARK-nya). hard_stop_triggered SENGAJA TIDAK diikutkan di sini --
+        # itu tetap jalur hold_no_sell lama, tidak berubah.
+        if (trail_stop_triggered or _be_forced_close) and do_close and prof_from_entry < 0:
+            cancel_deal_action(sym, 100, reason=f"{reason} (rugi, dialihkan cancel bukan jual)")
+            continue
+
         # batas hold sadar-strategi:
         #  brkX2  : MAX_HOLD_DAYS candle 12h (5*12jam=2.5 hari)
         #  reversal: REVERSAL_MAX_HOLD_CANDLES candle 8h
