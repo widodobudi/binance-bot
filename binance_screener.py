@@ -11042,7 +11042,15 @@ def thread2_monitor():
         # kalau nanti floating-nya balik positif (fungsi itu sendiri sengaja tidak menyentuh yg
         # masih negatif, lihat REMARK-nya). hard_stop_triggered SENGAJA TIDAK diikutkan di sini --
         # itu tetap jalur hold_no_sell lama, tidak berubah.
-        if (trail_stop_triggered or _be_forced_close) and do_close and prof_from_entry < 0:
+        # 20/10/2026 (permintaan Mas Budi, redesain exit topgainers_4h jadi 4 mekanisme sengaja --
+        # breakdown-dini/hard-stop/trailing sbg Close, timeout-24h sbg satu-satunya Cancel):
+        # topgainers_4h DIKECUALIKAN dari pengalihan cancel ini. Trailing adalah SATU-SATUNYA jalur
+        # realisasi pasca-armed utk strategi ini (hard-stop sudah dihilangkan dari peran itu di sini
+        # krn perannya diganti sbg lantai tak-bersyarat pra-armed) -- kalau trailing-rugi ikut
+        # dialihkan jadi cancel juga, posisi armed-lalu-jatuh TIDAK AKAN PERNAH terealisasi otomatis
+        # sama sekali (bukan cuma nunggu 24 jam, tapi selamanya nganggur). Strategi lain TETAP ikut
+        # mekanisme ini seperti semula.
+        if (trail_stop_triggered or _be_forced_close) and do_close and prof_from_entry < 0 and strat != 'topgainers_4h':
             cancel_deal_action(sym, 100, reason=f"{reason} (rugi, dialihkan cancel bukan jual)")
             continue
 
@@ -11214,8 +11222,12 @@ def thread2_monitor():
             # negatif memicu hold-no-sell dan koinnya tertahan 96 jam. Alasan impas tetap dipakai.
             if not _be_forced_close:
                 reason=hold_label+" tercapai"; timeout_triggered=True
-        elif opened_ts>0 and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
+        elif opened_ts>0 and strat != 'topgainers_4h' and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
             # Tanya AI saat tersisa 2 candle menuju timeout
+            # 20/10/2026 (permintaan Mas Budi): topgainers_4h DIKECUALIKAN dari near-timeout AI --
+            # redesain exit strategi ini sengaja dipersempit jadi 4 mekanisme (breakdown-dini AI-check,
+            # hard-stop, trailing, timeout-24h-cancel). Timeout-24h di atas sudah jadi satu-satunya
+            # jaring terakhir; tidak perlu lagi tanya AI menjelang batas waktu di sini.
             elapsed_sec = time.time() - opened_ts
             candle_sec  = hold_limit_sec / (
                 REVERSAL_MAX_HOLD_CANDLES if d.get('strategy') == 'reversal'
