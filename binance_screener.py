@@ -10693,7 +10693,14 @@ def thread2_monitor():
         # Idea #5 (17/10/2026): BB Upper live, dipakai utk arm-dini + perketat trailing di bawah.
         # TIDAK berlaku utk hunting_4h (TERMINATED, keputusan Mas Budi -- lihat REMARK BBUPPER_TIGHT_TIERS).
         live_bb_upper = get_live_bb_upper(sym, strat)
-        _bbupper_touched = strat != 'hunting_4h' and live_bb_upper is not None and peak >= live_bb_upper
+        # 21/10/2026 (permintaan Mas Budi, insiden ZK/USDT -4,88% -- lihat REMARK lengkap di
+        # TOPGAINERS_BBUPPER_MIN_ARM_PROFIT_PCT): topgainers_4h WAJIB ada bantalan profit minimum
+        # sebelum BB-Upper boleh armed -- mencegah armed di bantalan nyaris nol (ZK armed di
+        # +0,19%) yang rawan ke-gap langsung lewat seluruh jarak trailing sebelum siklus monitor
+        # berikutnya sempat bereaksi. Strategi lain (brkX2-4h/KeltnerBreak-12h/MomentumBreak-1h/
+        # BBSnap-4h, sudah divalidasi backtest 17/10) TIDAK terkena syarat ini.
+        _bbupper_touched = (strat != 'hunting_4h' and live_bb_upper is not None and peak >= live_bb_upper
+                             and (strat != 'topgainers_4h' or prof_peak >= TOPGAINERS_BBUPPER_MIN_ARM_PROFIT_PCT))
         _bbupper_overshoot_pct = (peak / live_bb_upper - 1) * 100 if _bbupper_touched else 0.0
 
         # Conditional Rules (18/10/2026, permintaan Mas Budi "kalau X terjadi, lakukan Y" --
@@ -20938,6 +20945,20 @@ TOPGAINERS_TIMEOUT_HOURS = 24  # 19/10/2026 (permintaan Mas Budi): batas tahan s
                                 # REMARK di titik do_close/thread2_monitor()). Awalnya diusulkan 48j
                                 # (sama jendela add-fund), diturunkan ke 24j krn slot cuma 2 & sering
                                 # penuh -- "cancel" (bukan jual) meringankan risiko kepotong kecepetan.
+# 21/10/2026 (permintaan Mas Budi, insiden ZK/USDT -4,88%): BB-Upper arm-dini (Idea #5, 17/10)
+# terbukti backtest NET POSITIF utk topgainers_4h secara agregat 4,8 tahun (diaudit independen,
+# lihat REMARK di BB_UPPER_TF_BY_STRATEGY/bbupper_tight_factor) -- TAPI kasus nyata ZK/USDT
+# menunjukkan celah yang backtest per-candle tidak bisa lihat: armed di peak profit cuma +0,19%
+# (bantalan nyaris nol) setelah 5j26m, lalu harga GAP langsung melewati SELURUH jarak trailing
+# sebelum siklus monitor berikutnya sempat bereaksi -- realisasi -4,88%, jauh lebih dalam dari
+# jarak trailing 0,675% yang seharusnya. Fix: WAJIB ada bantalan profit minimum sebelum BB-Upper
+# arm-dini boleh armed KHUSUS topgainers_4h (strategi lain yg sudah divalidasi backtest -- brkX2-4h/
+# KeltnerBreak-12h/MomentumBreak-1h/BBSnap-4h -- TIDAK disentuh, tetap armed langsung begitu BB
+# Upper tersentuh, apa adanya). INGAT: kalau masih kejadian lagi beberapa deal setelah fix ini
+# (pantau 10-15 deal berikutnya), PERTIMBANGKAN kembali opsi yang lebih tegas: kecualikan
+# topgainers_4h dari BB-Upper arm-dini sepenuhnya (balik ke arm_pct tier ATR% biasa) -- lihat
+# diskusi lengkap sesi 20-21/10/2026.
+TOPGAINERS_BBUPPER_MIN_ARM_PROFIT_PCT = 0.5
 LIVE_RANK_4H = {}       # {symbol: pct_change_4h (float, dari field "P" stream)}
 LIVE_RANK_4H_TS = 0     # ms epoch, kapan LIVE_RANK_4H terakhir diupdate (0 = belum pernah)
 LIVE_RANK_4H_LOCK = threading.Lock()
