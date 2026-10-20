@@ -10981,6 +10981,25 @@ def thread2_monitor():
                     if ai_decision_breakdown_check(sym, strat, d, price, _ecl):
                         do_close = True
                         reason = f"AI decision: breakdown dini (harga tembus low candle pembukaan {_fmt_price(_ecl)})"
+            # 20/10/2026 (permintaan Mas Budi): rank Top Gainers live merosot ke zona buruk (>=9 --
+            # entry zone 6-8, rank 1=terbaik/10=terburuk) -- INDEPENDEN dari harga/status armed,
+            # beda dari breakdown-dini di atas (#8, trigger harga, cuma pra-armed) -- rank yang
+            # anjlok adalah sinyal momentum breakout sudah hilang DULUAN, bisa sebelum harga sempat
+            # ikut jatuh. Dicek SEKALI per deal (flag rank_degrade_check_done). Sama pola: TANYA AI
+            # (bukan auto-cut), fail-open ke HOLD kalau AI tidak tersedia.
+            if not do_close and strat == 'topgainers_4h' and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
+                _rk_open = d.get('rank_open')
+                _rk_now = TOPGAINERS_LAST_RANK.get(sym)
+                if (_rk_open is not None and _rk_now is not None and _rk_now >= 9
+                        and not d.get('rank_degrade_check_done', False)):
+                    with active_deals_lock:
+                        if sym in active_deals:
+                            active_deals[sym]['rank_degrade_check_done'] = True
+                    save_active_deals()
+                    log(f"[T2] {sym} rank Top Gainers merosot (#{_rk_open} → #{_rk_now}) → tanya AI")
+                    if ai_decision_rank_degrade(sym, strat, d, price, _rk_open, _rk_now):
+                        do_close = True
+                        reason = f"AI decision: rank Top Gainers merosot (#{_rk_open} → #{_rk_now})"
             if not do_close:
                 _hs_label, _hs_base, _hs_pct = mombreak_hard_stop_pct() if strat == 'mombreak_1h' else hard_stop_pct(atrp, strat)
                 _be_trig = BE_TRIGGER_BY_STRATEGY.get(strat, 0)
@@ -31253,6 +31272,143 @@ def ai_decision_breakdown_check(symbol: str, strategy: str, d: dict, price: floa
         f"{ai_provider_note()}\n"
         f"Strategi : {strategy}\n"
         f"Event    : BREAKDOWN DINI (harga tembus low candle pembukaan)\n"
+        f"Profit   : {profit_after_fee:+.2f}% (setelah fee)\n"
+        f"Keputusan: {'⚡ CLOSE' if decision else '▶️ HOLD'}\n"
+        f"{reasoning}",
+        parse_mode=None
+    )
+    return decision
+
+
+def ai_decision_rank_degrade(symbol: str, strategy: str, d: dict, price: float, rank_open: int, rank_now: int) -> bool:
+    """
+    20/10/2026 (permintaan Mas Budi, mekanisme ke-5 topgainers_4h): AI decide begitu rank Top
+    Gainers live sebuah deal merosot ke #9 atau lebih buruk (rank 1=terbaik, 10=terburuk; strategi
+    ini masuk di rank 6-8) -- INDEPENDEN dari harga/status armed, lihat REMARK pemanggil di
+    thread2_monitor(). Rank yang anjlok jauh dari zona entry adalah bukti langsung momentum
+    breakout yang jadi dasar open posisi ini sudah hilang, bisa terjadi SEBELUM harga sendiri
+    sempat ikut jatuh cukup dalam utk kena breakdown-dini/hard-stop. TANYA AI (bukan auto-cut),
+    prompt menegaskan rank sbg sinyal kuat tapi keputusan akhir tetap AI.
+    Return True = CLOSE sekarang, False = HOLD. Default False (fail-open ke HOLD) kalau AI tidak
+    tersedia/error -- sama pola dgn ai_decision_breakdown_check(), sinyal ini baru INDIKASI.
+    """
+    FEE_ROUND_TRIP = 0.3
+    entry = d.get('entry_price', 0)
+    profit_gross = (price/entry - 1)*100 if entry > 0 else 0
+    profit_after_fee = profit_gross - FEE_ROUND_TRIP
+    armed = d.get('trailing_armed', False)
+
+    ind_live_str = ""
+    candle_str = ""
+    try:
+        df4 = get_ohlcv_4h(symbol, limit=60)
+        if df4 is not None and len(df4) >= 20:
+            df4 = compute_indicators_4h(df4)
+            r4 = df4.iloc[-1]
+            r4p = df4.iloc[-2]
+            rsi_live  = float(r4.get('rsi', float('nan'))) if 'rsi' in r4.index and not pd.isna(r4.get('rsi')) else None
+            sk_live   = float(r4.get('stoch_k', float('nan'))) if 'stoch_k' in r4.index and not pd.isna(r4.get('stoch_k')) else None
+            sd_live   = float(r4.get('stoch_d', float('nan'))) if 'stoch_d' in r4.index and not pd.isna(r4.get('stoch_d')) else None
+            macd_h    = float(r4.get('macd_hist', float('nan'))) if 'macd_hist' in r4.index and not pd.isna(r4.get('macd_hist')) else None
+            vol_ratio = float(r4.get('vol')/r4.get('vol_ma')) if 'vol' in r4.index and 'vol_ma' in r4.index and r4.get('vol_ma',0)>0 else None
+            st_dir    = int(r4.get('st_dir', 0)) if 'st_dir' in r4.index and not pd.isna(r4.get('st_dir')) else None
+            bb_pct    = float(r4.get('bb_pct', float('nan'))) if 'bb_pct' in r4.index and not pd.isna(r4.get('bb_pct')) else None
+            wr_live   = float(r4.get('williams_r', float('nan'))) if 'williams_r' in r4.index and not pd.isna(r4.get('williams_r')) else None
+            cci_live  = float(r4.get('cci', float('nan'))) if 'cci' in r4.index and not pd.isna(r4.get('cci')) else None
+            obv_now   = float(r4.get('obv', float('nan'))) if 'obv' in r4.index and not pd.isna(r4.get('obv')) else None
+            obv_prev  = float(r4p.get('obv', float('nan'))) if 'obv' in r4p.index and not pd.isna(r4p.get('obv')) else None
+
+            ind_parts = []
+            if rsi_live  is not None: ind_parts.append(f"RSI={rsi_live:.1f}")
+            if sk_live   is not None: ind_parts.append(f"Stoch%K={sk_live:.1f}")
+            if sd_live   is not None: ind_parts.append(f"Stoch%D={sd_live:.1f}")
+            if macd_h    is not None: ind_parts.append(f"MACD hist={macd_h:+.6f}")
+            if vol_ratio is not None: ind_parts.append(f"Vol={vol_ratio:.2f}xMA")
+            if st_dir    is not None: ind_parts.append(f"ST={'Up' if st_dir==1 else 'Down'}trend")
+            if bb_pct    is not None: ind_parts.append(f"BB%b={bb_pct:.2f}")
+            if wr_live   is not None: ind_parts.append(f"Williams%R={wr_live:.1f}")
+            if cci_live  is not None: ind_parts.append(f"CCI={cci_live:.1f}")
+            if obv_now is not None and obv_prev is not None:
+                obv_dir = "naik" if obv_now > obv_prev else "turun"
+                ind_parts.append(f"OBV={obv_dir}")
+            if ind_parts: ind_live_str = "Indikator 4h live: " + " | ".join(ind_parts)
+
+            c_now  = float(r4['close']); o_now = float(r4['open'])
+            h_now  = float(r4['high']);  l_now = float(r4['low'])
+            c_prev = float(r4p['close']); o_prev = float(r4p['open'])
+            body   = abs(c_now - o_now)
+            full_range = h_now - l_now if h_now > l_now else 1e-10
+            body_ratio = body / full_range
+            patterns = []
+            if body_ratio < 0.15:
+                patterns.append("Doji (indecision)")
+            if c_now > o_now and c_now > c_prev:
+                patterns.append("Candle hijau (bullish)")
+            elif c_now < o_now and c_now < c_prev:
+                patterns.append("Candle merah (bearish)")
+            upper_wick = h_now - max(c_now, o_now)
+            lower_wick = min(c_now, o_now) - l_now
+            if upper_wick > body * 2:
+                patterns.append("Upper shadow panjang (penolakan harga tinggi)")
+            if lower_wick > body * 2:
+                patterns.append("Lower shadow panjang (support kuat)")
+            if c_now > o_prev and o_now < c_prev and c_now > c_prev:
+                patterns.append("Bullish engulfing")
+            if c_now < o_prev and o_now > c_prev and c_now < c_prev:
+                patterns.append("Bearish engulfing")
+            if patterns:
+                candle_str = "Pattern candle: " + ", ".join(patterns)
+    except Exception:
+        pass
+
+    htf_str = fetch_htf_context_for_ai(symbol)
+    htf_section = f"\nKonteks HTF:\n{htf_str}" if htf_str else ""
+
+    prompt = (
+        f"Kamu adalah AI analyst trading crypto. Berikan analisis singkat.\n\n"
+        f"Deal: {to_display_pair(symbol)} | Strategi: {strategy}\n"
+        f"Entry: {_fmt_price(entry)} | Harga skrg: {_fmt_price(price)}\n"
+        f"Profit gross: {profit_gross:+.2f}% | Setelah fee (0.3%): {profit_after_fee:+.2f}% | Armed: {armed}\n"
+        f"Rank Top Gainers (1=terbaik, 10=terburuk; strategi ini masuk di zona rank 6-8): "
+        f"saat open #{rank_open} → sekarang #{rank_now} -- MEROSOT {rank_now-rank_open} peringkat, "
+        f"sudah keluar jauh dari zona entry.\n"
+        f"{ind_live_str}\n"
+        f"{candle_str}\n"
+        f"{htf_section}\n\n"
+        f"Rank Top Gainers coin ini sudah merosot jauh dari zona entry (6-8) ke #{rank_now} -- "
+        f"sinyal momentum breakout yang jadi dasar open posisi ini sudah terbukti melemah/hilang, "
+        f"meski harga sendiri belum tentu ikut jatuh signifikan. Sangat disarankan CLOSE kecuali "
+        f"ada indikasi kuat momentum akan pulih. Apakah CLOSE sekarang atau HOLD (masih ada alasan "
+        f"teknikal kuat untuk bertahan)?\n\n"
+        f"Format jawaban (ikuti persis):\n"
+        f"CLOSE atau HOLD\n"
+        f"Alasan: penjelasan singkat keputusan berdasarkan semua indikator\n\n"
+        f"Baris pertama HARUS hanya kata CLOSE atau HOLD."
+    )
+    result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
+    if not result:
+        return False
+    lines = result.strip().split("\n")
+    first_line = lines[0].strip().upper()
+    decision = "CLOSE" in first_line
+    reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+    log(f"[AI] RANK-DEGRADE decision {symbol}: {first_line} → {'CLOSE' if decision else 'HOLD'}")
+    log_ai_decision(
+        f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] RANK-DEGRADE-DECISION | {strategy} | "
+        f"{to_display_pair(symbol)} | {'CLOSE' if decision else 'HOLD'} | profit_after_fee={profit_after_fee:+.2f}% "
+        f"rank_open={rank_open} rank_now={rank_now}\n"
+        f"{ind_live_str + chr(10) if ind_live_str else ''}"
+        f"{candle_str + chr(10) if candle_str else ''}"
+        f"{('Konteks HTF:' + chr(10) + htf_str + chr(10)) if htf_str else ''}"
+        f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
+        f"{'─'*36}\n"
+    )
+    send_telegram(
+        f"🤖 AI Decision | {to_display_pair(symbol)}\n"
+        f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+        f"{ai_provider_note()}\n"
+        f"Strategi : {strategy}\n"
+        f"Event    : RANK MEROSOT (#{rank_open} → #{rank_now})\n"
         f"Profit   : {profit_after_fee:+.2f}% (setelah fee)\n"
         f"Keputusan: {'⚡ CLOSE' if decision else '▶️ HOLD'}\n"
         f"{reasoning}",
