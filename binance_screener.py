@@ -15104,6 +15104,7 @@ DASHBOARD_HTML = '''
   <button type="button" class="dash-tab-btn" data-tab="strategies" onclick="selectDashTab('strategies')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">STRATEGIES</button>
   <button type="button" class="dash-tab-btn" data-tab="monitor" onclick="selectDashTab('monitor')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">MONITOR</button>
   <button type="button" class="dash-tab-btn" data-tab="history" onclick="selectDashTab('history')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">HISTORY</button>
+  <button type="button" class="dash-tab-btn" data-tab="analisis" onclick="selectDashTab('analisis')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">ANALISIS</button>
   <button type="button" class="dash-tab-btn" data-tab="control" onclick="selectDashTab('control')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">CONTROL</button>
   <button type="button" class="dash-tab-btn" data-tab="tools" onclick="selectDashTab('tools')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">TOOLS</button>
   <button type="button" class="dash-tab-btn" data-tab="pajak" onclick="selectDashTab('pajak')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">PAJAK</button>
@@ -17286,34 +17287,6 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
   </div>
   <div id="ct-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px"></div>  <div id="ct-stats-all" style="display:none;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px;color:var(--muted)"></div>  <div id="ct-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:10px"></div>
   <div id="ct-equity" style="margin-bottom:14px"></div>
-  <div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:14px">
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-      <b style="font-size:12px">Analisis per Strategi</b>
-      <select id="sc-mode" onchange="onScModeChange()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
-        <option value="sizecut">Size Cut</option>
-        <option value="profit">Klasifikasi Profit</option>
-      </select>
-      <span id="sc-filter-time-wrap" style="display:inline-flex;gap:10px;align-items:center">
-        <select id="sc-filter-time" onchange="onScTimeFilterChange()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
-          <option value="">Semua waktu</option>
-          <option value="today">Hari ini</option>
-          <option value="yesterday">Kemarin</option>
-          <option value="week">Minggu ini</option>
-          <option value="7d">7 hari terakhir</option>
-          <option value="30d">30 hari terakhir</option>
-          <option value="custom">Custom</option>
-        </select>
-        <span id="sc-filter-custom-range" style="display:none;gap:4px;align-items:center">
-          <input type="date" id="sc-filter-from" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
-          <span style="color:var(--muted);font-size:11px">s/d</span>
-          <input type="date" id="sc-filter-to" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
-        </span>
-      </span>
-      <span id="sc-profit-note" style="display:none;color:var(--muted);font-size:10.5px">(trade sebelum fitur size-cut ada, close &lt; 16/10/2026 -- periode tetap, tidak ikut filter waktu)</span>
-      <button onclick="loadScActiveMode()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reload</button>
-    </div>
-    <div id="sc-cards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;align-items:start"></div>
-  </div>
   <div style="overflow-x:auto">
     <table id="ct-table" style="width:100%;border-collapse:collapse;font-size:11px">
       <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
@@ -17334,6 +17307,40 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
     </table>
   </div>
 </div>
+</div>
+<!-- ═══════════════ ANALISIS (20/10/2026, permintaan Mas Budi: dipindah keluar dari History,
+     jadi tab sendiri di antara History dan Control) ═══════════════ -->
+<div class="container dash-section-start" data-tab="analisis" style="margin-top:12px">
+  <div class="card">
+    <div class="card-header" onclick="toggleCard(this)"><h2>ANALISIS PER STRATEGI <span class="card-toggle">&#9660;</span></h2></div>
+    <div class="card-body" style="font-size:11px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <select id="sc-mode" onchange="onScModeChange()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+          <option value="sizecut">Size Cut</option>
+          <option value="profit">Klasifikasi Profit</option>
+        </select>
+        <span id="sc-filter-time-wrap" style="display:inline-flex;gap:10px;align-items:center">
+          <select id="sc-filter-time" onchange="onScTimeFilterChange()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+            <option value="">Semua waktu</option>
+            <option value="today">Hari ini</option>
+            <option value="yesterday">Kemarin</option>
+            <option value="week">Minggu ini</option>
+            <option value="7d">7 hari terakhir</option>
+            <option value="30d">30 hari terakhir</option>
+            <option value="custom">Custom</option>
+          </select>
+          <span id="sc-filter-custom-range" style="display:none;gap:4px;align-items:center">
+            <input type="date" id="sc-filter-from" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+            <span style="color:var(--muted);font-size:11px">s/d</span>
+            <input type="date" id="sc-filter-to" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
+          </span>
+        </span>
+        <span id="sc-profit-note" style="display:none;color:var(--muted);font-size:10.5px">(trade sebelum fitur size-cut ada, close &lt; 16/10/2026 -- periode tetap, tidak ikut filter waktu)</span>
+        <button onclick="loadScActiveMode()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Reload</button>
+      </div>
+      <div id="sc-cards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;align-items:start"></div>
+    </div>
+  </div>
 </div>
 <script>
 var closedTradesRows = [];
