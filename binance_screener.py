@@ -7470,19 +7470,26 @@ def ekstrem_supertrend_size_mult(symbol: str, strategy: str, atr_pct: float | No
     if is_ekstrem:
         _kb12h_ekstrem_blocked = (strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed')
                                    and keltner12h_volatil_btc_strong_exempt())
-        if _kb12h_ekstrem_blocked:
+        _tc4h_ekstrem_blocked = (strategy == 'trend_confirm_4h'
+                                  and trendconfirm4h_volatil_btc_strong_exempt())
+        if _kb12h_ekstrem_blocked or _tc4h_ekstrem_blocked:
+            _patch_tag = ('keltner12h-ekstrem-block-when-volatil-exempt' if _kb12h_ekstrem_blocked
+                           else 'trendconfirm4h-ekstrem-block-when-volatil-exempt')
             return 0.0, (f"ATR%={atr_pct:.2f} Ekstrem -- BLOKIR selama Volatil dikecualikan size-cut "
-                          f"(BTC HTF kuat: 1D 2x hijau berturut + 3D hijau) -- backtest 21/10/2026: "
-                          f"tier Ekstrem TIDAK diuntungkan BTC bagus, malah sedikit lebih buruk "
-                          f"(patch 'keltner12h-ekstrem-block-when-volatil-exempt')")
+                          f"(BTC HTF kuat) -- patch '{_patch_tag}' 21/10/2026")
         candidates.append((ekstrem_mult, f"ATR%={atr_pct:.2f} Ekstrem (>={EKSTREM_ATR_PCT:g}%)"))
     elif is_volatil:
         _kb12h_btc_exempt = (strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed')
                               and keltner12h_volatil_btc_strong_exempt())
-        if _kb12h_btc_exempt:
+        _tc4h_btc_exempt = (strategy == 'trend_confirm_4h'
+                             and trendconfirm4h_volatil_btc_strong_exempt())
+        if _kb12h_btc_exempt or _tc4h_btc_exempt:
+            _btc_desc = ("1D 2x hijau berturut + 3D hijau" if _kb12h_btc_exempt
+                         else "12H 3x hijau berturut + 1D 2x hijau berturut")
+            _patch_tag = ('keltner12h-btc-strong-volatil-exempt' if _kb12h_btc_exempt
+                          else 'trendconfirm4h-btc-strong-volatil-exempt')
             log(f"[SIZING] {symbol} ({strategy}) ATR%={atr_pct:.2f} Volatil tapi BTC HTF kuat "
-                f"(1D 2x hijau berturut + 3D hijau) -- size-cut DILEWATI, modal FULL "
-                f"(patch 'keltner12h-btc-strong-volatil-exempt' 21/10/2026)")
+                f"({_btc_desc}) -- size-cut DILEWATI, modal FULL (patch '{_patch_tag}' 21/10/2026)")
         else:
             candidates.append((volatil_mult, f"ATR%={atr_pct:.2f} Volatil ({VOLATIL_ATR_PCT:g}-{EKSTREM_ATR_PCT:g}%)"))
     if is_downtrend and st_action == 'size_cut' and st_mult is not None:
@@ -8561,6 +8568,36 @@ def btc_htf_last2_closed_bullish(htf_interval: str):
         log(f"  [BTC-GATE] error streak2 {htf_interval}: {e}")
         return slot["bullish"]
 
+_btc_htf_streak3_cache = {}   # key: htf_interval -> {"ts": float, "bullish": bool|None}
+
+def btc_htf_last3_closed_bullish(htf_interval: str):
+    """True kalau 3 candle CLOSED TERAKHIR di HTF BTCUSDT tsb BERTURUT-TURUT hijau (close>open
+    di KETIGANYA). Dipakai utk patch 'trendconfirm4h-btc-strong-volatil-exempt' (21/10/2026,
+    definisi final Mas Budi: 12H >=3 berturut, lihat trendconfirm4h_volatil_btc_strong_exempt()).
+    Cache terpisah dari _btc_htf_streak2_cache/_btc_htf_bullish_cache (data beda).
+    None = gagal fetch DAN belum ada cache -- caller WAJIB fail ke False (size-cut TETAP
+    berlaku), sama alasan spt btc_htf_last2_closed_bullish()."""
+    now = time.time()
+    slot = _btc_htf_streak3_cache.setdefault(htf_interval, {"ts": 0.0, "bullish": None})
+    if slot["bullish"] is not None and (now - slot["ts"]) < BTC_GATE_HTF_CACHE_TTL:
+        return slot["bullish"]
+    try:
+        df = get_ohlcv_htf("BTCUSDT", interval=htf_interval, limit=15)
+        if df is None or len(df) < 4:
+            return slot["bullish"]
+        if int(df["ct"].iloc[-1]) >= int(time.time() * 1000):
+            df = df.iloc[:-1]
+        if len(df) < 3:
+            return slot["bullish"]
+        last3 = df.iloc[-3:]
+        bullish = bool((last3["close"] > last3["open"]).all())
+        slot["ts"] = now
+        slot["bullish"] = bullish
+        return bullish
+    except Exception as e:
+        log(f"  [BTC-GATE] error streak3 {htf_interval}: {e}")
+        return slot["bullish"]
+
 def keltner12h_btc_gate_ok() -> bool:
     """KeltnerBreak-12h, KHUSUS jalur closed-candle (T1) -- lihat thread1_scan(). TIDAK dipanggil
     dari thread1c_scan_intrabar()/thread1c_scan_intrabar_early() SAMA SEKALI (bukti backtest
@@ -8605,6 +8642,41 @@ def keltner12h_volatil_btc_strong_exempt() -> bool:
     if b1d_streak2 is None or b3d is None:
         return False  # fail-safe: size-cut tetap berlaku kalau data BTC gagal diambil
     return bool(b1d_streak2) and bool(b3d)
+
+def trendconfirm4h_volatil_btc_strong_exempt() -> bool:
+    """Patch 'trendconfirm4h-btc-strong-volatil-exempt' + 'trendconfirm4h-ekstrem-block-when-
+    volatil-exempt' (21/10/2026, permintaan eksplisit Mas Budi -- "SAYA TAKE RISK GAK APA",
+    override keputusan atas 3 audit independen yang semuanya NEGATIF/noise utk mekanisme ini
+    di TrenKonfirmasi-4h, lihat REMARK panjang di EKSTREM_SUPERTREND_SIZING/
+    ekstrem_supertrend_size_mult()). Definisi final Mas Budi sendiri (BUKAN Kandidat B/A yang
+    dipakai strategi lain -- sengaja lebih ketat, diklarifikasi ulang setelah dia tolak definisi
+    longgar maupun versi Supertrend/EMA yang sempat saya tawarkan sendiri):
+    BTC 12H >=3 candle CLOSED TERAKHIR BERTURUT-TURUT hijau DAN BTC 1D >=2 candle CLOSED
+    TERAKHIR BERTURUT-TURUT hijau.
+
+    KALAU TERPENUHI: tier Volatil TrenKonfirmasi-4h DIKECUALIKAN dari size-cut (modal FULL,
+    bukan dipotong 32%) DAN tier Ekstrem DIBLOKIR TOTAL dari open long baru (pola sama persis
+    dgn KeltnerBreak-12h, atas permintaan eksplisit Mas Budi "SETUJU" pola blokir-Ekstrem ikut
+    diterapkan di sini juga) -- dicek di ekstrem_supertrend_size_mult().
+    KALAU TIDAK/TIDAK LAGI terpenuhi: Volatil balik kena size-cut 32%, Ekstrem balik boleh open
+    dgn size-cut 38% spt semula -- otomatis, dua-duanya gate dari fungsi yang SAMA ini jadi
+    tidak pernah nyangkut tidak sinkron satu sama lain.
+
+    Audit 21/10/2026 (3x independen, termasuk yang pakai definisi PERSIS ini): tier Volatil
+    TrenKonfirmasi-4h TIDAK terbukti diuntungkan BTC bagus (titik estimasi tetap negatif/flat,
+    z=-1,27 pakai definisi ketat ini, TRAIN & TEST dua2nya negatif; tier Ekstrem cuma noise,
+    tanda berbalik antar TRAIN/TEST). Mas Budi SADAR hasil ini dan tetap memilih jalan ini --
+    JANGAN dianggap backtest berubah positif, ini murni keputusan risiko Mas Budi sendiri.
+
+    Fail-safe: sama seperti keltner12h_volatil_btc_strong_exempt() -- gagal fetch data BTC
+    HARUS jatuh ke False (size-cut/block TETAP berlaku spt biasa), karena fungsi ini
+    MELONGGARKAN proteksi (Volatil) sekaligus MEMPERKETAT (Ekstrem), dua-duanya butuh sisi
+    aman yang sama: "anggap kondisi BTC TIDAK bagus" kalau datanya tidak bisa dipastikan."""
+    b12h_streak3 = btc_htf_last3_closed_bullish('12h')
+    b1d_streak2 = btc_htf_last2_closed_bullish('1d')
+    if b12h_streak3 is None or b1d_streak2 is None:
+        return False  # fail-safe: size-cut/block tetap berlaku kalau data BTC gagal diambil
+    return bool(b12h_streak3) and bool(b1d_streak2)
 
 def decouple4h_btc_gate_ok() -> bool:
     """Syarat: BTCUSDT HTF 12H DAN 1D, cukup SALAH SATU candle tertutup terakhir hijau
