@@ -10693,14 +10693,25 @@ def thread2_monitor():
         # Idea #5 (17/10/2026): BB Upper live, dipakai utk arm-dini + perketat trailing di bawah.
         # TIDAK berlaku utk hunting_4h (TERMINATED, keputusan Mas Budi -- lihat REMARK BBUPPER_TIGHT_TIERS).
         live_bb_upper = get_live_bb_upper(sym, strat)
-        # 21/10/2026 (permintaan Mas Budi, insiden ZK/USDT -4,88% -- lihat REMARK lengkap di
-        # TOPGAINERS_BBUPPER_MIN_ARM_PROFIT_PCT): topgainers_4h WAJIB ada bantalan profit minimum
-        # sebelum BB-Upper boleh armed -- mencegah armed di bantalan nyaris nol (ZK armed di
-        # +0,19%) yang rawan ke-gap langsung lewat seluruh jarak trailing sebelum siklus monitor
-        # berikutnya sempat bereaksi. Strategi lain (brkX2-4h/KeltnerBreak-12h/MomentumBreak-1h/
-        # BBSnap-4h, sudah divalidasi backtest 17/10) TIDAK terkena syarat ini.
+        # 21/10/2026 (permintaan Mas Budi): WAJIB ada bantalan profit minimum sebelum BB-Upper
+        # boleh armed -- mencegah armed di bantalan nyaris nol (ZK/USDT armed di +0,19%, PUMP/USDT
+        # di decouple_4h armed persis 0,00% 3x berturut-turut) yang rawan ke-gap langsung lewat
+        # seluruh jarak trailing sebelum siklus monitor berikutnya (~15-20 detik) sempat bereaksi.
+        # Awalnya cuma topgainers_4h (commit 35f9129, insiden ZK/USDT -4,88%), lalu diperluas ke
+        # decouple_4h/reversal/rvolbreak_8h setelah backtest 3-varian (OFF/ON/ON+cushion) malam
+        # ini sama-sama konfirmasi: bucket <0,5% WR anjlok drastis (decouple 1,90%, reversal 25%,
+        # rvolbreak_8h 60,5%) sementara total return TETAP naik/netral setelah dibantal -- jadi
+        # murni memotong ekor beracun, bukan buang manfaat BB-Upper secara keseluruhan. Strategi
+        # lain yg TIDAK masuk dict ini (brkX2-4h/KeltnerBreak-12h/MomentumBreak-1h/BBSnap-4h --
+        # divalidasi backtest asli 17/10; dipbuy_universe/bbsnap_8h -- BB-Upper nyaris tak pernah
+        # nembak di sana, dicek malam ini juga; brkX2_crossema -- keputusan ditunda, backtest-nya
+        # sendiri net negatif tapi tidak bisa mensimulasikan risiko gap live) pakai default 0
+        # (tanpa syarat bantalan, perilaku lama, tidak berubah). Dict-nya sendiri ada di module
+        # level (BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY), bukan di sini -- supaya tidak dibuat ulang
+        # tiap siklus loop.
+        _bbupper_min_cushion = BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY.get(strat, 0)
         _bbupper_touched = (strat != 'hunting_4h' and live_bb_upper is not None and peak >= live_bb_upper
-                             and (strat != 'topgainers_4h' or prof_peak >= TOPGAINERS_BBUPPER_MIN_ARM_PROFIT_PCT))
+                             and prof_peak >= _bbupper_min_cushion)
         _bbupper_overshoot_pct = (peak / live_bb_upper - 1) * 100 if _bbupper_touched else 0.0
 
         # Conditional Rules (18/10/2026, permintaan Mas Budi "kalau X terjadi, lakukan Y" --
@@ -20960,13 +20971,30 @@ TOPGAINERS_TIMEOUT_HOURS = 24  # 19/10/2026 (permintaan Mas Budi): batas tahan s
 # (bantalan nyaris nol) setelah 5j26m, lalu harga GAP langsung melewati SELURUH jarak trailing
 # sebelum siklus monitor berikutnya sempat bereaksi -- realisasi -4,88%, jauh lebih dalam dari
 # jarak trailing 0,675% yang seharusnya. Fix: WAJIB ada bantalan profit minimum sebelum BB-Upper
-# arm-dini boleh armed KHUSUS topgainers_4h (strategi lain yg sudah divalidasi backtest -- brkX2-4h/
-# KeltnerBreak-12h/MomentumBreak-1h/BBSnap-4h -- TIDAK disentuh, tetap armed langsung begitu BB
-# Upper tersentuh, apa adanya). INGAT: kalau masih kejadian lagi beberapa deal setelah fix ini
-# (pantau 10-15 deal berikutnya), PERTIMBANGKAN kembali opsi yang lebih tegas: kecualikan
+# arm-dini boleh armed KHUSUS topgainers_4h (strategi lain yg sudah divalidasi backtest asli 17/10
+# -- brkX2-4h/KeltnerBreak-12h/MomentumBreak-1h/BBSnap-4h -- TIDAK disentuh, tetap armed langsung
+# begitu BB Upper tersentuh, apa adanya). INGAT: kalau masih kejadian lagi beberapa deal setelah
+# fix ini (pantau 10-15 deal berikutnya), PERTIMBANGKAN kembali opsi yang lebih tegas: kecualikan
 # topgainers_4h dari BB-Upper arm-dini sepenuhnya (balik ke arm_pct tier ATR% biasa) -- lihat
 # diskusi lengkap sesi 20-21/10/2026.
-TOPGAINERS_BBUPPER_MIN_ARM_PROFIT_PCT = 0.5
+#
+# 21/10/2026 (lanjutan, insiden PUMP/USDT Decouple-4h -- armed 0,00% 3x berturut-turut): audit
+# sistematis via agent paralel malam ini memperluas pertanyaan ini ke SEMUA strategi yang belum
+# pernah diuji BB-Upper-nya (decouple_4h/dipbuy_universe/bbsnap_8h/rvolbreak_8h/reversal/
+# brkX2_crossema), masing-masing dibacktest 3-varian (BB-Upper OFF/ON/ON+bantalan 0,5%) pakai data
+# historis riil + logika entry/exit asli per strategi. Hasil: decouple_4h/reversal/rvolbreak_8h
+# sama-sama terbukti untung/netral kalau dibantal (bucket <0,5% WR anjlok drastis -- 1,90%/25%/
+# 60,5% -- sementara total return TETAP naik/netral setelah dibantal, jadi murni memotong ekor
+# beracun). dipbuy_universe/bbsnap_8h TIDAK perlu (BB-Upper nyaris tak pernah nembak di sana
+# secara struktural). brkX2_crossema SENGAJA DITUNDA -- backtest murni-nya net negatif kalau
+# dibantal, tapi backtest itu sendiri tidak bisa mensimulasikan risiko gap-live (asumsi fill
+# selalu persis di harga trigger), jadi keputusan ditunda sampai Mas Budi putuskan arah.
+BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY = {
+    'topgainers_4h': 0.5,
+    'decouple_4h': 0.5,
+    'reversal': 0.5,
+    'rvolbreak_8h': 0.5,
+}
 LIVE_RANK_4H = {}       # {symbol: pct_change_4h (float, dari field "P" stream)}
 LIVE_RANK_4H_TS = 0     # ms epoch, kapan LIVE_RANK_4H terakhir diupdate (0 = belum pernah)
 LIVE_RANK_4H_LOCK = threading.Lock()
