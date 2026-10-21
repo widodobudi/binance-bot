@@ -14773,6 +14773,14 @@ def cancel_deal_action(sym: str, pct: float = 100, reason: str = "") -> dict:
     # berkali-kali -- lihat REMARK record_cancelled_deal_price/execute_add_fund) supaya nanti
     # floating P&L-nya bisa dihitung kalau wallet masih menyimpannya.
     record_cancelled_deal_price(sym, removed_deal.get('entry_price', 0), removed_deal.get('strategy', '-'))
+    # 21/10/2026 (permintaan Mas Budi, insiden PUMP/USDT Decouple-4h -- buka/armed/cancel 3x
+    # dalam 32 menit): jalur CANCEL ini TIDAK PERNAH memanggil record_closed() sejak awal --
+    # beda dari bug whitelist basi semalam (6f4b165) yang cuma menutup jalur CLOSE biasa, celah
+    # ini ada di SEMUA jalur cancel (manual dashboard, timeout topgainers_4h, Conditional Rules,
+    # dan terutama negative-exit-cancel yang baru dibuat semalam -- itu yg memicu PUMP). Tanpa
+    # ini, cooldown 8 jam tidak pernah aktif stlh cancel -- symbol langsung bisa di-entry ulang
+    # siklus scan berikutnya, armed lagi di bantalan nyaris nol (BB-Upper), cancel lagi, berulang.
+    record_closed(sym)
     send_telegram(
         f"CANCEL DEAL ({reason or 'otomatis'})\nPair: {to_display_pair(sym)}\nStrategi: {removed_deal.get('strategy', '-')}\n"
         + ("Bot berhenti kelola pair ini. Koin TIDAK dijual, tetap di wallet." if pct >= 100
