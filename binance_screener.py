@@ -7447,13 +7447,18 @@ def ekstrem_supertrend_size_mult(symbol: str, strategy: str, atr_pct: float | No
     kuat -- lihat keltner12h_volatil_btc_strong_exempt(). Supertrend-downtrend tetap jadi
     kandidat seperti biasa (tidak ikut dikecualikan -- risiko tren coin itu sendiri, beda
     sumbu dari risiko ATR/BTC).
-    21/10/2026 (patch 'keltner12h-ekstrem-block-when-volatil-exempt', permintaan Mas Budi):
-    SELAMA kondisi di atas aktif (Volatil dikecualikan size-cut), tier Ekstrem KeltnerBreak-12h
-    DIBLOKIR TOTAL dari open long baru (bukan cuma dipotong modal) -- backtest 21/10/2026
-    tunjukkan tier Ekstrem TIDAK diuntungkan BTC bagus (malah sedikit lebih buruk: WR 76,8%
-    vs 79,5% kalau BTC biasa), jadi selama jendela "Volatil full size" ini, Ekstrem dianggap
-    too-risky utk dibuka sama sekali. Begitu kondisi BTC hilang (Volatil balik kena size-cut),
-    Ekstrem otomatis balik bisa open (dgn size-cut 28% spt biasa)."""
+    21/10/2026 (patch 'ekstrem-ai-sizing-decision', GANTI dari 'keltner12h-ekstrem-block-when-
+    volatil-exempt'/'trendconfirm4h-ekstrem-block-when-volatil-exempt', permintaan eksplisit
+    Mas Budi): SELAMA kondisi Volatil-exempt aktif (BTC HTF kuat), tier Ekstrem KeltnerBreak-12h
+    & TrenKonfirmasi-4h TIDAK LAGI diblokir-keras otomatis -- AI yang putuskan FULL size atau
+    tetap CUT (potongan normal strategi, BUKAN angka custom dari AI), dikasih konteks LENGKAP
+    (semua indikator coin + kondisi BTC di 2 HTF di atas TF native strategi, lihat
+    EKSTREM_AI_BTC_TF_PAIR) -- lihat ai_decision_ekstrem_sizing(). Backtest 21/10/2026 tetap
+    jadi LATAR BELAKANG keputusan ini (tier Ekstrem TIDAK terbukti diuntungkan BTC bagus
+    secara agregat, WR 76,8% vs 79,5% utk KeltnerBreak-12h), tapi Mas Budi eksplisit minta
+    AI yang menilai case-by-case drpd blokir keras, dengan syarat info ke AI harus lengkap.
+    Fail-safe AI gagal/tidak tersedia: TETAP CUT (ekstrem_mult normal, bukan FULL) -- sisi
+    konservatif yang sama dgn mekanisme BTC lain di fungsi ini."""
     cfg = EKSTREM_SUPERTREND_SIZING.get(strategy)
     if cfg is None:
         return 1.0, ""
@@ -7468,16 +7473,20 @@ def ekstrem_supertrend_size_mult(symbol: str, strategy: str, atr_pct: float | No
                       f"backtest 17/10/2026: half-Kelly negatif utk {strategy})")
     candidates = []
     if is_ekstrem:
-        _kb12h_ekstrem_blocked = (strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed')
-                                   and keltner12h_volatil_btc_strong_exempt())
-        _tc4h_ekstrem_blocked = (strategy == 'trend_confirm_4h'
-                                  and trendconfirm4h_volatil_btc_strong_exempt())
-        if _kb12h_ekstrem_blocked or _tc4h_ekstrem_blocked:
-            _patch_tag = ('keltner12h-ekstrem-block-when-volatil-exempt' if _kb12h_ekstrem_blocked
-                           else 'trendconfirm4h-ekstrem-block-when-volatil-exempt')
-            return 0.0, (f"ATR%={atr_pct:.2f} Ekstrem -- BLOKIR selama Volatil dikecualikan size-cut "
-                          f"(BTC HTF kuat) -- patch '{_patch_tag}' 21/10/2026")
-        candidates.append((ekstrem_mult, f"ATR%={atr_pct:.2f} Ekstrem (>={EKSTREM_ATR_PCT:g}%)"))
+        _kb12h_ai_sizing = (strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed')
+                             and keltner12h_volatil_btc_strong_exempt())
+        _tc4h_ai_sizing = (strategy == 'trend_confirm_4h'
+                            and trendconfirm4h_volatil_btc_strong_exempt())
+        if _kb12h_ai_sizing or _tc4h_ai_sizing:
+            _ai_full, _ai_reason = ai_decision_ekstrem_sizing(symbol, strategy, atr_pct)
+            if _ai_full:
+                log(f"[SIZING] {symbol} ({strategy}) ATR%={atr_pct:.2f} Ekstrem tapi BTC HTF kuat -- "
+                    f"AI putuskan FULL size (patch 'ekstrem-ai-sizing' 21/10/2026) -- {_ai_reason}")
+            else:
+                candidates.append((ekstrem_mult, f"ATR%={atr_pct:.2f} Ekstrem -- AI putuskan tetap CUT "
+                                                  f"meski BTC HTF kuat (patch 'ekstrem-ai-sizing') -- {_ai_reason}"))
+        else:
+            candidates.append((ekstrem_mult, f"ATR%={atr_pct:.2f} Ekstrem (>={EKSTREM_ATR_PCT:g}%)"))
     elif is_volatil:
         _kb12h_btc_exempt = (strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed')
                               and keltner12h_volatil_btc_strong_exempt())
@@ -31124,6 +31133,82 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
                 parse_mode=None
             )
     return decision
+
+
+# BTC HTF ("2 level di atas TF native strategi") dipakai utk ai_decision_ekstrem_sizing() --
+# per-strategi, SAMA PERSIS pasangan TF yg sudah dipakai di keltner12h_volatil_btc_strong_exempt()
+# / trendconfirm4h_volatil_btc_strong_exempt() (1D+3D utk KeltnerBreak-12h TF=12h, 12H+1D utk
+# TrenKonfirmasi-4h TF=4h) -- supaya konsisten, bukan pasangan TF baru yg beda sendiri.
+EKSTREM_AI_BTC_TF_PAIR = {
+    'brkX2': ('1D', '1d', '3D', '3d'), 'brkX2_closed': ('1D', '1d', '3D', '3d'),
+    'brkX2_intrabar': ('1D', '1d', '3D', '3d'), 'brkX2_12h_closed': ('1D', '1d', '3D', '3d'),
+    'trend_confirm_4h': ('12H', '12h', '1D', '1d'),
+}
+
+def ai_decision_ekstrem_sizing(symbol: str, strategy: str, atr_pct: float) -> tuple[bool, str]:
+    """Patch 'ekstrem-ai-sizing-decision' (21/10/2026, permintaan eksplisit Mas Budi -- GANTI
+    dari blokir-keras 'keltner12h/trendconfirm4h-ekstrem-block-when-volatil-exempt' yang baru
+    saja dipatch malam ini): daripada blokir Ekstrem secara KAKU berdasar 1 kondisi BTC biner,
+    AI yang putuskan modal FULL atau tetap DIPOTONG -- dengan syarat EKSPLISIT dari Mas Budi:
+    info yang dikasih ke AI HARUS LENGKAP, termasuk kondisi BTCUSDT di 2 HTF di atas TF native
+    strategi ini (lihat EKSTREM_AI_BTC_TF_PAIR) -- bukan cuma info coin itu sendiri spt
+    ai_decision_open() biasa.
+
+    Dipanggil dari ekstrem_supertrend_size_mult() KHUSUS saat is_ekstrem==True utk
+    KeltnerBreak-12h/TrenKonfirmasi-4h -- strategi lain / tier lain TIDAK terdampak sama sekali.
+    Return (allow_full, alasan). allow_full=False (CUT, size-cut normal tetap berlaku) adalah
+    default/fail-safe -- AI harus EKSPLISIT jawab FULL baru modal tidak dipotong, sama arah
+    fail-safe dgn keltner12h_volatil_btc_strong_exempt() (gagal/ragu = sisi aman/konservatif)."""
+    cfg = EKSTREM_SUPERTREND_SIZING.get(strategy)
+    ekstrem_cut_pct = (cfg[1] * 100) if cfg and cfg[1] is not None else None
+    tf1_label, tf1_tf, tf2_label, tf2_tf = EKSTREM_AI_BTC_TF_PAIR.get(strategy, ('1D', '1d', '3D', '3d'))
+    btc_line1 = _tf_indicator_line_for_ai("BTCUSDT", f"BTC {tf1_label}", tf1_tf, 250)
+    btc_line2 = _tf_indicator_line_for_ai("BTCUSDT", f"BTC {tf2_label}", tf2_tf, 250)
+    btc_section = "\n".join([l for l in (btc_line1, btc_line2) if l]) or "(data BTC HTF gagal diambil)"
+    coin_4h = get_full_4h_indicator_context(symbol)
+    coin_htf = fetch_htf_context_for_ai(symbol)
+    coin_ltf = fetch_ltf_context_for_ai(symbol)
+    sentimen = get_sentiment_section(symbol)
+    _cut_desc = f"dipotong jadi {ekstrem_cut_pct:.0f}% dari modal normal" if ekstrem_cut_pct else "dipotong (persentase tidak diketahui)"
+    prompt = (
+        f"Kamu adalah AI analyst trading crypto. Pertanyaan KHUSUS soal UKURAN MODAL -- sinyal "
+        f"entry ini SUDAH LOLOS semua filter & SUDAH DISETUJUI untuk open long, pertanyaannya "
+        f"CUMA soal besar modalnya, BUKAN soal buka/tidak.\n\n"
+        f"Strategi: {strategy} | Pair: {to_display_pair(symbol)}\n"
+        f"ATR% saat ini: {atr_pct:.2f}% -- tier EKSTREM (>={EKSTREM_ATR_PCT:g}%, volatilitas coin ini "
+        f"sendiri sedang tinggi). Kebijakan DEFAULT tier ini: modal {_cut_desc} (data historis: tier "
+        f"Ekstrem lebih sering kena stop-loss penuh dibanding tier lain).\n\n"
+        f"Indikator 4h coin ini:\n{coin_4h}\n"
+        f"Konteks HTF coin ini (1D/3D/1W):\n{coin_htf}\n"
+        f"Konteks LTF coin ini (1h):\n{coin_ltf}\n"
+        f"{sentimen}\n"
+        f"Kondisi BTCUSDT (pasar kripto secara umum, BUKAN coin yang sedang dievaluasi) pada 2 "
+        f"timeframe lebih tinggi dari TF eksekusi strategi {strategy}:\n{btc_section}\n\n"
+        f"Pertanyaan: meski ATR coin ini tier EKSTREM, apakah kombinasi kondisi BTC + indikator coin "
+        f"ini di atas cukup MEYAKINKAN utk modal FULL (tidak dipotong)? DEFAULT/AMAN adalah tetap "
+        f"CUT (potongan normal berlaku) -- hanya jawab FULL kalau benar-benar yakin, jangan FULL "
+        f"hanya karena sebagian indikator terlihat bagus.\n\n"
+        f"Format jawaban (ikuti persis):\n"
+        f"FULL atau CUT\n"
+        f"Alasan: ringkas\n\n"
+        f"Baris pertama HARUS hanya kata FULL atau CUT."
+    )
+    result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
+    if not result:
+        log(f"[AI] Ekstrem-sizing {symbol} ({strategy}): AI tidak tersedia -- fail-safe CUT (size-cut normal)")
+        return False, "AI tidak tersedia -- fail-safe CUT"
+    lines = result.strip().split("\n")
+    first_line = lines[0].strip().upper()
+    allow_full = first_line.startswith("FULL")
+    reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+    log(f"[AI] Ekstrem-sizing {symbol} ({strategy}): {first_line} → {'FULL' if allow_full else 'CUT'} | provider={AI_LAST_PROVIDER}")
+    log_ai_decision(
+        f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] EKSTREM-SIZING | {strategy} | "
+        f"{to_display_pair(symbol)} | {'FULL' if allow_full else 'CUT'}\n"
+        f"ATR%={atr_pct:.2f}\n{coin_4h}\n{coin_htf}\n{coin_ltf}\n{sentimen}\nBTC HTF:\n{btc_section}\n"
+        f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n{'─'*36}\n"
+    )
+    return allow_full, reasoning
 
 
 def run_ai_skip_summary_notifier():
