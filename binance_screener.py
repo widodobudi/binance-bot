@@ -4547,6 +4547,17 @@ def load_active_deals():
             except Exception as e:
                 log(f"WARN gagal tulis file saat RESET_DEAL_SYMBOL: {e}")
         with active_deals_lock: active_deals=data
+        # 21/10/2026 (permintaan Mas Budi, persiapan "petugas cepat" topgainers_4h -- lihat REMARK
+        # '_closing' di execute_close_now()): penanda '_closing' itu murni in-memory, cuma berlaku
+        # SELAMA proses bot ini hidup -- kalau sempat ketulis ke disk (save_active_deals() jalan
+        # saat flag ini aktif) lalu bot restart SEBELUM sempat dibersihkan, flag basi itu akan
+        # PERMANEN mengunci symbol itu dari semua auto-close (execute_close_now() akan terus
+        # menganggap "sedang diproses pemanggil lain" selamanya). Bersihkan paksa di sini, tiap
+        # startup -- proses lama yang mungkin sedang "menutup" itu sudah mati bareng restart-nya,
+        # tidak ada lagi yang perlu dilindungi.
+        with active_deals_lock:
+            for _d in active_deals.values():
+                _d.pop('_closing', None)
         log(f"   Loaded active_deals: {list(active_deals.keys())}")
         # ── Reconciliation startup (Binance direct mode only) ──────────────────
         # Cek setiap deal apakah masih ada posisi di Binance wallet.
@@ -6580,14 +6591,29 @@ def execute_close_now(sym: str, reason: str, telegram_header: str = "CLOSE MANUA
     ai_decision_capacity_swap() (AI menutup deal aktif utk kasih ruang kandidat baru saat
     kapasitas gabungan penuh) -- perilaku /manual_close TIDAK berubah, cuma reason/telegram_header/
     log_tag jadi parameter. Return {"ok": True, "sym", "price", "profit_pct"} atau {"ok": False, "error"}."""
+    # 21/10/2026 (permintaan Mas Budi, persiapan "petugas cepat" topgainers_4h via WS -- lihat
+    # REMARK run_thread_topgainers_fastmonitor()): dua jalur sekarang bisa mengevaluasi deal yang
+    # SAMA nyaris bersamaan (loop 15 detik lama + loop 2 detik baru khusus topgainers_4h). Tanpa
+    # penanda ini, keduanya bisa lolos cek "sym in active_deals" di atas lalu DUA-DUANYA memanggil
+    # send_close_long() -- race nyata (yang kedua kemungkinan gagal di Binance krn saldo sudah
+    # terjual, noisy tapi bukan korupsi data; TETAP tidak diinginkan). Set-dan-cek ATOMIK di bawah
+    # lock yang SAMA jadi penanda "siapa cepat dia yang proses" -- caller kedua langsung mundur
+    # tanpa pernah sampai ke send_close_long(). Dibersihkan lagi di jalur gagal (di bawah) supaya
+    # retry sah berikutnya tidak permanen terkunci.
     with active_deals_lock:
         if sym not in active_deals:
             return {"ok": False, "error": f"{sym} tidak ada di active_deals"}
+        if active_deals[sym].get('_closing', False):
+            return {"ok": False, "error": f"{sym} sedang diproses close oleh pemanggil lain"}
+        active_deals[sym]['_closing'] = True
         d = dict(active_deals[sym])
     strat = d.get('strategy', 'brkX2')
     try:
         price_now = get_price_now(sym)
         if price_now <= 0:
+            with active_deals_lock:
+                if sym in active_deals:
+                    active_deals[sym].pop('_closing', None)
             return {"ok": False, "error": "Gagal ambil harga live"}
         entry = d.get('entry_price', price_now)
         prof = (price_now / entry - 1) * 100 if entry > 0 else 0
@@ -6663,8 +6689,14 @@ def execute_close_now(sym: str, reason: str, telegram_header: str = "CLOSE MANUA
             )
             return {"ok": True, "sym": sym, "price": price_now, "profit_pct": round(prof, 2)}
         else:
+            with active_deals_lock:
+                if sym in active_deals:
+                    active_deals[sym].pop('_closing', None)
             return {"ok": False, "error": "Binance order close gagal (cek log server untuk detail)" if USE_BINANCE_DIRECT else "3Commas menolak close"}
     except Exception as e:
+        with active_deals_lock:
+            if sym in active_deals:
+                active_deals[sym].pop('_closing', None)
         return {"ok": False, "error": str(e)}
 
 def earn_partial_progress_line() -> str:
@@ -21027,7 +21059,7 @@ LIVE_RANK_4H_TS = 0     # ms epoch, kapan LIVE_RANK_4H terakhir diupdate (0 = be
 LIVE_RANK_4H_LOCK = threading.Lock()
 # 21/10/2026 (permintaan Mas Budi, insiden ZK/USDT -4,88%): harga live juga sudah ikut
 # terkirim di payload !ticker_4h@arr yang SAMA (field "c"), di samping "P" yang sudah
-# dibaca sejak awal -- dipakai topgainers_exit_check()/run_thread_topgainers_fastmonitor()
+# dibaca sejak awal -- dipakai topgainers_fast_exit_check()/run_thread_topgainers_fastmonitor()
 # di bawah supaya deal topgainers_4h bisa dipantau jauh lebih sering (~2 detik) TANPA
 # panggilan REST tambahan sama sekali. Nol biaya API baru -- data yang sama yang sudah
 # mengalir masuk untuk ranking, cuma field tambahan yang sebelumnya tidak dibaca.
@@ -21093,6 +21125,145 @@ def get_topgainers_ws_price(symbol: str) -> float:
         fresh = LIVE_RANK_4H_TS > 0 and (now_ms - LIVE_RANK_4H_TS) <= TOPGAINERS_WS_STALE_SEC * 1000
         px = LIVE_PRICE_WS.get(symbol, 0.0) if fresh else 0.0
     return px
+
+
+def topgainers_fast_exit_check(sym: str) -> None:
+    """Dipanggil run_thread_topgainers_fastmonitor() tiap ~2 detik, KHUSUS deal topgainers_4h
+    yang SUDAH armed -- cek hard-stop & trailing-stop pakai harga WS (bukan REST), supaya gap
+    harga cepat (pola ZK/USDT -4,88%, PUMP/USDT di decouple_4h armed 0,00% 3x berturut-turut)
+    tertangkap jauh lebih cepat dari siklus 15 detik thread2_monitor() biasa.
+
+    SENGAJA TAMBAHAN, bukan pengganti: fungsi ini TIDAK PERNAH menyentuh keputusan arm/un-arm/
+    breakdown-dini/rank-degrade/timeout-cancel -- semua itu TETAP sepenuhnya milik
+    thread2_monitor(), jalan seperti biasa tiap 15 detik tanpa diubah sedikit pun. Kalau WS basi
+    atau fungsi ini gagal karena alasan apapun (exception ditangkap di caller), jalur lama tetap
+    jalan sebagai cadangan -- tidak ada titik tunggal kegagalan baru yang diperkenalkan.
+
+    Replikasi SEBAGIAN logika thread2_monitor() (hard-stop/trailing/gerbang AI-close) dengan
+    SENGAJA, bukan dipanggil langsung dari sana -- supaya jalur cepat ini independen dan tidak
+    ikut terseret kalau ada perubahan tak terkait di loop utama. Kalau formula hard-stop/trailing/
+    AI-close di thread2_monitor() berubah di masa depan, fungsi ini WAJIB diupdate manual juga."""
+    with active_deals_lock:
+        d = dict(active_deals.get(sym, {}))
+    if not d or d.get('strategy') != 'topgainers_4h':
+        return
+    if not d.get('trailing_armed', False):
+        return   # belum armed -- biarkan thread2_monitor() yang urus (arm-dini/breakdown-dini/dll)
+    entry = d.get('entry_price', 0)
+    if entry <= 0:
+        return
+
+    price = get_topgainers_ws_price(sym)
+    if price <= 0:
+        price = get_price_now(sym)   # WS basi/belum konek -- fallback REST
+    if price <= 0:
+        return
+
+    strat = 'topgainers_4h'
+    peak = max(d.get('peak', entry), price)
+    if peak > float(d.get('peak', entry) or entry):
+        with active_deals_lock:
+            if sym in active_deals:
+                active_deals[sym]['peak'] = peak
+        save_active_deals()
+
+    atrp = d.get('atr_pct', 3.0)
+    live_atrp = get_live_atr_pct(sym, strat, atrp)      # cache 300 detik, independen dari interval loop ini
+    live_bb_upper = get_live_bb_upper(sym, strat)        # cache 300 detik, independen dari interval loop ini
+    prof_peak = (peak / entry - 1) * 100
+
+    _bbupper_min_cushion = BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY.get(strat, 0)
+    _bbupper_touched = (live_bb_upper is not None and peak >= live_bb_upper
+                         and prof_peak >= _bbupper_min_cushion)
+    tdist = trailing_dist_progressive(live_atrp, prof_peak)
+    if _bbupper_touched:
+        _bbupper_overshoot_pct = (peak / live_bb_upper - 1) * 100
+        tdist = round(tdist * bbupper_tight_factor(_bbupper_overshoot_pct), 4)
+
+    do_close = False
+    reason = ""
+    _hs_label, _hs_base, _hs_pct = hard_stop_pct(atrp, strat)
+    if price <= entry * (1 - _hs_pct / 100):
+        do_close = True
+        reason = (f"hard stop volatilitas [{_hs_label}, ATR {atrp:.2f}%]: price {_fmt_price(price)} "
+                  f"turun >= {_hs_pct:.2f}% dari entry [T_TOPGAINERS_FAST]")
+    if not do_close:
+        stop = peak * (1 - tdist / 100)
+        if price <= stop:
+            do_close = True
+            reason = (f"trailing (turun ke {_fmt_price(price)} dari puncak {_fmt_price(peak)}, "
+                      f"dev {tdist}%) [T_TOPGAINERS_FAST]")
+    if not do_close:
+        return
+
+    # negative-exit-cancel (dee3595): topgainers_4h SUDAH dikecualikan dari mekanisme itu sejak
+    # c758916 (lihat REMARK di thread2_monitor()) -- trailing-rugi topgainers_4h SELALU
+    # direalisasi lewat close, tidak pernah dialihkan cancel. Jadi jalur cepat ini tidak perlu
+    # replikasi cek itu sama sekali.
+
+    prof_from_entry = (price / entry - 1) * 100 - FEE_ROUND_TRIP_PCT
+
+    # Batas absolut: sama persis logika thread2_monitor() -- rugi >= hard_stop+5 poin, AI tidak
+    # boleh menahan lagi (mencegah deal "digantung" AI tanpa batas).
+    _ai_override_bypassed = False
+    _absolute_ceiling_pct = _hs_pct + CLOSE_HARD_CEILING_EXTRA_PCT
+    if price <= entry * (1 - _absolute_ceiling_pct / 100):
+        _ai_override_bypassed = True
+        log(f"[T_TOPGAINERS_FAST] {sym} BATAS ABSOLUT tercapai (rugi >= {_absolute_ceiling_pct:.2f}%) -- AI tidak bisa menahan lagi")
+        reason += f" [BATAS ABSOLUT {_absolute_ceiling_pct:.2f}%: AI override dilewati]"
+
+    if not _ai_override_bypassed and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
+        _close_ai_hold_until = float(d.get('close_ai_hold_until', 0) or 0)
+        if time.time() < _close_ai_hold_until:
+            return   # masih cooldown AI -- diam saja, thread2_monitor() sendiri yg log ini tiap 15 detik
+        _reason_kind = _close_reason_kind(reason)
+        _last_notified_kind = d.get('close_ai_last_notified_kind')
+        _should_notify = (_reason_kind != _last_notified_kind)
+        if not ai_decision_close(sym, strat, d, price, peak, reason, notify=_should_notify):
+            with active_deals_lock:
+                if sym in active_deals:
+                    active_deals[sym]['close_ai_hold_until'] = time.time() + 10 * 60
+                    if _should_notify:
+                        active_deals[sym]['close_ai_last_notified_kind'] = _reason_kind
+            save_active_deals()
+            log(f"[T_TOPGAINERS_FAST] {sym} CLOSE di-hold oleh AI decision (reason: {reason})")
+            return
+
+    log(f"[T_TOPGAINERS_FAST] {sym} CLOSE: {reason} | profit {prof_from_entry:.2f}%")
+    result = execute_close_now(sym, reason, telegram_header="CLOSE Top Gainers-4h (fast-monitor WS)",
+                                log_tag="TOPGAINERS-FAST-CLOSE", thread_label="T_TOPGAINERS_FAST")
+    if not result.get('ok'):
+        log(f"WARN [T_TOPGAINERS_FAST] {sym} close gagal/dilewati: {result.get('error')}")
+
+
+def run_thread_topgainers_fastmonitor() -> None:
+    """Thread T_TOPGAINERS_FAST (21/10/2026, permintaan Mas Budi, insiden ZK/USDT -4,88% & PUMP/
+    USDT armed 0,00% 3x): cek deal topgainers_4h yang SUDAH armed tiap TOPGAINERS_FASTMONITOR_
+    INTERVAL detik (2 detik, bukan 15 detik), pakai harga WS -- NOL biaya REST tambahan.
+
+    SENGAJA thread TERPISAH, bukan interval thread2_monitor() yang dipercepat untuk SEMUA deal --
+    itu akan mempercepat get_price_now() REST utk ~20 strategi lain juga & berisiko kena rate-
+    limit Binance. Strategi lain TIDAK disentuh sama sekali, tetap 15 detik seperti biasa.
+
+    SENGAJA TAMBAHAN, bukan pengganti thread2_monitor() -- lihat REMARK panjang di
+    topgainers_fast_exit_check(). Hindari double-close lewat penanda '_closing' atomik di
+    execute_close_now() (lihat REMARK di sana), BUKAN dengan menghapus pengecekan topgainers_4h
+    dari thread2_monitor() -- jalur lama tetap jadi cadangan kalau WS basi/thread ini error."""
+    if not TOPGAINERS_ENABLED:
+        return
+    while True:
+        try:
+            with active_deals_lock:
+                syms = [s for s, dd in active_deals.items()
+                        if dd.get('strategy') == 'topgainers_4h' and dd.get('trailing_armed', False)]
+            for sym in syms:
+                try:
+                    topgainers_fast_exit_check(sym)
+                except Exception as e:
+                    log(f"WARN [T_TOPGAINERS_FAST] {sym} error: {e}")
+        except Exception as e:
+            log(f"WARN [T_TOPGAINERS_FAST] loop error: {e}")
+        time.sleep(TOPGAINERS_FASTMONITOR_INTERVAL)
 
 
 def run_thread_topgainers_ws() -> None:
@@ -31802,6 +31973,13 @@ if __name__ == '__main__':
         # loop sleep-based T-TopGainers yang ada.
         t_tg_ws = threading.Thread(target=run_thread_topgainers_ws, daemon=True, name="T-TopGainers-WS")
         threads.append(t_tg_ws)
+        n_threads += 1
+        # 21/10/2026 (permintaan Mas Budi, insiden ZK/USDT -4,88% & PUMP/USDT armed 0,00% 3x):
+        # petugas cepat TAMBAHAN, khusus deal topgainers_4h yang sudah armed, pakai harga WS
+        # (lihat REMARK panjang di run_thread_topgainers_fastmonitor()) -- TIDAK menggantikan
+        # T-TopGainers di atas, cuma pengaman ekstra yang jalan jauh lebih sering (2 detik).
+        t_tg_fast = threading.Thread(target=run_thread_topgainers_fastmonitor, daemon=True, name="T-TopGainers-Fast")
+        threads.append(t_tg_fast)
         n_threads += 1
     if DIPBUY_UNIVERSE_ENABLED:
         t_db = threading.Thread(target=run_thread_dipbuy_universe, daemon=True, name="T-DipBuy")
