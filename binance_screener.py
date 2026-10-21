@@ -10698,15 +10698,14 @@ def thread2_monitor():
         # di decouple_4h armed persis 0,00% 3x berturut-turut) yang rawan ke-gap langsung lewat
         # seluruh jarak trailing sebelum siklus monitor berikutnya (~15-20 detik) sempat bereaksi.
         # Awalnya cuma topgainers_4h (commit 35f9129, insiden ZK/USDT -4,88%), lalu diperluas ke
-        # decouple_4h/reversal/rvolbreak_8h setelah backtest 3-varian (OFF/ON/ON+cushion) malam
-        # ini sama-sama konfirmasi: bucket <0,5% WR anjlok drastis (decouple 1,90%, reversal 25%,
-        # rvolbreak_8h 60,5%) sementara total return TETAP naik/netral setelah dibantal -- jadi
-        # murni memotong ekor beracun, bukan buang manfaat BB-Upper secara keseluruhan. Strategi
-        # lain yg TIDAK masuk dict ini (brkX2-4h/KeltnerBreak-12h/MomentumBreak-1h/BBSnap-4h --
-        # divalidasi backtest asli 17/10; dipbuy_universe/bbsnap_8h -- BB-Upper nyaris tak pernah
-        # nembak di sana, dicek malam ini juga; brkX2_crossema -- keputusan ditunda, backtest-nya
-        # sendiri net negatif tapi tidak bisa mensimulasikan risiko gap live) pakai default 0
-        # (tanpa syarat bantalan, perilaku lama, tidak berubah). Dict-nya sendiri ada di module
+        # decouple_4h/reversal/rvolbreak_8h/brkX2_crossema setelah backtest 3-varian (OFF/ON/
+        # ON+cushion) malam ini -- brkX2_crossema sempat kelihatan net negatif di backtest murni,
+        # tapi audit independen membuktikan itu krn backtest buta thd risiko gap-live (fill selalu
+        # diasumsikan persis di harga pemicu), bukan bukti fix-nya merugikan. Strategi lain yg
+        # TIDAK masuk dict ini (brkX2-4h/KeltnerBreak-12h/MomentumBreak-1h/BBSnap-4h -- divalidasi
+        # backtest asli 17/10; dipbuy_universe/bbsnap_8h -- BB-Upper nyaris tak pernah nembak di
+        # sana, dicek malam ini juga) pakai default 0 (tanpa syarat bantalan, perilaku lama, tidak
+        # berubah). Dict-nya sendiri ada di module
         # level (BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY), bukan di sini -- supaya tidak dibuat ulang
         # tiap siklus loop.
         _bbupper_min_cushion = BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY.get(strat, 0)
@@ -20986,14 +20985,23 @@ TOPGAINERS_TIMEOUT_HOURS = 24  # 19/10/2026 (permintaan Mas Budi): batas tahan s
 # sama-sama terbukti untung/netral kalau dibantal (bucket <0,5% WR anjlok drastis -- 1,90%/25%/
 # 60,5% -- sementara total return TETAP naik/netral setelah dibantal, jadi murni memotong ekor
 # beracun). dipbuy_universe/bbsnap_8h TIDAK perlu (BB-Upper nyaris tak pernah nembak di sana
-# secara struktural). brkX2_crossema SENGAJA DITUNDA -- backtest murni-nya net negatif kalau
-# dibantal, tapi backtest itu sendiri tidak bisa mensimulasikan risiko gap-live (asumsi fill
-# selalu persis di harga trigger), jadi keputusan ditunda sampai Mas Budi putuskan arah.
+# secara struktural).
+#
+# 21/10/2026 (lanjutan lagi, keputusan brkX2_crossema): backtest murni brkX2_crossema sempat
+# kelihatan net negatif kalau dibantal (-335 poin), tapi audit independen (agent ke-2, baca kode
+# sendiri dari nol + tulis ulang simulasi sendiri) membongkar KENAPA -- dari 135 trade yang
+# hasilnya berubah krn bantalan, 129/135 (96%) punya bukti nyata di candle yg sama: harga
+# SEBENARNYA sempat jatuh jauh lebih dalam (median 3%, maks 9%) dari harga "keluar bersih" yg
+# dicatat backtest -- krn backtest ASUMSIKAN fill selalu persis di harga pemicu (dicek literal di
+# baris exit-nya), buta thd risiko gap-antar-siklus-monitor yg PERSIS alasan fix ini dibuat (sudah
+# 2x kejadian sungguhan: ZK/USDT -4,88%, PUMP/USDT armed 0% 3x). Jadi "untung" backtest tanpa
+# bantalan itu ilusi presisi, bukan bukti fix-nya merugikan. Mas Budi SETUJU pasang bantalan jg.
 BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY = {
     'topgainers_4h': 0.5,
     'decouple_4h': 0.5,
     'reversal': 0.5,
     'rvolbreak_8h': 0.5,
+    'brkX2_crossema': 0.5,
 }
 LIVE_RANK_4H = {}       # {symbol: pct_change_4h (float, dari field "P" stream)}
 LIVE_RANK_4H_TS = 0     # ms epoch, kapan LIVE_RANK_4H terakhir diupdate (0 = belum pernah)
