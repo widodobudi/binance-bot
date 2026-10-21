@@ -7446,7 +7446,14 @@ def ekstrem_supertrend_size_mult(symbol: str, strategy: str, atr_pct: float | No
     Volatil, kandidat ATR-nya bisa DILEWATI (tidak ikut dipilih min()) kalau BTC HTF lagi
     kuat -- lihat keltner12h_volatil_btc_strong_exempt(). Supertrend-downtrend tetap jadi
     kandidat seperti biasa (tidak ikut dikecualikan -- risiko tren coin itu sendiri, beda
-    sumbu dari risiko ATR/BTC)."""
+    sumbu dari risiko ATR/BTC).
+    21/10/2026 (patch 'keltner12h-ekstrem-block-when-volatil-exempt', permintaan Mas Budi):
+    SELAMA kondisi di atas aktif (Volatil dikecualikan size-cut), tier Ekstrem KeltnerBreak-12h
+    DIBLOKIR TOTAL dari open long baru (bukan cuma dipotong modal) -- backtest 21/10/2026
+    tunjukkan tier Ekstrem TIDAK diuntungkan BTC bagus (malah sedikit lebih buruk: WR 76,8%
+    vs 79,5% kalau BTC biasa), jadi selama jendela "Volatil full size" ini, Ekstrem dianggap
+    too-risky utk dibuka sama sekali. Begitu kondisi BTC hilang (Volatil balik kena size-cut),
+    Ekstrem otomatis balik bisa open (dgn size-cut 28% spt biasa)."""
     cfg = EKSTREM_SUPERTREND_SIZING.get(strategy)
     if cfg is None:
         return 1.0, ""
@@ -7461,6 +7468,13 @@ def ekstrem_supertrend_size_mult(symbol: str, strategy: str, atr_pct: float | No
                       f"backtest 17/10/2026: half-Kelly negatif utk {strategy})")
     candidates = []
     if is_ekstrem:
+        _kb12h_ekstrem_blocked = (strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed')
+                                   and keltner12h_volatil_btc_strong_exempt())
+        if _kb12h_ekstrem_blocked:
+            return 0.0, (f"ATR%={atr_pct:.2f} Ekstrem -- BLOKIR selama Volatil dikecualikan size-cut "
+                          f"(BTC HTF kuat: 1D 2x hijau berturut + 3D hijau) -- backtest 21/10/2026: "
+                          f"tier Ekstrem TIDAK diuntungkan BTC bagus, malah sedikit lebih buruk "
+                          f"(patch 'keltner12h-ekstrem-block-when-volatil-exempt')")
         candidates.append((ekstrem_mult, f"ATR%={atr_pct:.2f} Ekstrem (>={EKSTREM_ATR_PCT:g}%)"))
     elif is_volatil:
         _kb12h_btc_exempt = (strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed')
