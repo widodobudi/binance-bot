@@ -17606,13 +17606,14 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <th data-sort-key="close_time" onclick="sortClosedTrades('close_time')" style="text-align:left;padding:5px 8px;cursor:pointer">Closed</th>
         <th style="text-align:right;padding:5px 8px">Exit</th>
         <th data-sort-key="rsi_open" onclick="sortClosedTrades('rsi_open')" style="text-align:right;padding:5px 8px;cursor:pointer" title="RSI(14) saat open long">RSI@Open</th>
+        <th data-sort-key="atr_pct" onclick="sortClosedTrades('atr_pct')" style="text-align:right;padding:5px 8px;cursor:pointer" title="ATR% saat open long + tier (Tenang/Normal/Aktif/Volatil/Ekstrem)">ATR%@Open</th>
         <th data-sort-key="profit_pct" onclick="sortClosedTrades('profit_pct')" style="text-align:right;padding:5px 8px;cursor:pointer">Profit%</th>
         <th data-sort-key="profit_usd" onclick="sortClosedTrades('profit_usd')" style="text-align:right;padding:5px 8px;cursor:pointer">Profit$</th>
         <th style="text-align:right;padding:5px 8px">Modal</th>
         <th data-sort-key="duration" onclick="sortClosedTrades('duration')" style="text-align:right;padding:5px 8px;cursor:pointer">Durasi</th>
         <th style="text-align:left;padding:5px 8px">Alasan</th>
       </tr></thead>
-      <tbody id="ct-body"><tr><td colspan="12" style="color:var(--muted);padding:12px 8px;text-align:center">Pilih filter (opsional), lalu klik Reload untuk muat data</td></tr></tbody>
+      <tbody id="ct-body"><tr><td colspan="13" style="color:var(--muted);padding:12px 8px;text-align:center">Pilih filter (opsional), lalu klik Reload untuk muat data</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -17692,18 +17693,21 @@ function renderClosedTradesRows() {
     }
     document.querySelectorAll('#ct-table th[data-sort-key]').forEach(function(th) {
         var label = th.getAttribute('data-sort-key');
-        var text = {open_time:'Opened',close_time:'Closed',symbol:'Pair',strategy:'Strategi',rsi_open:'RSI@Open',profit_pct:'Profit%',profit_usd:'Profit$',duration:'Durasi'}[label];
+        var text = {open_time:'Opened',close_time:'Closed',symbol:'Pair',strategy:'Strategi',rsi_open:'RSI@Open',atr_pct:'ATR%@Open',profit_pct:'Profit%',profit_usd:'Profit$',duration:'Durasi'}[label];
         th.textContent = text + (closedTradesSortKey === label ? (closedTradesSortDirection === 1 ? ' ▲' : ' ▼') : '');
     });
     window._ctFilteredRows = rows;
     renderCtSummary(rows);
     renderCtEquityCurve(rows);
     var tbody = document.getElementById('ct-body');
-    if (!rows.length) { tbody.innerHTML = '<tr><td colspan="12" style="color:var(--muted);padding:12px 8px;text-align:center">Belum ada data closed trades</td></tr>'; return; }
+    if (!rows.length) { tbody.innerHTML = '<tr><td colspan="13" style="color:var(--muted);padding:12px 8px;text-align:center">Belum ada data closed trades</td></tr>'; return; }
+    var ATR_TIER_CLR = {Tenang:'var(--muted)',Normal:'var(--muted)',Aktif:'var(--text)',Volatil:'var(--yellow)',Ekstrem:'var(--red)'};
     tbody.innerHTML = rows.map(function(r) {
             var pct = parseFloat(r.profit_pct||0);
             var usd = parseFloat(r.profit_usd||0);
             var clr = pct>=0?'var(--green)':'var(--red)';
+            var atrClr = ATR_TIER_CLR[r.atr_tier] || 'var(--muted)';
+            var atrTxt = r.atr_pct ? (r.atr_pct + '%' + (r.atr_tier ? ' (' + r.atr_tier + ')' : '')) : '-';
             return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">' +
                 '<td style="padding:5px 8px;font-weight:600;white-space:nowrap">' + (r.symbol ? ('<a href="javascript:void(0)" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="color:' + clr + ';text-decoration:none;cursor:pointer" title="Buka chart TradingView">' + r.symbol + '</a>' + (r.fixed_note ? ' <span style="display:inline-block;white-space:nowrap;color:var(--green);font-size:9px;font-weight:600;cursor:help;border:1px solid var(--green);border-radius:3px;padding:0 3px" title="Sudah di-fix: ' + String(r.fixed_note).replace(/"/g,'&quot;') + '">✓ FIXED</span>' : '')) : '-') + '</td>' +
                 '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (strat_map[r.strategy]||r.strategy||'-') + '</td>' +
@@ -17712,6 +17716,7 @@ function renderClosedTradesRows() {
                 '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.close_time||'').substring(0,16) + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.exit_price||'-') + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;font-size:10px;color:var(--muted)">' + (r.rsi_open||'-') + '</td>' +
+                '<td style="padding:5px 8px;text-align:right;font-size:10px;color:' + atrClr + '">' + atrTxt + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;color:' + clr + '">' + (pct>=0?'+':'') + pct.toFixed(2) + '%</td>' +
                 '<td style="padding:5px 8px;text-align:right;color:' + clr + '">' + (usd>=0?'+':'') + usd.toFixed(2) + '</td>' +
                 '<td style="padding:5px 8px;text-align:right;color:var(--muted)">$' + (r.base_usd||'-') + '</td>' +
@@ -18000,7 +18005,7 @@ function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
     var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
-    var headers = ['Pair','Strategi','Opened','Entry','Closed','Exit','RSI@Open','Profit%','Profit$','Modal','Durasi','Alasan'];
+    var headers = ['Pair','Strategi','Opened','Entry','Closed','Exit','RSI@Open','ATR%@Open','ATR Tier','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
         if (v.indexOf(',') !== -1 || v.indexOf('"') !== -1 || v.indexOf('\\n') !== -1) { v = '"' + v.replace(/"/g, '""') + '"'; }
@@ -18009,7 +18014,7 @@ function exportCtCsv() {
     var lines = [headers.join(',')];
     rows.forEach(function(r) {
         lines.push([r.symbol||'', strat_map[r.strategy]||r.strategy||'', r.open_time||'', r.entry_price||'',
-            r.close_time||'', r.exit_price||'', r.rsi_open||'', r.profit_pct||'', r.profit_usd||'', r.base_usd||'',
+            r.close_time||'', r.exit_price||'', r.rsi_open||'', r.atr_pct||'', r.atr_tier||'', r.profit_pct||'', r.profit_usd||'', r.base_usd||'',
             r.duration||'', r.exit_reason||''].map(csvEsc).join(','));
     });
     var blob = new Blob([lines.join('\\n')], {type: 'text/csv;charset=utf-8;'});
@@ -29436,6 +29441,16 @@ def run_web_dashboard():
                     else: losses += 1
                     total_pnl_pct += pct
                     total_pnl_usd += p_usd
+                    # 21/10/2026 (permintaan Mas Budi, soal "coin A selalu Ekstrem atau bisa
+                    # Volatil juga?"): tampilkan ATR% saat open + tier-nya (Tenang/Normal/Aktif/
+                    # Volatil/Ekstrem) -- reuse label dari hard_stop_pct() (SATU sumber kebenaran
+                    # tier yg sama dipakai size-cut/hard-stop) drpd duplikasi ambang di sini.
+                    _atrp_raw = r.get('atr_pct', '')
+                    _atrp_tier = ''
+                    try:
+                        _atrp_tier = hard_stop_pct(float(_atrp_raw), r.get('strategy'))[0]
+                    except (TypeError, ValueError):
+                        pass
                     trades.append({
                         "open_time":    r.get('open_time_wib',''),
                         "close_time":   r.get('close_time_wib',''),
@@ -29452,6 +29467,8 @@ def run_web_dashboard():
                         "reason_category": categorize_exit_reason(r.get('exit_reason','')),
                         "duration":     dur,
                         "rsi_open":     r.get('rsi_open',''),
+                        "atr_pct":      _atrp_raw,
+                        "atr_tier":     _atrp_tier,
                         "entry_mode":   r.get('entry_mode',''),
                         "fixed_note":   _fixed_note_of(r),
                     })
