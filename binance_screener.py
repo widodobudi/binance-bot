@@ -321,7 +321,26 @@ BE_EXIT_BUFFER_PCT_BY_STRATEGY = {'brkX2_4h': 0.1, 'trend_confirm_4h': 0.99,
 # hard-stop 18.2% -> 14.0% dari trade, rugi terburuk -12.3% -> -11.0%, avg +1.80% -> +1.85% (2025+: 20.6% -> 16.2%,
 # +1.52% -> +1.53%). Stop per tier ATR: <1% 6.0%, <2% 8.25%, <4% 10.5%, >=4% 10.8% (cap). REMARK nilai lama (rollback):
 # K=1.1 tanpa cap (4.4/6.05/7.7/9.9/12.1%). Cap lebih rapat (<=9%) TIDAK menurunkan frekuensi hard-stop & memotong untung.
-HARD_STOP_CAP_PCT_BY_STRATEGY = {'trend_confirm_4h': 10.8}
+#
+# 21/10/2026 (permintaan Mas Budi): sampai malam ini, trend_confirm_4h SATU-SATUNYA strategi yg
+# punya cap -- decouple_4h/rvolbreak_8h/dipbuy_universe (K=1.3, tier Ekstrem 11%x1.3=14,3% tanpa
+# batas) sama sekali tidak pernah diuji. Backtest 3 agent terpisah malam ini (sweep beberapa cap,
+# metodologi sama persis spt TC4h dulu -- lihat REMARK di atas):
+# - decouple_4h: cap 12% paling bedah-presisi -- cuma kena tier Ekstrem (2,8% trade), biaya nyaris
+#   nol (WR -0,17pp, total return -3,1%), worst-case -14,5%->-12,2%.
+# - rvolbreak_8h: cap 12% direkomendasikan (cap 13% malah GRATIS BERSIH/net-positif -- lebih
+#   sedikit rugi dalam menutupi biaya trade yg kesulut lebih cepat -- tapi 12% dipilih konsisten
+#   dgn decouple_4h, biaya tambahannya nyaris nol: WR -0,54pp, total return -1,6%, worst-case
+#   -14,5%->-12,2%).
+# - dipbuy_universe: cap 10,8% (angka SAMA dgn trend_confirm_4h, dipakai ulang bukan angka baru)
+#   -- cap lebih ketat (8%/6%) terbukti mulai memotong pemulihan profitable normal, bukan cuma
+#   ekor rugi; worst-case -14,5%->-11,0%, biaya WR -3,17pp/total return -6,9%.
+HARD_STOP_CAP_PCT_BY_STRATEGY = {
+    'trend_confirm_4h': 10.8,
+    'decouple_4h': 12.0,
+    'rvolbreak_8h': 12.0,
+    'dipbuy_universe': 10.8,
+}
 # 24/09/2026 -- REVIEW SELESAI, KEPUTUSAN: TETAP K1.5/cap10.8%, TIDAK rollback ke K1.1 (permintaan
 # Mas Budi, lihat REMARK "REVIEW SIAP" di tc_hardstop_track_close/TC_HS_REVIEW_TARGET). Data real
 # 22 deal sejak 20/09 19:23 WIB (bukan cuma 15 target): hard-stop 9% (2/22) -- LEBIH JARANG dari
@@ -21006,6 +21025,13 @@ BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY = {
 LIVE_RANK_4H = {}       # {symbol: pct_change_4h (float, dari field "P" stream)}
 LIVE_RANK_4H_TS = 0     # ms epoch, kapan LIVE_RANK_4H terakhir diupdate (0 = belum pernah)
 LIVE_RANK_4H_LOCK = threading.Lock()
+# 21/10/2026 (permintaan Mas Budi, insiden ZK/USDT -4,88%): harga live juga sudah ikut
+# terkirim di payload !ticker_4h@arr yang SAMA (field "c"), di samping "P" yang sudah
+# dibaca sejak awal -- dipakai topgainers_exit_check()/run_thread_topgainers_fastmonitor()
+# di bawah supaya deal topgainers_4h bisa dipantau jauh lebih sering (~2 detik) TANPA
+# panggilan REST tambahan sama sekali. Nol biaya API baru -- data yang sama yang sudah
+# mengalir masuk untuk ranking, cuma field tambahan yang sebelumnya tidak dibaca.
+LIVE_PRICE_WS = {}      # {symbol: harga terakhir (float, dari field "c")}
 
 
 def _topgainers_ws_on_message(ws, message):
@@ -21017,13 +21043,19 @@ def _topgainers_ws_on_message(ws, message):
         now_ms = int(time.time() * 1000)
         with LIVE_RANK_4H_LOCK:
             for t in data:
-                sym = t.get('s'); pct = t.get('P')
-                if not sym or pct is None:
+                sym = t.get('s'); pct = t.get('P'); last_px = t.get('c')
+                if not sym:
                     continue
-                try:
-                    LIVE_RANK_4H[sym] = float(pct)
-                except (TypeError, ValueError):
-                    continue
+                if pct is not None:
+                    try:
+                        LIVE_RANK_4H[sym] = float(pct)
+                    except (TypeError, ValueError):
+                        pass
+                if last_px is not None:
+                    try:
+                        LIVE_PRICE_WS[sym] = float(last_px)
+                    except (TypeError, ValueError):
+                        pass
             LIVE_RANK_4H_TS = now_ms
     except Exception as e:
         log(f"WARN [T_TOPGAINERS_WS] gagal parse pesan: {e}")
@@ -21036,6 +21068,32 @@ def _topgainers_ws_on_close(ws, close_status_code, close_msg):
 
 def _topgainers_ws_on_open(ws):
     log("[T_TOPGAINERS_WS] tersambung ke !ticker_4h@arr (rolling 4h, live)")
+
+# 21/10/2026 (permintaan Mas Budi, insiden ZK/USDT -4,88% & PUMP/USDT armed 0,00% 3x
+# berturut-turut di decouple_4h): mekanisme BB-Upper arm-dini (lihat BB_UPPER_MIN_ARM_PROFIT_
+# BY_STRATEGY) menutup celah "armed dengan bantalan nyaris nol", tapi akar masalah yang lebih
+# dalam tetap ada -- siklus monitor thread2_monitor() 15 detik (T2_MONITOR_INTERVAL) kasih
+# ruang harga untuk gap jauh sebelum sempat dicek ulang. topgainers_4h KHUSUS dapat siklus
+# jauh lebih cepat (2 detik) lewat fungsi di bawah, pakai harga dari WS yang sudah mengalir
+# (LIVE_PRICE_WS di atas) -- NOL panggilan REST tambahan. Binance kirim update ~1x/detik per
+# simbol yang berubah (dibatch, cuma simbol yang berubah yang dikirim ulang) -- 2 detik dipilih
+# supaya ada 1 siklus WS penuh sebagai jeda aman dari jitter pemrosesan pesan, masih ~7-8x
+# lebih cepat dari 15 detik thread2_monitor() biasa. Strategi lain (brkX2/trend_confirm_4h/
+# decouple_4h/dll) TIDAK disentuh sama sekali -- tetap 15 detik, tetap REST get_price_now().
+TOPGAINERS_FASTMONITOR_INTERVAL = 2   # detik -- lihat REMARK di atas soal kenapa 2, bukan 1
+
+
+def get_topgainers_ws_price(symbol: str) -> float:
+    """Harga live dari !ticker_4h@arr (field 'c'), KHUSUS topgainers_4h fast-monitor.
+    Return 0.0 kalau WS basi (>TOPGAINERS_WS_STALE_SEC detik tanpa update) atau symbol belum
+    pernah muncul di stream -- caller WAJIB fallback ke get_price_now() REST kalau 0.0, pola
+    sama persis dgn fallback rank yang sudah ada di thread_topgainers_scan()."""
+    now_ms = int(time.time() * 1000)
+    with LIVE_RANK_4H_LOCK:
+        fresh = LIVE_RANK_4H_TS > 0 and (now_ms - LIVE_RANK_4H_TS) <= TOPGAINERS_WS_STALE_SEC * 1000
+        px = LIVE_PRICE_WS.get(symbol, 0.0) if fresh else 0.0
+    return px
+
 
 def run_thread_topgainers_ws() -> None:
     """Thread T_TOPGAINERS_WS: pegang 1 koneksi WebSocket terus-menerus ke Binance, isi
