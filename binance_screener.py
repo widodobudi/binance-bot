@@ -10210,7 +10210,7 @@ def thread1_scan():
                 f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
                 f"Harga sinyal (candle close): {_fmt_price(signal_price)}\n"
                 f"Selisih (lonjakan/slippage): {slip_pct:+.2f}%\n"
-                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%) - {hard_stop_pct(atrp, None)[0]}\n"
                 f"Modal: ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}\n"
                 f"{_ind_block}"
@@ -10222,7 +10222,7 @@ def thread1_scan():
                 f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
                 f"Harga sinyal (candle close): {_fmt_price(signal_price)}\n"
                 f"Selisih (lonjakan/slippage): {slip_pct:+.2f}%\n"
-                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%) - {hard_stop_pct(atrp, None)[0]}\n"
                 f"Modal: ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}\n"
                 f"{_ind_block}"
@@ -10509,7 +10509,7 @@ def thread1b_scan_reversal():
                 f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
                 f"Harga sinyal (candle close): {_fmt_price(signal_price)}\n"
                 f"Selisih (slippage): {slip_pct:+.2f}%\n"
-                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%) - {hard_stop_pct(atrp, None)[0]}\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
                 f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{total_max_deals_all_strategies()}\n"
                 f"{_fmt_indicators_open_block(_open_fields_rev)}"
@@ -10521,7 +10521,7 @@ def thread1b_scan_reversal():
                 f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
                 f"Harga sinyal (candle close): {_fmt_price(signal_price)}\n"
                 f"Selisih (slippage): {slip_pct:+.2f}%\n"
-                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%) - {hard_stop_pct(atrp, None)[0]}\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
                 f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} | total {active_deal_count()}/{total_max_deals_all_strategies()}\n"
                 f"{_fmt_indicators_open_block(_open_fields_rev)}"
@@ -12194,7 +12194,7 @@ def thread1c_scan_intrabar():
                 f"Harga sinyal (candle n-1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
-                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%) - {hard_stop_pct(atrp, None)[0]}\n"
                 f"Modal: ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}"
             )
@@ -12206,7 +12206,7 @@ def thread1c_scan_intrabar():
                 f"Harga sinyal (candle n-1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
-                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%) - {hard_stop_pct(atrp, None)[0]}\n"
                 f"Modal: ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}"
             ), daemon=True).start()
@@ -12413,7 +12413,7 @@ def thread1c_scan_intrabar_early():
                 f"Harga sinyal (candle n-1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
-                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%) - {hard_stop_pct(atrp, None)[0]}\n"
                 f"Modal: ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}"
             )
@@ -12425,7 +12425,7 @@ def thread1c_scan_intrabar_early():
                 f"Harga sinyal (candle n-1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
                 f"Elapsed candle 12h: {elapsed_pct*100:.1f}% (jam ke-{elapsed_pct*12:.1f})\n"
-                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%) - {hard_stop_pct(atrp, None)[0]}\n"
                 f"Modal: ${target_usd}{addfund_txt}\n"
                 f"Slot terpakai: {active_deal_count()}/{total_max_deals_all_strategies()}"
             ), daemon=True).start()
@@ -12689,7 +12689,7 @@ def thread_rev_intrabar_scan():
                 f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
                 f"Harga sinyal (c+1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
-                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%) - {hard_stop_pct(atrp, None)[0]}\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
                 f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} "
                 f"| total {active_deal_count()}/{total_max_deals_all_strategies()}"
@@ -12701,7 +12701,7 @@ def thread_rev_intrabar_scan():
                 f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
                 f"Harga sinyal (c+1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
-                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%) - {hard_stop_pct(atrp, None)[0]}\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
                 f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} "
                 f"| total {active_deal_count()}/{total_max_deals_all_strategies()}"
@@ -12713,7 +12713,7 @@ def thread_rev_intrabar_scan():
                 f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
                 f"Harga sinyal (c+1 close): {_fmt_price(signal_price)}\n"
                 f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
-                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%) - {hard_stop_pct(atrp, None)[0]}\n"
                 f"Base  : ${BASE_ORDER_VOLUME}\n"
                 f"Slot reversal: {deal_count_by_strategy('reversal')}/{MAX_DEALS_REVERSAL} "
                 f"| total {active_deal_count()}/{total_max_deals_all_strategies()}"
@@ -13012,7 +13012,7 @@ def thread1d_scan_4h():
             f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
             f"Harga sinyal (4h live): {_fmt_price(signal_price)}\n"
             f"Selisih (slippage): {slip_pct:+.2f}%\n"
-            f"ATR%  : {atrp:.2f}  (trailing {trail_d}% stlh +{trail_arm}%)\n"
+            f"ATR%  : {atrp:.2f}  (trailing {trail_d}% stlh +{trail_arm}%) - {hard_stop_pct(atrp, None)[0]}\n"
             f"RSI   : {_rsi_str}  |  Stoch%K: {_stoch_str}\n"
             f"EMA20 : {_e20_str}  |  EMA50 : {_e50_str}\n"
             f"Skor sinyal: {score}/5 -> modal ${target_usd:.0f}"
@@ -13473,7 +13473,7 @@ def thread_crossema_scan():
                     f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
                     f"Harga sinyal (EMA20 cross): {_fmt_price(signal_price)}\n"
                     f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
-                    f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                    f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%) - {hard_stop_pct(atrp, None)[0]}\n"
                     f"Base  : ${BASE_ORDER_VOLUME}\n"
                     f"Elapsed: {elapsed_pct*100:.1f}% (menit ke {int(elapsed_pct*240)})\n"
                     f"Slot crossema: {n_crossema+1}/{STRAT_CROSSEMA_MAX_DEALS}"
@@ -13485,7 +13485,7 @@ def thread_crossema_scan():
                     f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
                     f"Harga sinyal (EMA20 cross): {_fmt_price(signal_price)}\n"
                     f"Selisih entry vs sinyal: {slip_pct:+.2f}%\n"
-                    f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%)\n"
+                    f"ATR%  : {atrp:.2f}  (trailing {trailing_dist(atrp)}% stlh +{TRAIL_ARM_PCT}%) - {hard_stop_pct(atrp, None)[0]}\n"
                     f"Base  : ${BASE_ORDER_VOLUME}\n"
                     f"Elapsed: {elapsed_pct*100:.1f}% (menit ke {int(elapsed_pct*240)})\n"
                     f"Slot crossema: {n_crossema+1}/{STRAT_CROSSEMA_MAX_DEALS}"
@@ -13889,7 +13889,7 @@ def thread_trendconfirm_scan():
             f"Harga entry (pasar): {_fmt_price(entry_price)}\n"
             f"Harga sinyal (4h closed): {_fmt_price(signal_price)}\n"
             f"Selisih (slippage): {slip_pct:+.2f}%\n"
-            f"ATR%  : {atrp:.2f}  (trailing {trail_d}% stlh +{trail_arm}%)\n"
+            f"ATR%  : {atrp:.2f}  (trailing {trail_d}% stlh +{trail_arm}%) - {hard_stop_pct(atrp, None)[0]}\n"
             f"RVOL  : {detail.get('rvol',0):.2f}x  |  BB%b: {detail.get('bb_pct',0):.2f}  |  vs EMA20: {detail.get('gap_ema20_pct',0):+.2f}%  |  RSI: {detail.get('rsi',0):.1f}\n"
             f"Skor sinyal: {score}/2 -> modal ${target_usd:.0f}"
             + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else "") + "\n"
@@ -14555,7 +14555,7 @@ def open_hunting_candidate(held: dict) -> bool:
         f"gap={ema_gap_str}%  chg={price_change_pct:.2f}%  "
         f"{'\u2191uptrend' if uptrend else '\u2193'}\n"
         f"ST 4h: {st_str}  |  {stoch_str}\n"
-        f"ATR%={atrp:.2f}  trailing {trail_d}% stlh +{trail_arm}%\n"
+        f"ATR%={atrp:.2f}  trailing {trail_d}% stlh +{trail_arm}% - {hard_stop_pct(atrp, None)[0]}\n"
         f"Modal: ${target_usd:.0f}"
         + (f" (+add ${add_usd:.0f})" if add_usd > 0 else "")
         + f"\nSlot hunting: {active_deal_count_hunting()}/{HUNTING_MAX_DEALS}"
@@ -21992,7 +21992,7 @@ def thread_decouple_scan() -> None:
             f"Harga entry (pasar): {_fmt_price(fill_price)}\n"
             f"Harga sinyal (4h): {_fmt_price(signal_price)}\n"
             f"Selisih (slippage): {slip_pct:+.2f}%\n"
-            f"ATR%  : {atr_now:.2f}  |  Unggul vs BTC: {rel_now:+.1f}pp\n"
+            f"ATR%  : {atr_now:.2f}  |  Unggul vs BTC: {rel_now:+.1f}pp  -  {hard_stop_pct(atr_now, None)[0]}\n"
             f"Modal: ${target_usd:.0f}" + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else ""),
             parse_mode=None
         )
@@ -22166,7 +22166,7 @@ def thread_rvolbreak8h_scan() -> None:
             f"Harga entry (pasar): {_fmt_price(fill_price)}\n"
             f"Harga sinyal (8h): {_fmt_price(signal_price)}\n"
             f"Selisih (slippage): {slip_pct:+.2f}%\n"
-            f"ATR%  : {atr_now:.2f}  |  RVOL: {rvol_now:.2f}x\n"
+            f"ATR%  : {atr_now:.2f}  |  RVOL: {rvol_now:.2f}x  -  {hard_stop_pct(atr_now, None)[0]}\n"
             f"Modal: ${target_usd:.0f}" + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else ""),
             parse_mode=None
         )
@@ -22411,7 +22411,7 @@ def thread_bbsnap_scan(tf_label: str) -> None:
             f"Harga entry (pasar): {_fmt_price(fill_price)}\n"
             f"Harga sinyal ({cfg['interval']}): {_fmt_price(signal_price)}\n"
             f"Selisih (slippage): {slip_pct:+.2f}%\n"
-            f"ATR%  : {atr_now:.2f}  |  RVOL: {rvol_now:.2f}x  |  BB-width breakdown: {bbw_breakdown:.2f}%\n"
+            f"ATR%  : {atr_now:.2f}  |  RVOL: {rvol_now:.2f}x  |  BB-width breakdown: {bbw_breakdown:.2f}%  -  {hard_stop_pct(atr_now, None)[0]}\n"
             f"Modal: ${target_usd:.0f}" + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else ""),
             parse_mode=None
         )
@@ -22595,7 +22595,7 @@ def thread_dipbuy_universe_scan() -> None:
             f"Harga entry (pasar): {_fmt_price(fill_price)}\n"
             f"Harga sinyal (4h): {_fmt_price(signal_price)}\n"
             f"Selisih (slippage): {slip_pct:+.2f}%\n"
-            f"ATR%  : {atr_now:.2f}  |  Drop 1 candle 4h: {chg_4h:+.2f}%\n"
+            f"ATR%  : {atr_now:.2f}  |  Drop 1 candle 4h: {chg_4h:+.2f}%  -  {hard_stop_pct(atr_now, None)[0]}\n"
             f"Exit: trailing standar (BUKAN TP/SL tetap spt shadow lama)\n"
             f"Modal: ${target_usd:.0f}" + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else ""),
             parse_mode=None
@@ -26686,7 +26686,7 @@ def run_web_dashboard():
                 f"Peak: {_fmt_price(peak)}\n"
                 f"Profit estimasi: {profit_pct:+.2f}%\n"
                 f"Armed: {bool(deal.get('trailing_armed', False))}\n"
-                f"ATR%: {atr_pct:.2f}%\n"
+                f"ATR%: {atr_pct:.2f}% - {hard_stop_pct(atr_pct, strategy)[0]}\n"
                 f"Hold candles: {hold_candles}\n"
                 f"RSI: {fmt_indicator('rsi_open', 1)}\n"
                 f"Stoch K: {fmt_indicator('stoch_k_open', 1)}\n"
