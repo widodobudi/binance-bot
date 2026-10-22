@@ -11619,24 +11619,28 @@ def thread2_monitor():
                     continue
             log(f"[T2] CLOSE {sym}: {reason} | profit {prof_from_entry:.2f}%")
             strat = d.get('strategy','brkX2')
-            if strat == 'reversal':
-                strat_label = "Reversal Doji+HA (8h)"
-            elif strat == 'brkX2_4h':
-                strat_label = "Momentum brkX2-4h (4h)"
-            elif strat == 'brkX2_crossema':
-                strat_label = "CrossEMA-4h"
-            elif strat == 'hunting_4h':
-                strat_label = "Hunting-4h"
-            elif strat == 'akum_entry_a':
-                strat_label = "Akumulasi-4h Entry A"
-            elif strat == 'akum_entry_b':
-                strat_label = "Akumulasi-4h Entry B"
-            elif strat == 'trend_confirm_4h':
-                strat_label = "TrenKonfirmasi-4h"
-            elif strat == 'mombreak_1h':
-                strat_label = "MomentumBreak-1h"
-            else:
-                strat_label = "Momentum brkX2 (12h)"
+            # 22/10/2026 (ketahuan dari laporan Mas Budi -- CVX/ALT/COMP/USDT KeltnerBreak-12h
+            # muncul di notif CLOSE sbg "Momentum brkX2 (12h)", nama historis SEBELUM strategi ini
+            # di-rename): if/elif lama di sini TIDAK PERNAH menyebut 'brkX2'/'brkX2_closed'/
+            # 'brkX2_intrabar'/'brkX2_12h_closed' (SEMUA identitas KeltnerBreak-12h) atau strategi
+            # yg lebih baru (decouple_4h/rvolbreak_8h/rvolbreak_1h/dipbuy_universe/bbsnap_4h/
+            # bbsnap_8h/topgainers_4h) sama sekali -- SEMUANYA jatuh ke else lama ("Momentum brkX2
+            # (12h)"), bukan cuma KeltnerBreak-12h. Deal-nya tetap REAL (uang asli, dikelola
+            # normal) -- cuma label TAMPILAN di notif CLOSE yang salah. Diganti kamus lengkap,
+            # fallback ke `strat` mentah (bukan nama buatan) kalau ada strategi baru lagi nanti
+            # yang terlewat -- supaya ketahuan jelas di notif, bukan diam-diam salah label lagi.
+            _CLOSE_STRAT_LABEL = {
+                'brkX2': 'KeltnerBreak-12h', 'brkX2_closed': 'KeltnerBreak-12h',
+                'brkX2_intrabar': 'KeltnerBreak-12h', 'brkX2_12h_closed': 'KeltnerBreak-12h',
+                'reversal': 'Reversal Doji+HA (8h)', 'brkX2_4h': 'Momentum brkX2-4h (4h)',
+                'brkX2_crossema': 'CrossEMA-4h', 'hunting_4h': 'Hunting-4h',
+                'akum_entry_a': 'Akumulasi-4h Entry A', 'akum_entry_b': 'Akumulasi-4h Entry B',
+                'trend_confirm_4h': 'TrenKonfirmasi-4h', 'mombreak_1h': 'MomentumBreak-1h',
+                'decouple_4h': 'Decouple-4h', 'rvolbreak_8h': 'RVolBreak-8h',
+                'rvolbreak_1h': 'RVOLBreak-1h', 'dipbuy_universe': 'Dip-Buy Universe',
+                'bbsnap_4h': 'BBSnap-4h', 'bbsnap_8h': 'BBSnap-8h', 'topgainers_4h': 'Top Gainers-4h',
+            }
+            strat_label = _CLOSE_STRAT_LABEL.get(strat, strat)
             # Hold-no-sell: kalau ini hard-stop, ATAU timeout ("batas N candle tercapai") sementara
             # deal lagi RUGI (semua strategi -- 30/08/2026, permintaan user), DAN checkbox "hold,
             # jangan jual" aktif (default True) untuk deal ini -> SKIP jual, koin tetap di wallet.
