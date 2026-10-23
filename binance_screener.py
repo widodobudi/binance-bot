@@ -12109,6 +12109,18 @@ def thread1c_scan_intrabar():
         # Harga LIVE saat ini (bukan tunggu candle 12h berikutnya tutup) tembus Keltner
         price_now = get_price_now(sym)
         if price_now <= 0 or price_now <= float(kc_level): continue
+        # B2 freshness guard (24/10/2026, keputusan Mas Budi dari backtest "keltner12h
+        # path-comparison" 23/10/2026): intrabar SEBELUMNYA tidak punya syarat ini,
+        # menyebabkan entry berulang "basi" di band yang SAMA selama beberapa candle
+        # berturut-turut -- avg%/trade all-tier intrabar jauh di bawah closed-candle
+        # (+0,89% vs +3,48%). Syarat: candle TERAKHIR YANG SUDAH TUTUP (r12, basis
+        # kc_level di atas) itu SENDIRI belum menembus Keltner Upper-nya -- meniru
+        # syarat fresh-crossover check_entry() (T1). Simulasi B2 (guard ini + no-overlap,
+        # yang terakhir sudah berjalan lewat active_deals di atas): n=11.076,
+        # avg+1,58%/trade vs intrabar apa adanya +0,89%.
+        if float(r12['close']) > float(kc_level):
+            log(f"  [T1c] {sym} lolos intrabar tapi DITOLAK freshness guard (candle sblmnya sudah close di atas band)")
+            continue
         # HTF 3D filter
         if HTF_FILTER_ENABLED and not htf_filter_ok(sym):
             log(f"  [T1c] {sym} lolos intrabar tapi DITOLAK HTF 3D filter (price<EMA50 atau MACD<0)")
@@ -12328,6 +12340,11 @@ def thread1c_scan_intrabar_early():
         # Harga LIVE saat ini tembus Keltner
         price_now = get_price_now(sym)
         if price_now <= 0 or price_now <= float(kc_level): continue
+
+        # B2 freshness guard -- lihat REMARK lengkap di thread1c_scan_intrabar().
+        if float(r12['close']) > float(kc_level):
+            log(f"  [T1c-E] {sym} lolos early tapi DITOLAK freshness guard (candle sblmnya sudah close di atas band)")
+            continue
 
         # HTF 3D filter
         if HTF_FILTER_ENABLED and not htf_filter_ok(sym):
