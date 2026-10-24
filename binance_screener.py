@@ -9923,7 +9923,13 @@ def thread1_scan():
     for t in ticker:
         try: volmap[t['symbol']] = float(t.get('quoteVolume',0))
         except: pass
-    universe = [p for p in pairs if volmap.get(p,0) >= MIN_VOLUME_USD]
+    # 24/10/2026 (patch 'kb12h-bstock-exclude', permintaan Mas Budi): kecualikan bStock
+    # sepenuhnya dari kandidat KeltnerBreak-12h -- sama pola dgn TrenKonfirmasi-4h/Akumulasi-4h
+    # (lihat REMARK is_bstock_symbol() & thread_trendconfirm_scan()). Backtest per-simbol riwayat
+    # penuh (24/10/2026) tunjukkan 7 simbol bStock yg ada datanya KONSISTEN di dasar peringkat
+    # performa KeltnerBreak-12h -- cocok dgn temuan independen yg sama di 2 strategi lain (4/4
+    # sampel bStock kalah di TrenKonfirmasi-4h+Akumulasi-4h, 15/09/2026).
+    universe = [p for p in pairs if volmap.get(p,0) >= MIN_VOLUME_USD and not is_bstock_symbol(p)]
 
     # slot brkX2 penuh ATAU total pool penuh? jangan cari sinyal
     if deal_count_by_strategy('brkX2_12h_closed') >= MAX_DEALS_BRKX2_CLOSED:
@@ -12091,7 +12097,8 @@ def thread1c_scan_intrabar():
     for t in ticker:
         try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
         except: pass
-    universe = [p for p in pairs if volmap.get(p, 0) >= MIN_VOLUME_USD]
+    # 24/10/2026 (patch 'kb12h-bstock-exclude') -- lihat REMARK lengkap di thread1_scan().
+    universe = [p for p in pairs if volmap.get(p, 0) >= MIN_VOLUME_USD and not is_bstock_symbol(p)]
     if BTC_FILTER_ENABLED and not btc_filter_ok():
         return None
     held_bx12c = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
@@ -12316,7 +12323,8 @@ def thread1c_scan_intrabar_early():
     for t in ticker:
         try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
         except: pass
-    universe = [p for p in pairs if volmap.get(p, 0) >= MIN_VOLUME_USD]
+    # 24/10/2026 (patch 'kb12h-bstock-exclude') -- lihat REMARK lengkap di thread1_scan().
+    universe = [p for p in pairs if volmap.get(p, 0) >= MIN_VOLUME_USD and not is_bstock_symbol(p)]
 
     if BTC_FILTER_ENABLED and not btc_filter_ok():
         return None
