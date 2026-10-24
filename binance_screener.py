@@ -8349,10 +8349,22 @@ def get_btc_chg_pct(window_hours: int):
         log(f"  [BTC-DUMP-EXIT] error: {e}")
         return slot["pct"]
 
-def get_arm_pct(atr_pct: float) -> float:
+def get_arm_pct(atr_pct: float, strategy: str = None) -> float:
     """Arm threshold, 5 tier ATR% (konsisten dgn hard_stop_pct()/trailing_dist()).
     Titik Aktif=2.0% & Ekstrem=3.5% tervalidasi backtest_arm_sweep; 3 titik tengah interpolasi.
+    24/10/2026 (patch 'tc4h-ekstrem-arm-dini', permintaan Mas Budi -- investigasi ERA/ALT
+    soal rugi dalam di tier Ekstrem, salah satu dari 6 gagasan yang dibacktest hari ini):
+    trend_confirm_4h tier Ekstrem (ATR%>=7) arm di SETENGAH ambang biasa (1,75% bukan 3,5%).
+    Backtest sweep arm_frac (reuse dataset ekstrem_or_supertrend_trendconfirm4h.pkl, exit
+    function produksi asli, TRAIN<=2024/TEST>=2025): di titik paling agresif yang diuji
+    (arm_frac=0,5) WR DAN avg%/trade naik KONSISTEN di TRAIN+TEST tanpa trade-off yang
+    kelihatan (avg% TRAIN +1,93%->+2,25%, TEST +2,22%->+2,52%, WR nyaris sama). BEDA dari
+    KeltnerBreak-12h yang hasilnya CAMPURAN di percobaan sama (WR naik tapi avg%/trade
+    malah turun di TRAIN) -- jadi perubahan ini SENGAJA cuma utk trend_confirm_4h, strategi
+    lain TIDAK disentuh (parameter strategy=None = perilaku lama, tidak berubah).
     """
+    if strategy == 'trend_confirm_4h' and atr_pct >= EKSTREM_ATR_PCT:
+        return 1.75   # setengah dari 3.5% baseline Ekstrem -- patch 'tc4h-ekstrem-arm-dini'
     if atr_pct < 1.0:   return 1.0    # Tenang
     elif atr_pct < 2.0: return 1.5    # Normal
     elif atr_pct < 4.0: return 2.0    # Aktif
@@ -10996,7 +11008,7 @@ def thread2_monitor():
         # — SKIP untuk akumulasi: exit via TP/SL/Timeout, bukan trailing
         _is_akum = strat in ('akum_entry_a', 'akum_entry_b')
         _mombreak_arm = strat == 'mombreak_1h'
-        _cur_arm_pct = mombreak_arm_pct() if _mombreak_arm else get_arm_pct(live_atrp)
+        _cur_arm_pct = mombreak_arm_pct() if _mombreak_arm else get_arm_pct(live_atrp, strat)
         # Idea #5: arm dini kalau BB Upper tersentuh DULUAN, sebelum tier ATR%/flat% biasa
         # tercapai -- _bbupper_touched sudah False utk hunting_4h (lihat di atas).
         if (not armed) and (not _is_akum) and get_deal_override(sym, 'arm_trailing_enabled', True) and (prof_peak >= _cur_arm_pct or _bbupper_touched):
@@ -11730,7 +11742,7 @@ def thread2_monitor():
                     'exit_reason':  reason,
                     'peak_price':   _fmt_price(peak),
                     'peak_profit':  f"{prof_peak:.2f}%",
-                    'arm_pct':      f"{get_arm_pct(atrp):.1f}% ({'armed' if armed else 'belum armed'})",
+                    'arm_pct':      f"{get_arm_pct(atrp, strat):.1f}% ({'armed' if armed else 'belum armed'})",
                     'trail_dist':   f"{tdist:.2f}%" if armed else "—",
                     'atr_pct':      f"{d.get('atr_pct', 0):.2f}%",
                     'add_usd':      f"${d.get('add_usd', 0):.0f}" if d.get('add_usd') else "—",
@@ -13901,7 +13913,7 @@ def thread_trendconfirm_scan():
         })
         _trendconfirm_last_candle_ts[sym] = candle_open_ms
 
-        trail_arm = get_arm_pct(atrp)
+        trail_arm = get_arm_pct(atrp, 'trend_confirm_4h')
         trail_d   = trailing_dist(atrp)
         msg = (
             f"TrenKonfirmasi-4h | OPEN LONG\n"
@@ -26223,7 +26235,7 @@ def run_web_dashboard():
                                 _gap_pct_d = (lp / _stop_price_d - 1) * 100
                                 dd["arm_status_detail"] = f"trail {_tdist_d:.1f}%{' (BB Upper)' if _bbu_touched_d else ''}, jarak ke stop {_gap_pct_d:.2f}%"
                     else:
-                        _arm_pct_d = mombreak_arm_pct() if _strat_d_bbu == 'mombreak_1h' else get_arm_pct(_live_atrp_d)
+                        _arm_pct_d = mombreak_arm_pct() if _strat_d_bbu == 'mombreak_1h' else get_arm_pct(_live_atrp_d, _strat_d_bbu)
                         dd["arm_status_detail"] = "arm (BB Upper tersentuh)" if _bbu_touched_d else f"arm @ +{_arm_pct_d:.1f}%"
                 deals_display[sym] = dd
             closest_to_close = estimate_closest_deal_to_close(deals_display)
@@ -31471,7 +31483,7 @@ def ai_decision_armed(symbol: str, strategy: str, d: dict, price: float, peak: f
         f"Deal: {to_display_pair(symbol)} | Strategi: {strategy}\n"
         f"Entry: {_fmt_price(entry)} | Peak: {_fmt_price(peak)} | Harga skrg: {_fmt_price(price)}\n"
         f"Profit dari entry: {profit_now:+.2f}% | Profit peak: {profit_peak:+.2f}%\n"
-        f"ATR%: {atrp:.2f}% | Arm threshold: {get_arm_pct(atrp):.1f}%\n"
+        f"ATR%: {atrp:.2f}% | Arm threshold: {get_arm_pct(atrp, strategy):.1f}%\n"
         f"Hold candle ke-{d.get('hold_candle_count', '?')}\n"
         f"{ind4h_section}"
         f"{htf_section}\n"
