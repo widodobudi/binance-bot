@@ -17826,6 +17826,21 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
       <tbody id="ct-body"><tr><td colspan="14" style="color:var(--muted);padding:12px 8px;text-align:center">Pilih filter (opsional), lalu klik Reload untuk muat data</td></tr></tbody>
     </table>
   </div>
+  <!-- 25/10/2026 (permintaan Mas Budi): modal "Chart Deal" -- candlestick custom (data Binance
+       langsung, BUKAN TradingView -- lihat chat soal kredensial/API TradingView, platform itu
+       tidak expose cara utk suntik marker custom ke chart publiknya) dgn marker Base Order/
+       Average Order/Close digambar sendiri lewat renderDealCandleSVG(). Tombol TradingView lama
+       TETAP ada di kolom Chart (permintaan Mas Budi: biar bisa dibandingkan dulu). -->
+  <div id="deal-chart-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:1000;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) closeDealChartModal()">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;max-width:1000px;width:100%;max-height:92vh;overflow:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:10px">
+        <div id="deal-chart-title" style="font-size:13px;font-weight:600"></div>
+        <button onclick="closeDealChartModal()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;white-space:nowrap">✕ Tutup</button>
+      </div>
+      <div id="deal-chart-legend" style="font-size:9px;color:var(--muted);margin-bottom:6px"></div>
+      <div id="deal-chart-body" style="font-size:11px"></div>
+    </div>
+  </div>
 </div>
 </div>
 <!-- ═══════════════ ANALISIS (20/10/2026, permintaan Mas Budi: dipindah keluar dari History,
@@ -17918,7 +17933,7 @@ function renderClosedTradesRows() {
     var tbody = document.getElementById('ct-body');
     if (!rows.length) { tbody.innerHTML = '<tr><td colspan="14" style="color:var(--muted);padding:12px 8px;text-align:center">Belum ada data closed trades</td></tr>'; return; }
     var ATR_TIER_CLR = {Tenang:'var(--muted)',Normal:'var(--muted)',Aktif:'var(--text)',Volatil:'var(--yellow)',Ekstrem:'var(--red)'};
-    tbody.innerHTML = rows.map(function(r) {
+    tbody.innerHTML = rows.map(function(r, i) {
             var pct = parseFloat(r.profit_pct||0);
             var usd = parseFloat(r.profit_usd||0);
             var clr = pct>=0?'var(--green)':'var(--red)';
@@ -17926,8 +17941,16 @@ function renderClosedTradesRows() {
             var atrTxt = r.atr_pct ? (r.atr_pct + '%' + (r.atr_tier ? ' (' + r.atr_tier + ')' : '')) : '-';
             return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">' +
                 '<td style="padding:5px 4px;font-weight:600;white-space:nowrap">' + (r.symbol ? ('<a href="javascript:void(0)" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="color:' + clr + ';text-decoration:none;cursor:pointer" title="Buka chart TradingView">' + r.symbol + '</a>' + (r.fixed_note ? ' <span style="display:inline-block;white-space:nowrap;color:var(--green);font-size:9px;font-weight:600;cursor:help;border:1px solid var(--green);border-radius:3px;padding:0 3px" title="Sudah di-fix: ' + String(r.fixed_note).replace(/"/g,'&quot;') + '">✓ FIXED</span>' : '')) : '-') + '</td>' +
-                // 25/10/2026 (permintaan Mas Budi): kolom Open Chart di antara Pair dan Strategi (sama dgn tombol Active Deals).
-                '<td style="padding:5px 4px;text-align:center">' + (r.symbol ? ('<button type="button" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="background:#2962ff;color:#fff;border:none;border-radius:4px;padding:3px 6px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Open Chart</button>') : '-') + '</td>' +
+                // 25/10/2026 (permintaan Mas Budi): kolom Chart di antara Pair dan Strategi -- 2 tombol:
+                // TradingView (asli, tanpa marker, tombol lama) + Chart Deal (candlestick custom kita
+                // sendiri dgn marker Base/Average/Close, lihat openDealChartModal()). Mas Budi minta
+                // keduanya tetap ada supaya bisa dibandingkan dulu sebelum pilih salah satu.
+                '<td style="padding:4px;text-align:center">' + (r.symbol ? (
+                    '<div style="display:flex;flex-direction:column;gap:2px">' +
+                    '<button type="button" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="background:#2962ff;color:#fff;border:none;border-radius:4px;padding:2px 5px;font-size:9px;cursor:pointer;font-family:var(--font);white-space:nowrap" title="Buka TradingView asli (tanpa marker)">TradingView</button>' +
+                    '<button type="button" onclick="openDealChartModal(' + i + ')" style="background:var(--yellow);color:#1a1300;border:none;border-radius:4px;padding:2px 5px;font-size:9px;cursor:pointer;font-family:var(--font);white-space:nowrap" title="Chart candle + marker Base/Average/Close (di dalam dashboard)">Chart Deal</button>' +
+                    '</div>'
+                ) : '-') + '</td>' +
                 '<td style="padding:5px 4px;color:var(--muted);white-space:nowrap">' + (strat_map[r.strategy]||r.strategy||'-') + '</td>' +
                 '<td style="padding:5px 4px;color:var(--muted);white-space:nowrap" title="' + (r.open_time||'') + '">' + (r.open_time ? ctShortDt(r.open_time) : '-') + '</td>' +
                 '<td style="padding:5px 4px;text-align:right;font-size:10px">' + (r.entry_price||'-') + '</td>' +
@@ -17943,6 +17966,115 @@ function renderClosedTradesRows() {
             '</tr>';
     }).join('');
 }
+
+// ── Chart Deal modal (25/10/2026, permintaan Mas Budi) ───────────────────────────
+// Candlestick custom pakai data Binance langsung (BUKAN TradingView -- platform itu tidak
+// menyediakan cara utk pihak luar menyuntik marker custom ke chart publiknya lewat link/API,
+// lihat chat ttg kredensial TradingView). Marker Base Order/Average Order/Close digambar
+// sendiri di sini. Average Order historis diturunkan dari profit_pct sama persis dgn formula
+// commit f1cf885 (chart agregat yg sempat dicoba lalu diganti tombol per-deal, 768917f) --
+// avg_entry = exit_price / (1 + (profit_pct + FEE_ROUND_TRIP_PCT)/100).
+function fmtPriceJs(v) {
+    if (v === null || v === undefined || isNaN(v)) return '-';
+    if (v >= 1000) return v.toFixed(2);
+    if (v >= 1) return v.toFixed(4);
+    if (v >= 0.01) return v.toFixed(6);
+    if (v >= 0.0001) return v.toFixed(8);
+    return v.toFixed(10).replace(/0+$/, '').replace(/\\.$/, '');
+}
+function wibTimeLabel(ms) {
+    // Geser manual +7 jam lalu baca pakai getter UTC -- supaya tidak bergantung zona waktu
+    // browser (sama alasan dgn feedback_sandbox_tz_broken_use_utc_plus_7 di memori project).
+    var d = new Date(ms + 7 * 3600 * 1000);
+    function p2(n) { return (n < 10 ? '0' : '') + n; }
+    return p2(d.getUTCDate()) + '/' + p2(d.getUTCMonth() + 1) + ' ' + p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes());
+}
+function renderDealCandleSVG(candles, openMs, closeMs, basePrice, avgPrice, exitPrice) {
+    if (!candles.length) return '<div style="color:var(--muted);padding:30px;text-align:center">Tidak ada data candle dari Binance utk rentang waktu ini.</div>';
+    var W = 1000, H = 420, padL = 58, padR = 14, padT = 14, padB = 26;
+    var stepGuess = candles.length > 1 ? (candles[1].t - candles[0].t) : 60000;
+    var tMin = Math.min(candles[0].t, openMs);
+    var tMax = Math.max(candles[candles.length - 1].t + stepGuess, closeMs);
+    if (tMax <= tMin) tMax = tMin + 60000;
+    var lo = Math.min.apply(null, candles.map(function(c){ return c.l; }).concat([basePrice, avgPrice, exitPrice]));
+    var hi = Math.max.apply(null, candles.map(function(c){ return c.h; }).concat([basePrice, avgPrice, exitPrice]));
+    var priceRange = (hi - lo) || (hi * 0.01) || 1;
+    var padP = priceRange * 0.08;
+    lo -= padP; hi += padP; priceRange = hi - lo;
+    var toX = function(t) { return padL + (t - tMin) / (tMax - tMin) * (W - padL - padR); };
+    var toY = function(p) { return H - padB - (p - lo) / priceRange * (H - padT - padB); };
+    var candleW = Math.max(1.2, Math.min(9, (W - padL - padR) / candles.length * 0.7));
+    var bodies = candles.map(function(c) {
+        var x = toX(c.t);
+        var up = c.c >= c.o;
+        var clr = up ? '#3fb950' : '#f85149';
+        var yO = toY(c.o), yC = toY(c.c), yH = toY(c.h), yL = toY(c.l);
+        var yTop = Math.min(yO, yC), bodyH = Math.max(0.8, Math.abs(yC - yO));
+        return '<line x1="' + x.toFixed(1) + '" y1="' + yH.toFixed(1) + '" x2="' + x.toFixed(1) + '" y2="' + yL.toFixed(1) + '" stroke="' + clr + '" stroke-width="1" vector-effect="non-scaling-stroke"></line>' +
+               '<rect x="' + (x - candleW/2).toFixed(1) + '" y="' + yTop.toFixed(1) + '" width="' + candleW.toFixed(1) + '" height="' + bodyH.toFixed(1) + '" fill="' + clr + '"></rect>';
+    }).join('');
+    function hLine(price, color, dash) {
+        var y = toY(price).toFixed(1);
+        return '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="' + color + '" stroke-width="1.2" stroke-dasharray="' + dash + '" vector-effect="non-scaling-stroke"></line>';
+    }
+    var exitClr = exitPrice >= basePrice ? '#3fb950' : '#f85149';
+    var hasAddFund = basePrice > 0 && Math.abs(avgPrice - basePrice) / basePrice > 0.0005;
+    var marks = hLine(basePrice, '#58a6ff', '5,3');
+    if (hasAddFund) marks += hLine(avgPrice, 'var(--yellow)', '2,3');
+    marks += hLine(exitPrice, exitClr, '5,3');
+    function vMark(t, color) {
+        var x = toX(t).toFixed(1);
+        return '<line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="' + color + '" stroke-width="1" stroke-dasharray="2,3" vector-effect="non-scaling-stroke" opacity="0.6"></line>';
+    }
+    marks += vMark(openMs, '#58a6ff');
+    marks += vMark(closeMs, exitClr);
+    var dots = '<circle cx="' + toX(openMs).toFixed(1) + '" cy="' + toY(basePrice).toFixed(1) + '" r="4" fill="#58a6ff" stroke="#fff" stroke-width="1.2"></circle>' +
+               '<circle cx="' + toX(closeMs).toFixed(1) + '" cy="' + toY(exitPrice).toFixed(1) + '" r="4" fill="' + exitClr + '" stroke="#fff" stroke-width="1.2"></circle>';
+    var labels =
+        '<text x="' + toX(openMs).toFixed(1) + '" y="' + (H - padB + 14) + '" text-anchor="middle" font-size="9" fill="#58a6ff">OPEN ' + wibTimeLabel(openMs) + '</text>' +
+        '<text x="' + toX(closeMs).toFixed(1) + '" y="' + (H - padB + 14) + '" text-anchor="middle" font-size="9" fill="' + exitClr + '">CLOSE ' + wibTimeLabel(closeMs) + '</text>' +
+        '<text x="' + (padL - 4) + '" y="' + toY(basePrice).toFixed(1) + '" text-anchor="end" dominant-baseline="middle" font-size="9" fill="#58a6ff">' + fmtPriceJs(basePrice) + '</text>' +
+        '<text x="' + (padL - 4) + '" y="' + toY(exitPrice).toFixed(1) + '" text-anchor="end" dominant-baseline="middle" font-size="9" fill="' + exitClr + '">' + fmtPriceJs(exitPrice) + '</text>' +
+        (hasAddFund ? '<text x="' + (padL - 4) + '" y="' + toY(avgPrice).toFixed(1) + '" text-anchor="end" dominant-baseline="middle" font-size="9" fill="var(--yellow)">' + fmtPriceJs(avgPrice) + '</text>' : '');
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:400px;background:var(--bg);border:1px solid var(--border);border-radius:4px">' +
+        bodies + marks + dots + labels + '</svg>';
+}
+function openDealChartModal(i) {
+    var r = (window._ctFilteredRows || [])[i];
+    if (!r || !r.symbol) return;
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var modal = document.getElementById('deal-chart-modal');
+    var titleEl = document.getElementById('deal-chart-title');
+    var legendEl = document.getElementById('deal-chart-legend');
+    var bodyEl = document.getElementById('deal-chart-body');
+    titleEl.textContent = r.symbol + ' — ' + (strat_map[r.strategy] || r.strategy || '-');
+    legendEl.innerHTML = '';
+    bodyEl.innerHTML = '<div style="color:var(--muted);padding:30px;text-align:center">Memuat candle dari Binance...</div>';
+    modal.style.display = 'flex';
+    var qs = 'symbol=' + encodeURIComponent(r.symbol) + '&open_time=' + encodeURIComponent(r.open_time || '') + '&close_time=' + encodeURIComponent(r.close_time || '');
+    fetch('/api/deal_chart?' + qs).then(function(resp) { return resp.json(); }).then(function(d) {
+        if (!d.ok) { bodyEl.innerHTML = '<div style="color:var(--red);padding:20px;text-align:center">Gagal memuat chart: ' + (d.error || '?') + '</div>'; return; }
+        var base = parseFloat(r.entry_price);
+        var exit = parseFloat(r.exit_price);
+        var pct = parseFloat(r.profit_pct || 0);
+        var FEE_RT = 0.2;
+        var avgEntry = (base > 0 && exit > 0) ? exit / (1 + (pct + FEE_RT) / 100) : base;
+        var hasAddFund = base > 0 && Math.abs(avgEntry - base) / base > 0.0005;
+        bodyEl.innerHTML = renderDealCandleSVG(d.candles || [], d.open_ms, d.close_ms, base, avgEntry, exit);
+        legendEl.innerHTML =
+            '<span style="color:#58a6ff">● Base Order</span> ' + fmtPriceJs(base) + ' &nbsp; ' +
+            (hasAddFund ? '<span style="color:var(--yellow)">● Average Order</span> ' + fmtPriceJs(avgEntry) + ' (setelah add-fund) &nbsp; ' : '<span style="color:var(--muted)">(tidak ada add-fund)</span> &nbsp; ') +
+            '<span style="color:' + (exit >= base ? '#3fb950' : '#f85149') + '">● Close</span> ' + fmtPriceJs(exit) + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)' +
+            '<br>Interval candle: ' + (d.interval || '-') + ' — jam ditampilkan WIB. Garis putus-putus biru/kuning/hijau-merah = level harga; arahkan kursor ke candle utk lihat OHLC (via tooltip browser).';
+    }).catch(function(e) {
+        bodyEl.innerHTML = '<div style="color:var(--red);padding:20px;text-align:center">Gagal memuat chart: ' + e + '</div>';
+    });
+}
+function closeDealChartModal() {
+    var modal = document.getElementById('deal-chart-modal');
+    if (modal) modal.style.display = 'none';
+}
+document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeDealChartModal(); });
 
 function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
@@ -29660,6 +29792,67 @@ def run_web_dashboard():
                 })
             except Exception as e:
                 return jsonify({"trades": [], "stats": {}, "error": str(e)})
+
+        @app.route("/api/deal_chart")
+        def api_deal_chart():
+            """25/10/2026 (permintaan Mas Budi): data candle Binance utk modal "Chart Deal" di
+            Closed Deals -- marker Base Order/Average Order/Close digambar di FRONTEND
+            (renderDealCandleSVG(), dash.js) pakai open_ms/close_ms yg dikembalikan di sini;
+            avg entry dihitung di frontend dari entry_price/exit_price/profit_pct yg sudah
+            dikirim /api/closed_trades, SAMA formula dgn commit f1cf885 (chart agregat yg
+            sempat dicoba lalu diganti tombol per-deal, 768917f) -- tidak diulang di sini.
+            Rentang candle: open_time..close_time + padding 15% (minimal 5 menit) tiap sisi;
+            interval dipilih otomatis supaya jumlah candle ~<=130 (tidak terlalu padat/jarang)."""
+            try:
+                import datetime as _dt
+                symbol = request.args.get("symbol", "").upper().replace("/", "").strip()
+                open_time_s = request.args.get("open_time", "").strip()
+                close_time_s = request.args.get("close_time", "").strip()
+                if not symbol or not open_time_s or not close_time_s:
+                    return jsonify({"ok": False, "error": "symbol/open_time/close_time wajib diisi"}), 400
+                fmt = "%Y-%m-%d %H:%M:%S"
+                WIB = _dt.timezone(_dt.timedelta(hours=7))
+                try:
+                    open_dt = _dt.datetime.strptime(open_time_s[:19], fmt).replace(tzinfo=WIB)
+                    close_dt = _dt.datetime.strptime(close_time_s[:19], fmt).replace(tzinfo=WIB)
+                except ValueError:
+                    return jsonify({"ok": False, "error": "format open_time/close_time tidak dikenali"}), 400
+                if close_dt <= open_dt:
+                    close_dt = open_dt + _dt.timedelta(minutes=1)
+                dur_sec = (close_dt - open_dt).total_seconds()
+                pad_sec = max(dur_sec * 0.15, 300)
+                range_start = open_dt - _dt.timedelta(seconds=pad_sec)
+                range_end = close_dt + _dt.timedelta(seconds=pad_sec)
+                INTERVALS = [('1m', 60), ('3m', 180), ('5m', 300), ('15m', 900), ('30m', 1800),
+                             ('1h', 3600), ('2h', 7200), ('4h', 14400), ('6h', 21600), ('8h', 28800),
+                             ('12h', 43200), ('1d', 86400)]
+                total_sec = (range_end - range_start).total_seconds()
+                interval = INTERVALS[-1][0]
+                for name, sec in INTERVALS:
+                    if total_sec / sec <= 130:
+                        interval = name
+                        break
+                start_ms = int(range_start.timestamp() * 1000)
+                end_ms = int(range_end.timestamp() * 1000)
+                r = _binance_get("/api/v3/klines", params={
+                    'symbol': symbol, 'interval': interval,
+                    'startTime': start_ms, 'endTime': end_ms, 'limit': 1000,
+                }, timeout=15)
+                if r is None or r.status_code != 200:
+                    return jsonify({"ok": False, "error": "Gagal ambil data candle dari Binance"}), 502
+                raw = r.json()
+                if not isinstance(raw, list):
+                    return jsonify({"ok": False, "error": "Respons Binance tidak dikenali"}), 502
+                candles = [{"t": int(k[0]), "o": float(k[1]), "h": float(k[2]),
+                            "l": float(k[3]), "c": float(k[4])} for k in raw]
+                return jsonify({
+                    "ok": True, "symbol": symbol, "interval": interval,
+                    "candles": candles,
+                    "open_ms": int(open_dt.timestamp() * 1000),
+                    "close_ms": int(close_dt.timestamp() * 1000),
+                })
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
 
         @app.route("/api/sizecut_summary")
         def api_sizecut_summary():
