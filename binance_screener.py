@@ -17808,20 +17808,20 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
   <div style="overflow-x:auto">
     <table id="ct-table" style="width:100%;border-collapse:collapse;font-size:11px">
       <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
-        <th data-sort-key="symbol" onclick="sortClosedTrades('symbol')" style="text-align:left;padding:5px 8px;cursor:pointer">Pair</th>
-        <th data-sort-key="strategy" onclick="sortClosedTrades('strategy')" style="text-align:left;padding:5px 8px;cursor:pointer">Strategi</th>
-        <th data-sort-key="open_time" onclick="sortClosedTrades('open_time')" style="text-align:left;padding:5px 8px;cursor:pointer">Opened</th>
-        <th style="text-align:right;padding:5px 8px">Entry</th>
-        <th data-sort-key="close_time" onclick="sortClosedTrades('close_time')" style="text-align:left;padding:5px 8px;cursor:pointer">Closed</th>
-        <th style="text-align:right;padding:5px 8px">Exit</th>
-        <th data-sort-key="rsi_open" onclick="sortClosedTrades('rsi_open')" style="text-align:right;padding:5px 8px;cursor:pointer" title="RSI(14) saat open long">RSI@Open</th>
-        <th data-sort-key="atr_pct" onclick="sortClosedTrades('atr_pct')" style="text-align:right;padding:5px 8px;cursor:pointer" title="ATR% saat open long + tier (Tenang/Normal/Aktif/Volatil/Ekstrem)">ATR%@Open</th>
-        <th data-sort-key="profit_pct" onclick="sortClosedTrades('profit_pct')" style="text-align:right;padding:5px 8px;cursor:pointer">Profit%</th>
-        <th data-sort-key="profit_usd" onclick="sortClosedTrades('profit_usd')" style="text-align:right;padding:5px 8px;cursor:pointer">Profit$</th>
-        <th style="text-align:right;padding:5px 8px">Modal</th>
-        <th data-sort-key="duration" onclick="sortClosedTrades('duration')" style="text-align:right;padding:5px 8px;cursor:pointer">Durasi</th>
-        <th style="text-align:left;padding:5px 8px">Alasan</th>
-        <th style="text-align:center;padding:5px 8px">Chart</th>
+        <th data-sort-key="symbol" onclick="sortClosedTrades('symbol')" style="text-align:left;padding:5px 4px;cursor:pointer">Pair</th>
+        <th style="text-align:center;padding:5px 4px">Chart</th>
+        <th data-sort-key="strategy" onclick="sortClosedTrades('strategy')" style="text-align:left;padding:5px 4px;cursor:pointer">Strategi</th>
+        <th data-sort-key="open_time" onclick="sortClosedTrades('open_time')" style="text-align:left;padding:5px 4px;cursor:pointer">Opened</th>
+        <th style="text-align:right;padding:5px 4px">Entry</th>
+        <th data-sort-key="close_time" onclick="sortClosedTrades('close_time')" style="text-align:left;padding:5px 4px;cursor:pointer">Closed</th>
+        <th style="text-align:right;padding:5px 4px">Exit</th>
+        <th data-sort-key="rsi_open" onclick="sortClosedTrades('rsi_open')" style="text-align:right;padding:5px 4px;cursor:pointer" title="RSI(14) saat open long">RSI@Open</th>
+        <th data-sort-key="atr_pct" onclick="sortClosedTrades('atr_pct')" style="text-align:right;padding:5px 4px;cursor:pointer" title="ATR% saat open long + tier (Tenang/Normal/Aktif/Volatil/Ekstrem)">ATR%@Open</th>
+        <th data-sort-key="profit_pct" onclick="sortClosedTrades('profit_pct')" style="text-align:right;padding:5px 4px;cursor:pointer">Profit%</th>
+        <th data-sort-key="profit_usd" onclick="sortClosedTrades('profit_usd')" style="text-align:right;padding:5px 4px;cursor:pointer">Profit$</th>
+        <th style="text-align:right;padding:5px 4px">Modal</th>
+        <th data-sort-key="duration" onclick="sortClosedTrades('duration')" style="text-align:right;padding:5px 4px;cursor:pointer">Durasi</th>
+        <th style="text-align:left;padding:5px 4px">Alasan</th>
       </tr></thead>
       <tbody id="ct-body"><tr><td colspan="14" style="color:var(--muted);padding:12px 8px;text-align:center">Pilih filter (opsional), lalu klik Reload untuk muat data</td></tr></tbody>
     </table>
@@ -17873,6 +17873,12 @@ function sortClosedTrades(key) {
     renderClosedTradesRows();
 }
 
+function ctShortDt(t) {
+    // '2026-10-24 21:23:05' -> '24/10 21:23' (tabel dipadatkan agar tidak perlu scroll kanan-kiri; tooltip menampilkan waktu lengkap)
+    var d = (t || '').substring(0,16);
+    return d.length >= 16 ? (d.substring(8,10) + '/' + d.substring(5,7) + ' ' + d.substring(11,16)) : d;
+}
+
 function renderClosedTradesRows() {
     var rows = closedTradesRows.slice();
     var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
@@ -17919,22 +17925,21 @@ function renderClosedTradesRows() {
             var atrClr = ATR_TIER_CLR[r.atr_tier] || 'var(--muted)';
             var atrTxt = r.atr_pct ? (r.atr_pct + '%' + (r.atr_tier ? ' (' + r.atr_tier + ')' : '')) : '-';
             return '<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">' +
-                '<td style="padding:5px 8px;font-weight:600;white-space:nowrap">' + (r.symbol ? ('<a href="javascript:void(0)" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="color:' + clr + ';text-decoration:none;cursor:pointer" title="Buka chart TradingView">' + r.symbol + '</a>' + (r.fixed_note ? ' <span style="display:inline-block;white-space:nowrap;color:var(--green);font-size:9px;font-weight:600;cursor:help;border:1px solid var(--green);border-radius:3px;padding:0 3px" title="Sudah di-fix: ' + String(r.fixed_note).replace(/"/g,'&quot;') + '">✓ FIXED</span>' : '')) : '-') + '</td>' +
-                '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (strat_map[r.strategy]||r.strategy||'-') + '</td>' +
-                '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.open_time ? r.open_time.substring(0,16) : '-') + '</td>' +
-                '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.entry_price||'-') + '</td>' +
-                '<td style="padding:5px 8px;color:var(--muted);white-space:nowrap">' + (r.close_time||'').substring(0,16) + '</td>' +
-                '<td style="padding:5px 8px;text-align:right;font-size:10px">' + (r.exit_price||'-') + '</td>' +
-                '<td style="padding:5px 8px;text-align:right;font-size:10px;color:var(--muted)">' + (r.rsi_open||'-') + '</td>' +
-                '<td style="padding:5px 8px;text-align:right;font-size:10px;color:' + atrClr + '">' + atrTxt + '</td>' +
-                '<td style="padding:5px 8px;text-align:right;color:' + clr + '">' + (pct>=0?'+':'') + pct.toFixed(2) + '%</td>' +
-                '<td style="padding:5px 8px;text-align:right;color:' + clr + '">' + (usd>=0?'+':'') + usd.toFixed(2) + '</td>' +
-                '<td style="padding:5px 8px;text-align:right;color:var(--muted)">$' + (r.base_usd||'-') + '</td>' +
-                '<td style="padding:5px 8px;text-align:right;color:var(--muted)">' + (r.duration||'-') + '</td>' +
-                '<td style="padding:5px 8px;color:var(--muted);font-size:10px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (r.exit_reason||'') + '">' + (r.exit_reason||'-') + '</td>' +
-                // 25/10/2026 (permintaan Mas Budi): tombol "Open Chart" per closed deal, sama persis dgn
-                // tombol di kolom Chart panel Active Deals (openTradingViewChart(pair, label strategi)).
-                '<td style="padding:5px 8px;text-align:center">' + (r.symbol ? ('<button type="button" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="background:#2962ff;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Open Chart</button>') : '-') + '</td>' +
+                '<td style="padding:5px 4px;font-weight:600;white-space:nowrap">' + (r.symbol ? ('<a href="javascript:void(0)" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="color:' + clr + ';text-decoration:none;cursor:pointer" title="Buka chart TradingView">' + r.symbol + '</a>' + (r.fixed_note ? ' <span style="display:inline-block;white-space:nowrap;color:var(--green);font-size:9px;font-weight:600;cursor:help;border:1px solid var(--green);border-radius:3px;padding:0 3px" title="Sudah di-fix: ' + String(r.fixed_note).replace(/"/g,'&quot;') + '">✓ FIXED</span>' : '')) : '-') + '</td>' +
+                // 25/10/2026 (permintaan Mas Budi): kolom Open Chart di antara Pair dan Strategi (sama dgn tombol Active Deals).
+                '<td style="padding:5px 4px;text-align:center">' + (r.symbol ? ('<button type="button" onclick="openTradingViewChart(\\'' + r.symbol.replace('/','') + '\\',\\'' + (strat_map[r.strategy]||r.strategy||'') + '\\')" style="background:#2962ff;color:#fff;border:none;border-radius:4px;padding:3px 6px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Open Chart</button>') : '-') + '</td>' +
+                '<td style="padding:5px 4px;color:var(--muted);white-space:nowrap">' + (strat_map[r.strategy]||r.strategy||'-') + '</td>' +
+                '<td style="padding:5px 4px;color:var(--muted);white-space:nowrap" title="' + (r.open_time||'') + '">' + (r.open_time ? ctShortDt(r.open_time) : '-') + '</td>' +
+                '<td style="padding:5px 4px;text-align:right;font-size:10px">' + (r.entry_price||'-') + '</td>' +
+                '<td style="padding:5px 4px;color:var(--muted);white-space:nowrap" title="' + (r.close_time||'') + '">' + ctShortDt(r.close_time||'') + '</td>' +
+                '<td style="padding:5px 4px;text-align:right;font-size:10px">' + (r.exit_price||'-') + '</td>' +
+                '<td style="padding:5px 4px;text-align:right;font-size:10px;color:var(--muted)">' + (r.rsi_open||'-') + '</td>' +
+                '<td style="padding:5px 4px;text-align:right;font-size:10px;color:' + atrClr + '">' + atrTxt + '</td>' +
+                '<td style="padding:5px 4px;text-align:right;color:' + clr + '">' + (pct>=0?'+':'') + pct.toFixed(2) + '%</td>' +
+                '<td style="padding:5px 4px;text-align:right;color:' + clr + '">' + (usd>=0?'+':'') + usd.toFixed(2) + '</td>' +
+                '<td style="padding:5px 4px;text-align:right;color:var(--muted)">$' + (r.base_usd||'-') + '</td>' +
+                '<td style="padding:5px 4px;text-align:right;color:var(--muted)">' + (r.duration||'-') + '</td>' +
+                '<td style="padding:5px 4px;color:var(--muted);font-size:10px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (r.exit_reason||'') + '">' + (r.exit_reason||'-') + '</td>' +
             '</tr>';
     }).join('');
 }
