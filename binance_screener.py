@@ -1866,6 +1866,14 @@ def get_terminated_strategies() -> set:
     return {
         k for k, enabled in {
             "rvolbreak_1h": False,   # 12/10/2026: diterminate penuh, diganti rvolbreak_8h (bukan _ENABLED flag -- konstanta lamanya sudah dihapus)
+            # 25/10/2026 (permintaan Mas Budi): "brkx2-12h" (key legacy pre-split 09/10/2026)
+            # tampil berdampingan dgn "KeltnerBreak-12h" (brkX2_12h_closed) di Strategy Control,
+            # padahal sudah strategy_enabled=False sejak lama dan TIDAK PERNAH buka deal baru lagi
+            # (lihat KELTNER12H_FOLD di renderCtSummary() -- histori closed deals-nya SUDAH digabung
+            # ke tampilan "KeltnerBreak-12h" sejak 10/10/2026). Disembunyikan dari Strategy Control
+            # SAJA via mekanisme ini (sama persis rvolbreak_1h) -- data CSV/strategy_config.json
+            # TIDAK disentuh, baris lama di Closed Deals/History tetap utuh seperti sebelumnya.
+            "brkX2": False,
             "reversal": REVERSAL_ENABLED,
             "brkX2_crossema": STRAT_CROSSEMA_ENABLED,
             "akum_entry_a": STRAT_AKUM_ENABLED,
