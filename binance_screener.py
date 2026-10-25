@@ -1822,7 +1822,12 @@ def total_max_deals_all_strategies() -> int:
 # 28-29/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE dan SEMUA deal-nya disembunyikan dari tampilan dashboard default
 # (Closed Trades + kartu Performance per Strategi). Data tetap ada di CSV / counter fase / batas rugi harian; tampil lagi kalau
 # strategi dipilih eksplisit di filter Closed Trades atau ?show_paused=1. Satu sumber kebenaran utk kedua endpoint.
-PAUSED_HIDDEN_STRATEGIES = ('brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h', 'rvolbreak_1h', 'mombreak_1h', 'rvolbreak_8h')
+PAUSED_HIDDEN_STRATEGIES = ('brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h', 'rvolbreak_1h', 'mombreak_1h', 'rvolbreak_8h', 'bbsnap_4h')
+# 25/10/2026 (permintaan Mas Budi): bbsnap_4h ditarik ke paper test juga -- 5 closed deal REAL
+# lamanya (1W/4L, +4.12%) DIHILANGKAN dari kartu Performance per Strategi & Closed Trades default
+# ("reset kembali dari 0"), persis pola mombreak_1h/rvolbreak_8h di atas. Baris CSV-nya TETAP ADA
+# (counter fase/batas rugi harian tidak berubah), tampil lagi via ?show_paused=1 kalau suatu saat
+# perlu dicek lagi -- TIDAK dihapus permanen, cuma disembunyikan dari tampilan default.
 # 04/10/2026: 'mombreak_1h' SEMPAT DIKELUARKAN -- "Izinkan Open Long" di-unlock hari ini (fd0fe3d),
 # strategi aktif live lagi (ada deal riil, IOTA/USDT 21:21 WIB), sama pola persis spt 'reversal'
 # 02/10/2026 di bawah -- daftar ini sempat tidak ikut di-sync saat unlock-nya dikerjakan.
@@ -14894,10 +14899,12 @@ _dashboard_lock = threading.Lock()
 PAPER_TEST_TARGET = 15
 PAPER_TEST_MAX_HOLD_HOURS = 48
 PAPER_TEST_FILE = os.path.join(DATA_DIR, "paper_test.json")
-PAPER_TEST_LABELS = {"mombreak_1h": "MomentumBreak-1h", "rvolbreak_8h": "RVolBreak-8h"}
+PAPER_TEST_LABELS = {"mombreak_1h": "MomentumBreak-1h", "rvolbreak_8h": "RVolBreak-8h",
+                      "bbsnap_4h": "BBSnap-4h"}  # 25/10/2026: BBSnap-4h ditarik ke paper juga
 _paper_test_lock = threading.Lock()
 _paper_test_state = {"mombreak_1h": {"open": [], "closed": []},
-                      "rvolbreak_8h": {"open": [], "closed": []}}
+                      "rvolbreak_8h": {"open": [], "closed": []},
+                      "bbsnap_4h": {"open": [], "closed": []}}
 
 def load_paper_test_state():
     global _paper_test_state
@@ -14925,10 +14932,25 @@ def _save_paper_test_state():
         log(f"WARN gagal simpan paper_test.json: {e}")
 
 def _paper_test_open(strategy: str, sym: str, entry_price: float, atr_pct: float):
+    """25/10/2026 (patch 'paper-test-cooldown-fix', ketahuan dari review RVolBreak-8h --
+    15/15 closed paper trade TERNYATA semuanya QKC/USDT dibuka ulang berkali-kali dalam
+    ~50 menit di harga identik: sinyal breakout candle 8h yg SUDAH closed tetap TRUE
+    selama candle itu belum ganti (~8 jam), dan _paper_test_scan_rvolbreak8h() TIDAK
+    PERNAH cek cooldown setelah sebuah posisi paper close -- beda dari jalur live yg
+    selalu pakai is_cooldown_enabled()+cooldown_remaining() SEBELUM buka. Fix di SATU
+    tempat ini (bukan di tiap _paper_test_scan_*) supaya otomatis berlaku ke SEMUA
+    strategi paper-test, sekarang maupun nanti -- cek entri 'closed' TERAKHIR utk symbol
+    ini (sudah persisted di paper_test.json, tidak perlu state baru), tolak buka kalau
+    closed_ts-nya < COOLDOWN_SECONDS (8 jam, SAMA dgn cooldown live) yang lalu."""
     label = PAPER_TEST_LABELS.get(strategy, strategy)
     with _paper_test_lock:
         if any(p['sym'] == sym for p in _paper_test_state[strategy]['open']):
             return  # sudah ada posisi paper terbuka di symbol ini, jangan dobel
+        last_closed_ts = max(
+            (c.get('closed_ts', 0) for c in _paper_test_state[strategy]['closed'] if c.get('sym') == sym),
+            default=0)
+        if last_closed_ts and (time.time() - last_closed_ts) < COOLDOWN_SECONDS:
+            return  # masih cooldown pasca close paper terakhir utk symbol ini -- jangan re-entry sinyal yg sama
         _paper_test_state[strategy]['open'].append({
             "sym": sym, "entry_price": entry_price, "atr_pct": atr_pct,
             "opened_ts": int(time.time() * 1000), "opened_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
@@ -14968,7 +14990,8 @@ def paper_test_check_exits(strategy: str):
             continue
         with _paper_test_lock:
             _paper_test_state[strategy]['closed'].append({**pos, "exit_price": price_now, "pct": pct,
-                "reason": reason, "closed_at": now_wib().strftime('%Y-%m-%d %H:%M:%S')})
+                "reason": reason, "closed_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                "closed_ts": int(time.time())})  # 25/10/2026: dipakai cooldown check di _paper_test_open()
             n_done = len(_paper_test_state[strategy]['closed'])
             wins = sum(1 for c in _paper_test_state[strategy]['closed'] if c['pct'] > 0)
         log(f"[PAPER-{label}] CLOSE (paper) {sym} @ {price_now:.8g} ({pct:+.2f}%) -- {reason} -- #{n_done}/{PAPER_TEST_TARGET} (WR {100*wins/n_done:.0f}%)")
@@ -14985,16 +15008,16 @@ def paper_test_check_exits(strategy: str):
     _save_paper_test_state()
 
 def run_thread_paper_test() -> None:
-    """Thread T-PaperTest: cek exit posisi paper (mombreak_1h + rvolbreak_8h) tiap 60 detik.
-    Entry paper masing2 strategi dipanggil dari scan thread live-nya sendiri (lihat
-    _paper_test_scan_mombreak() di thread_mombreak_scan(), _paper_test_scan_rvolbreak8h()
-    di thread_rvolbreak8h_scan()) -- thread ini KHUSUS exit, supaya cek harga tetap jalan
-    walau scan entry masing2 strategi beda interval."""
+    """Thread T-PaperTest: cek exit posisi paper (mombreak_1h + rvolbreak_8h + bbsnap_4h,
+    25/10/2026) tiap 60 detik -- entry & exit SEMUA strategi paper dipanggil dari SATU thread
+    ini (bukan nested di scan thread live masing2, meski komentar lama di beberapa fungsi
+    paper-scan bilang begitu -- itu sudah stale, cek di sini sumber kebenarannya)."""
     while True:
         try:
             _paper_test_scan_mombreak()
             _paper_test_scan_rvolbreak8h()
-            for strat in ("mombreak_1h", "rvolbreak_8h"):
+            _paper_test_scan_bbsnap4h()
+            for strat in ("mombreak_1h", "rvolbreak_8h", "bbsnap_4h"):
                 paper_test_check_exits(strat)
         except Exception as e:
             log(f"WARN T-PaperTest: {e}")
@@ -16151,7 +16174,9 @@ var SHADOW_LABELS = {
   // PAPER_TEST_TARGET) -- ditambahkan di sini supaya progress-nya kelihatan di panel yg sama,
   // bukan cuma di log Railway/Telegram.
   'mombreak_1h': 'MomentumBreak-1h (paper)',
-  'rvolbreak_8h': 'RVolBreak-8h (paper)'
+  'rvolbreak_8h': 'RVolBreak-8h (paper)',
+  // 25/10/2026: BBSnap-4h ditarik dari LIVE balik ke paper test (sama pola mombreak_1h/rvolbreak_8h).
+  'bbsnap_4h': 'BBSnap-4h (paper)'
 };
 function refreshShadowChart() {
   fetch('/api/shadow_fwdtest_status')
@@ -22787,6 +22812,73 @@ def run_thread_bbsnap8h() -> None:
         time.sleep(BBSNAP_SCAN_INTERVAL)
 
 
+def _paper_test_scan_bbsnap4h():
+    """25/10/2026 (permintaan Mas Budi): BBSnap-4h ditarik dari LIVE balik ke PAPER TEST --
+    strategy_enabled sudah False (lihat STRATEGY_CONFIG_DEFAULTS), jadi thread_bbsnap_scan('4h')
+    tidak akan buka deal REAL lagi; entry paper REPLIKA PERSIS syarat live-nya (cross-up BB
+    Lower(20,2) + RVOL + lebar-band-saat-breakdown, lihat thread_bbsnap_scan()), dipanggil dari
+    run_thread_paper_test() sama pola persis _paper_test_scan_rvolbreak8h()/_paper_test_scan_mombreak().
+    BBSnap-8h SENGAJA TIDAK ikut (Mas Budi cuma minta BBSnap-4h -- strategy_enabled-nya tetap
+    False tanpa jalur paper, sama seperti sebelum patch ini)."""
+    now_s = time.time()
+    if now_s - _paper_test_last_scan['bbsnap_4h'] < PAPER_TEST_SCAN_INTERVAL['bbsnap_4h']:
+        return
+    _paper_test_last_scan['bbsnap_4h'] = now_s
+    with _paper_test_lock:
+        if len(_paper_test_state['bbsnap_4h']['closed']) >= PAPER_TEST_TARGET:
+            return
+    cfg = _BBSNAP_TF_CONFIG['4h']
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST]
+    except Exception as e:
+        log(f"WARN [PAPER-BBSNAP4H] gagal ambil universe: {e}")
+        return
+    with _paper_test_lock:
+        paper_open_syms = {p['sym'] for p in _paper_test_state['bbsnap_4h']['open']}
+    import pandas_ta as _pta_bbs_paper
+    for sym in universe:
+        if sym in paper_open_syms:
+            continue
+        try:
+            df = get_ohlcv(sym, interval=cfg['interval'], limit=cfg['limit'])
+            if df is None or len(df) < 60: continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) < 46: continue
+            c, h, l, v = df['close'], df['high'], df['low'], df['vol']
+            bb = _pta_bbs_paper.bbands(c, length=20, std=2)
+            bb_lower = bb.iloc[:, 0]; bb_mid = bb.iloc[:, 1]; bb_upper = bb.iloc[:, 2]
+            bb_width_pct = (bb_upper - bb_lower) / bb_mid * 100
+            atr_pct = _pta_bbs_paper.atr(h, l, c, length=14) / c * 100
+            vol_ma20 = v.rolling(20).mean()
+            rvol = v / vol_ma20
+            n = len(df); i = n - 1
+            close_ = c.values; bbl_ = bb_lower.values; bbw_ = bb_width_pct.values
+            rvol_ = rvol.values; atrp_ = atr_pct.values
+            if any(pd.isna(x) for x in [bbl_[i], bbl_[i-1], atrp_[i], rvol_[i]]) or atrp_[i] <= 0:
+                continue
+            below = close_ <= bbl_
+            cross_up_ok = bool(below[i-1] and not below[i])
+            rvol_now = float(rvol_[i])
+            j = i - 1
+            while j > 25 and below[j-1]:
+                j -= 1
+            bbw_breakdown = float(bbw_[j]) if not pd.isna(bbw_[j]) else None
+            if not (cross_up_ok and bbw_breakdown is not None and bbw_breakdown > cfg['bbwidth_min']
+                    and rvol_now >= BBSNAP_RVOL_MIN):
+                continue
+            _paper_test_open('bbsnap_4h', sym, float(close_[i]), float(atrp_[i]))
+        except Exception:
+            continue
+
+
 def thread_dipbuy_universe_scan() -> None:
     """Scan sinyal Dip-Buy Universe LIVE (09/10/2026, Tahap 3/4). Sinyal IDENTIK dengan
     _shadow_dipbuy_universe_try_open() (1 candle 4h TERTUTUP turun <= SHADOW_DIPBUY_UNIVERSE_CHG4H_MIN,
@@ -26233,8 +26325,9 @@ def thread_mombreak_scan():
         log(f"WARN [MOMBREAK] scan error: {e}")
 
 
-_paper_test_last_scan = {"mombreak_1h": 0, "rvolbreak_8h": 0}
-PAPER_TEST_SCAN_INTERVAL = {"mombreak_1h": MOMBREAK_SCAN_INTERVAL, "rvolbreak_8h": 300}
+_paper_test_last_scan = {"mombreak_1h": 0, "rvolbreak_8h": 0, "bbsnap_4h": 0}
+PAPER_TEST_SCAN_INTERVAL = {"mombreak_1h": MOMBREAK_SCAN_INTERVAL, "rvolbreak_8h": 300,
+                             "bbsnap_4h": BBSNAP_SCAN_INTERVAL}  # 25/10/2026, sama interval scan live-nya
 
 def _paper_test_scan_mombreak():
     """18/10/2026: entry PAPER MomentumBreak-1h -- replika PERSIS syarat live (check_mombreak_signal()
@@ -30068,7 +30161,7 @@ def run_web_dashboard():
             # endpoint/kartu baru.
             with _paper_test_lock:
                 paper_snap = {k: {"open": list(v["open"]), "closed": list(v["closed"])} for k, v in _paper_test_state.items()}
-            for key in ("mombreak_1h", "rvolbreak_8h"):
+            for key in ("mombreak_1h", "rvolbreak_8h", "bbsnap_4h"):
                 closed = paper_snap[key]['closed']
                 n = len(closed)
                 wins = [c for c in closed if c['pct'] > 0]
@@ -30092,6 +30185,24 @@ def run_web_dashboard():
             with _shadow_hsconfirm_lock:
                 hsconfirm = _load_shadow_hsconfirm()
             return jsonify({"ok": True, "shadow_fwdtest": fwdtest, "shadow_hsconfirm": hsconfirm})
+
+        @app.route("/api/paper_test_reset", methods=["POST"])
+        def api_paper_test_reset():
+            """25/10/2026 (permintaan Mas Budi): reset counter paper-test 1 strategi balik ke 0
+            closed/0 open -- dipakai setelah fix 'paper-test-cooldown-fix' utk buang 15 sampel
+            RVolBreak-8h yg kebanjiran QKC/USDT berulang (bug cooldown, bukan hasil strategi
+            beneran), supaya 15 sampel berikutnya bersih sebelum dievaluasi layak LIVE atau tidak.
+            Dibuat sbg endpoint reusable (bukan one-off script) -- kalau MomentumBreak-1h/BBSnap-4h
+            suatu saat perlu direset ulang juga, tinggal panggil ini, tidak perlu minta patch lagi."""
+            strategy = (request.get_json(force=True, silent=True) or {}).get("strategy", "").strip()
+            if strategy not in _paper_test_state:
+                return jsonify({"ok": False, "error": f"strategy '{strategy}' tidak dikenal di paper-test (pilihan: {list(_paper_test_state.keys())})"}), 400
+            with _paper_test_lock:
+                n_before = len(_paper_test_state[strategy]['closed'])
+                _paper_test_state[strategy] = {"open": [], "closed": []}
+            _save_paper_test_state()
+            log(f"[ADMIN] paper_test_reset: {strategy} direset ({n_before} closed dibuang)")
+            return jsonify({"ok": True, "strategy": strategy, "n_closed_before": n_before})
 
         log(f"[WEB] Dashboard jalan di port {WEB_PORT}")
         # Patch "dashboard-threaded-server" (18/10/2026, permintaan Mas Budi "bikin berat pacific
