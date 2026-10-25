@@ -1530,7 +1530,10 @@ STRATEGY_CONFIG_DEFAULTS = {
     # HANYA dipanggil di thread1_scan() (closed-candle/T1) -- bukti backtest-nya spesifik utk itu,
     # TIDAK dipanggil sama sekali di thread1c_scan_intrabar()/thread1c_scan_intrabar_early()
     # (jalur intrabar, sengaja tidak digeneralisir tanpa uji sendiri).
-    "brkX2_12h_closed":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
+    # base_usd 60->8 (25/10/2026, patch 'smallstart-reclaim-addfund'): modal awal SEKARANG
+    # SELALU kecil ($8, dekat batas minimum Binance), ditambah ke $60 (SMALLSTART_FULL_TARGET_USD)
+    # HANYA kalau harga reclaim EMA20 setelah sempat drop -- lihat REMARK lengkap di konstanta itu.
+    "brkX2_12h_closed":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
     "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 5, "close_sell_pct": 100},
@@ -1548,7 +1551,9 @@ STRATEGY_CONFIG_DEFAULTS = {
     # -> get_strategy_base_usd(strategy) pakai key asli tiap entry).
     "akum_entry_b":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8,  "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
     "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
-    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
+    # base_usd 30->8 (25/10/2026, patch 'smallstart-reclaim-addfund') -- sama pola persis spt
+    # brkX2_12h_closed di atas, target add-fund $30 (SMALLSTART_FULL_TARGET_USD).
+    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
     # mombreak_1h: 'btc_gate_elapsed_pct' -- satu2nya strategi yg rumus Gate0-nya punya parameter
     # elapsed-time (tunggu candle 3m BTCUSDT closed sampai sekian % sebelum gendut-check dianggap
     # valid). Default 100 (candle HARUS closed penuh) -- SATU2NYA nilai yg terbukti backtest
@@ -7166,7 +7171,12 @@ BRKX2_TIER_LOW_USD          = 60    # skor 0-1 (REMARK lama, sebelum split: $30)
 BRKX2_TIER_HIGH_USD         = 90    # skor >=2 (REMARK lama, sebelum split: $45)
 # 20/09/2026 (permintaan Mas Budi): tier TrenKonfirmasi-4h dikembalikan ke angka aman $30/$45.
 # REMARK nilai sebelum penurunan ini (rollback): tier bawah=$70, tier atas=$100.
-TRENDCONFIRM_TIER_LOW_USD   = 30    # skor 0-1
+# 25/10/2026 (patch 'smallstart-reclaim-addfund'): 30->8 -- HARUS disamakan dgn base_usd baru
+# di STRATEGY_CONFIG_DEFAULTS['trend_confirm_4h'], krn score_to_target_usd() dipakai lewat
+# target=max(TRENDCONFIRM_TIER_LOW_USD, _cfg_base) di open_deal_with_sizing() -- kalau angka ini
+# dibiarkan 30, max() akan memaksa modal balik ke $30 (lewat add_usd langsung, BUKAN lewat
+# reclaim), menggagalkan seluruh desain smallstart-reclaim-addfund tanpa error apapun yg kelihatan.
+TRENDCONFIRM_TIER_LOW_USD   = 8    # skor 0-1 (dulu 30, lihat REMARK di atas)
 # 24/09/2026 (permintaan Mas Budi): upsize otomatis-by-score DIMATIKAN (TRENDCONFIRM_TIER_HIGH_USD
 # tidak dipakai lagi di score_to_target_usd di bawah -- dikunci flat TRENDCONFIRM_TIER_LOW_USD,
 # sama seperti CrossEMA-4h). Data real 48 trade closed: tier skor>=2 (avg base $52.9, yg dulu naik
@@ -7299,13 +7309,16 @@ VOLATIL_ATR_PCT = 4.0  # ambang bawah tier "Volatil" -- SAMA dgn hard_stop_pct()
 # 'na' = Supertrend bukan pembeda sama sekali (CrossEMA-4h, wajib di entry); 'size_cut' =
 # dikalikan st_mult spt biasa.
 EKSTREM_SUPERTREND_SIZING = {
-    # KeltnerBreak-12h (+ 3 key legacy formula sama persis): half-Kelly Volatil 23,9/25,2->24%,
-    # Ekstrem 28,8/28,3->28%, ST 32,9/25,0->25% (sampel ST lebih kecil, n=69-88, tapi dua2nya
-    # positif konsisten).
-    'brkX2_12h_closed': (0.24, 0.28, 0.25, 'size_cut'),
-    'brkX2':             (0.24, 0.28, 0.25, 'size_cut'),
-    'brkX2_closed':      (0.24, 0.28, 0.25, 'size_cut'),
-    'brkX2_intrabar':    (0.24, 0.28, 0.25, 'size_cut'),
+    # KeltnerBreak-12h ('brkX2_12h_closed' + 3 key legacy) -- size-cut DIHAPUS 25/10/2026
+    # (patch 'smallstart-reclaim-addfund', permintaan eksplisit Mas Budi setelah backtest
+    # 3-skenario hari ini: hapus size-cut + modal kecil seragam TERBUKTI MENANG dari size-cut
+    # dipertahankan bareng smallstart, di KEDUA strategi, konsisten TRAIN+TEST -- lihat REMARK
+    # lengkap di SMALLSTART_FULL_TARGET_USD). Modal sekarang SELALU $8 rata (SMALLSTART_BASE_USD,
+    # tidak lagi tergantung ATR tier/Supertrend), ditambah ke modal normal HANYA kalau harga
+    # reclaim EMA20 setelah sempat drop -- lihat check_kb12h_smallstart_reclaim()/thread2_monitor().
+    # 'brkX2'/'brkX2_closed'/'brkX2_intrabar' TIDAK buka deal baru lagi (arsip), dihapus juga
+    # dari dict ini sekalian utk konsistensi (tidak pernah dibaca lagi, tapi daripada menyesatkan
+    # kalau ada yg grep nanti).
     # brkX2-4h: half-Kelly Volatil 21,7/23,8->22%, Ekstrem 27,3/27,9->27% (keduanya size-cut
     # normal); ST Kelly NEGATIF (-9,7%/-9,0%, WR~20% vs baseline~52%) -> BLOKIR, SATU-SATUNYA
     # strategi dgn block.
@@ -7320,9 +7333,8 @@ EKSTREM_SUPERTREND_SIZING = {
     # poin 4) -- size-cut berbasis ATR memang tidak relevan di strategi ini pada tingkat
     # manapun; ST 21,2/19,9->20% (tipis tapi konsisten, baseline 17,1/18,9%).
     'mombreak_1h':       (None, None, 0.20, 'size_cut'),
-    # TrenKonfirmasi-4h: Volatil 32,4/31,5->32%, Ekstrem 38,7/38,4->38% (TERKUAT dari semua
-    # strategi, baseline cuma 29,5/26,2%); ST (netral, sedikit DI BAWAH baseline) 26,3/22,9->23%.
-    'trend_confirm_4h':  (0.32, 0.38, 0.23, 'size_cut'),
+    # TrenKonfirmasi-4h: size-cut DIHAPUS 25/10/2026, sama alasan & patch persis spt
+    # KeltnerBreak-12h di atas -- lihat REMARK lengkap di SMALLSTART_FULL_TARGET_USD.
     # Decouple-4h: Volatil 18,3/16,7->17%, Ekstrem 23,7/21,6->22%; ST (netral, TEST jauh lebih
     # lemah dari TRAIN 14,7%->5,5%, ambil yg lebih kecil) 14,7/5,5->6%.
     'decouple_4h':       (0.17, 0.22, 0.06, 'size_cut'),
@@ -7433,6 +7445,83 @@ def get_live_ema20_reclaim_signal(symbol: str, strategy: str, n_candles: int, rv
     with _live_ema20_reclaim_cache_lock:
         _live_ema20_reclaim_cache[cache_key] = (now, signal)
     return signal
+
+# ── Patch "smallstart-reclaim-addfund" (25/10/2026) ──────────────────────────────────────
+# Permintaan Mas Budi setelah investigasi ERA/ALT (KeltnerBreak-12h Ekstrem, rugi dalam):
+# 6 gagasan mitigasi dibacktest hari ini (jual bertahap/coin-drop-breaker/AI-proxy/perketat
+# stop/sub-tier/arm-dini), semuanya TIDAK terbukti -- KECUALI 1 ide baru yang muncul dari
+# diskusi: BUKAN soal exit lebih awal, tapi soal UKURAN MODAL AWAL. Backtest 4 ronde (data
+# penuh, exit function produksi asli, syarat reclaim TrenKonfirmasi-4h diverifikasi PERSIS
+# sama dgn get_live_ema20_reclaim_signal() yg sudah live) -- hasil akhir KONSISTEN di KEDUA
+# strategi, TRAIN+TEST: size-cut (EKSTREM_SUPERTREND_SIZING) DIHAPUS + modal awal SERAGAM
+# KECIL ($8, bukan tergantung ATR tier) MENANG dari size-cut dipertahankan bareng smallstart.
+# KeltnerBreak-12h: ROI turun tipis (3,27%->3,05%) tapi modal terpakai cuma 78,1% dari
+# biasa -- sisanya bebas dipakai Mas Budi. TrenKonfirmasi-4h: ROI malah NAIK (1,34%->1,37%)
+# DAN modal lebih hemat (90,8%) -- menang murni, bukan cuma trade-off modal.
+# Desain: SETIAP entry baru (KeltnerBreak-12h & TrenKonfirmasi-4h, apapun ATR tier/kondisi
+# BTC) mulai dari modal $8 rata (lihat STRATEGY_CONFIG_DEFAULTS/TRENDCONFIRM_TIER_LOW_USD).
+# Modal DITAMBAH ke angka normal (SMALLSTART_FULL_TARGET_USD) HANYA kalau harga drop di bawah
+# EMA20 lalu reclaim (close kembali di atas) -- lihat check_kb12h_smallstart_reclaim() (baru,
+# definisi SEDERHANA: drop kapan saja lalu reclaim, tanpa batas candle/RVol, krn KeltnerBreak-12h
+# TIDAK PUNYA mekanisme reclaim lama yg perlu disamakan) dan blok trend_confirm_4h di
+# thread2_monitor() (REUSE get_live_ema20_reclaim_signal() yg SUDAH LIVE sejak 17/10/2026,
+# cuma JUMLAH tambahannya diubah dari "dobel modal awal" jadi "sampai modal normal penuh").
+SMALLSTART_FULL_TARGET_USD = {
+    'brkX2_12h_closed': 60.0,   # modal normal lama (base_usd sebelum patch ini)
+    'trend_confirm_4h': 30.0,
+}
+LIVE_EMA20_4H_CACHE_SECONDS = 300  # pola sama persis LIVE_BBUPPER_CACHE_SECONDS dkk
+_live_ema20_4h_cache = {}
+_live_ema20_4h_cache_lock = threading.Lock()
+
+def get_live_ema20_4h_closed(symbol: str):
+    """Return (close, ema20) dari candle 4 jam TERAKHIR YANG SUDAH TUTUP, atau None kalau
+    fetch/hitung gagal. KHUSUS dipakai check_kb12h_smallstart_reclaim() -- KeltnerBreak-12h
+    TF native-nya 12h, tapi reclaim smallstart SENGAJA dicek di 4h (lebih cepat, terbukti
+    backtest 25/10/2026 titik terbaik dibanding 12h/8h -- lihat REMARK smallstart-reclaim-addfund
+    di atas)."""
+    now = time.time()
+    with _live_ema20_4h_cache_lock:
+        cached = _live_ema20_4h_cache.get(symbol)
+        if cached and now - cached[0] < LIVE_EMA20_4H_CACHE_SECONDS:
+            return cached[1]
+    result = None
+    try:
+        frame = get_ohlcv_4h(symbol, limit=35)
+        if frame is not None and len(frame) >= 22:
+            closed = frame.iloc[:-1]  # buang candle yang masih berjalan
+            ema20 = ta.ema(closed['close'], length=20)
+            if len(ema20) and not pd.isna(ema20.iloc[-1]):
+                result = (float(closed['close'].iloc[-1]), float(ema20.iloc[-1]))
+    except Exception as error:
+        log(f"[ADDFUND] live EMA20 4h {symbol} gagal: {error}")
+    with _live_ema20_4h_cache_lock:
+        _live_ema20_4h_cache[symbol] = (now, result)
+    return result
+
+def check_kb12h_smallstart_reclaim(symbol: str, deal: dict) -> bool:
+    """True = candle 4h TERTUTUP terakhir reclaim EMA20 (close >= ema20) SETELAH deal ini
+    pernah tercatat drop di bawah EMA20 (flag 'smallstart_below_ema20', diset True candle
+    manapun sejak entry yang close-nya < ema20 -- TIDAK ada batas berapa candle, beda
+    sengaja dari get_live_ema20_reclaim_signal() TrenKonfirmasi-4h yg N=5 candle+RVol, krn
+    KeltnerBreak-12h tidak punya mekanisme reclaim lama yg perlu disamakan -- definisi ini
+    PERSIS yang dibacktest 25/10/2026). False kalau belum reclaim atau belum pernah drop.
+    Efek samping: UPDATE flag 'smallstart_below_ema20' di active_deals kalau candle sekarang
+    di bawah EMA20 (caller TIDAK perlu panggil terpisah)."""
+    live = get_live_ema20_4h_closed(symbol)
+    if live is None:
+        return False
+    close_now, ema20_now = live
+    was_below = bool(deal.get('smallstart_below_ema20', False))
+    if close_now < ema20_now:
+        if not was_below:
+            with active_deals_lock:
+                if symbol in active_deals:
+                    active_deals[symbol]['smallstart_below_ema20'] = True
+            save_active_deals()
+        return False
+    # close_now >= ema20_now -- reclaim cuma valid kalau SEBELUMNYA pernah tercatat di bawah
+    return was_below
 
 def ekstrem_supertrend_size_mult(symbol: str, strategy: str, atr_pct: float | None):
     """Return (multiplier, alasan_log). multiplier<=0.0 = BLOKIR -- caller WAJIB batalkan
@@ -10789,6 +10878,64 @@ def thread2_monitor():
         strat = d.get('strategy', 'brkX2')
         live_atrp = get_live_atr_pct(sym, strat, atrp)
 
+        # Patch "smallstart-reclaim-addfund" (25/10/2026, KeltnerBreak-12h) -- lihat REMARK
+        # lengkap di SMALLSTART_FULL_TARGET_USD (dekat get_live_ema20_reclaim_signal()).
+        # KeltnerBreak-12h TIDAK PUNYA mekanisme reclaim lama (beda dari TrenKonfirmasi-4h di
+        # bawah) -- definisi reclaim-nya SEDERHANA (drop lalu reclaim EMA20 4h, tanpa batas
+        # candle/RVol), PERSIS yang dibacktest. Underwater (price<entry) WAJIB dicek DI SINI,
+        # sama alasan spt blok TrenKonfirmasi-4h di bawah. Fire-once via reclaim_addfund_used
+        # (field sama, dipakai bersama TrenKonfirmasi-4h/Decouple-4h/RVolBreak-8h).
+        if strat == 'brkX2_12h_closed' and not d.get('reclaim_addfund_used', False):
+            # check_kb12h_smallstart_reclaim() DIPANGGIL TANPA syarat price<entry -- fungsi ini
+            # yang melacak status "pernah di bawah EMA20" (efek samping, lihat docstring-nya),
+            # harus jalan TIAP siklus supaya tidak kelewat candle yang dropnya terjadi SAAT
+            # posisi masih di atas entry (profit tipis) tapi di bawah EMA20 -- baru belakangan
+            # beneran underwater. Kalau dicek cuma pas price<entry, drop yang terjadi sebelum
+            # underwater itu tidak akan pernah tercatat, beda dari yang dibacktest (definisinya
+            # murni soal EMA20, tidak terikat status untung/rugi). Syarat price<entry TETAP
+            # dipakai, tapi HANYA utk keputusan EKSEKUSI add-fund-nya (di bawah), bukan tracking.
+            _kb_reclaim_signal = check_kb12h_smallstart_reclaim(sym, d)
+            if _kb_reclaim_signal and price < entry:
+                if not get_deal_override(sym, 'auto_add_fund', True):
+                    log(f"[T2] {sym} smallstart-reclaim: TERPICU tapi auto_add_fund=OFF (toggle 'Auto Avg Down') -- di-skip, tidak dicoba ulang")
+                    with active_deals_lock:
+                        if sym in active_deals:
+                            active_deals[sym]['reclaim_addfund_used'] = True
+                else:
+                    _kb_current_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('brkX2_12h_closed'))
+                    _kb_modal = round(max(0.0, SMALLSTART_FULL_TARGET_USD.get('brkX2_12h_closed', 60.0) - _kb_current_modal), 2)
+                    if _kb_modal <= 0:
+                        log(f"[T2] {sym} smallstart-reclaim TERPICU tapi modal (${_kb_current_modal:.0f}) sudah >= target normal -- tidak ada yg perlu ditambah")
+                        with active_deals_lock:
+                            if sym in active_deals:
+                                active_deals[sym]['reclaim_addfund_used'] = True
+                        continue
+                    _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=_kb_modal)
+                    if not _glob_ok:
+                        log(f"[T2] {sym} smallstart-reclaim: TERPICU tapi kapasitas gabungan penuh ({_glob_reason}) -- di-skip, tidak dicoba ulang")
+                        with active_deals_lock:
+                            if sym in active_deals:
+                                active_deals[sym]['reclaim_addfund_used'] = True
+                    else:
+                        log(f"[T2] {sym} smallstart-reclaim TERPICU: harga reclaim EMA20 4h setelah sempat drop -- "
+                            f"tambah modal ${_kb_modal:.0f} (modal ${_kb_current_modal:.0f} -> target ${SMALLSTART_FULL_TARGET_USD.get('brkX2_12h_closed', 60.0):.0f})")
+                        _kb_result = execute_add_fund(sym, _kb_modal)
+                        with active_deals_lock:
+                            if sym in active_deals:
+                                active_deals[sym]['reclaim_addfund_used'] = True
+                        if _kb_result.get('ok'):
+                            send_telegram(
+                                f"📈 Smallstart Reclaim Add-Fund (KeltnerBreak-12h)\n"
+                                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                                f"Pair    : {to_display_pair(sym)}\n"
+                                f"Pola    : EMA20 4h cross-down lalu cross-up (reclaim)\n"
+                                f"Modal ditambah: ${_kb_modal:.0f} @ {_fmt_price(_kb_result.get('price',0))}",
+                                parse_mode=None
+                            )
+                        else:
+                            log(f"WARN [T2] {sym} smallstart-reclaim gagal: {_kb_result.get('error')}")
+                        continue   # entry/peak lokal sudah basi setelah add-fund -- lanjut siklus berikutnya
+
         # Patch "tc-addfund-reclaim-swap" (17/10/2026, permintaan Mas Budi): add-fund reaktif
         # khusus TrenKonfirmasi-4h -- GANTI dari "dip lalu breakout" (26/09/2026, TERBUKTI net
         # merugikan di backtest replay 17/10/2026 -- lihat REMARK lengkap di
@@ -10809,7 +10956,19 @@ def thread2_monitor():
                         if sym in active_deals:
                             active_deals[sym]['reclaim_addfund_used'] = True
                 else:
-                    _rc_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('trend_confirm_4h'))
+                    # 25/10/2026 (patch "smallstart-reclaim-addfund"): JUMLAH tambahan diubah
+                    # dari "dobel modal awal" (_cfg_base/target_usd) jadi "sampai modal normal
+                    # penuh" (SMALLSTART_FULL_TARGET_USD) -- trigger/syarat reclaim-nya (N candle
+                    # + RVol di atas) TIDAK disentuh, tetap PERSIS sama spt yang sudah live sejak
+                    # 17/10/2026. Lihat REMARK lengkap di SMALLSTART_FULL_TARGET_USD.
+                    _rc_current_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('trend_confirm_4h'))
+                    _rc_modal = round(max(0.0, SMALLSTART_FULL_TARGET_USD.get('trend_confirm_4h', 30.0) - _rc_current_modal), 2)
+                    if _rc_modal <= 0:
+                        log(f"[T2] {sym} reclaim-addfund TERPICU tapi modal (${_rc_current_modal:.0f}) sudah >= target normal -- tidak ada yg perlu ditambah")
+                        with active_deals_lock:
+                            if sym in active_deals:
+                                active_deals[sym]['reclaim_addfund_used'] = True
+                        continue
                     _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=_rc_modal)
                     if not _glob_ok:
                         log(f"[T2] {sym} reclaim-addfund: TERPICU tapi kapasitas gabungan penuh ({_glob_reason}) -- di-skip, tidak dicoba ulang")
@@ -10818,7 +10977,7 @@ def thread2_monitor():
                                 active_deals[sym]['reclaim_addfund_used'] = True
                     else:
                         log(f"[T2] {sym} reclaim-addfund TERPICU: EMA20 reclaim (<={TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES} candle) "
-                            f"+ RVol>={TRENDCONFIRM_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_rc_modal:.0f}")
+                            f"+ RVol>={TRENDCONFIRM_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_rc_modal:.0f} (modal ${_rc_current_modal:.0f} -> target ${SMALLSTART_FULL_TARGET_USD.get('trend_confirm_4h', 30.0):.0f})")
                         _rc_result = execute_add_fund(sym, _rc_modal)
                         with active_deals_lock:
                             if sym in active_deals:
