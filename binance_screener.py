@@ -17805,6 +17805,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
   </div>
   <div id="ct-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px"></div>  <div id="ct-stats-all" style="display:none;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:11px;color:var(--muted)"></div>  <div id="ct-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:10px"></div>
   <div id="ct-equity" style="margin-bottom:14px"></div>
+  <div id="ct-deal-levels" style="margin-bottom:14px"></div>
   <div style="overflow-x:auto">
     <table id="ct-table" style="width:100%;border-collapse:collapse;font-size:11px">
       <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
@@ -17908,6 +17909,7 @@ function renderClosedTradesRows() {
     window._ctFilteredRows = rows;
     renderCtSummary(rows);
     renderCtEquityCurve(rows);
+    renderCtDealLevels(rows);
     var tbody = document.getElementById('ct-body');
     if (!rows.length) { tbody.innerHTML = '<tr><td colspan="13" style="color:var(--muted);padding:12px 8px;text-align:center">Belum ada data closed trades</td></tr>'; return; }
     var ATR_TIER_CLR = {Tenang:'var(--muted)',Normal:'var(--muted)',Aktif:'var(--text)',Volatil:'var(--yellow)',Ekstrem:'var(--red)'};
@@ -17996,6 +17998,70 @@ function renderCtEquityCurve(rows) {
         '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="width:100%;height:70px;background:var(--bg);border:1px solid var(--border);border-radius:4px">' +
             '<line x1="0" y1="' + zeroY + '" x2="' + W + '" y2="' + zeroY + '" stroke="var(--border)" stroke-dasharray="4,3" stroke-width="1"></line>' +
             '<polyline points="' + pathPts + '" fill="none" stroke="' + lineColor + '" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>' +
+        '</svg>';
+}
+
+// 25/10/2026 (permintaan Mas Budi): chart Base Order / Average Order / Close level per deal.
+// entry_price di CSV SELALU harga Base Order (fill order pertama, lihat _csv_open_fill_entry()
+// backend -- tidak pernah ditimpa walau ada add-fund). Average Order (harga rata-rata tertimbang
+// SESUDAH add-fund) TIDAK pernah dipersist terpisah setelah deal ditutup (active_deals.entry_price
+// ditimpa jadi avg lalu hilang begitu deal closed) -- jadi di sini diturunkan BALIK dari profit_pct,
+// yang backend SELALU hitung thd avg entry (lihat execute_add_fund() + semua 'profit_pct = (price/
+// entry_price - 1)*100 - FEE_ROUND_TRIP_PCT'): avg_entry = exit_price / (1 + (profit_pct+fee)/100).
+// Kalau tidak pernah ada add-fund, avg_entry == base_entry (titik kuning berimpit dgn garis 0%).
+// Caveat: turunan ini asumsi 1x exit penuh dari avg entry (bukan partial-sell bertahap) -- sesuai
+// utk KeltnerBreak-12h/TrenKonfirmasi-4h (tidak pakai partial-sell-ke-Earn, lihat project_partial_sell_earn).
+function renderCtDealLevels(rows) {
+    var el = document.getElementById('ct-deal-levels');
+    if (!el) return;
+    if (!rows.length) { el.innerHTML = ''; return; }
+    var FEE_RT = 0.2; // sinkron dgn FEE_ROUND_TRIP_PCT backend (0.1% beli + 0.1% jual)
+    var sorted = rows.slice().sort(function(a,b) { return (a.close_time||'').localeCompare(b.close_time||''); });
+    var pts = [];
+    sorted.forEach(function(r) {
+        var base = parseFloat(r.entry_price);
+        var exit = parseFloat(r.exit_price);
+        var pct  = parseFloat(r.profit_pct || 0);
+        if (!(base > 0) || !(exit > 0) || !isFinite(base) || !isFinite(exit)) return;
+        var avgEntry = exit / (1 + (pct + FEE_RT) / 100);
+        pts.push({
+            avgPct:   (avgEntry / base - 1) * 100,
+            closePct: (exit / base - 1) * 100,
+            symbol:   r.symbol, closeTime: r.close_time
+        });
+    });
+    if (!pts.length) { el.innerHTML = ''; return; }
+    var allVals = [0];
+    pts.forEach(function(p){ allVals.push(p.avgPct, p.closePct); });
+    var minV = Math.min.apply(null, allVals), maxV = Math.max.apply(null, allVals);
+    var range0 = (maxV - minV) || 1, padV = range0 * 0.08;
+    minV -= padV; maxV += padV;
+    var range = maxV - minV;
+    var W = 1000, H = 140, pad = 4;
+    var stepX = pts.length > 1 ? (W - pad*2) / (pts.length - 1) : 0;
+    var toY = function(v) { return H - pad - ((v - minV) / range) * (H - pad*2); };
+    var zeroY = toY(0).toFixed(1);
+    var barW = Math.max(1, Math.min(4, stepX * 0.6)).toFixed(1);
+    var marks = pts.map(function(p, i) {
+        var x = (pad + i*stepX).toFixed(1);
+        var yClose = toY(p.closePct).toFixed(1);
+        var clr = p.closePct >= 0 ? '#3fb950' : '#f85149';
+        var tip = p.symbol + ' (' + (p.closeTime||'').substring(0,16) + ') | Close ' +
+            (p.closePct>=0?'+':'') + p.closePct.toFixed(2) + '% dari Base Order' +
+            (Math.abs(p.avgPct) > 0.01 ? ' | Average Order ' + (p.avgPct>=0?'+':'') + p.avgPct.toFixed(2) + '% dari Base Order' : ' | tidak ada add-fund');
+        var out = '<line x1="' + x + '" y1="' + zeroY + '" x2="' + x + '" y2="' + yClose + '" stroke="' + clr +
+            '" stroke-width="' + barW + '" vector-effect="non-scaling-stroke"><title>' + tip + '</title></line>';
+        if (Math.abs(p.avgPct) > 0.01) {
+            out += '<circle cx="' + x + '" cy="' + toY(p.avgPct).toFixed(1) + '" r="2.3" fill="var(--yellow)" stroke="none"><title>' + tip + '</title></circle>';
+        }
+        return out;
+    }).join('');
+    el.innerHTML =
+        '<div style="font-size:9px;color:var(--muted);margin-bottom:3px">Level harga per deal (% dari harga Base Order, ' + pts.length + ' trade, terurut waktu) — ' +
+        'garis putus-putus = Base Order (0%), batang hijau/merah = Close level, <span style="color:var(--yellow)">● kuning</span> = Average Order level (kalau ada add-fund)</div>' +
+        '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="width:100%;height:120px;background:var(--bg);border:1px solid var(--border);border-radius:4px">' +
+            '<line x1="0" y1="' + zeroY + '" x2="' + W + '" y2="' + zeroY + '" stroke="var(--border)" stroke-dasharray="4,3" stroke-width="1"></line>' +
+            marks +
         '</svg>';
 }
 
