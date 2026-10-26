@@ -15013,13 +15013,32 @@ def _paper_test_open(strategy: str, sym: str, entry_price: float, atr_pct: float
 
 def paper_test_check_exits(strategy: str):
     """Dipanggil periodik (lihat run_thread_paper_test()) -- cek posisi paper strategy ini,
-    tutup kalau kena hard-stop atau timeout. Read-only thd Binance (get_price_now), TIDAK
-    PERNAH memanggil order/sell asli."""
+    tutup kalau kena hard-stop/trailing atau timeout. Read-only thd Binance (get_price_now),
+    TIDAK PERNAH memanggil order/sell asli.
+    26/10/2026 (patch "mombreak-papertest-exit-fix" + "papertest-stuck-at-target-fix",
+    permintaan Mas Budi):
+    1) Exit mombreak_1h SEBELUMNYA pakai hard_stop_pct() generik (4-11% ber-tier ATR, TIDAK
+       pernah ada trailing) -- padahal live mombreak_1h pakai skema FLAT TERPISAH (arm
+       MOMBREAK_LIVE_ARM_PCT=0.8% lalu trailing MOMBREAK_LIVE_TRAIL_PCT=0.3% dari puncak,
+       hard-stop MOMBREAK_LIVE_STOP_PCT=1.0% -- lihat mombreak_hard_stop_pct()/
+       mombreak_arm_pct()/mombreak_trail_pct()). Dicocokkan ke data: paper sebelumnya exit
+       hard-stop di 4,4%/6,0% (rumus generik x K=1,1), bukan 1,0% asli -- hasil WR/PF paper
+       SELAMA INI TIDAK representatif thd exit live beneran. Diperbaiki DI SINI SAJA (bukan
+       3 strategi paper-test lain -- punya mereka TIDAK ada skema flat terpisah, hard-stop
+       generik+cap per-strategi MEMANG sudah sama dgn live-nya, cuma trailing yg memang
+       sengaja disederhanakan jadi hard-stop+timeout saja, pola lama yg TETAP dipertahankan).
+    2) SEBELUMNYA `n_closed_before >= PAPER_TEST_TARGET` bikin exit-check function ini
+       return LANGSUNG begitu target tercapai -- posisi yg MASIH OPEN saat itu (dibuka
+       sebelum target, belum closed) jadi macet PERMANEN, tidak pernah dicek lagi selamanya
+       (ketahuan dari 12 posisi mombreak_1h yg masih "open" 6 hari pasca target tercapai,
+       jauh lewat timeout 48 jam). Guard ini DIHAPUS -- posisi yg sudah terlanjur buka tetap
+       dilanjutkan sampai closed wajar (hard-stop/trailing/timeout), cuma SCAN ENTRI baru yg
+       berhenti di target (sudah dicek terpisah di tiap _paper_test_scan_*()).
+    """
     label = PAPER_TEST_LABELS.get(strategy, strategy)
     with _paper_test_lock:
         open_list = list(_paper_test_state[strategy]['open'])
-        n_closed_before = len(_paper_test_state[strategy]['closed'])
-    if not open_list or n_closed_before >= PAPER_TEST_TARGET:
+    if not open_list:
         return
     now_ms = int(time.time() * 1000)
     still_open = []
@@ -15031,13 +15050,26 @@ def paper_test_check_exits(strategy: str):
             continue
         entry = pos['entry_price']
         pct = (price_now / entry - 1) * 100
-        _, _, hs_pct = hard_stop_pct(pos.get('atr_pct', 3.0) or 3.0, strategy)
         elapsed_h = (now_ms - pos['opened_ts']) / 3_600_000
         reason = None
-        if pct <= -hs_pct:
-            reason = f"hard-stop {hs_pct:.1f}%"
-        elif elapsed_h >= PAPER_TEST_MAX_HOLD_HOURS:
-            reason = f"timeout {PAPER_TEST_MAX_HOLD_HOURS}j"
+        if strategy == 'mombreak_1h':
+            peak = max(pos.get('peak', entry), price_now)
+            pos['peak'] = peak
+            peak_pct = (peak / entry - 1) * 100
+            stop_pct = mombreak_hard_stop_pct()[2]
+            armed = peak_pct >= mombreak_arm_pct()
+            if pct <= -stop_pct:
+                reason = f"hard-stop {stop_pct:.1f}%"
+            elif armed and price_now <= peak * (1 - mombreak_trail_pct() / 100):
+                reason = f"trailing (arm {mombreak_arm_pct():.1f}%, trail {mombreak_trail_pct():.1f}% dari puncak {peak_pct:+.2f}%)"
+            elif elapsed_h >= PAPER_TEST_MAX_HOLD_HOURS:
+                reason = f"timeout {PAPER_TEST_MAX_HOLD_HOURS}j"
+        else:
+            _, _, hs_pct = hard_stop_pct(pos.get('atr_pct', 3.0) or 3.0, strategy)
+            if pct <= -hs_pct:
+                reason = f"hard-stop {hs_pct:.1f}%"
+            elif elapsed_h >= PAPER_TEST_MAX_HOLD_HOURS:
+                reason = f"timeout {PAPER_TEST_MAX_HOLD_HOURS}j"
         if reason is None:
             still_open.append(pos)
             continue
@@ -15054,7 +15086,7 @@ def paper_test_check_exits(strategy: str):
             f"Pair  : {to_display_pair(sym)}\n"
             f"P&L   : {pct:+.2f}% -- {reason}\n"
             f"Progress: #{n_done}/{PAPER_TEST_TARGET} (WR {100*wins/n_done:.0f}%)"
-            + (f"\n\nTarget {PAPER_TEST_TARGET} deal tercapai -- siap dievaluasi apakah layak balik LIVE." if n_done >= PAPER_TEST_TARGET else "")
+            + (f"\n\nTarget {PAPER_TEST_TARGET} deal tercapai -- siap dievaluasi apakah layak balik LIVE." if n_done == PAPER_TEST_TARGET else "")
         )
     with _paper_test_lock:
         _paper_test_state[strategy]['open'] = still_open
