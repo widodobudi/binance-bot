@@ -1833,7 +1833,14 @@ def total_max_deals_all_strategies() -> int:
 # 28-29/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE dan SEMUA deal-nya disembunyikan dari tampilan dashboard default
 # (Closed Trades + kartu Performance per Strategi). Data tetap ada di CSV / counter fase / batas rugi harian; tampil lagi kalau
 # strategi dipilih eksplisit di filter Closed Trades atau ?show_paused=1. Satu sumber kebenaran utk kedua endpoint.
-PAUSED_HIDDEN_STRATEGIES = ('brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h', 'rvolbreak_1h', 'mombreak_1h', 'rvolbreak_8h', 'bbsnap_4h')
+PAUSED_HIDDEN_STRATEGIES = ('brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h', 'rvolbreak_1h', 'mombreak_1h', 'rvolbreak_8h', 'bbsnap_4h', 'decouple_4h')
+# 26/10/2026 (permintaan Mas Budi, "TERMINATE DAN DELETE SAJA closed deals nya, biar kita maju
+# dgn segala yg baru"): decouple_4h masuk daftar ini juga -- 11 closed deal REAL lamanya (6W/5L,
+# +3.41%) DIHILANGKAN dari kartu Performance per Strategi & Closed Trades default, sama pola
+# non-destruktif yg sudah dipakai bbsnap_4h di atas (baris CSV TETAP ADA, tampil lagi via
+# ?show_paused=1) -- BUKAN penghapusan permanen dari file. Kalau Mas Budi mau baris CSV-nya
+# benar2 dihapus dari trades_forwardtest.csv (ireversibel), itu perlu patch terpisah + konfirmasi
+# eksplisit, belum dikerjakan di sini.
 # 25/10/2026 (permintaan Mas Budi): bbsnap_4h ditarik ke paper test juga -- 5 closed deal REAL
 # lamanya (1W/4L, +4.12%) DIHILANGKAN dari kartu Performance per Strategi & Closed Trades default
 # ("reset kembali dari 0"), persis pola mombreak_1h/rvolbreak_8h di atas. Baris CSV-nya TETAP ADA
