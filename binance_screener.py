@@ -1568,7 +1568,15 @@ STRATEGY_CONFIG_DEFAULTS = {
     # 09/10/2026 (Tahap 1/4, permintaan Mas Budi): decouple_4h naik dari shadow ke live, lulus
     # target 24/20 (18W/6L, +56.9%). max_deals di sini cuma utk tampilan dashboard -- enforcement
     # sungguhan tetap pakai konstanta DECOUPLE_4H_MAX_DEALS di thread_decouple_scan().
-    "decouple_4h":   {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100, "btc_gate_enabled": True},
+    # 26/10/2026 (patch "decouple-rvolbreak8h-smallstart-reclaim", backtest 25/10/2026 confirmed
+    # smallstart+reclaim HELPS Decouple-4h clearly -- TEST period flips from avg -0.068%/trade to
+    # +0.146%, WR 78.7%->80.9%, using only ~24% of baseline capital. base_usd 50->8 (flat, same
+    # value as KeltnerBreak-12h/TrenKonfirmasi-4h's smallstart base -- not literally the 13.3%
+    # ratio the backtest used, since that would be ~$2.66 here, below practical Binance minimum
+    # notional for many pairs). strategy_enabled also flipped True->False here: Mas Budi wants
+    # Decouple-4h to go through the SAME paper-test harness as RVolBreak-8h (target 15 closed)
+    # before any live decision, not straight back to live -- see _paper_test_scan_decouple4h().
+    "decouple_4h":   {"strategy_enabled": False, "sizing_enabled": True, "base_usd": 8, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100, "btc_gate_enabled": True},
     # 09/10/2026 (Tahap 2/4): rvolbreak_1h naik dari shadow ke live, lulus target 24/20 (15W/9L, +61.8%).
     # 12/10/2026: DITERMINATE (lihat get_terminated_strategies()), diganti rvolbreak_8h di bawah --
     # baris ini TETAP (bukan dihapus) krn posisi lama yg masih terbuka saat deploy ini masih baca
@@ -1580,7 +1588,10 @@ STRATEGY_CONFIG_DEFAULTS = {
     # 18/10/2026 (permintaan Mas Budi): sama spt mombreak_1h di atas -- ditarik balik ke PAPER
     # TEST, target 15 deal closed via _paper_test_scan_rvolbreak8h() sebelum dipertimbangkan
     # balik live lagi.
-    "rvolbreak_8h":  {"strategy_enabled": False, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    # 26/10/2026 (patch "decouple-rvolbreak8h-smallstart-reclaim"): base_usd 50->8, same backtest-
+    # confirmed smallstart+reclaim treatment as Decouple-4h above (TEST avg +3.159%->+3.328%,
+    # ~15% of baseline capital) -- see SMALLSTART_FULL_TARGET_USD. Paper-test target unchanged.
+    "rvolbreak_8h":  {"strategy_enabled": False, "sizing_enabled": True, "base_usd": 8, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     # 09/10/2026 (Tahap 3/4): dipbuy_universe naik dari shadow ke live, lulus target 50/50 (43W/7L,
     # +85.5%) -- exit DIGANTI ke trailing (lihat REMARK DIPBUY_UNIVERSE_* di sekitar baris 16424).
     "dipbuy_universe": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
@@ -7482,6 +7493,14 @@ def get_live_ema20_reclaim_signal(symbol: str, strategy: str, n_candles: int, rv
 SMALLSTART_FULL_TARGET_USD = {
     'brkX2_12h_closed': 60.0,   # modal normal lama (base_usd sebelum patch ini)
     'trend_confirm_4h': 30.0,
+    # 26/10/2026 (patch "decouple-rvolbreak8h-smallstart-reclaim"): modal normal lama
+    # decouple_4h/rvolbreak_8h SEBELUM patch ini -- decouple_4h pakai nilai LIVE saat ini (20,
+    # BUKAN STRATEGY_CONFIG_DEFAULTS code-default lama 50 -- ada saved override di
+    # strategy_config.json yg sudah berlaku sejak sebelumnya, diverifikasi via GET
+    # /api/strategy_config 26/10/2026 sebelum patch ini ditulis). rvolbreak_8h tidak ada
+    # override (live == code-default), jadi 50.
+    'decouple_4h':      20.0,
+    'rvolbreak_8h':     50.0,
 }
 LIVE_EMA20_4H_CACHE_SECONDS = 300  # pola sama persis LIVE_BBUPPER_CACHE_SECONDS dkk
 _live_ema20_4h_cache = {}
@@ -11028,7 +11047,19 @@ def thread2_monitor():
                         if sym in active_deals:
                             active_deals[sym]['reclaim_addfund_used'] = True
                 else:
-                    _dc_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('decouple_4h'))
+                    # 26/10/2026 (patch "decouple-rvolbreak8h-smallstart-reclaim"): JUMLAH tambahan
+                    # diubah dari "dobel modal awal" jadi "sampai modal normal penuh"
+                    # (SMALLSTART_FULL_TARGET_USD) -- trigger/syarat reclaim-nya TIDAK disentuh,
+                    # tetap PERSIS sama spt yang sudah live sejak 17/10/2026. Pola identik dgn
+                    # TrenKonfirmasi-4h, lihat REMARK lengkap di SMALLSTART_FULL_TARGET_USD.
+                    _dc_current_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('decouple_4h'))
+                    _dc_modal = round(max(0.0, SMALLSTART_FULL_TARGET_USD.get('decouple_4h', 20.0) - _dc_current_modal), 2)
+                    if _dc_modal <= 0:
+                        log(f"[T2] {sym} reclaim-addfund TERPICU tapi modal (${_dc_current_modal:.0f}) sudah >= target normal -- tidak ada yg perlu ditambah")
+                        with active_deals_lock:
+                            if sym in active_deals:
+                                active_deals[sym]['reclaim_addfund_used'] = True
+                        continue
                     _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=_dc_modal)
                     if not _glob_ok:
                         log(f"[T2] {sym} reclaim-addfund: TERPICU tapi kapasitas gabungan penuh ({_glob_reason}) -- di-skip, tidak dicoba ulang")
@@ -11037,7 +11068,7 @@ def thread2_monitor():
                                 active_deals[sym]['reclaim_addfund_used'] = True
                     else:
                         log(f"[T2] {sym} reclaim-addfund TERPICU: EMA20 reclaim (<={DECOUPLE_RECLAIM_ADDFUND_N_CANDLES} candle) "
-                            f"+ RVol>={DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_dc_modal:.0f}")
+                            f"+ RVol>={DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_dc_modal:.0f} (modal ${_dc_current_modal:.0f} -> target ${SMALLSTART_FULL_TARGET_USD.get('decouple_4h', 20.0):.0f})")
                         _dc_result = execute_add_fund(sym, _dc_modal)
                         with active_deals_lock:
                             if sym in active_deals:
@@ -11075,7 +11106,18 @@ def thread2_monitor():
                         if sym in active_deals:
                             active_deals[sym]['reclaim_addfund_used'] = True
                 else:
-                    _rv_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('rvolbreak_8h'))
+                    # 26/10/2026 (patch "decouple-rvolbreak8h-smallstart-reclaim"): JUMLAH tambahan
+                    # diubah dari "dobel modal awal" jadi "sampai modal normal penuh"
+                    # (SMALLSTART_FULL_TARGET_USD) -- trigger/syarat reclaim-nya TIDAK disentuh.
+                    # Pola identik dgn TrenKonfirmasi-4h/Decouple-4h di atas.
+                    _rv_current_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('rvolbreak_8h'))
+                    _rv_modal = round(max(0.0, SMALLSTART_FULL_TARGET_USD.get('rvolbreak_8h', 50.0) - _rv_current_modal), 2)
+                    if _rv_modal <= 0:
+                        log(f"[T2] {sym} reclaim-addfund TERPICU tapi modal (${_rv_current_modal:.0f}) sudah >= target normal -- tidak ada yg perlu ditambah")
+                        with active_deals_lock:
+                            if sym in active_deals:
+                                active_deals[sym]['reclaim_addfund_used'] = True
+                        continue
                     _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=_rv_modal)
                     if not _glob_ok:
                         log(f"[T2] {sym} reclaim-addfund: TERPICU tapi kapasitas gabungan penuh ({_glob_reason}) -- di-skip, tidak dicoba ulang")
@@ -11084,7 +11126,7 @@ def thread2_monitor():
                                 active_deals[sym]['reclaim_addfund_used'] = True
                     else:
                         log(f"[T2] {sym} reclaim-addfund TERPICU: EMA20 reclaim (<={RVOLBREAK8H_RECLAIM_ADDFUND_N_CANDLES} candle) "
-                            f"+ RVol>={RVOLBREAK8H_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_rv_modal:.0f}")
+                            f"+ RVol>={RVOLBREAK8H_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_rv_modal:.0f} (modal ${_rv_current_modal:.0f} -> target ${SMALLSTART_FULL_TARGET_USD.get('rvolbreak_8h', 50.0):.0f})")
                         _rv_result = execute_add_fund(sym, _rv_modal)
                         with active_deals_lock:
                             if sym in active_deals:
@@ -14900,11 +14942,15 @@ PAPER_TEST_TARGET = 15
 PAPER_TEST_MAX_HOLD_HOURS = 48
 PAPER_TEST_FILE = os.path.join(DATA_DIR, "paper_test.json")
 PAPER_TEST_LABELS = {"mombreak_1h": "MomentumBreak-1h", "rvolbreak_8h": "RVolBreak-8h",
-                      "bbsnap_4h": "BBSnap-4h"}  # 25/10/2026: BBSnap-4h ditarik ke paper juga
+                      "bbsnap_4h": "BBSnap-4h", "decouple_4h": "Decouple-4h"}
+# 25/10/2026: BBSnap-4h ditarik ke paper juga. 26/10/2026 (permintaan Mas Budi): Decouple-4h
+# JUGA masuk paper test (bukan langsung live) -- target 15 closed sama spt RVolBreak-8h, baru
+# dianalisis bareng keduanya setelah 15-15 terkumpul apakah layak live.
 _paper_test_lock = threading.Lock()
 _paper_test_state = {"mombreak_1h": {"open": [], "closed": []},
                       "rvolbreak_8h": {"open": [], "closed": []},
-                      "bbsnap_4h": {"open": [], "closed": []}}
+                      "bbsnap_4h": {"open": [], "closed": []},
+                      "decouple_4h": {"open": [], "closed": []}}
 
 def load_paper_test_state():
     global _paper_test_state
@@ -15008,16 +15054,17 @@ def paper_test_check_exits(strategy: str):
     _save_paper_test_state()
 
 def run_thread_paper_test() -> None:
-    """Thread T-PaperTest: cek exit posisi paper (mombreak_1h + rvolbreak_8h + bbsnap_4h,
-    25/10/2026) tiap 60 detik -- entry & exit SEMUA strategi paper dipanggil dari SATU thread
-    ini (bukan nested di scan thread live masing2, meski komentar lama di beberapa fungsi
-    paper-scan bilang begitu -- itu sudah stale, cek di sini sumber kebenarannya)."""
+    """Thread T-PaperTest: cek exit posisi paper (mombreak_1h + rvolbreak_8h + bbsnap_4h +
+    decouple_4h, 26/10/2026) tiap 60 detik -- entry & exit SEMUA strategi paper dipanggil dari
+    SATU thread ini (bukan nested di scan thread live masing2, meski komentar lama di beberapa
+    fungsi paper-scan bilang begitu -- itu sudah stale, cek di sini sumber kebenarannya)."""
     while True:
         try:
             _paper_test_scan_mombreak()
             _paper_test_scan_rvolbreak8h()
             _paper_test_scan_bbsnap4h()
-            for strat in ("mombreak_1h", "rvolbreak_8h", "bbsnap_4h"):
+            _paper_test_scan_decouple4h()
+            for strat in ("mombreak_1h", "rvolbreak_8h", "bbsnap_4h", "decouple_4h"):
                 paper_test_check_exits(strat)
         except Exception as e:
             log(f"WARN T-PaperTest: {e}")
@@ -16176,7 +16223,9 @@ var SHADOW_LABELS = {
   'mombreak_1h': 'MomentumBreak-1h (paper)',
   'rvolbreak_8h': 'RVolBreak-8h (paper)',
   // 25/10/2026: BBSnap-4h ditarik dari LIVE balik ke paper test (sama pola mombreak_1h/rvolbreak_8h).
-  'bbsnap_4h': 'BBSnap-4h (paper)'
+  'bbsnap_4h': 'BBSnap-4h (paper)',
+  // 26/10/2026: Decouple-4h JUGA ditarik ke paper test (target 15, sama spt RVolBreak-8h).
+  'decouple_4h': 'Decouple-4h (paper)'
 };
 function refreshShadowChart() {
   fetch('/api/shadow_fwdtest_status')
@@ -22383,6 +22432,77 @@ def run_thread_decouple() -> None:
         time.sleep(DECOUPLE_4H_SCAN_INTERVAL)
 
 
+def _paper_test_scan_decouple4h():
+    """26/10/2026 (permintaan Mas Budi): Decouple-4h ditarik dari LIVE balik ke PAPER TEST,
+    sama pola target 15 closed dgn RVolBreak-8h -- strategy_enabled sudah False (lihat
+    STRATEGY_CONFIG_DEFAULTS), jadi thread_decouple_scan() tidak akan buka deal REAL lagi;
+    entry paper REPLIKA PERSIS syarat live-nya (koin unggul >=DECOUPLE_REL_MIN_PCT poin vs
+    BTC return 20-candle 4h, DAN baru saja crossing ambang itu, DI BELAKANG Gate0 BTC HTF
+    sama persis thread_decouple_scan() -- supaya sampel paper tidak nyala di kondisi pasar yg
+    live-nya sendiri tidak akan pernah scan), dipanggil dari run_thread_paper_test() sama pola
+    persis _paper_test_scan_rvolbreak8h()/_paper_test_scan_bbsnap4h(). TIDAK replika babak AI
+    konfirmasi (sama spt paper-test strategi lain -- evaluasi di sini murni kualitas sinyal
+    rule-based, bukan keputusan AI)."""
+    now_s = time.time()
+    if now_s - _paper_test_last_scan['decouple_4h'] < PAPER_TEST_SCAN_INTERVAL['decouple_4h']:
+        return
+    _paper_test_last_scan['decouple_4h'] = now_s
+    with _paper_test_lock:
+        if len(_paper_test_state['decouple_4h']['closed']) >= PAPER_TEST_TARGET:
+            return
+    if not decouple4h_btc_gate_ok():
+        return
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST]
+    except Exception as e:
+        log(f"WARN [PAPER-DECOUPLE4H] gagal ambil universe: {e}")
+        return
+    try:
+        btc_df = get_ohlcv_4h('BTCUSDT', limit=SQUIZED_BB_LOOKBACK + 50)
+        if btc_df is not None and len(btc_df) and btc_df['ct'].iloc[-1] >= int(time.time() * 1000):
+            btc_df = btc_df.iloc[:-1]
+        if btc_df is None or len(btc_df) <= DECOUPLE_LOOKBACK + 1:
+            return
+        bc = btc_df['close'].values
+        btc_ret20 = bc[-1] / bc[-1 - DECOUPLE_LOOKBACK] - 1
+        btc_ret20_prev = bc[-2] / bc[-2 - DECOUPLE_LOOKBACK] - 1
+    except Exception as e:
+        log(f"WARN [PAPER-DECOUPLE4H] gagal ambil BTC: {e}")
+        return
+    with _paper_test_lock:
+        paper_open_syms = {p['sym'] for p in _paper_test_state['decouple_4h']['open']}
+    import pandas_ta as _pta_dc_paper
+    for sym in universe:
+        if sym in paper_open_syms:
+            continue
+        try:
+            df = get_ohlcv_4h(sym, limit=SQUIZED_BB_LOOKBACK + 50)
+            if df is None or len(df) < SQUIZED_BB_LOOKBACK + 25: continue
+            if df['ct'].iloc[-1] >= int(time.time() * 1000):
+                df = df.iloc[:-1]
+            if len(df) <= DECOUPLE_LOOKBACK + 1: continue
+            cc = df['close'].values
+            coin_ret20 = cc[-1] / cc[-1 - DECOUPLE_LOOKBACK] - 1
+            coin_ret20_prev = cc[-2] / cc[-2 - DECOUPLE_LOOKBACK] - 1
+            rel_now = (coin_ret20 - btc_ret20) * 100
+            rel_prev = (coin_ret20_prev - btc_ret20_prev) * 100
+            if not (rel_now >= DECOUPLE_REL_MIN_PCT and rel_prev < DECOUPLE_REL_MIN_PCT):
+                continue
+            atrp_series = _pta_dc_paper.atr(df['high'], df['low'], df['close'], length=14) / df['close'] * 100
+            atr_now = float(atrp_series.iloc[-1])
+            if pd.isna(atr_now) or atr_now <= 0: continue
+            _paper_test_open('decouple_4h', sym, float(cc[-1]), atr_now)
+        except Exception:
+            continue
+
+
 def thread_rvolbreak8h_scan() -> None:
     """Scan sinyal RVolBreak-8h LIVE (12/10/2026, pengganti RVOLBreak-1h -- lihat REMARK
     konstanta RVOLBREAK_8H_* di atas). Sinyal IDENTIK dgn versi 1h yg digantikan (close
@@ -26325,9 +26445,10 @@ def thread_mombreak_scan():
         log(f"WARN [MOMBREAK] scan error: {e}")
 
 
-_paper_test_last_scan = {"mombreak_1h": 0, "rvolbreak_8h": 0, "bbsnap_4h": 0}
+_paper_test_last_scan = {"mombreak_1h": 0, "rvolbreak_8h": 0, "bbsnap_4h": 0, "decouple_4h": 0}
 PAPER_TEST_SCAN_INTERVAL = {"mombreak_1h": MOMBREAK_SCAN_INTERVAL, "rvolbreak_8h": 300,
-                             "bbsnap_4h": BBSNAP_SCAN_INTERVAL}  # 25/10/2026, sama interval scan live-nya
+                             "bbsnap_4h": BBSNAP_SCAN_INTERVAL,
+                             "decouple_4h": DECOUPLE_4H_SCAN_INTERVAL}  # sama interval scan live-nya
 
 def _paper_test_scan_mombreak():
     """18/10/2026: entry PAPER MomentumBreak-1h -- replika PERSIS syarat live (check_mombreak_signal()
@@ -30161,7 +30282,7 @@ def run_web_dashboard():
             # endpoint/kartu baru.
             with _paper_test_lock:
                 paper_snap = {k: {"open": list(v["open"]), "closed": list(v["closed"])} for k, v in _paper_test_state.items()}
-            for key in ("mombreak_1h", "rvolbreak_8h", "bbsnap_4h"):
+            for key in ("mombreak_1h", "rvolbreak_8h", "bbsnap_4h", "decouple_4h"):
                 closed = paper_snap[key]['closed']
                 n = len(closed)
                 wins = [c for c in closed if c['pct'] > 0]
