@@ -1526,10 +1526,18 @@ STRATEGY_CONFIG_DEFAULTS = {
     # SENGAJA TIDAK diberi field ini -- baik yg sudah diuji & terbukti TIDAK membantu
     # (brkX2_4h/dipbuy_universe/rvolbreak_1h) maupun yg belum pernah diuji sama sekali -- lihat
     # SC_BTC_GATE_HELPED/SC_BTC_GATE_TOOLTIP di dash.js utk daftar lengkap & alasan per-strategi.
-    # PENTING: krn KeltnerBreak-12h sekarang 2 jalur entry dlm 1 identitas, keltner12h_btc_gate_ok()
-    # HANYA dipanggil di thread1_scan() (closed-candle/T1) -- bukti backtest-nya spesifik utk itu,
-    # TIDAK dipanggil sama sekali di thread1c_scan_intrabar()/thread1c_scan_intrabar_early()
-    # (jalur intrabar, sengaja tidak digeneralisir tanpa uji sendiri).
+    # 27/10/2026 (patch "kb12h-gate0-intrabar-fix", permintaan Mas Budi, SEGERA): SEBELUMNYA
+    # keltner12h_btc_gate_ok() HANYA dipanggil di thread1_scan() (closed-candle/T1) -- bukti
+    # backtest 10/10/2026 memang spesifik utk itu, sengaja TIDAK digeneralisir ke intrabar tanpa
+    # uji sendiri. TAPI audit 27/10/2026 (Mas Budi minta cek konsistensi lewat email/log) menemukan
+    # ~100% deal KeltnerBreak-12h RIIL lewat thread1c_scan_intrabar()/thread1c_scan_intrabar_early()
+    # (T1c/T1c-E), BUKAN T1 -- jadi gerbang yg cuma di T1 praktis tidak melindungi apa pun, dan
+    # label dashboard/email "TERBLOKIR" menyesatkan (kesannya semua jalur terhenti, padahal cuma
+    # T1). SEKARANG dipanggil di KETIGA jalur (T1/T1c/T1c-E), formula SAMA PERSIS, TANPA uji
+    # backtest terpisah utk intrabar -- keputusan eksplisit Mas Budi ("IYA HARUS DITAMBAHKAN"),
+    # bukan hasil backtest baru. Kalau hasil live KeltnerBreak-12h berubah drastis stlh ini,
+    # pertimbangkan apa Gate0-nya genuinely membantu di jalur intrabar atau tidak (belum pernah
+    # diuji terpisah).
     # base_usd 60->8 (25/10/2026, patch 'smallstart-reclaim-addfund'): modal awal SEKARANG
     # SELALU kecil ($8, dekat batas minimum Binance), ditambah ke $60 (SMALLSTART_FULL_TARGET_USD)
     # HANYA kalau harga reclaim EMA20 setelah sempat drop -- lihat REMARK lengkap di konstanta itu.
@@ -12322,6 +12330,18 @@ def thread1c_scan_intrabar():
     universe = [p for p in pairs if volmap.get(p, 0) >= MIN_VOLUME_USD and not is_bstock_symbol(p)]
     if BTC_FILTER_ENABLED and not btc_filter_ok():
         return None
+    # Gate0 (27/10/2026, patch "kb12h-gate0-intrabar-fix", permintaan Mas Budi -- lihat REMARK
+    # lengkap di STRATEGY_CONFIG_DEFAULTS['brkX2_12h_closed']): SEBELUMNYA keltner12h_btc_gate_ok()
+    # cuma dipanggil di thread1_scan() (closed-candle/T1), TIDAK di sini -- padahal audit 27/10/2026
+    # (permintaan Mas Budi, cek konsistensi lewat email/log) menemukan ~100% deal KeltnerBreak-12h
+    # RIIL lewat jalur intrabar ini, bukan T1 -- jadi gerbang yg cuma berlaku di T1 praktis TIDAK
+    # melindungi apa pun. Ditambahkan di sini supaya "TERBLOKIR" di dashboard/email benar2 berarti
+    # tidak ada posisi baru sama sekali, bukan cuma utk jalur yg jarang dipakai.
+    _kb12h_gate_ok = keltner12h_btc_gate_ok()
+    _notify_btc_gate_transition('brkX2_12h_closed', 'KeltnerBreak-12h', _kb12h_gate_ok, 'BTCUSDT HTF 1D DAN 3D candle tertutup terakhir keduanya hijau')
+    if not _kb12h_gate_ok:
+        log("[T1c] Gate0: syarat BTC (HTF 1D+3D hijau) belum lolos, scan dibatalkan periode ini.")
+        return None
     held_bx12c = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
     for sym in universe:
         if deal_count_by_strategy('brkX2_12h_closed') >= MAX_DEALS_BRKX2_CLOSED:
@@ -12548,6 +12568,14 @@ def thread1c_scan_intrabar_early():
     universe = [p for p in pairs if volmap.get(p, 0) >= MIN_VOLUME_USD and not is_bstock_symbol(p)]
 
     if BTC_FILTER_ENABLED and not btc_filter_ok():
+        return None
+
+    # Gate0 (27/10/2026, patch "kb12h-gate0-intrabar-fix") -- lihat REMARK lengkap di
+    # thread1c_scan_intrabar() dan STRATEGY_CONFIG_DEFAULTS['brkX2_12h_closed'].
+    _kb12h_gate_ok = keltner12h_btc_gate_ok()
+    _notify_btc_gate_transition('brkX2_12h_closed', 'KeltnerBreak-12h', _kb12h_gate_ok, 'BTCUSDT HTF 1D DAN 3D candle tertutup terakhir keduanya hijau')
+    if not _kb12h_gate_ok:
+        log("[T1c-E] Gate0: syarat BTC (HTF 1D+3D hijau) belum lolos, scan dibatalkan periode ini.")
         return None
 
     held_bx12e = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
