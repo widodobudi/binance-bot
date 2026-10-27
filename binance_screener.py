@@ -1841,7 +1841,9 @@ def total_max_deals_all_strategies() -> int:
 # 28-29/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE dan SEMUA deal-nya disembunyikan dari tampilan dashboard default
 # (Closed Trades + kartu Performance per Strategi). Data tetap ada di CSV / counter fase / batas rugi harian; tampil lagi kalau
 # strategi dipilih eksplisit di filter Closed Trades atau ?show_paused=1. Satu sumber kebenaran utk kedua endpoint.
-PAUSED_HIDDEN_STRATEGIES = ('brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h', 'rvolbreak_1h', 'mombreak_1h', 'rvolbreak_8h', 'bbsnap_4h', 'decouple_4h')
+PAUSED_HIDDEN_STRATEGIES = ('brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h', 'rvolbreak_1h', 'mombreak_1h', 'rvolbreak_8h', 'bbsnap_4h', 'decouple_4h', 'topgainers_4h')
+# 27/10/2026 (permintaan Mas Budi, "setuju dan hilangkan semua closed deals dan strateginya
+# pada semua menu"): topgainers_4h TERMINATE -- lihat REMARK lengkap di TOPGAINERS_ENABLED.
 # 26/10/2026 (permintaan Mas Budi, "TERMINATE DAN DELETE SAJA closed deals nya, biar kita maju
 # dgn segala yg baru"): decouple_4h masuk daftar ini juga -- 11 closed deal REAL lamanya (6W/5L,
 # +3.41%) DIHILANGKAN dari kartu Performance per Strategi & Closed Trades default, sama pola
@@ -1910,6 +1912,13 @@ def get_terminated_strategies() -> set:
             "akum_entry_a": STRAT_AKUM_ENABLED,
             "akum_entry_b": STRAT_AKUM_ENABLED,
             "hunting_4h": HUNTING_ENABLED,
+            # 27/10/2026 (permintaan Mas Budi, "sangsi dgn strateginya"): Top Gainers-4h
+            # di-TERMINATE -- 31 deal sejak 18/10/2026, WR 51.6%, net RUGI -0.96%, dan sudah
+            # mati total 6 hari (deal terakhir 21/10 05:31 WIB) tanpa backtest validasi dari
+            # awal (memang disengaja live-only, lihat REMARK TOPGAINERS_ENABLED). Riwayat
+            # closed deals-nya DIHILANGKAN dari Performance/Closed Trades jg (lihat
+            # PAUSED_HIDDEN_STRATEGIES) -- data CSV TETAP ADA, tampil lagi via ?show_paused=1.
+            "topgainers_4h": TOPGAINERS_ENABLED,
         }.items() if not enabled
     }
 
@@ -16659,8 +16668,9 @@ refreshShadowChart();
           <option value="Dip-Buy Universe">Dip-Buy Universe</option>
           <option value="BBSnap-4h">BBSnap-4h</option>
           <option value="BBSnap-8h">BBSnap-8h</option>
-          <option value="Top Gainers-4h">Top Gainers-4h ⚡</option>
         </select>
+        <!-- 27/10/2026: "Top Gainers-4h" dihapus dari dropdown ini -- strategi di-TERMINATE
+             (permintaan Mas Budi), lihat REMARK TOPGAINERS_ENABLED. -->
       </div>
       <!-- Dropdown kandidat dinamis per strategi -->
       {% set all_nm = {
@@ -16672,8 +16682,7 @@ refreshShadowChart();
         "RVolBreak-8h": near_miss.get("RVolBreak-8h", []),
         "Dip-Buy Universe": near_miss.get("Dip-Buy Universe", []),
         "BBSnap-4h": near_miss.get("BBSnap-4h", []),
-        "BBSnap-8h": near_miss.get("BBSnap-8h", []),
-        "Top Gainers-4h": near_miss.get("Top Gainers-4h", [])
+        "BBSnap-8h": near_miss.get("BBSnap-8h", [])
       } %}
       <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <label style="font-size:11px;color:var(--muted)">Pilih item hasil scan:</label>
@@ -21621,7 +21630,12 @@ def _shadow_newstrat_check_exits(data: dict, combo: str, target: int) -> None:
 # backtest sama sekali -- murni validasi live). Exit pakai mekanisme GENERIK yang sama dipakai
 # strategi "tak dikenal" lain (hard-stop ATR% + trailing + batas waktu) -- SENGAJA tidak dikasih
 # exit custom, supaya cuma 1 hal baru yang belum teruji (entry-nya) dalam satu waktu.
-TOPGAINERS_ENABLED = True  # kill-switch permanen thread-nya (pola sama DECOUPLE_4H_ENABLED dkk,
+# 27/10/2026 (permintaan Mas Budi, patch "terminate-topgainers-4h"): DIMATIKAN PERMANEN --
+# 31 deal sejak 18/10/2026 (WR 51.6%, net -0.96%), sudah mati 6 hari (deal terakhir 21/10
+# 05:31 WIB) tanpa ada yang menyalakan lagi, dan memang belum pernah divalidasi backtest
+# dari awal (lihat REMARK di atas). Lihat juga get_terminated_strategies() (hilang dari
+# Strategy Control) + PAUSED_HIDDEN_STRATEGIES (hilang dari Performance/Closed Trades).
+TOPGAINERS_ENABLED = False  # kill-switch permanen thread-nya (pola sama DECOUPLE_4H_ENABLED dkk,
                             # dicek sekali saat start thread) -- TERPISAH dari is_strategy_enabled
                             # ('topgainers_4h', toggle Strategy Control runtime, dicek tiap siklus
                             # DI DALAM thread_topgainers_scan()).
