@@ -29929,6 +29929,13 @@ def run_web_dashboard():
                 # 19/10/2026 (permintaan Mas Budi): buffer impas BBSnap-4h/8h 0.1% < biaya round-trip
                 # 0.2% -- SELALU minus walau harga sudah balik naik. Diperbaiki ke 0.5% (commit c4c71ba).
                 _WHY_FIX_BBSNAP_IMPAS_BUFFER = "buffer impas BBSnap 0.1% < biaya round-trip 0.2%, selalu minus walau harga balik naik; dinaikkan ke 0.5% (live 19/10/2026, commit c4c71ba)"
+                # 27/10/2026 (audit Mas Budi via email+CSV): gerbang BTC Gate0 KeltnerBreak-12h
+                # (keltner12h_btc_gate_ok()) cuma dipanggil di jalur closed-candle (T1) sejak
+                # 10/10/2026 -- TIDAK di jalur intrabar (T1c/T1c-E), padahal ~100% deal riil
+                # lewat situ. Akibatnya 12 dari 24 deal (14-24/10/2026) terbukti kebuka SAAT
+                # gerbang closed-candle-nya TERBLOKIR, total dampak ~-$14.96. Diperbaiki (live
+                # 27/10/2026, commit 925b847) -- gerbang sekarang berlaku di ketiga jalur.
+                _WHY_FIX_KB12H_GATE0_INTRABAR = "gerbang BTC Gate0 belum berlaku di jalur intrabar KeltnerBreak-12h -- deal ini kebuka saat gerbang closed-candle TERBLOKIR; sekarang berlaku di ketiga jalur (live 27/10/2026, commit 925b847)"
                 _known_fixed = {
                     ('AVA/USDT',   '2026-10-16 14:02'): _WHY_FIX_EKSTREM_SIZING,
                     ('MAGIC/USDT', '2026-10-12 21:41'): _WHY_FIX_EKSTREM_SIZING,
@@ -29937,6 +29944,18 @@ def run_web_dashboard():
                     ('GNS/USDT',   '2026-10-14 19:12'): _WHY_FIX_LATE_ENTRY_4H,
                     ('PUMP/USDT',  '2026-10-19 12:01'): _WHY_FIX_BBSNAP_IMPAS_BUFFER,
                     ('PUMP/USDT',  '2026-10-19 10:45'): _WHY_FIX_BBSNAP_IMPAS_BUFFER,
+                    ('DUSK/USDT',  '2026-10-15 21:46'): _WHY_FIX_KB12H_GATE0_INTRABAR,
+                    ('BAT/USDT',   '2026-10-16 17:51'): _WHY_FIX_KB12H_GATE0_INTRABAR,
+                    ('TIA/USDT',   '2026-10-17 10:39'): _WHY_FIX_KB12H_GATE0_INTRABAR,
+                    ('DUSK/USDT',  '2026-10-19 02:53'): _WHY_FIX_KB12H_GATE0_INTRABAR,
+                    ('GTC/USDT',   '2026-10-19 23:17'): _WHY_FIX_KB12H_GATE0_INTRABAR,
+                    ('GTC/USDT',   '2026-10-20 14:09'): _WHY_FIX_KB12H_GATE0_INTRABAR,
+                    ('ALT/USDT',   '2026-10-21 23:17'): _WHY_FIX_KB12H_GATE0_INTRABAR,
+                    ('IOST/USDT',  '2026-10-21 03:26'): _WHY_FIX_KB12H_GATE0_INTRABAR,
+                    ('PEPE/USDT',  '2026-10-24 05:47'): _WHY_FIX_KB12H_GATE0_INTRABAR,
+                    ('ARK/USDT',   '2026-10-24 01:07'): _WHY_FIX_KB12H_GATE0_INTRABAR,
+                    ('ERA/USDT',   '2026-10-24 06:55'): _WHY_FIX_KB12H_GATE0_INTRABAR,
+                    ('TREE/USDT',  '2026-10-24 10:44'): _WHY_FIX_KB12H_GATE0_INTRABAR,
                 }
                 def _fixed_note_of(r):
                     return _known_fixed.get(((r.get('symbol') or ''), (r.get('close_time_wib') or '')[:16]), '')
