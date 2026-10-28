@@ -17986,25 +17986,34 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
     <div class="card-header" onclick="toggleCard(this)" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;margin-bottom:14px;gap:8px">
         <h2 style="margin:0;font-size:13px;letter-spacing:.08em;color:var(--accent)">CLOSED TRADES <span class="card-toggle">&#9660;</span></h2>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;max-width:100%">
-    <select id="ct-filter-strat" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
-        <option value="">Semua strategi</option>
-        <option value="brkX2_12h_closed">KeltnerBreak-12h</option>
-        <option value="brkX2_4h">brkX2-4h</option>
-        <option value="reversal">Reversal-8h</option>
-        <option value="hunting_4h">Hunting-4h</option>
-        <option value="brkX2_crossema">CrossEMA-4h</option>
-        <option value="akumulasi">Akumulasi-4h</option>
-        <option value="trend_confirm_4h">TrenKonfirmasi-4h</option>
-        <option value="mombreak_1h">MomentumBreak-1h</option>
-        <option value="decouple_4h">Decouple-4h</option>
-        <option value="rvolbreak_1h">RVOLBreak-1h</option>
-        <option value="rvolbreak_8h">RVolBreak-8h</option>
-        <option value="dipbuy_universe">Dip-Buy Universe</option>
-        <option value="bbsnap_4h">BBSnap-4h</option>
-        <option value="bbsnap_8h">BBSnap-8h</option>
-        <option value="topgainers_4h">Top Gainers-4h</option>
-        <option value="__exclude_hardstop__">Semua strategi, exclude hardstop volatilitas</option>
-      </select>
+    <!-- 28/10/2026 (permintaan Mas Budi): dulu dropdown <select> cuma bisa 1 strategi -- sekarang
+         checkbox multi-pilih custom (native <select multiple> butuh ctrl/cmd-click yg tidak jelas
+         buat Mas Budi) via toggleCtStratMenu()/onCtStratCheckChange() di bawah. -->
+    <div id="ct-filter-strat-wrap" style="position:relative;display:inline-block" onclick="event.stopPropagation()">
+      <button type="button" id="ct-filter-strat-btn" onclick="toggleCtStratMenu()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;cursor:pointer;font-family:var(--font);white-space:nowrap;max-width:190px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle">Semua strategi &#9662;</button>
+      <div id="ct-filter-strat-menu" style="display:none;position:absolute;top:100%;left:0;z-index:50;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:6px;margin-top:3px;max-height:300px;overflow-y:auto;width:235px;box-shadow:0 4px 14px rgba(0,0,0,0.35)">
+        <div style="display:flex;gap:6px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--border)">
+          <button type="button" onclick="ctStratSelectAll()" style="flex:1;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 4px;font-size:10px;cursor:pointer;font-family:var(--font)">Pilih semua</button>
+          <button type="button" onclick="ctStratClearAll()" style="flex:1;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 4px;font-size:10px;cursor:pointer;font-family:var(--font)">Kosongkan</button>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="brkX2_12h_closed" onchange="onCtStratCheckChange()">KeltnerBreak-12h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="brkX2_4h" onchange="onCtStratCheckChange()">brkX2-4h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="reversal" onchange="onCtStratCheckChange()">Reversal-8h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="hunting_4h" onchange="onCtStratCheckChange()">Hunting-4h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="brkX2_crossema" onchange="onCtStratCheckChange()">CrossEMA-4h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="akumulasi" onchange="onCtStratCheckChange()">Akumulasi-4h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="trend_confirm_4h" onchange="onCtStratCheckChange()">TrenKonfirmasi-4h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="mombreak_1h" onchange="onCtStratCheckChange()">MomentumBreak-1h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="decouple_4h" onchange="onCtStratCheckChange()">Decouple-4h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="rvolbreak_1h" onchange="onCtStratCheckChange()">RVOLBreak-1h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="rvolbreak_8h" onchange="onCtStratCheckChange()">RVolBreak-8h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="dipbuy_universe" onchange="onCtStratCheckChange()">Dip-Buy Universe</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="bbsnap_4h" onchange="onCtStratCheckChange()">BBSnap-4h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="bbsnap_8h" onchange="onCtStratCheckChange()">BBSnap-8h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="topgainers_4h" onchange="onCtStratCheckChange()">Top Gainers-4h</label>
+        <label style="display:flex;align-items:center;gap:6px;padding:4px 2px 2px;font-size:11px;cursor:pointer;margin-top:4px;border-top:1px solid var(--border)"><input type="checkbox" id="ct-strat-exclude-hardstop" onchange="onCtStratCheckChange()" style="margin-top:4px">Exclude hardstop volatilitas</label>
+      </div>
+    </div>
     <select id="ct-filter-pair" onclick="event.stopPropagation()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px">
         <option value="">Semua pair</option>
       </select>
@@ -18669,13 +18678,66 @@ function ctTimeFilterRange() {
   return null;
 }
 
+// 28/10/2026 (permintaan Mas Budi): filter Strategi di Closed Trades sekarang checkbox multi-pilih
+// (lihat markup #ct-filter-strat-menu di atas), bukan <select> satu pilihan.
+var CT_STRAT_LABELS = {
+  brkX2_12h_closed: 'KeltnerBreak-12h', brkX2_4h: 'brkX2-4h', reversal: 'Reversal-8h',
+  hunting_4h: 'Hunting-4h', brkX2_crossema: 'CrossEMA-4h', akumulasi: 'Akumulasi-4h',
+  trend_confirm_4h: 'TrenKonfirmasi-4h', mombreak_1h: 'MomentumBreak-1h', decouple_4h: 'Decouple-4h',
+  rvolbreak_1h: 'RVOLBreak-1h', rvolbreak_8h: 'RVolBreak-8h', dipbuy_universe: 'Dip-Buy Universe',
+  bbsnap_4h: 'BBSnap-4h', bbsnap_8h: 'BBSnap-8h', topgainers_4h: 'Top Gainers-4h'
+};
+function toggleCtStratMenu() {
+  var m = document.getElementById('ct-filter-strat-menu');
+  if (m) m.style.display = (m.style.display === 'none' || !m.style.display) ? 'block' : 'none';
+}
+document.addEventListener('click', function(e){
+  var wrap = document.getElementById('ct-filter-strat-wrap');
+  var menu = document.getElementById('ct-filter-strat-menu');
+  if (wrap && menu && menu.style.display === 'block' && !wrap.contains(e.target)) menu.style.display = 'none';
+});
+function getCtSelectedStrategies() {
+  return Array.prototype.slice.call(document.querySelectorAll('.ct-strat-check:checked')).map(function(c){ return c.value; });
+}
+function ctStratExcludeHardstop() {
+  var c = document.getElementById('ct-strat-exclude-hardstop');
+  return !!(c && c.checked);
+}
+function updateCtStratBtnLabel() {
+  var btn = document.getElementById('ct-filter-strat-btn');
+  if (!btn) return;
+  var sel = getCtSelectedStrategies();
+  var hs = ctStratExcludeHardstop();
+  var txt;
+  if (!sel.length) txt = 'Semua strategi';
+  else if (sel.length <= 2) txt = sel.map(function(v){ return CT_STRAT_LABELS[v] || v; }).join(', ');
+  else txt = sel.length + ' strategi dipilih';
+  if (hs) txt += ' (exclude hardstop)';
+  btn.textContent = txt + ' ▾';
+}
+function ctStratSelectAll() {
+  document.querySelectorAll('.ct-strat-check').forEach(function(c){ c.checked = true; });
+  onCtStratCheckChange();
+}
+function ctStratClearAll() {
+  document.querySelectorAll('.ct-strat-check').forEach(function(c){ c.checked = false; });
+  var hs = document.getElementById('ct-strat-exclude-hardstop');
+  if (hs) hs.checked = false;
+  onCtStratCheckChange();
+}
+function onCtStratCheckChange() {
+  updateCtStratBtnLabel();
+  loadClosedTrades();
+}
+
 function loadClosedTrades() {
-  var strat = document.getElementById('ct-filter-strat').value;
+  var selStrats = getCtSelectedStrategies();
+  var excludeHardstop = ctStratExcludeHardstop();
   var pairSel = document.getElementById('ct-filter-pair');
   var pair = pairSel ? pairSel.value : '';
   var params = [];
-  if (strat === '__exclude_hardstop__') params.push('exclude_hardstop=1');
-  else if (strat) params.push('strategy=' + strat);
+  if (selStrats.length) params.push('strategy=' + selStrats.map(encodeURIComponent).join(','));
+  if (excludeHardstop) params.push('exclude_hardstop=1');
   if (pair) params.push('pair=' + encodeURIComponent(pair));
   var outcomeSel = document.getElementById('ct-filter-outcome');
   if (outcomeSel && outcomeSel.value) params.push('outcome=' + outcomeSel.value);
@@ -18701,7 +18763,8 @@ function loadClosedTrades() {
     var fromEl  = document.getElementById('ct-filter-from');
     var toEl    = document.getElementById('ct-filter-to');
     var searchEl= document.getElementById('ct-filter-search');
-    _setCookie('ct_strat', strat);
+    _setCookie('ct_strat', selStrats.join(','));
+    _setCookie('ct_strat_exhs', excludeHardstop ? '1' : '');
     _setCookie('ct_pair', pair);
     _setCookie('ct_outcome', outcomeSel ? outcomeSel.value : '');
     _setCookie('ct_reason', reasonSel ? reasonSel.value : '');
@@ -18765,7 +18828,6 @@ function loadClosedTrades() {
   }).catch(function(e){ document.getElementById('ct-body').innerHTML = '<tr><td colspan="12" style="color:var(--red);padding:8px">Error: ' + e + '</td></tr>'; });
 }
 function resetCtFilters() {
-    var stratSel  = document.getElementById('ct-filter-strat');
     var pairSel   = document.getElementById('ct-filter-pair');
     var timeSel   = document.getElementById('ct-filter-time');
     var fromEl    = document.getElementById('ct-filter-from');
@@ -18773,7 +18835,10 @@ function resetCtFilters() {
     var outcomeSel= document.getElementById('ct-filter-outcome');
     var reasonSel = document.getElementById('ct-filter-reason');
     var searchEl  = document.getElementById('ct-filter-search');
-    if (stratSel)   stratSel.value = '';
+    document.querySelectorAll('.ct-strat-check').forEach(function(c){ c.checked = false; });
+    var hsEl = document.getElementById('ct-strat-exclude-hardstop');
+    if (hsEl) hsEl.checked = false;
+    updateCtStratBtnLabel();
     if (pairSel)    pairSel.value = '';
     if (timeSel)    timeSel.value = '';
     if (fromEl)     fromEl.value = '';
@@ -18788,7 +18853,6 @@ function resetCtFilters() {
 
 function restoreCtFilters() {
     try {
-        var stratSel  = document.getElementById('ct-filter-strat');
         var outcomeSel= document.getElementById('ct-filter-outcome');
         var reasonSel = document.getElementById('ct-filter-reason');
         var timeSel   = document.getElementById('ct-filter-time');
@@ -18796,7 +18860,14 @@ function restoreCtFilters() {
         var toEl      = document.getElementById('ct-filter-to');
         var searchEl  = document.getElementById('ct-filter-search');
         var sv;
-        sv = _getCookie('ct_strat');   if (stratSel && sv)   stratSel.value = sv;
+        sv = _getCookie('ct_strat');
+        if (sv) {
+            var wanted = sv.split(',').filter(function(x){ return x; });
+            document.querySelectorAll('.ct-strat-check').forEach(function(c){ c.checked = wanted.indexOf(c.value) !== -1; });
+        }
+        var hsEl = document.getElementById('ct-strat-exclude-hardstop');
+        if (hsEl) hsEl.checked = _getCookie('ct_strat_exhs') === '1';
+        updateCtStratBtnLabel();
         sv = _getCookie('ct_outcome'); if (outcomeSel && sv) outcomeSel.value = sv;
         sv = _getCookie('ct_reason');  if (reasonSel && sv)  reasonSel.value = sv;
         sv = _getCookie('ct_time');    if (timeSel && sv)    timeSel.value = sv;
@@ -29900,42 +29971,46 @@ def run_web_dashboard():
                     'brkX2_12h_closed': FWDTEST_BRKX2_PHASE_OFFSET,
                     'hunting_4h': HUNTING_FWDTEST_PHASE_OFFSET,
                 }
-                if strategy_filter:
-                    if strategy_filter == 'akumulasi':
-                        rows = [r for r in rows if (r.get('strategy') or 'brkX2') in ('akum_entry_a', 'akum_entry_b')]
-                    elif strategy_filter == 'brkX2_12h_closed':
-                        # 10/10/2026: KeltnerBreak-12h digabung balik -- filter "KeltnerBreak-12h" di
-                        # dashboard mencakup SEMUA era: deal baru (brkX2_12h_closed), era split 1-hari
-                        # (brkX2_closed/brkX2_intrabar), DAN mayoritas histori lama (strategy='brkX2'
-                        # polos, dari SEBELUM split 09/10/2026) -- supaya total histori lengkap, bukan
-                        # cuma 1 hari terakhir. 'brkX2' tetap row Strategy-Control terpisah ("brkx2-12h",
-                        # tidak buka deal baru), tapi utk PELAPORAN/HISTORI tetap dihitung di sini.
-                        rows = [r for r in rows if (r.get('strategy') or 'brkX2') in ('brkX2_12h_closed', 'brkX2_closed', 'brkX2_intrabar', 'brkX2')]
-                    else:
-                        rows = [r for r in rows if (r.get('strategy') or 'brkX2') == strategy_filter]
-                    offset = phase_offsets.get(strategy_filter, 0)
-                    if offset:
-                        rows = rows[offset:]
-                else:
-                    # 11/10/2026 (bug ketahuan dari laporan Mas Budi -- CFX/USDT close KeltnerBreak-12h
-                    # hilang dari "Semua strategi" meski sudah di-reload): SEBELUMNYA baris dikelompokkan
-                    # per `strategy` MENTAH, lalu offset 15 (FWDTEST_BRKX2_PHASE_OFFSET) diterapkan
-                    # PER KEY MENTAH masing2 -- key baru 'brkX2_12h_closed' (sejak merge 10/10/2026)
-                    # baru punya segelintir baris, di bawah 15, jadi SEMUA baris dgn key itu hilang
-                    # (strategy_rows[15:] dari list <15 elemen = kosong). Cabang filter EKSPLISIT
-                    # (strategy=brkX2_12h_closed, baris ~24652 di atas) sudah benar: union 4 key DULU,
-                    # baru potong 15 dari gabungan -- cabang "Semua strategi" ini sekarang disamakan,
-                    # fold ke key gabungan SEBELUM grouping, supaya offset diterapkan 1x ke gabungan.
-                    rows_by_strategy = {}
-                    for row in rows:
-                        key = row.get('strategy') or 'brkX2'
-                        if key in ('brkX2', 'brkX2_closed', 'brkX2_intrabar'):
-                            key = 'brkX2_12h_closed'
-                        rows_by_strategy.setdefault(key, []).append(row)
-                    rows = []
-                    for key, strategy_rows in rows_by_strategy.items():
-                        offset = phase_offsets.get(key, 0)
-                        rows.extend(strategy_rows[offset:] if offset else strategy_rows)
+                # 28/10/2026 (permintaan Mas Budi): filter Strategi di Closed Trades sekarang checkbox
+                # multi-pilih, bukan dropdown satu pilihan -- frontend kirim "strategy=a,b,c" dipisah
+                # koma. Tiap key difoldkan sama persis dgn cabang "Semua strategi" di bawah (akumulasi ->
+                # 2 entry, brkX2_12h_closed -> union 4 era lama), offset fase diterapkan PER key gabungan
+                # SEBELUM digabung jadi satu -- union-nya tidak perlu urut kronologis krn tabel selalu
+                # di-sort close_time di frontend (closedTradesSortKey default, lihat renderClosedTradesRows()).
+                strategy_filters = [s.strip() for s in strategy_filter.split(',') if s.strip()] if strategy_filter else []
+                def _fold_strategy_key(raw_key):
+                    # 10/10/2026: KeltnerBreak-12h digabung balik -- 'brkX2'/'brkX2_closed'/'brkX2_intrabar'
+                    # (era split 1-hari + histori lama sebelum split 09/10/2026) dilebur ke 1 key gabungan
+                    # supaya total histori lengkap, bukan cuma 1 hari terakhir.
+                    if raw_key in ('brkX2', 'brkX2_closed', 'brkX2_intrabar'):
+                        return 'brkX2_12h_closed'
+                    return raw_key
+                if strategy_filters:
+                    wanted = set()
+                    for f in strategy_filters:
+                        if f == 'akumulasi':
+                            wanted.update(('akum_entry_a', 'akum_entry_b'))
+                        elif f == 'brkX2_12h_closed':
+                            wanted.update(('brkX2_12h_closed', 'brkX2_closed', 'brkX2_intrabar', 'brkX2'))
+                        else:
+                            wanted.add(f)
+                    rows = [r for r in rows if (r.get('strategy') or 'brkX2') in wanted]
+                # 11/10/2026 (bug ketahuan dari laporan Mas Budi -- CFX/USDT close KeltnerBreak-12h
+                # hilang dari "Semua strategi" meski sudah di-reload): SEBELUMNYA baris dikelompokkan
+                # per `strategy` MENTAH, lalu offset 15 (FWDTEST_BRKX2_PHASE_OFFSET) diterapkan
+                # PER KEY MENTAH masing2 -- key baru 'brkX2_12h_closed' (sejak merge 10/10/2026)
+                # baru punya segelintir baris, di bawah 15, jadi SEMUA baris dgn key itu hilang
+                # (strategy_rows[15:] dari list <15 elemen = kosong). Berlaku sama baik utk "Semua
+                # strategi" MAUPUN filter eksplisit (tunggal atau multi): fold ke key gabungan DULU,
+                # baru potong offset dari gabungan per key.
+                rows_by_strategy = {}
+                for row in rows:
+                    key = _fold_strategy_key(row.get('strategy') or 'brkX2')
+                    rows_by_strategy.setdefault(key, []).append(row)
+                rows = []
+                for key, strategy_rows in rows_by_strategy.items():
+                    offset = phase_offsets.get(key, 0)
+                    rows.extend(strategy_rows[offset:] if offset else strategy_rows)
                 # 28/09/2026 (permintaan Mas Budi): salinan baris SEBELUM disembunyikan (hard-stop / manual reconcile /
                 # di-patch), hanya dipakai utk ringkasan stats_all "termasuk yang disembunyikan" -- tampilan baris & stats
                 # utama TIDAK berubah. Fase lama (phase_offsets) tetap tidak ikut, sama dgn tampilan normal.
@@ -29943,11 +30018,13 @@ def run_web_dashboard():
                 # 28/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE (mombreak_1h, brkX2_crossema; 29/09/2026 +reversal)
                 # -- SEMUA deal-nya disembunyikan dari tampilan Closed Trades default. Baris TETAP di CSV (counter fase /
                 # batas rugi harian tidak berubah) dan tetap ikut ringkasan stats_all "termasuk yang disembunyikan".
-                # Tampil lagi kalau strategi itu dipilih eksplisit di filter Strategi, atau ?show_paused=1.
+                # Tampil lagi kalau strategi itu dipilih eksplisit di filter Strategi (multi-select, 28/10/2026:
+                # cek SALAH SATU dari strategy_filters sudah cukup -- rows sudah dibatasi ke strategi yg
+                # dipilih di atas, jadi tidak ada risiko strategi paused lain ikut lolos), atau ?show_paused=1.
                 paused_hidden_strategies = PAUSED_HIDDEN_STRATEGIES
                 show_paused = request.args.get("show_paused", "") in ("1", "true", "True")
                 hidden_paused = 0
-                if not show_paused and strategy_filter not in paused_hidden_strategies:
+                if not show_paused and not any(f in paused_hidden_strategies for f in strategy_filters):
                     _before = len(rows)
                     rows = [r for r in rows if (r.get('strategy') or 'brkX2') not in paused_hidden_strategies]
                     hidden_paused = _before - len(rows)
