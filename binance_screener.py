@@ -1387,15 +1387,62 @@ _RETRY_DELAY   = 2.0        # detik jeda antar retry (× backoff)
 _RETRY_BACKOFF = 2.0        # kelipatan jeda: percobaan ke-2 = 4s, ke-3 = 8s
 _RATE_LIMIT_SLEEP = 10.0    # detik tunggu extra saat terima HTTP 429 (rate limited)
 
+# 28/10/2026 (permintaan Mas Budi, insiden ban berkepanjangan 28/10/2026 ~11:53-13:38 WIB):
+# HTTP 418 (-1003 "IP banned until <ms>") sebelumnya TIDAK ditangani khusus -- _binance_get()
+# mengembalikan response 418 apa adanya (bukan None/retry), dan _binance_trading_request()
+# langsung raise tanpa backoff sama sekali. Akibatnya setiap siklus scan/poll TETAP menembak
+# Binance lagi walau sedang diban, yang justru memperpanjang ban itu sendiri (dibuktikan dari
+# log get_usdt_balance/get_master_usdt_balance: waktu "banned until" terus mundur tiap dicoba
+# ulang). State global ini dishare SEMUA request Binance (data-api.binance.vision MAUPUN
+# api.binance.com trading via _binance_trading_request) -- begitu salah satu lihat 418, SEMUA
+# request lain berhenti menembak sampai waktu ban itu lewat, baru coba lagi.
+_binance_ban_lock = threading.Lock()
+_binance_ban_until_ms = 0.0
+_binance_ban_last_logged = 0.0  # throttle log biar tidak banjir tiap siklus selama ban aktif
+
+def _binance_register_ban(msg: str):
+    """Baca 'banned until <ms>' dari pesan error 418 Binance, simpan ke state global supaya
+    SEMUA pemanggil (data API maupun trading API) berhenti menembak sampai waktu itu lewat."""
+    global _binance_ban_until_ms, _binance_ban_last_logged
+    m = re.search(r'banned until (\d+)', str(msg))
+    until_ms = float(m.group(1)) if m else (time.time() * 1000 + _RATE_LIMIT_SLEEP * 1000)
+    should_log = False
+    with _binance_ban_lock:
+        if until_ms > _binance_ban_until_ms:
+            _binance_ban_until_ms = until_ms
+        if (time.time() - _binance_ban_last_logged) > 30:
+            _binance_ban_last_logged = time.time()
+            should_log = True
+    if should_log:
+        remaining = (_binance_ban_until_ms - time.time() * 1000) / 1000
+        log(f"WARN [Binance] HTTP 418 IP banned -- SEMUA request Binance dihentikan sementara, "
+            f"~{remaining:.0f}s lagi (sampai {_binance_ban_until_ms/1000:.0f} epoch)")
+
+def _binance_still_banned() -> float:
+    """Return sisa detik ban aktif (0.0 kalau tidak sedang diban)."""
+    with _binance_ban_lock:
+        until = _binance_ban_until_ms
+    remaining = until - time.time() * 1000
+    return remaining / 1000 if remaining > 0 else 0.0
+
 def _binance_get(endpoint: str, params: dict = None, timeout: int = 15):
     """GET ke Binance data API dgn retry otomatis.
-    Menangani: timeout, connection error, HTTP 5xx, HTTP 429 (rate limit).
-    Return: response object (caller wajib panggil .json()), ATAU None kalau semua retry gagal."""
+    Menangani: timeout, connection error, HTTP 5xx, HTTP 429 (rate limit), HTTP 418 (IP banned).
+    Return: response object (caller wajib panggil .json()), ATAU None kalau semua retry gagal
+    ATAU sedang dalam masa ban aktif (lihat _binance_register_ban di atas)."""
+    if _binance_still_banned() > 0:
+        return None  # jangan nembak sama sekali selama ban aktif -- mencegah ban makin panjang
     url = f"{BASE}{endpoint}"
     delay = _RETRY_DELAY
     for attempt in range(1, _RETRY_COUNT + 1):
         try:
             r = session.get(url, params=params, timeout=timeout)
+            if r.status_code == 418:
+                try:
+                    _binance_register_ban(r.json().get("msg", ""))
+                except Exception:
+                    _binance_register_ban("")
+                return None
             if r.status_code == 429:
                 # Rate limited: tunggu extra sebelum retry
                 log(f"WARN [Binance] HTTP 429 rate limit di {endpoint} (attempt {attempt})"
@@ -4898,6 +4945,11 @@ def _binance_trading_request(method: str, path: str, params: dict, api_key: str 
     Earn bisa jalan di kredensial akun lain -- Master -- terlepas dari BINANCE_TRADING_KEY
     yang sejak migrasi Sub Account dipakai utk trading)."""
     import hmac, hashlib, urllib.parse as _up
+    banned_for = _binance_still_banned()
+    if banned_for > 0:
+        # 28/10/2026: lihat REMARK _binance_register_ban() -- jangan nembak sama sekali selama
+        # ban IP aktif (ban ini dishare dgn _binance_get, bisa saja ter-trigger dari sana).
+        raise RuntimeError(f"Binance API sedang IP-banned, sisa ~{banned_for:.0f}s -- request dilewati")
     api_key    = api_key or os.environ.get("BINANCE_TRADING_KEY", "")
     api_secret = api_secret or os.environ.get("BINANCE_TRADING_SECRET", "")
     if not api_key or not api_secret:
@@ -4911,6 +4963,8 @@ def _binance_trading_request(method: str, path: str, params: dict, api_key: str 
     headers = {"X-MBX-APIKEY": api_key}
     resp    = session.request(method, url, headers=headers, timeout=10)
     data    = resp.json()
+    if resp.status_code == 418:
+        _binance_register_ban(data.get("msg", ""))
     if resp.status_code != 200:
         raise RuntimeError(f"Binance API {resp.status_code}: {data}")
     return data
@@ -8675,32 +8729,59 @@ def get_ohlcv_htf(symbol: str, interval: str = "3d", limit: int = 120):
 # ("Pakai Syarat BTC"), default checked -- lihat is_btc_gate_enabled()/get_btc_gate_elapsed_pct()
 # di atas. SEMUA fungsi di bawah FAIL-OPEN (anggap lolos/True) kalau data BTC gagal diambil --
 # gate ini TIDAK BOLEH jadi titik gagal yang memblokir entry krn masalah jaringan sesaat.
-_btc_htf_bullish_cache = {}   # key: htf_interval -> {"ts": float, "bullish": bool|None}
+_btc_htf_bullish_cache = {}   # key: htf_interval -> {"ts": float, "bullish": bool|None, "warned_stale": bool}
 BTC_GATE_HTF_CACHE_TTL = 300  # detik, sama pola spt fitur alert BTC-HTF yg sempat ada (dicabut)
+# 28/10/2026 (permintaan Mas Budi, insiden gerbang BTC macet di nilai basi 12+ jam saat Binance
+# IP-ban 28/10/2026 ~11:53-13:38 WIB): SEBELUMNYA kalau fetch gagal, fungsi ini selalu balikin
+# `slot["bullish"]` lama TANPA batas waktu -- begitu Binance mulai gagal diakses terus-menerus
+# (saat itu krn ban IP), cache lama (merah, dari saat beneran terblokir) dipakai TERUS tanpa
+# pernah ter-refresh, DAN tanpa log sama sekali (jalur `df is None` tidak nge-log) -- jadi
+# fail-open yang dijanjikan di docstring ("gate ini TIDAK BOLEH jadi titik gagal") TIDAK PERNAH
+# kepicu selama cache sudah pernah terisi sekali. Sekarang dibatasi: kalau fetch gagal lebih
+# lama dari BTC_GATE_HTF_MAX_STALE, berhenti percaya cache lama -- balikin None (caller WAJIB
+# fail-open) dan log WARN sekali (biar kelihatan di Railway, tidak banjir tiap siklus).
+BTC_GATE_HTF_MAX_STALE = 1800  # detik (30 menit) -- jauh lebih longgar dari TTL normal (5 menit),
+                                # supaya gangguan SESAAT (network blip) tetap pakai cache lama
+                                # spt biasa, cuma gangguan BERKEPANJANGAN yang akhirnya fail-open.
+
+def _btc_htf_stale_or_none(slot: dict, htf_interval: str):
+    """Dipanggil saat fetch gagal: pakai cache lama kalau masih dalam batas wajar
+    (BTC_GATE_HTF_MAX_STALE), kalau sudah kelewat lama balikin None supaya caller BENAR
+    fail-open, bukan diam-diam ikut nilai basi. Lihat REMARK BTC_GATE_HTF_MAX_STALE di atas."""
+    age = time.time() - slot["ts"]
+    if slot["bullish"] is not None and age < BTC_GATE_HTF_MAX_STALE:
+        return slot["bullish"]
+    if not slot.get("warned_stale"):
+        slot["warned_stale"] = True
+        log(f"WARN [BTC-GATE] {htf_interval}: fetch gagal & cache sudah basi {age/60:.0f} menit "
+            f"-- fail-open (anggap lolos), BUKAN ikut nilai lama.")
+    return None
 
 def btc_htf_closed_bullish(htf_interval: str):
     """True/False = warna candle HTF BTCUSDT TERTUTUP terakhir (close>open / close<=open).
-    None = gagal fetch DAN belum ada cache -- caller WAJIB fail-open (anggap lolos), bukan blokir."""
+    None = gagal fetch DAN belum ada cache (atau cache sudah lewat BTC_GATE_HTF_MAX_STALE) --
+    caller WAJIB fail-open (anggap lolos), bukan blokir."""
     now = time.time()
-    slot = _btc_htf_bullish_cache.setdefault(htf_interval, {"ts": 0.0, "bullish": None})
+    slot = _btc_htf_bullish_cache.setdefault(htf_interval, {"ts": 0.0, "bullish": None, "warned_stale": False})
     if slot["bullish"] is not None and (now - slot["ts"]) < BTC_GATE_HTF_CACHE_TTL:
         return slot["bullish"]
     try:
         df = get_ohlcv_htf("BTCUSDT", interval=htf_interval, limit=15)
         if df is None or len(df) < 2:
-            return slot["bullish"]
+            return _btc_htf_stale_or_none(slot, htf_interval)
         if int(df["ct"].iloc[-1]) >= int(time.time() * 1000):
             df = df.iloc[:-1]
         if len(df) < 1:
-            return slot["bullish"]
+            return _btc_htf_stale_or_none(slot, htf_interval)
         last = df.iloc[-1]
         bullish = bool(float(last["close"]) > float(last["open"]))
         slot["ts"] = now
         slot["bullish"] = bullish
+        slot["warned_stale"] = False
         return bullish
     except Exception as e:
         log(f"  [BTC-GATE] error {htf_interval}: {e}")
-        return slot["bullish"]
+        return _btc_htf_stale_or_none(slot, htf_interval)
 
 _btc_htf_streak2_cache = {}   # key: htf_interval -> {"ts": float, "bullish": bool|None}
 
