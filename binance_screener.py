@@ -17990,11 +17990,16 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
          checkbox multi-pilih custom (native <select multiple> butuh ctrl/cmd-click yg tidak jelas
          buat Mas Budi) via toggleCtStratMenu()/onCtStratCheckChange() di bawah. -->
     <div id="ct-filter-strat-wrap" style="position:relative;display:inline-block" onclick="event.stopPropagation()">
-      <button type="button" id="ct-filter-strat-btn" onclick="toggleCtStratMenu()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;cursor:pointer;font-family:var(--font);white-space:nowrap;max-width:190px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle">Semua strategi &#9662;</button>
-      <div id="ct-filter-strat-menu" style="display:none;position:absolute;top:100%;left:0;z-index:50;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:6px;margin-top:3px;max-height:300px;overflow-y:auto;width:235px;box-shadow:0 4px 14px rgba(0,0,0,0.35)">
+      <button type="button" id="ct-filter-strat-btn" onclick="toggleCtStratMenu()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:11px;cursor:pointer;font-family:var(--font);white-space:nowrap;max-width:190px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle">Semua strategi &#9662;</button>
+      <!-- 28/10/2026 (fix "tabrakan" dilaporkan Mas Budi): sebelumnya pakai var(--card)/var(--fg) --
+           dua token itu TIDAK PERNAH didefinisikan di :root (lihat ~baris 15802, cuma ada --bg/--surface/
+           --border/--text/--muted/dst), jadi background-nya jatuh ke transparan total dan teks baris
+           statistik di belakangnya keliatan numpuk/tabrakan sama checkbox. Diganti ke --surface/--text,
+           token asli yg dipakai .card class (~baris 15812) -- solid & beda dari --bg halaman (bukan hitam). -->
+      <div id="ct-filter-strat-menu" style="display:none;position:absolute;top:100%;left:0;z-index:50;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px;margin-top:3px;max-height:300px;overflow-y:auto;width:235px;box-shadow:0 4px 14px rgba(0,0,0,0.5)">
         <div style="display:flex;gap:6px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--border)">
-          <button type="button" onclick="ctStratSelectAll()" style="flex:1;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 4px;font-size:10px;cursor:pointer;font-family:var(--font)">Pilih semua</button>
-          <button type="button" onclick="ctStratClearAll()" style="flex:1;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:3px 4px;font-size:10px;cursor:pointer;font-family:var(--font)">Kosongkan</button>
+          <button type="button" onclick="ctStratSelectAll()" style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 4px;font-size:10px;cursor:pointer;font-family:var(--font)">Pilih semua</button>
+          <button type="button" onclick="ctStratClearAll()" style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 4px;font-size:10px;cursor:pointer;font-family:var(--font)">Kosongkan</button>
         </div>
         <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="brkX2_12h_closed" onchange="onCtStratCheckChange()">KeltnerBreak-12h</label>
         <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="brkX2_4h" onchange="onCtStratCheckChange()">brkX2-4h</label>
