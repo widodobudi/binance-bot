@@ -3955,6 +3955,19 @@ def send_telegram(message: str, parse_mode: str = None):
         resp = session.post(url, json=payload, timeout=10)
         if resp.status_code != 200:
             log(f"WARN Telegram error: {resp.text}")
+        else:
+            # 28/10/2026 (permintaan Mas Budi, investigasi notif Telegram "bejibun" siang 28/10):
+            # SEBELUM ini tidak ada jejak isi pesan yang BERHASIL terkirim di Railway log sama
+            # sekali -- cuma kegagalan kirim yang ke-log, jadi insiden banjir notif tadi tidak
+            # bisa dilacak ke titik kode mana pun. Sekarang tiap kirim sukses dicatat 1 baris:
+            # fungsi pemanggil (caller) + baris pertama pesan -- kalau terulang, langsung
+            # ketahuan dari log mana sumbernya, tanpa nebak2 dari pola WARN yang tidak langsung.
+            try:
+                import inspect
+                _caller = inspect.stack()[1].function
+            except Exception:
+                _caller = "?"
+            log(f"[TG-SENT] dari {_caller}(): {message.splitlines()[0][:80] if message else ''}")
     except Exception as e:
         log(f"WARN gagal kirim Telegram: {e}")
 
