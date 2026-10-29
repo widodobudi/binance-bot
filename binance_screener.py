@@ -7282,6 +7282,70 @@ def execute_add_fund_from_asset(source_asset: str, target_symbol: str, pct: floa
             "proceeds_usdt": proceeds, "target_symbol": target_symbol,
             "avg_price": fund_result.get("avg_price")}
 
+# ── Patch "reclaim-addfund-shortfall-handling" (29/10/2026) ─────────────────────────────
+# Permintaan Mas Budi setelah insiden ENAUSDT (29/10): reclaim-addfund TrenKonfirmasi-4h
+# TERPICU 2x dalam 2 menit pertama deal, 2x gagal TOTAL ("Account has insufficient balance",
+# Binance -2010) -- blok reclaim (TC4h & KeltnerBreak-12h) sebelumnya tembak execute_add_fund()
+# langsung tanpa precheck saldo, tanpa coba auto-convert, tanpa opsi partial -- sayang
+# dilewatkan begitu saja padahal kadang saldo SEBAGIAN masih ada.
+# Dipanggil dari KEDUA blok reclaim (permintaan eksplisit Mas Budi: "KEDUANYA") -- BUKAN dari
+# blok Decouple-4h/RVolBreak-8h (masih fire-once lama, tidak diubah, di luar scope diskusi ini).
+# Urutan (makin "mahal"/berisiko tiap tahap, dicoba dari yang paling murah/aman dulu):
+#   1. Saldo USDT bebas CUKUP -> execute_add_fund() PENUH spt biasa dulu, SELESAI (jalur lama,
+#      TIDAK berubah utk kasus normal).
+#   2. Kurang -> coba auto-convert GRATIS (TIDAK ada trade-off ukuran posisi -- cuma pindahkan
+#      modal dari aset nganggur lain): koin orphan untung dulu
+#      (auto_fund_addfund_from_orphaned_profit, REUSE 100%), lalu aset nganggur lain
+#      (auto_fund_addfund_from_idle_asset, REUSE 100%) -- fungsi2 ini SUDAH kirim Telegram
+#      sendiri kalau berhasil, caller DI SINI tidak perlu kirim notif duplikat.
+#   3. Masih kurang juga (tidak ada aset nganggur/orphan yang cukup) -> AI putuskan porsi dari
+#      SISA SALDO RIIL (ai_decide_reclaim_addfund_shortfall()): pakai SEMUA sisa, pakai SEPARUH
+#      (sisanya disimpan jaga2 ada kesempatan add-fund lain segera), atau TUNDA total.
+# Floor WAJIB BINANCE_MIN_NOTIONAL_SAFE_USD ($6) -- kalau porsi hasil keputusan AI di bawah itu
+# (atau AI memilih TUNDA), TIDAK dieksekusi SAMA SEKALI. TAPI AI tetap SELALU dipanggil &
+# alasannya tetap tercatat ke ai_decisions_log.txt (permintaan eksplisit Mas Budi: "tetap kasih
+# tau AI" walau saldo sudah pasti kurang dari minNotional -- supaya ada jejak kenapa di-skip,
+# bukan diam2 dilewati tanpa alasan tercatat).
+# Keputusan apapun di tahap 3 (penuh/sebagian/tunda) TETAP dihitung 1x kesempatan add-fund
+# terpakai dari jatah MAX_ADDS (permintaan eksplisit Mas Budi) -- caller (thread2_monitor) yang
+# menaikkan counter reclaim_addfund_count, SAMA kebijakannya dgn toggle-off/capacity-penuh/
+# modal<=0 yang sudah berlaku sebelumnya (lihat REMARK TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES).
+def handle_reclaim_addfund_shortfall(symbol: str, strategy: str, deal: dict, target_usd: float,
+                                      add_index: int, max_adds: int) -> dict:
+    """Return dict {"ok", "mode" ("full"/"converted"/"partial"/"skipped"), "amount", "price",
+    "error", "ai_reasoning"}. Lihat REMARK lengkap di atas definisi ini utk urutan & kebijakan."""
+    free_usdt_now, _ = get_usdt_balance()
+    if free_usdt_now >= target_usd:
+        result = execute_add_fund(symbol, target_usd)
+        if result.get('ok'):
+            return {"ok": True, "mode": "full", "amount": target_usd, "price": result.get('price', 0)}
+        return {"ok": False, "mode": "full", "amount": target_usd, "error": result.get('error')}
+
+    log(f"[T2] {symbol} reclaim-addfund: saldo USDT bebas (${free_usdt_now:.2f}) < target (${target_usd:.2f}) -- coba auto-convert dulu")
+    conv = auto_fund_addfund_from_orphaned_profit(symbol, target_usd)
+    if not conv.get('ok'):
+        conv = auto_fund_addfund_from_idle_asset(symbol, target_usd)
+    if conv.get('ok'):
+        return {"ok": True, "mode": "converted", "amount": target_usd,
+                "price": conv.get('avg_price', 0), "source_asset": conv.get('source_asset')}
+
+    log(f"[T2] {symbol} reclaim-addfund: auto-convert juga gagal/tidak ada kandidat cukup -- minta AI putuskan porsi dari sisa saldo")
+    decision = ai_decide_reclaim_addfund_shortfall(symbol, strategy, deal, target_usd, free_usdt_now, add_index, max_adds)
+    amount = decision['amount']
+    if decision['action'] == 'TUNDA':
+        return {"ok": False, "mode": "skipped", "amount": amount,
+                "error": f"AI: TUNDA -- {decision['reasoning']}", "ai_reasoning": decision['reasoning']}
+    if amount < BINANCE_MIN_NOTIONAL_SAFE_USD:
+        return {"ok": False, "mode": "skipped", "amount": amount,
+                "error": f"AI: {decision['action']} tapi hasil (${amount:.2f}) di bawah minNotional (${BINANCE_MIN_NOTIONAL_SAFE_USD:.0f})",
+                "ai_reasoning": decision['reasoning']}
+    result = execute_add_fund(symbol, amount)
+    if result.get('ok'):
+        return {"ok": True, "mode": "partial", "amount": amount, "price": result.get('price', 0),
+                "ai_reasoning": decision['reasoning']}
+    return {"ok": False, "mode": "partial", "amount": amount, "error": result.get('error'),
+            "ai_reasoning": decision['reasoning']}
+
 _daily_loss_notify_lock = threading.Lock()
 # 09/09/2026 (permintaan Mas Budi, keluhan notif "Batas Rugi Harian Tersulut" bertubi-tubi):
 # diganti dari "maks 1x/30menit SELAMA blokir masih aktif" (bisa jadi puluhan notif identik
@@ -11163,22 +11227,35 @@ def thread2_monitor():
                     else:
                         log(f"[T2] {sym} smallstart-reclaim TERPICU (add ke-{_kb_add_count + 1}/{KB12H_RECLAIM_ADDFUND_MAX_ADDS}, toleransi {KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%): harga reclaim EMA20 4h setelah sempat drop -- "
                             f"tambah modal ${_kb_modal:.0f} (modal ${_kb_current_modal:.0f} -> target ${_kb_target:.0f})")
-                        _kb_result = execute_add_fund(sym, _kb_modal)
+                        # 29/10/2026 (patch "reclaim-addfund-shortfall-handling"): GANTI dari
+                        # execute_add_fund() langsung ke handle_reclaim_addfund_shortfall() --
+                        # lihat REMARK lengkap di atas definisi fungsi itu (dekat
+                        # execute_add_fund_from_asset()). Precheck saldo -> auto-convert gratis
+                        # -> AI putuskan porsi dari sisa, SEBELUM give up total spt dulu.
+                        _kb_result = handle_reclaim_addfund_shortfall(
+                            sym, strat, d, _kb_modal, _kb_add_count + 1, KB12H_RECLAIM_ADDFUND_MAX_ADDS)
                         with active_deals_lock:
                             if sym in active_deals:
                                 active_deals[sym]['reclaim_addfund_count'] = _kb_add_count + 1
                                 active_deals[sym]['smallstart_below_ema20'] = False
                         if _kb_result.get('ok'):
-                            send_telegram(
-                                f"📈 Smallstart Reclaim Add-Fund (KeltnerBreak-12h) -- ke-{_kb_add_count + 1}/{KB12H_RECLAIM_ADDFUND_MAX_ADDS}\n"
-                                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-                                f"Pair    : {to_display_pair(sym)}\n"
-                                f"Pola    : EMA20 4h cross-down lalu cross-up (reclaim, toleransi {KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%)\n"
-                                f"Modal ditambah: ${_kb_modal:.0f} @ {_fmt_price(_kb_result.get('price',0))}",
-                                parse_mode=None
-                            )
+                            _kb_mode = _kb_result.get('mode')
+                            if _kb_mode == 'converted':
+                                log(f"[T2] {sym} smallstart-reclaim: dana dari auto-convert ({_kb_result.get('source_asset')}) -- modal penuh ${_kb_modal:.0f} tercukupi")
+                            else:
+                                _kb_label = "SEBAGIAN (AI, saldo mepet)" if _kb_mode == 'partial' else "penuh"
+                                send_telegram(
+                                    f"📈 Smallstart Reclaim Add-Fund (KeltnerBreak-12h) -- ke-{_kb_add_count + 1}/{KB12H_RECLAIM_ADDFUND_MAX_ADDS}" +
+                                    (f" [{_kb_label}]" if _kb_mode == 'partial' else "") + "\n"
+                                    f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                                    f"Pair    : {to_display_pair(sym)}\n"
+                                    f"Pola    : EMA20 4h cross-down lalu cross-up (reclaim, toleransi {KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%)\n"
+                                    f"Modal ditambah: ${_kb_result.get('amount',0):.2f} @ {_fmt_price(_kb_result.get('price',0))}" +
+                                    (f"\nCatatan: target penuh ${_kb_modal:.0f}, saldo mepet -- {_kb_result.get('ai_reasoning','')}" if _kb_mode == 'partial' else ""),
+                                    parse_mode=None
+                                )
                         else:
-                            log(f"WARN [T2] {sym} smallstart-reclaim gagal: {_kb_result.get('error')}")
+                            log(f"WARN [T2] {sym} smallstart-reclaim gagal/di-skip ({_kb_result.get('mode')}): {_kb_result.get('error')}")
                         continue   # entry/peak lokal sudah basi setelah add-fund -- lanjut siklus berikutnya
 
         # Patch "tc-addfund-reclaim-swap" (17/10/2026, permintaan Mas Budi): add-fund reaktif
@@ -11234,21 +11311,35 @@ def thread2_monitor():
                     else:
                         log(f"[T2] {sym} reclaim-addfund TERPICU (add ke-{_rc_add_count + 1}/{TRENDCONFIRM_RECLAIM_ADDFUND_MAX_ADDS}): EMA20 reclaim (<={TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES} candle, toleransi {TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%) "
                             f"+ RVol>={TRENDCONFIRM_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_rc_modal:.0f} (modal ${_rc_current_modal:.0f} -> target ${_rc_target:.0f})")
-                        _rc_result = execute_add_fund(sym, _rc_modal)
+                        # 29/10/2026 (patch "reclaim-addfund-shortfall-handling", insiden
+                        # ENAUSDT 2x TERPICU 2x gagal total -2010): GANTI dari execute_add_fund()
+                        # langsung ke handle_reclaim_addfund_shortfall() -- lihat REMARK lengkap
+                        # di atas definisi fungsi itu (dekat execute_add_fund_from_asset()).
+                        # Precheck saldo -> auto-convert gratis -> AI putuskan porsi dari sisa,
+                        # SEBELUM give up total spt dulu.
+                        _rc_result = handle_reclaim_addfund_shortfall(
+                            sym, strat, d, _rc_modal, _rc_add_count + 1, TRENDCONFIRM_RECLAIM_ADDFUND_MAX_ADDS)
                         with active_deals_lock:
                             if sym in active_deals:
                                 active_deals[sym]['reclaim_addfund_count'] = _rc_add_count + 1
                         if _rc_result.get('ok'):
-                            send_telegram(
-                                f"📈 Reclaim Add-Fund (TrenKonfirmasi-4h) -- ke-{_rc_add_count + 1}/{TRENDCONFIRM_RECLAIM_ADDFUND_MAX_ADDS}\n"
-                                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-                                f"Pair    : {to_display_pair(sym)}\n"
-                                f"Pola    : EMA20 cross-down lalu cross-up (reclaim, toleransi {TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%) + RVol\n"
-                                f"Modal ditambah: ${_rc_modal:.0f} @ {_fmt_price(_rc_result.get('price',0))}",
-                                parse_mode=None
-                            )
+                            _rc_mode = _rc_result.get('mode')
+                            if _rc_mode == 'converted':
+                                log(f"[T2] {sym} reclaim-addfund: dana dari auto-convert ({_rc_result.get('source_asset')}) -- modal penuh ${_rc_modal:.0f} tercukupi")
+                            else:
+                                _rc_label = "SEBAGIAN (AI, saldo mepet)" if _rc_mode == 'partial' else "penuh"
+                                send_telegram(
+                                    f"📈 Reclaim Add-Fund (TrenKonfirmasi-4h) -- ke-{_rc_add_count + 1}/{TRENDCONFIRM_RECLAIM_ADDFUND_MAX_ADDS}" +
+                                    (f" [{_rc_label}]" if _rc_mode == 'partial' else "") + "\n"
+                                    f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                                    f"Pair    : {to_display_pair(sym)}\n"
+                                    f"Pola    : EMA20 cross-down lalu cross-up (reclaim, toleransi {TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%) + RVol\n"
+                                    f"Modal ditambah: ${_rc_result.get('amount',0):.2f} @ {_fmt_price(_rc_result.get('price',0))}" +
+                                    (f"\nCatatan: target penuh ${_rc_modal:.0f}, saldo mepet -- {_rc_result.get('ai_reasoning','')}" if _rc_mode == 'partial' else ""),
+                                    parse_mode=None
+                                )
                         else:
-                            log(f"WARN [T2] {sym} reclaim-addfund gagal: {_rc_result.get('error')}")
+                            log(f"WARN [T2] {sym} reclaim-addfund gagal/di-skip ({_rc_result.get('mode')}): {_rc_result.get('error')}")
                         continue   # entry/peak lokal sudah basi setelah add-fund -- lanjut siklus berikutnya
 
         # Patch "decouple-addfund-reclaim" (17/10/2026, permintaan Mas Budi -- blok SENDIRI,
@@ -32535,6 +32626,77 @@ def ai_decision_add_fund(symbol: str, strategy: str, d: dict, add_usd: float, cu
         f"{'─'*36}\n"
     )
     return decision
+
+
+def ai_decide_reclaim_addfund_shortfall(symbol: str, strategy: str, deal: dict, target_usd: float,
+                                         free_usdt: float, add_index: int, max_adds: int) -> dict:
+    """AI putuskan porsi add-fund saat reclaim TERPICU tapi saldo USDT bebas tidak cukup utk
+    target penuh, DAN auto-convert (orphan untung -> aset nganggur) SUDAH dicoba & gagal (tidak
+    ada kandidat cukup). Dipanggil dari handle_reclaim_addfund_shortfall() -- KEDUA strategi
+    (TrenKonfirmasi-4h & KeltnerBreak-12h), permintaan Mas Budi 29/10/2026 setelah insiden
+    ENAUSDT (2x TERPICU, 2x gagal total -2010 insufficient balance, padahal masih ada saldo
+    sebagian -- sayang dilewatkan begitu saja).
+    Return dict {"action": "TUNDA"|"SEMUA"|"SEPARUH", "amount": float, "reasoning": str}.
+    Default TUNDA (fail-CLOSED -- BEDA dari ai_decision_add_fund() yg fail-open True: di sini
+    kegagalan AI/API sebaiknya TIDAK otomatis pakai saldo, krn konteksnya sudah diketahui mepet,
+    bukan sekadar "AI tidak tersedia, lanjut normal spt biasa").
+    Keputusan AI (penuh/sebagian/tunda) TETAP dihitung 1x kesempatan add-fund terpakai dari
+    jatah MAX_ADDS, APAPUN hasilnya (permintaan eksplisit Mas Budi) -- caller (thread2_monitor)
+    yang menaikkan counter, BUKAN fungsi ini."""
+    entry = deal.get('entry_price', 0)
+    price = get_price_now(symbol)
+    profit_now = (price/entry - 1)*100 if entry > 0 and price > 0 else 0
+    ind4h_str = get_full_4h_indicator_context(symbol)
+    ind4h_section = f"\n{ind4h_str}\n" if ind4h_str else ""
+    prompt = (
+        f"Kamu adalah AI analyst trading crypto. Berikan analisis singkat.\n\n"
+        f"Deal: {to_display_pair(symbol)} | Strategi: {strategy}\n"
+        f"Entry: {_fmt_price(entry)} | Harga skrg: {_fmt_price(price)}\n"
+        f"Profit dari entry: {profit_now:+.2f}%\n"
+        f"Pola reclaim EMA20 TERPICU -- add-fund ke-{add_index}/{max_adds} seharusnya dikirim.\n"
+        f"Target penuh: ${target_usd:.2f}. Saldo USDT bebas SAAT INI: ${free_usdt:.2f} (TIDAK CUKUP).\n"
+        f"Auto-convert (jual koin orphan untung / aset nganggur) SUDAH dicoba, tidak ada yang cukup.\n"
+        f"{ind4h_section}"
+        f"Pilihan: pakai SEMUA sisa saldo (${free_usdt:.2f}) sekarang, pakai SEPARUH saja "
+        f"(${free_usdt/2:.2f}, sisanya disimpan jaga-jaga kalau ada kesempatan add-fund lain "
+        f"segera -- baik utk deal ini maupun deal lain), atau TUNDA (lewati add-fund kali ini, "
+        f"saldo terlalu riskan dipakai sekarang).\n"
+        f"Catatan: keputusan apapun di sini MENGHABISKAN jatah add-fund ke-{add_index} dari "
+        f"total {max_adds} untuk deal ini -- tidak akan dicoba ulang otomatis walau TUNDA.\n\n"
+        f"Format jawaban (ikuti persis):\n"
+        f"TUNDA atau SEMUA atau SEPARUH\n"
+        f"Alasan: alasan singkat\n\n"
+        f"Baris pertama HARUS hanya salah satu dari 3 kata itu."
+    )
+    try:
+        result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
+    except Exception as e:
+        result = None
+        log(f"WARN [AI] reclaim-addfund-shortfall {symbol} gagal: {e}")
+    if not result:
+        action, reasoning = "TUNDA", "(AI tidak tersedia -- fail-closed, saldo mepet tidak dipakai otomatis)"
+    else:
+        lines = result.strip().split("\n")
+        first_line = lines[0].strip().upper()
+        if "SEMUA" in first_line:
+            action = "SEMUA"
+        elif "SEPARUH" in first_line:
+            action = "SEPARUH"
+        else:
+            action = "TUNDA"
+        reasoning = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+    amount = {"TUNDA": 0.0, "SEMUA": free_usdt, "SEPARUH": free_usdt / 2}[action]
+    amount = round(max(0.0, amount) * 0.98, 2)   # haircut 2% -- jaga dari drift saldo/fee kecil antara cek & eksekusi
+    log(f"[AI] RECLAIM-ADDFUND-SHORTFALL decision {symbol}: {action} (${amount:.2f} dari saldo ${free_usdt:.2f})")
+    log_ai_decision(
+        f"[{now_wib().strftime('%Y-%m-%d %H:%M:%S')} WIB] RECLAIM-ADDFUND-SHORTFALL-DECISION | {strategy} | "
+        f"{to_display_pair(symbol)} | {action} | target=${target_usd:.2f} free=${free_usdt:.2f} "
+        f"amount=${amount:.2f} add_ke={add_index}/{max_adds} profit={profit_now:+.2f}%\n"
+        f"{ind4h_section.strip() + chr(10) if ind4h_section else ''}"
+        f"Alasan AI: {reasoning if reasoning else '(tidak ada)'}\n"
+        f"{'─'*36}\n"
+    )
+    return {"action": action, "amount": amount, "reasoning": reasoning}
 
 
 def ai_decision_near_timeout(symbol: str, strategy: str, d: dict, price: float, peak: float,
