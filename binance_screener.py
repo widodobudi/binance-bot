@@ -1682,7 +1682,12 @@ STRATEGY_CONFIG_DEFAULTS = {
     # 26/10/2026 (patch "decouple-rvolbreak8h-smallstart-reclaim"): base_usd 50->8, same backtest-
     # confirmed smallstart+reclaim treatment as Decouple-4h above (TEST avg +3.159%->+3.328%,
     # ~15% of baseline capital) -- see SMALLSTART_FULL_TARGET_USD. Paper-test target unchanged.
-    "rvolbreak_8h":  {"strategy_enabled": False, "sizing_enabled": True, "base_usd": 8, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    # 30/10/2026 (patch "rvolbreak8h-btc-gate0-or"): btc_gate_enabled ditambahkan -- backtest
+    # khusus strategi ini (142 pair, 2023-2026, mekanik Donchian24+RVOL asli) nunjukkin OR
+    # (12H ATAU 1D hijau) avg/trade +3.15%->+3.25%, tapi TRAIN turun (+3.53%->+3.29%) sementara
+    # TEST naik (+2.88%->+3.22%) -- bukti CAMPURAN, bukan konsisten spt KB12h/TC4h. Dipasang
+    # atas keputusan eksplisit Mas Budi (30/10/2026) meski buktinya belum sekuat strategi lain.
+    "rvolbreak_8h":  {"strategy_enabled": False, "sizing_enabled": True, "base_usd": 8, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100, "btc_gate_enabled": True},
     # 09/10/2026 (Tahap 3/4): dipbuy_universe naik dari shadow ke live, lulus target 50/50 (43W/7L,
     # +85.5%) -- exit DIGANTI ke trailing (lihat REMARK DIPBUY_UNIVERSE_* di sekitar baris 16424).
     "dipbuy_universe": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
@@ -2017,11 +2022,12 @@ def is_cooldown_enabled(strategy: str) -> bool:
 
 def is_btc_gate_enabled(strategy: str) -> bool:
     """Gate0 Tahap 2 (10/10/2026, permintaan Mas Budi): toggle "Pakai Syarat BTC" di Strategy
-    Control. Default True (checked) -- HANYA berlaku utk 4 strategi yg backtest Gate0-nya (175
-    pair + ~1 tahun data 1-menit, 2022-2026) terbukti terbantu: brkX2_12h_closed (KHUSUS jalur
+    Control. Default True (checked) -- berlaku utk brkX2_12h_closed (KHUSUS jalur
     closed-candle T1, lihat REMARK di thread1_scan() -- TIDAK dipanggil sama sekali di
     thread1c_scan_intrabar()/thread1c_scan_intrabar_early()), decouple_4h, trend_confirm_4h,
-    mombreak_1h. Uncheck dari dashboard kalau mau matikan sementara tanpa redeploy."""
+    mombreak_1h (4 strategi, backtest 10/10/2026, 175 pair + ~1 tahun data 1-menit), DAN
+    rvolbreak_8h (30/10/2026, backtest terpisah 142 pair 2023-2026 -- lihat REMARK
+    rvolbreak8h_btc_gate_ok()). Uncheck dari dashboard kalau mau matikan sementara tanpa redeploy."""
     cfg = load_strategy_config()
     return cfg.get(strategy, {}).get("btc_gate_enabled", True)
 
@@ -9103,6 +9109,27 @@ def trendconfirm4h_btc_gate_ok() -> bool:
         return True  # fail-open
     return b12h and b1d
 
+# 30/10/2026 (patch "rvolbreak8h-btc-gate0-or", permintaan Mas Budi): RVolBreak-8h sebelumnya
+# TIDAK PUNYA gerbang BTC sama sekali -- backtest Gate0 10/10/2026 cuma menguji RVolBreak-1h
+# (versi lama, terminated), bukan versi 8h yg sekarang live. Backtest terpisah 30/10/2026
+# (142 pair vol>=$1M, candle 8h 2023-2026, 2151 sinyal mekanis Donchian24+RVOL>=3.0, exit
+# hard-stop/trailing/timeout ASLI dari kode produksi, lapis AI confirmation SENGAJA dilewati)
+# nguji 2 varian: AND (12H DAN 1D) retain 41.8% sinyal, OR (12H ATAU 1D) retain 85.8% sinyal.
+# OR dipilih: WR 77.6%->78.5%, avg/trade +3.15%->+3.25% -- TAPI TRAIN turun (+3.53%->+3.29%)
+# sementara TEST naik (+2.88%->+3.22%), bukti CAMPURAN (beda dari KB12h/TC4h yg konsisten
+# di TRAIN+TEST). Dipasang atas keputusan eksplisit Mas Budi meski belum sekuat strategi lain.
+def rvolbreak8h_btc_gate_ok() -> bool:
+    """Syarat: BTCUSDT HTF 12H DAN 1D, cukup SALAH SATU candle tertutup terakhir hijau (OR,
+    sama pola persis decouple4h_btc_gate_ok() -- lihat REMARK 'rvolbreak8h-btc-gate0-or' di atas
+    utk angka backtest & alasan OR dipilih)."""
+    if not is_btc_gate_enabled('rvolbreak_8h'):
+        return True
+    b12h = btc_htf_closed_bullish('12h')
+    b1d = btc_htf_closed_bullish('1d')
+    if b12h is None and b1d is None:
+        return True  # fail-open, dua2nya gagal
+    return bool(b12h) or bool(b1d)
+
 MOMBREAK_BTC_GATE_GENDUT_PCT = 0.10  # FIXED (bukan field dashboard), satu2nya nilai terbukti backtest
 
 def mombreak_btc_gate_ok() -> bool:
@@ -9182,7 +9209,7 @@ def _btc_gate_live_detail(kind: str) -> str:
         return '?' if b is None else ('HIJAU' if b else 'MERAH')
     if kind == 'keltner12h':
         return f"1D: {_lbl(btc_htf_closed_bullish('1d'))} | 3D: {_lbl(btc_htf_closed_bullish('3d'))}"
-    if kind in ('decouple4h', 'trendconfirm4h'):
+    if kind in ('decouple4h', 'trendconfirm4h', 'rvolbreak8h'):
         return f"12H: {_lbl(btc_htf_closed_bullish('12h'))} | 1D: {_lbl(btc_htf_closed_bullish('1d'))}"
     if kind == 'mombreak':
         try:
@@ -17488,13 +17515,19 @@ var SC_PAUSED_LOCKED = {brkX2_crossema: true};
 // dipanggil di thread1_scan(), TIDAK PERNAH di thread1c_scan_intrabar()/thread1c_scan_intrabar_early()
 // (jalur intrabar, lihat kasus brkX2_4h yg sempat 2x salah gara2 soal timing intrabar serupa --
 // tidak aman digeneralisir tanpa uji sendiri).
-var SC_BTC_GATE_HELPED = {brkX2_12h_closed: true, decouple_4h: true, trend_confirm_4h: true, mombreak_1h: true};
+// 30/10/2026 (patch "rvolbreak8h-btc-gate0-or"): rvolbreak_8h ditambahkan dari backtest
+// TERPISAH (bukan bagian dari 7-strategi 10/10/2026 di atas -- itu nguji RVolBreak-1h yg sudah
+// terminated) -- 142 pair, candle 8h native, 2023-2026, mekanik Donchian24+RVOL>=3.0 & exit
+// ASLI dari kode. Beda dari 4 strategi lain: buktinya CAMPURAN (TRAIN turun, TEST naik), bukan
+// konsisten -- dipasang atas keputusan eksplisit Mas Budi, bukan rekomendasi default.
+var SC_BTC_GATE_HELPED = {brkX2_12h_closed: true, decouple_4h: true, trend_confirm_4h: true, mombreak_1h: true, rvolbreak_8h: true};
 var SC_BTC_GATE_ELAPSED = {mombreak_1h: true};  // satu2nya yg rumusnya punya parameter elapsed %
 var SC_BTC_GATE_TOOLTIP = {
     brkX2_12h_closed: 'Syarat: BTCUSDT pada HTF 1D DAN 3D, candle TERTUTUP terakhir keduanya harus hijau. Backtest 10/10/2026: dari 100 kesempatan histori, 56 tetap lolos; win-rate naik +2,5pp, rata-rata profit/trade naik +0,17pp. Bukti paling kuat & konsisten dari 7 strategi yang diuji. HANYA berlaku jalur closed-candle (T1) -- lihat Tahap 2.',
     decouple_4h: 'Syarat: BTCUSDT pada HTF 12H DAN 1D, cukup SALAH SATU candle tertutup terakhir hijau. Backtest 10/10/2026: dari 100 kesempatan, 74 tetap lolos; rata-rata profit/trade naik +0,05pp.',
     trend_confirm_4h: 'Syarat: BTCUSDT pada HTF 12H DAN 1D, candle tertutup terakhir keduanya harus hijau. Backtest 10/10/2026: dari 100 kesempatan, 39 tetap lolos; rata-rata profit/trade naik +0,14pp. Satu-satunya uji yang menunjukkan bukti untuk strategi ini.',
-    mombreak_1h: 'Syarat: tunggu candle BTCUSDT 1 jam (TF strategi ini sendiri, diganti dari 3 menit 14/10/2026) closed sampai persentase di kolom sebelah, DAN BTC-nya harus naik minimal 0,10% di candle itu. Ambang 0,10% itu HASIL BACKTEST LAMA khusus candle 3 menit (dari 100 kesempatan, 36 tetap lolos; avg profit naik +0,06pp) -- BELUM diuji ulang utk candle 1 jam, dipertahankan sbg titik awal.'
+    mombreak_1h: 'Syarat: tunggu candle BTCUSDT 1 jam (TF strategi ini sendiri, diganti dari 3 menit 14/10/2026) closed sampai persentase di kolom sebelah, DAN BTC-nya harus naik minimal 0,10% di candle itu. Ambang 0,10% itu HASIL BACKTEST LAMA khusus candle 3 menit (dari 100 kesempatan, 36 tetap lolos; avg profit naik +0,06pp) -- BELUM diuji ulang utk candle 1 jam, dipertahankan sbg titik awal.',
+    rvolbreak_8h: 'Syarat: BTCUSDT pada HTF 12H DAN 1D, cukup SALAH SATU candle tertutup terakhir hijau. Backtest TERPISAH 30/10/2026 (142 pair, candle 8h, 2023-2026, 2151 sinyal mekanis): win-rate 77,6%->78,5%, rata-rata profit/trade +3,15%->+3,25%. TAPI buktinya CAMPURAN -- periode TRAIN (<=2024) justru TURUN (+3,53%->+3,29%), periode TEST (>=2025) BARU naik (+2,88%->+3,22%). Beda dari 4 strategi lain di atas yang konsisten di TRAIN+TEST -- dipasang atas keputusan eksplisit Mas Budi meski bukti belum sekuat yang lain.'
 };
 var SC_BTC_GATE_TOOLTIP_OFF_TESTED = {
     brkX2_4h: 'Sudah diuji 10/10/2026 (2x, sempat ketemu bug lookahead lalu diperbaiki) -- hasilnya TIDAK membantu, nyaris tidak ada beda / cenderung menurunkan hasil. Tidak direkomendasikan.',
@@ -22967,6 +23000,14 @@ def thread_rvolbreak8h_scan() -> None:
     n_active = deal_count_by_strategy('rvolbreak_8h')
     if n_active >= RVOLBREAK_8H_MAX_DEALS: return
 
+    # Gate0 (30/10/2026, patch "rvolbreak8h-btc-gate0-or"): syarat BTCUSDT HTF 12H ATAU 1D
+    # hijau (minimal salah satu) -- lihat REMARK lengkap di rvolbreak8h_btc_gate_ok().
+    _rv_gate_ok = rvolbreak8h_btc_gate_ok()
+    _notify_btc_gate_transition('rvolbreak_8h', 'RVolBreak-8h', _rv_gate_ok, 'BTCUSDT HTF 12H ATAU 1D candle tertutup terakhir, minimal salah satu hijau')
+    if not _rv_gate_ok:
+        log(f"[T_RVOLBREAK8H] Gate0: syarat BTC (HTF 12H/1D) belum lolos, scan dibatalkan periode ini.")
+        return
+
     try:
         pairs = get_usdt_spot_pairs()
         ticker = get_ticker_24h()
@@ -27881,8 +27922,10 @@ def run_web_dashboard():
                 },
                 "rvolbreak_8h": {
                     "label": "RVolBreak-8h",
-                    "status": "na",
-                    "syarat": "Belum pernah diuji -- strategi baru (12/10/2026), belum ada data backtest gerbang BTC sama sekali.",
+                    "status": "ok" if rvolbreak8h_btc_gate_ok() else "blocked",
+                    "syarat": "BTCUSDT HTF 12H ATAU 1D candle tertutup terakhir, minimal salah satu hijau",
+                    "live_detail": _btc_gate_live_detail('rvolbreak8h'),
+                    "candles": {"12H": _candles['12h'], "1D": _candles['1d']},
                 },
                 "trend_confirm_4h": {
                     "label": "TrenKonfirmasi-4h",
