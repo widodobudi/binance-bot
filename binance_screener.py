@@ -2022,15 +2022,16 @@ def is_cooldown_enabled(strategy: str) -> bool:
 
 def is_btc_gate_enabled(strategy: str) -> bool:
     """Gate0 Tahap 2 (10/10/2026, permintaan Mas Budi): toggle "Pakai Syarat BTC" di Strategy
-    Control. Default True (checked) -- per 31/10/2026 HANYA berlaku utk 3 strategi yg masih
-    punya gerbang hard-block ON/OFF sederhana: brkX2_12h_closed (DIPANGGIL di KETIGA jalur
-    T1/T1c/T1c-E sejak 27/10/2026, OR sejak 31/10/2026 -- lihat REMARK
-    keltner12h_btc_gate_ok()), mombreak_1h, DAN rvolbreak_8h (30/10/2026, backtest terpisah
-    142 pair 2023-2026 -- lihat REMARK rvolbreak8h_btc_gate_ok()). decouple_4h &
-    trend_confirm_4h DICABUT dari model gerbang blokir ON/OFF 31/10/2026 (lihat REMARK
-    masing2 di thread_decouple_scan()/thread_trendconfirm_scan()) -- field 'btc_gate_enabled'
-    di config-nya SEKARANG TIDAK DIBACA lagi (dipertahankan di JSON, tidak fungsional).
-    Uncheck dari dashboard kalau mau matikan sementara tanpa redeploy."""
+    Control. Default True (checked) -- per 31/10/2026 berlaku utk brkX2_12h_closed (DIPANGGIL
+    di KETIGA jalur T1/T1c/T1c-E sejak 27/10/2026, OR sejak 31/10/2026 -- lihat REMARK
+    keltner12h_btc_gate_ok()), decouple_4h (OR, gerbang biasa -- sempat dicabut sama hari lewat
+    patch "decouple4h-gate0-removed-tighter-threshold", lalu DIBATALKAN atas permintaan Mas
+    Budi, gerbang asli dipakai lagi), mombreak_1h, DAN rvolbreak_8h (30/10/2026, backtest
+    terpisah 142 pair 2023-2026 -- lihat REMARK rvolbreak8h_btc_gate_ok()). trend_confirm_4h
+    DICABUT dari model gerbang blokir ON/OFF 31/10/2026 (lihat REMARK di
+    thread_trendconfirm_scan()) -- field 'btc_gate_enabled' di config-nya SEKARANG TIDAK
+    DIBACA lagi (dipertahankan di JSON, tidak fungsional). Uncheck dari dashboard kalau mau
+    matikan sementara tanpa redeploy."""
     cfg = load_strategy_config()
     return cfg.get(strategy, {}).get("btc_gate_enabled", True)
 
@@ -17536,10 +17537,11 @@ var SC_PAUSED_LOCKED = {brkX2_crossema: true};
 // terminated) -- 142 pair, candle 8h native, 2023-2026, mekanik Donchian24+RVOL>=3.0 & exit
 // ASLI dari kode. Beda dari 4 strategi lain: buktinya CAMPURAN (TRAIN turun, TEST naik), bukan
 // konsisten -- dipasang atas keputusan eksplisit Mas Budi, bukan rekomendasi default.
-// 31/10/2026 (permintaan Mas Budi): decouple_4h & trend_confirm_4h DIKELUARKAN dari sini --
-// gerbang hard-block ON/OFF-nya DICABUT (diganti logic lain yg gak sesuai model checkbox
-// sederhana ini -- lihat SC_BTC_GATE_TOOLTIP_UNTESTED_SPECIFIC utk penjelasan masing2).
-var SC_BTC_GATE_HELPED = {brkX2_12h_closed: true, mombreak_1h: true, rvolbreak_8h: true};
+// 31/10/2026 (permintaan Mas Budi): trend_confirm_4h DIKELUARKAN dari sini -- gerbang
+// hard-block ON/OFF-nya DICABUT (lihat SC_BTC_GATE_TOOLTIP_UNTESTED_SPECIFIC). decouple_4h
+// SEMPAT dikeluarkan juga (patch "decouple4h-gate0-removed-tighter-threshold") tapi
+// DIBATALKAN sama hari atas permintaan Mas Budi -- gerbang OR aslinya tetap dipakai.
+var SC_BTC_GATE_HELPED = {brkX2_12h_closed: true, decouple_4h: true, mombreak_1h: true, rvolbreak_8h: true};
 var SC_BTC_GATE_ELAPSED = {mombreak_1h: true};  // satu2nya yg rumusnya punya parameter elapsed %
 var SC_BTC_GATE_TOOLTIP = {
     brkX2_12h_closed: 'Syarat (sejak 31/10/2026): BTCUSDT pada HTF 1D ATAU 3D, cukup SALAH SATU candle tertutup terakhir hijau. Sebelumnya AND (wajib dua-duanya) -- backtest 10/10/2026 dgn AND itu bukti paling kuat dari 7 strategi diuji (WR +2,5pp, avg/trade +0,17pp). Diganti ke OR 31/10/2026 atas keputusan Mas Budi meski bukti OR belum sekuat itu (per-tahun 2023-2026: dekat di 3/4 tahun, 2025 ketinggalan jauh, WR tetap sedikit kalah tiap tahun).',
@@ -17556,8 +17558,7 @@ var SC_BTC_GATE_TOOLTIP_OFF_TESTED = {
 var SC_BTC_GATE_TOOLTIP_UNTESTED_SPECIFIC = {
     brkX2: 'Varian "legacy" (brkx2-12h) sudah tidak buka deal baru sama sekali (cuma arsip deal lama) -- tidak relevan diuji.',
     topgainers_4h: 'Sengaja didesain TANPA gerbang BTC-HTF sama sekali -- tujuan strategi ini justru mengisi kekosongan deal saat BTC-HTF sedang memblokir strategi lain, jadi tidak relevan diuji/dipasangi gerbang yang sama.',
-    trend_confirm_4h: 'Gerbang hard-block DICABUT 31/10/2026 -- backtest (147 pair, 2022-2026) nunjukkin sinyal yang diblokir, kalau tetap pakai smallstart+reclaim biasa (BUKAN full-size), hasilnya identik statistik dengan yang lolos gerbang, konsisten di SEMUA 5 tahun kalender. Deal sekarang tetap boleh dibuka walau BTC jelek, sizing tidak berubah.',
-    decouple_4h: 'Gerbang hard-block DICABUT 31/10/2026, diganti syarat sinyal yang dinaikkan 2x (bukan dicek on/off lagi) saat BTCUSDT HTF 12H+1D dua-duanya merah -- backtest (108 pair, 2023-2026) nunjukkin avg/trade naik di SEMUA 4 tahun kalender, +17,7% lebih banyak trade.'
+    trend_confirm_4h: 'Gerbang hard-block DICABUT 31/10/2026 -- backtest (147 pair, 2022-2026) nunjukkin sinyal yang diblokir, kalau tetap pakai smallstart+reclaim biasa (BUKAN full-size), hasilnya identik statistik dengan yang lolos gerbang, konsisten di SEMUA 5 tahun kalender. Deal sekarang tetap boleh dibuka walau BTC jelek, sizing tidak berubah.'
 };
 var SC_BTC_GATE_TOOLTIP_UNTESTED = 'Belum pernah diuji -- backtest Gate0 10/10/2026 cuma mencakup 7 strategi (KeltnerBreak-12h, decouple_4h, dipbuy_universe, trend_confirm_4h, mombreak_1h, rvolbreak_1h, brkX2-4h). Strategi ini belum ada datanya sama sekali.';
 function btcGateCellHtml(k, cfg) {
@@ -21552,9 +21553,10 @@ SHADOW_NEWSTRAT_MAX_HOLD_CANDLES = 20          # sama persis yg dibacktest (robu
 SQUIZED_BB_LOOKBACK   = 100
 DECOUPLE_LOOKBACK     = 20
 DECOUPLE_REL_MIN_PCT  = 5.0    # keunggulan vs BTC >=5 poin persentase, DAN baru saja crossing
-# 31/10/2026 (patch "decouple4h-gate0-removed-tighter-threshold", permintaan Mas Budi): dipakai
-# di thread_decouple_scan() -- lihat REMARK lengkap di situ.
-DECOUPLE_REL_MIN_PCT_BAD_BTC_MULT = 2.0
+# 31/10/2026: DECOUPLE_REL_MIN_PCT_BAD_BTC_MULT (patch "decouple4h-gate0-removed-tighter-
+# threshold") dibuat, SEMPAT deploy (commit 55657fc), lalu dibatalkan sama hari atas
+# permintaan Mas Budi -- lihat REMARK di thread_decouple_scan(). Konstanta dihapus krn sudah
+# tidak dipakai di mana pun.
 
 # ── Decouple-4h LIVE (09/10/2026, Tahap 1/4 -- permintaan Mas Budi): lulus target shadow
 # 24/20 (18W/6L, +56.9%) 09/10/2026. Sinyal & exit IDENTIK dengan versi shadow di atas
@@ -22742,23 +22744,19 @@ def thread_decouple_scan() -> None:
     n_active = deal_count_by_strategy('decouple_4h')
     if n_active >= DECOUPLE_4H_MAX_DEALS: return
 
-    # Patch "decouple4h-gate0-removed-tighter-threshold" (31/10/2026, permintaan Mas Budi):
-    # Gerbang hard-block Gate0 (yg sebelumnya BLOKIR TOTAL scan kalau BTCUSDT HTF 12H+1D
-    # dua2nya merah) DICABUT -- backtest (108 pair, candle 4h, 2023-2026, exit mechanics asli
-    # dari kode) nunjukkin blokir total itu RUGI avg/trade dibanding tetap buka dgn
-    # smallstart+reclaim biasa (TRAIN +1,43%->+1,41%, TEST +0,91%->+0,86%). TAPI backtest
-    # lanjutan nemuin: populasi sinyal yg lahir pas BTC BENER2 jelek (12H+1D dua2nya merah)
-    # kualitasnya emang lebih lemah -- bukan soal diblokir/tidak, tapi soal AMBANG sinyalnya.
-    # Solusi yg TERBUKTI (avg/trade naik di SEMUA 4 tahun 2023-2026, gak ada yg minus, +17,7%
-    # lebih banyak trade vs sekarang): pas kondisi itu, syarat selisih-vs-BTC dinaikin jadi
-    # DECOUPLE_REL_MIN_PCT_BAD_BTC_MULT (2x) dari normal. Deal TETAP BOLEH dibuka kapan pun BTC
-    # jelek -- gak ada lagi "scan dibatalkan"/notifikasi TERBLOKIR, cuma syarat sinyalnya lebih
-    # ketat. decouple4h_btc_gate_ok() DIPERTAHANKAN (dipakai di tempat lain / referensi lama),
-    # cuma gak dipanggil lagi di sini.
-    _dc4h_b12h = btc_htf_closed_bullish('12h')
-    _dc4h_b1d = btc_htf_closed_bullish('1d')
-    _dc4h_neither_green = (_dc4h_b12h is False) and (_dc4h_b1d is False)
-    _dc4h_rel_min_pct = DECOUPLE_REL_MIN_PCT * (DECOUPLE_REL_MIN_PCT_BAD_BTC_MULT if _dc4h_neither_green else 1.0)
+    # 31/10/2026: patch "decouple4h-gate0-removed-tighter-threshold" dibuat & SEMPAT DEPLOY
+    # (commit 55657fc), lalu DIBATALKAN atas permintaan Mas Budi ("temuan decouple dan
+    # rvolbreak layak untuk exclude decouple dari pemasangan") -- Decouple-4h & RVolBreak-8h
+    # sama2 lagi paper-test-only (strategy_enabled=False), dan RVolBreak-8h paper-nya kena
+    # WR 0% mencurigakan (lihat investigasi terpisah) -- Mas Budi gak mau Decouple-4h ikut
+    # dipasang sebelum itu dipahami, in case ada akar masalah bersama. Dikembalikan ke gerbang
+    # hard-block semula.
+    # Gate0 Tahap 2 (10/10/2026): syarat BTCUSDT HTF 12H ATAU 1D hijau (minimal salah satu).
+    _dc4h_gate_ok = decouple4h_btc_gate_ok()
+    _notify_btc_gate_transition('decouple_4h', 'Decouple-4h', _dc4h_gate_ok, 'BTCUSDT HTF 12H ATAU 1D candle tertutup terakhir, minimal salah satu hijau')
+    if not _dc4h_gate_ok:
+        log(f"[T_DECOUPLE] Gate0: syarat BTC (HTF 12H/1D) belum lolos, scan dibatalkan periode ini.")
+        return
 
     try:
         pairs = get_usdt_spot_pairs()
@@ -22813,13 +22811,13 @@ def thread_decouple_scan() -> None:
             rel_now = (coin_ret20 - btc_ret20) * 100
             rel_prev = (coin_ret20_prev - btc_ret20_prev) * 100
             _dc_checks = [
-                (rel_now >= _dc4h_rel_min_pct, f"selisih vs BTC < {_dc4h_rel_min_pct:g}pp ({rel_now:+.1f}pp)" + (" [BTC jelek, ambang 2x]" if _dc4h_neither_green else "")),
-                (rel_prev < _dc4h_rel_min_pct, f"sudah unggul sejak candle lalu (bukan crossing baru)"),
+                (rel_now >= DECOUPLE_REL_MIN_PCT, f"selisih vs BTC < {DECOUPLE_REL_MIN_PCT:g}pp ({rel_now:+.1f}pp)"),
+                (rel_prev < DECOUPLE_REL_MIN_PCT, f"sudah unggul sejak candle lalu (bukan crossing baru)"),
             ]
             _dc_n_pass = sum(1 for ok, _ in _dc_checks if ok)
             if _dc_n_pass >= 1:
                 near_miss_dc.append((_dc_n_pass, sym, [m for ok, m in _dc_checks if not ok], len(_dc_checks)))
-            if not (rel_now >= _dc4h_rel_min_pct and rel_prev < _dc4h_rel_min_pct):
+            if not (rel_now >= DECOUPLE_REL_MIN_PCT and rel_prev < DECOUPLE_REL_MIN_PCT):
                 continue
             atrp_series = _pta_dc.atr(df['high'], df['low'], df['close'], length=14) / df['close'] * 100
             atr_now = float(atrp_series.iloc[-1])
@@ -22966,14 +22964,10 @@ def _paper_test_scan_decouple4h():
     with _paper_test_lock:
         if len(_paper_test_state['decouple_4h']['closed']) >= PAPER_TEST_TARGET:
             return
-    # 31/10/2026 (patch "decouple4h-gate0-removed-tighter-threshold"): gerbang hard-block
-    # DICABUT di sini juga -- lihat REMARK lengkap di thread_decouple_scan() (fungsi paper ini
-    # WAJIB tetap replika persis fungsi live, itu tujuannya). b12h/b1d dihitung di bawah,
-    # dipakai utk naikkan ambang 2x kalau dua2nya merah, BUKAN utk blokir scan.
-    _dc4h_paper_b12h = btc_htf_closed_bullish('12h')
-    _dc4h_paper_b1d = btc_htf_closed_bullish('1d')
-    _dc4h_paper_neither_green = (_dc4h_paper_b12h is False) and (_dc4h_paper_b1d is False)
-    _dc4h_paper_rel_min_pct = DECOUPLE_REL_MIN_PCT * (DECOUPLE_REL_MIN_PCT_BAD_BTC_MULT if _dc4h_paper_neither_green else 1.0)
+    # 31/10/2026: gerbang hard-block dikembalikan di sini juga -- lihat REMARK di
+    # thread_decouple_scan() (patch "decouple4h-gate0-removed-tighter-threshold" dibatalkan).
+    if not decouple4h_btc_gate_ok():
+        return
     try:
         pairs = get_usdt_spot_pairs()
         ticker = get_ticker_24h()
@@ -23015,7 +23009,7 @@ def _paper_test_scan_decouple4h():
             coin_ret20_prev = cc[-2] / cc[-2 - DECOUPLE_LOOKBACK] - 1
             rel_now = (coin_ret20 - btc_ret20) * 100
             rel_prev = (coin_ret20_prev - btc_ret20_prev) * 100
-            if not (rel_now >= _dc4h_paper_rel_min_pct and rel_prev < _dc4h_paper_rel_min_pct):
+            if not (rel_now >= DECOUPLE_REL_MIN_PCT and rel_prev < DECOUPLE_REL_MIN_PCT):
                 continue
             atrp_series = _pta_dc_paper.atr(df['high'], df['low'], df['close'], length=14) / df['close'] * 100
             atr_now = float(atrp_series.iloc[-1])
@@ -27944,8 +27938,10 @@ def run_web_dashboard():
                 },
                 "decouple_4h": {
                     "label": "Decouple-4h",
-                    "status": "na",
-                    "syarat": "Gerbang hard-block DICABUT 31/10/2026 -- deal tetap boleh dibuka walau BTCUSDT HTF 12H+1D dua-duanya merah, cuma syarat selisih-vs-BTC dinaikin 2x (DECOUPLE_REL_MIN_PCT_BAD_BTC_MULT) saat itu. Backtest: avg/trade naik di semua 4 tahun 2023-2026.",
+                    "status": "ok" if decouple4h_btc_gate_ok() else "blocked",
+                    "syarat": "BTCUSDT HTF 12H ATAU 1D candle tertutup terakhir, minimal salah satu hijau",
+                    "live_detail": _btc_gate_live_detail('decouple4h'),
+                    "candles": {"12H": _candles['12h'], "1D": _candles['1d']},
                 },
                 "dipbuy_universe": {
                     "label": "Dip-Buy Universe",
