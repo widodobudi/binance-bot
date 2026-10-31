@@ -761,7 +761,11 @@ TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES   = 15   # 5->15 (28/10/2026) -- jendela 
 TRENDCONFIRM_RECLAIM_ADDFUND_RVOL_MIN    = 0.0  # 1.0->0 (28/10/2026) -- syarat volume DIHAPUS, lihat REMARK di atas
 TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT = 5.0  # BARU (28/10/2026) -- candle cross-up cukup close >= EMA20*(1-5%), tidak wajib PERSIS di atas garis
 TRENDCONFIRM_RECLAIM_ADDFUND_MAX_ADDS    = 2    # BARU (28/10/2026) -- boleh kena add-fund reclaim sampai 2x per deal (dulu cuma 1x)
-TRENDCONFIRM_RECLAIM_ADDFUND_STEP_USD    = 22.0 # BARU (28/10/2026) -- step tambahan ke-2 dst, SAMA BESAR dgn step ke-1 ($8->$30 = +$22), lihat thread2_monitor()
+TRENDCONFIRM_RECLAIM_ADDFUND_STEP_USD    = 32.0 # 28/10/2026: 22 (step tambahan ke-2 dst, dulu SAMA BESAR dgn step
+                                                 # ke-1 $8->$30=+$22). 01/11/2026: naik ke 32 ikutin SMALLSTART_FULL_TARGET_USD
+                                                 # trend_confirm_4h 30->40 (step ke-1 jadi +$32 juga) -- lihat REMARK
+                                                 # "addfund-target-increase" di SMALLSTART_FULL_TARGET_USD. Tier efektif
+                                                 # sekarang: $8 (base) -> $40 (add ke-1) -> $72 (add ke-2, maks).
 # Patch "addfund-reclaim-gapcap" (01/11/2026, permintaan eksplisit Mas Budi -- "ayo patch
 # ketiga strategi itu", sama konsep & REMARK lengkap spt KB12H_RECLAIM_GAP_CAP_PCT di
 # get_live_ema20_1h_closed()/check_kb12h_smallstart_reclaim()): syarat "pernah di bawah EMA20"
@@ -7745,14 +7749,21 @@ def get_live_ema20_reclaim_signal(symbol: str, strategy: str, n_candles: int, rv
 # cuma JUMLAH tambahannya diubah dari "dobel modal awal" jadi "sampai modal normal penuh").
 SMALLSTART_FULL_TARGET_USD = {
     'brkX2_12h_closed': 60.0,   # modal normal lama (base_usd sebelum patch ini)
-    'trend_confirm_4h': 30.0,
+    # 01/11/2026 (patch "addfund-target-increase", permintaan eksplisit Mas Budi -- "nambah
+    # add fund pada TrenKonfirmasi-4h dan Decouple-4h agar diperbesar, gak nendang itu",
+    # dipilih lewat AskUserQuestion dari opsi "rekomendasi"): trend_confirm_4h 30->40 (target
+    # add ke-1; add ke-2 ikut naik ke $72 lewat TRENDCONFIRM_RECLAIM_ADDFUND_STEP_USD di bawah,
+    # lihat REMARK di situ), decouple_4h 20->40 (satu-satunya target add, single-shot). HANYA
+    # angka nominal yang berubah -- trigger/syarat reclaim (gap-cap, N-candle, RVol, dst) SAMA
+    # SEKALI TIDAK disentuh.
+    'trend_confirm_4h': 40.0,
     # 26/10/2026 (patch "decouple-rvolbreak8h-smallstart-reclaim"): modal normal lama
     # decouple_4h/rvolbreak_8h SEBELUM patch ini -- decouple_4h pakai nilai LIVE saat ini (20,
     # BUKAN STRATEGY_CONFIG_DEFAULTS code-default lama 50 -- ada saved override di
     # strategy_config.json yg sudah berlaku sejak sebelumnya, diverifikasi via GET
     # /api/strategy_config 26/10/2026 sebelum patch ini ditulis). rvolbreak_8h tidak ada
     # override (live == code-default), jadi 50.
-    'decouple_4h':      20.0,
+    'decouple_4h':      40.0,   # 01/11/2026: 20->40, lihat REMARK "addfund-target-increase" di atas
     'rvolbreak_8h':     50.0,
 }
 
@@ -11414,10 +11425,10 @@ def thread2_monitor():
                     # penuh" (SMALLSTART_FULL_TARGET_USD) -- trigger/syarat reclaim-nya (N candle
                     # + RVol di atas) TIDAK disentuh, tetap PERSIS sama spt yang sudah live sejak
                     # 17/10/2026. Lihat REMARK lengkap di SMALLSTART_FULL_TARGET_USD.
-                    # 28/10/2026: target add ke-2 = target ke-1 + STEP_USD ($30+$22=$52) -- SAMA
-                    # besar step-nya dgn add ke-1, lihat REMARK TRENDCONFIRM_RECLAIM_ADDFUND_STEP_USD.
+                    # 28/10/2026: target add ke-2 = target ke-1 + STEP_USD, SAMA besar step-nya dgn
+                    # add ke-1 (01/11/2026: $8->$40->$72), lihat REMARK TRENDCONFIRM_RECLAIM_ADDFUND_STEP_USD.
                     _rc_current_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('trend_confirm_4h'))
-                    _rc_target = SMALLSTART_FULL_TARGET_USD.get('trend_confirm_4h', 30.0) + TRENDCONFIRM_RECLAIM_ADDFUND_STEP_USD * _rc_add_count
+                    _rc_target = SMALLSTART_FULL_TARGET_USD.get('trend_confirm_4h', 40.0) + TRENDCONFIRM_RECLAIM_ADDFUND_STEP_USD * _rc_add_count
                     _rc_modal = round(max(0.0, _rc_target - _rc_current_modal), 2)
                     if _rc_modal <= 0:
                         log(f"[T2] {sym} reclaim-addfund TERPICU tapi modal (${_rc_current_modal:.0f}) sudah >= target (${_rc_target:.0f}) -- tidak ada yg perlu ditambah")
@@ -11492,7 +11503,7 @@ def thread2_monitor():
                     # tetap PERSIS sama spt yang sudah live sejak 17/10/2026. Pola identik dgn
                     # TrenKonfirmasi-4h, lihat REMARK lengkap di SMALLSTART_FULL_TARGET_USD.
                     _dc_current_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('decouple_4h'))
-                    _dc_modal = round(max(0.0, SMALLSTART_FULL_TARGET_USD.get('decouple_4h', 20.0) - _dc_current_modal), 2)
+                    _dc_modal = round(max(0.0, SMALLSTART_FULL_TARGET_USD.get('decouple_4h', 40.0) - _dc_current_modal), 2)
                     if _dc_modal <= 0:
                         log(f"[T2] {sym} reclaim-addfund TERPICU tapi modal (${_dc_current_modal:.0f}) sudah >= target normal -- tidak ada yg perlu ditambah")
                         with active_deals_lock:
@@ -11507,7 +11518,7 @@ def thread2_monitor():
                                 active_deals[sym]['reclaim_addfund_used'] = True
                     else:
                         log(f"[T2] {sym} reclaim-addfund TERPICU: EMA20 reclaim (<={DECOUPLE_RECLAIM_ADDFUND_N_CANDLES} candle, gap-cap {DECOUPLE_RECLAIM_ADDFUND_GAP_CAP_PCT:g}%) "
-                            f"+ RVol>={DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_dc_modal:.0f} (modal ${_dc_current_modal:.0f} -> target ${SMALLSTART_FULL_TARGET_USD.get('decouple_4h', 20.0):.0f})")
+                            f"+ RVol>={DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_dc_modal:.0f} (modal ${_dc_current_modal:.0f} -> target ${SMALLSTART_FULL_TARGET_USD.get('decouple_4h', 40.0):.0f})")
                         _dc_result = execute_add_fund(sym, _dc_modal)
                         with active_deals_lock:
                             if sym in active_deals:
