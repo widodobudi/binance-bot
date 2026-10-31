@@ -9010,26 +9010,24 @@ def btc_htf_last3_closed_bullish(htf_interval: str):
         return slot["bullish"]
 
 # 31/10/2026 (patch "keltner12h-gate0-and-to-or", permintaan Mas Budi): AND (1D DAN 3D)
-# diganti jadi OR (1D ATAU 3D) -- backtest (68 pair, candle 12h, 2023-2026, exit mechanics
-# asli) nunjukkin AND-ketat kehilangan peluang yg sebenarnya gak buruk: populasi "cuma salah
-# satu hijau" sendirian avg/trade +1.758% (vs "dua2nya merah" cuma +1.224%). Dicoba juga cabut
-# gerbang total (variant C) DAN naikkan syarat breakout (variant E) -- keduanya GAGAL (E malah
-# makin jelek makin ketat). OR per-tahun (2023-2026): avg/trade dekat A di 3 dari 4 tahun,
-# cuma 2025 yg jauh ketinggalan (bukan pola terus-menerus) -- WR tetap sedikit kalah tiap
-# tahun. Bukti BELUM sekuat TC4h/Decouple-4h, tapi dipasang atas keputusan eksplisit Mas Budi
-# ("PERINTAH SAYA, IKUTKAN KELTNERBREAK-12 ARTINYA IKUT DIPASANG").
+# diganti jadi OR (1D ATAU 3D) sempat dipasang, lalu HARI YANG SAMA diganti lagi jadi
+# FIXED 1D SAJA (3D dibuang sepenuhnya dari keputusan) -- backtest ulang pakai metode
+# train/test mingguan yang benar (seluruh 2022-2026, minggu ganjil=TRAIN genap=TEST, sizing
+# smallstart+reclaim, bukan modal tetap) nunjukkin di data TEST: AND menang tipis soal
+# persentase menang (82,9% vs 81,7%), TAPI 1D-saja menang soal untung rata-rata/transaksi
+# (+3,76% vs +3,69%) -- OR (yang sempat jalan) kalah dari keduanya di kedua ukuran. Mas Budi
+# pilih 1D-saja.
 def keltner12h_btc_gate_ok() -> bool:
     """Dipanggil di KETIGA jalur KeltnerBreak-12h (T1/thread1_scan(), T1c/thread1c_scan_intrabar(),
     T1c-E/thread1c_scan_intrabar_early() -- lihat patch "kb12h-gate0-intrabar-fix" 27/10/2026).
-    Syarat: BTCUSDT HTF 1D ATAU 3D, cukup SALAH SATU candle tertutup terakhir hijau (OR, versi
-    longgar sejak 31/10/2026 -- lihat REMARK "keltner12h-gate0-and-to-or" di atas)."""
+    Syarat: BTCUSDT HTF 1D SAJA, candle tertutup terakhir harus hijau (FIXED single-condition
+    sejak 31/10/2026 -- 3D tidak lagi dipakai/dicek sama sekali, lihat REMARK di atas)."""
     if not is_btc_gate_enabled('brkX2_12h_closed'):
         return True
     b1d = btc_htf_closed_bullish('1d')
-    b3d = btc_htf_closed_bullish('3d')
-    if b1d is None and b3d is None:
-        return True  # fail-open, dua2nya gagal
-    return bool(b1d) or bool(b3d)
+    if b1d is None:
+        return True  # fail-open, data gagal diambil
+    return bool(b1d)
 
 def keltner12h_volatil_btc_strong_exempt() -> bool:
     """Patch 'keltner12h-btc-strong-volatil-exempt' (21/10/2026, permintaan Mas Budi setelah
@@ -10367,7 +10365,7 @@ def thread1_scan():
     # Gate0 Tahap 2 (10/10/2026): syarat BTCUSDT HTF 1D+3D hijau -- KHUSUS jalur closed-candle
     # ini (T1). TIDAK dipanggil di thread1c_scan_intrabar()/thread1c_scan_intrabar_early().
     _kb12h_gate_ok = keltner12h_btc_gate_ok()
-    _notify_btc_gate_transition('brkX2_12h_closed', 'KeltnerBreak-12h', _kb12h_gate_ok, 'BTCUSDT HTF 1D ATAU 3D candle tertutup terakhir, minimal salah satu hijau')
+    _notify_btc_gate_transition('brkX2_12h_closed', 'KeltnerBreak-12h', _kb12h_gate_ok, 'BTCUSDT HTF 1D candle tertutup terakhir harus hijau')
     if not _kb12h_gate_ok:
         log("[T1] Gate0: syarat BTC (HTF 1D+3D hijau) belum lolos, scan dibatalkan periode ini.")
         return "Gate0 BTC aktif & tidak lolos — scan dibatalkan periode ini."
@@ -12677,7 +12675,7 @@ def thread1c_scan_intrabar():
     # melindungi apa pun. Ditambahkan di sini supaya "TERBLOKIR" di dashboard/email benar2 berarti
     # tidak ada posisi baru sama sekali, bukan cuma utk jalur yg jarang dipakai.
     _kb12h_gate_ok = keltner12h_btc_gate_ok()
-    _notify_btc_gate_transition('brkX2_12h_closed', 'KeltnerBreak-12h', _kb12h_gate_ok, 'BTCUSDT HTF 1D ATAU 3D candle tertutup terakhir, minimal salah satu hijau')
+    _notify_btc_gate_transition('brkX2_12h_closed', 'KeltnerBreak-12h', _kb12h_gate_ok, 'BTCUSDT HTF 1D candle tertutup terakhir harus hijau')
     if not _kb12h_gate_ok:
         log("[T1c] Gate0: syarat BTC (HTF 1D+3D hijau) belum lolos, scan dibatalkan periode ini.")
         return None
@@ -12912,7 +12910,7 @@ def thread1c_scan_intrabar_early():
     # Gate0 (27/10/2026, patch "kb12h-gate0-intrabar-fix") -- lihat REMARK lengkap di
     # thread1c_scan_intrabar() dan STRATEGY_CONFIG_DEFAULTS['brkX2_12h_closed'].
     _kb12h_gate_ok = keltner12h_btc_gate_ok()
-    _notify_btc_gate_transition('brkX2_12h_closed', 'KeltnerBreak-12h', _kb12h_gate_ok, 'BTCUSDT HTF 1D ATAU 3D candle tertutup terakhir, minimal salah satu hijau')
+    _notify_btc_gate_transition('brkX2_12h_closed', 'KeltnerBreak-12h', _kb12h_gate_ok, 'BTCUSDT HTF 1D candle tertutup terakhir harus hijau')
     if not _kb12h_gate_ok:
         log("[T1c-E] Gate0: syarat BTC (HTF 1D+3D hijau) belum lolos, scan dibatalkan periode ini.")
         return None
@@ -17547,7 +17545,7 @@ var SC_PAUSED_LOCKED = {brkX2_crossema: true};
 var SC_BTC_GATE_HELPED = {brkX2_12h_closed: true, mombreak_1h: true, rvolbreak_8h: true};
 var SC_BTC_GATE_ELAPSED = {mombreak_1h: true};  // satu2nya yg rumusnya punya parameter elapsed %
 var SC_BTC_GATE_TOOLTIP = {
-    brkX2_12h_closed: 'Syarat (sejak 31/10/2026): BTCUSDT pada HTF 1D ATAU 3D, cukup SALAH SATU candle tertutup terakhir hijau. Sebelumnya AND (wajib dua-duanya) -- backtest 10/10/2026 dgn AND itu bukti paling kuat dari 7 strategi diuji (WR +2,5pp, avg/trade +0,17pp). Diganti ke OR 31/10/2026 atas keputusan Mas Budi meski bukti OR belum sekuat itu (per-tahun 2023-2026: dekat di 3/4 tahun, 2025 ketinggalan jauh, WR tetap sedikit kalah tiap tahun).',
+    brkX2_12h_closed: 'Syarat (sejak 31/10/2026): BTCUSDT pada HTF 1D SAJA, candle tertutup terakhir harus hijau (3D tidak dipakai lagi). Sempat AND (1D+3D wajib dua-duanya), lalu OR (cukup salah satu) sama hari, lalu dipilih FIXED 1D-saja atas keputusan Mas Budi -- backtest ulang metode train/test mingguan (2022-2026 penuh, sizing smallstart+reclaim): di data TEST, AND menang tipis soal persentase menang (82,9% vs 81,7%), tapi 1D-saja menang soal untung rata-rata/trade (+3,76% vs +3,69%); OR kalah dari keduanya di kedua ukuran.',
     decouple_4h: 'Syarat: BTCUSDT pada HTF 12H DAN 1D, cukup SALAH SATU candle tertutup terakhir hijau. Backtest 10/10/2026: dari 100 kesempatan, 74 tetap lolos; rata-rata profit/trade naik +0,05pp.',
     trend_confirm_4h: 'Syarat: BTCUSDT pada HTF 12H DAN 1D, candle tertutup terakhir keduanya harus hijau. Backtest 10/10/2026: dari 100 kesempatan, 39 tetap lolos; rata-rata profit/trade naik +0,14pp. Satu-satunya uji yang menunjukkan bukti untuk strategi ini.',
     mombreak_1h: 'Syarat: tunggu candle BTCUSDT 1 jam (TF strategi ini sendiri, diganti dari 3 menit 14/10/2026) closed sampai persentase di kolom sebelah, DAN BTC-nya harus naik minimal 0,10% di candle itu. Ambang 0,10% itu HASIL BACKTEST LAMA khusus candle 3 menit (dari 100 kesempatan, 36 tetap lolos; avg profit naik +0,06pp) -- BELUM diuji ulang utk candle 1 jam, dipertahankan sbg titik awal.',
@@ -27938,7 +27936,7 @@ def run_web_dashboard():
                 "brkX2_12h_closed": {
                     "label": "KeltnerBreak-12h",
                     "status": "ok" if keltner12h_btc_gate_ok() else "blocked",
-                    "syarat": "BTCUSDT HTF 1D ATAU 3D candle tertutup terakhir, minimal salah satu hijau",
+                    "syarat": "BTCUSDT HTF 1D candle tertutup terakhir harus hijau",
                     "live_detail": _btc_gate_live_detail('keltner12h'),
                     "candles": {"1D": _candles['1d'], "3D": _candles['3d']},
                 },
