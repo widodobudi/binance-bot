@@ -11296,7 +11296,7 @@ def thread2_monitor():
                                     (f" [{_kb_label}]" if _kb_mode == 'partial' else "") + "\n"
                                     f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                                     f"Pair    : {to_display_pair(sym)}\n"
-                                    f"Pola    : EMA20 4h cross-down lalu cross-up (reclaim, toleransi {KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%)\n"
+                                    f"Pola    : EMA20 1h cross-down lalu cross-up (reclaim, toleransi {KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%)\n"
                                     f"Modal ditambah: ${_kb_result.get('amount',0):.2f} @ {_fmt_price(_kb_result.get('price',0))}" +
                                     (f"\nCatatan: target penuh ${_kb_modal:.0f}, saldo mepet -- {_kb_result.get('ai_reasoning','')}" if _kb_mode == 'partial' else ""),
                                     parse_mode=None
