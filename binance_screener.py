@@ -10370,12 +10370,13 @@ def thread1_scan():
         log("[T1] Filter BTC: kondisi tidak lolos, scan dibatalkan.")
         return "Filter BTC aktif & tidak lolos — scan dibatalkan periode ini."
 
-    # Gate0 Tahap 2 (10/10/2026): syarat BTCUSDT HTF 1D+3D hijau -- KHUSUS jalur closed-candle
-    # ini (T1). TIDAK dipanggil di thread1c_scan_intrabar()/thread1c_scan_intrabar_early().
+    # Gate0 Tahap 2 (10/10/2026, fixed 1D-saja sejak 31/10/2026): dipanggil di KETIGA jalur
+    # (T1/T1c/T1c-E, lihat patch "kb12h-gate0-intrabar-fix" 27/10/2026) -- komentar lama di
+    # sini yang bilang "khusus T1" sudah tidak akurat sejak patch itu.
     _kb12h_gate_ok = keltner12h_btc_gate_ok()
     _notify_btc_gate_transition('brkX2_12h_closed', 'KeltnerBreak-12h', _kb12h_gate_ok, 'BTCUSDT HTF 1D candle tertutup terakhir harus hijau')
     if not _kb12h_gate_ok:
-        log("[T1] Gate0: syarat BTC (HTF 1D+3D hijau) belum lolos, scan dibatalkan periode ini.")
+        log("[T1] Gate0: syarat BTC (HTF 1D hijau) belum lolos, scan dibatalkan periode ini.")
         return "Gate0 BTC aktif & tidak lolos — scan dibatalkan periode ini."
 
     candidates = []
@@ -12686,7 +12687,7 @@ def thread1c_scan_intrabar():
     _kb12h_gate_ok = keltner12h_btc_gate_ok()
     _notify_btc_gate_transition('brkX2_12h_closed', 'KeltnerBreak-12h', _kb12h_gate_ok, 'BTCUSDT HTF 1D candle tertutup terakhir harus hijau')
     if not _kb12h_gate_ok:
-        log("[T1c] Gate0: syarat BTC (HTF 1D+3D hijau) belum lolos, scan dibatalkan periode ini.")
+        log("[T1c] Gate0: syarat BTC (HTF 1D hijau) belum lolos, scan dibatalkan periode ini.")
         return None
     held_bx12c = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
     for sym in universe:
@@ -12921,7 +12922,7 @@ def thread1c_scan_intrabar_early():
     _kb12h_gate_ok = keltner12h_btc_gate_ok()
     _notify_btc_gate_transition('brkX2_12h_closed', 'KeltnerBreak-12h', _kb12h_gate_ok, 'BTCUSDT HTF 1D candle tertutup terakhir harus hijau')
     if not _kb12h_gate_ok:
-        log("[T1c-E] Gate0: syarat BTC (HTF 1D+3D hijau) belum lolos, scan dibatalkan periode ini.")
+        log("[T1c-E] Gate0: syarat BTC (HTF 1D hijau) belum lolos, scan dibatalkan periode ini.")
         return None
 
     held_bx12e = {}   # 03/09/2026 pola 2-babak: symbol -> data kandidat yg lolos babak 1
