@@ -2247,12 +2247,23 @@ def save_cancelled_deal_price():
     except Exception as e:
         log(f"WARN gagal simpan cancelled_deal_price.json: {e}")
 
-def record_cancelled_deal_price(symbol: str, entry_price: float, strategy: str):
+def record_cancelled_deal_price(symbol: str, entry_price: float, strategy: str,
+                                 target_usd: float = 0.0, reclaim_add_count: int = 0):
+    """01/11/2026 (patch "orphan-reclaim-addfund", permintaan eksplisit Mas Budi -- "YA SANGAT
+    MAU BANGET", lihat REMARK lengkap di ORPHAN_RECLAIM_SCAN_INTERVAL): target_usd/reclaim_add_count
+    BARU -- dulu cuma entry_price/strategy. target_usd = modal (USD) yang sudah tertanam saat
+    di-cancel (dari removed_deal['target_usd']) -- dipakai run_thread_orphan_reclaim() hitung
+    tier add berikutnya, SAMA formula spt deal aktif. reclaim_add_count = carry-over dari
+    removed_deal['reclaim_addfund_count'] (BUKAN mulai dari 0) -- supaya total add-fund per deal
+    (aktif + orphan digabung) TETAP dibatasi MAX_ADDS yang sama, tidak dobel kesempatan gara2
+    di-cancel."""
     if not entry_price or float(entry_price) <= 0:
         return
     with cancelled_deal_price_lock:
         cancelled_deal_price[symbol] = {"entry_price": float(entry_price), "strategy": strategy,
-                                         "ts": time.time(), "cancelled_wib": now_wib().strftime('%d/%m/%Y %H:%M')}
+                                         "ts": time.time(), "cancelled_wib": now_wib().strftime('%d/%m/%Y %H:%M'),
+                                         "target_usd": float(target_usd or 0), "below_ema20": False,
+                                         "reclaim_add_count": int(reclaim_add_count or 0)}
     save_cancelled_deal_price()
 
 def get_cancelled_deal_price(asset: str):
@@ -7225,6 +7236,57 @@ def auto_fund_addfund_from_orphaned_profit(target_symbol: str, needed_usd: float
     return result
 
 
+def execute_orphan_addfund(symbol: str, add_usd: float) -> dict:
+    """Patch "orphan-reclaim-addfund" (01/11/2026, permintaan eksplisit Mas Budi -- "YA SANGAT
+    MAU BANGET", lihat REMARK lengkap di ORPHAN_RECLAIM_SCAN_INTERVAL): nambah modal ke coin
+    yang SUDAH di-cancel (orphan, lihat cancelled_deal_price) -- BEDA ARAH TOTAL dari
+    auto_fund_addfund_from_orphaned_profit() di atas (itu JUAL orphan buat danai deal LAIN;
+    ini BELI LEBIH BANYAK orphan itu SENDIRI, nurunin harga rata-rata belinya).
+    TIDAK PERNAH menghidupkan lagi pengelolaan exit (hard-stop/trailing/dll) -- coin ini
+    TETAP TIDAK AKAN PERNAH dijual otomatis sesudah ini, sama persis janji awal fitur cancel
+    ("kamu jangan sell"). Cuma entry_price & target_usd di cancelled_deal_price yang
+    diperbarui (rata-rata tertimbang berbasis MODAL USD, formula SAMA PERSIS spt
+    reclaim_walk_decouple() di backtest sesi ini: target/(modal_lama/harga_lama + tambahan/harga_baru)
+    -- cancelled_deal_price TIDAK melacak qty_coin on-chain, jadi basis USD, bukan qty).
+    V1 SENGAJA TIDAK pakai handle_reclaim_addfund_shortfall() (AI-fallback saldo mepet, dipakai
+    jalur deal aktif) -- kalau saldo USDT kurang walau sudah dicoba redeem Earn, cukup gagal &
+    di-skip, dicoba lagi siklus scan berikutnya (TIDAK ada time-pressure spt deal aktif).
+    Return dict {"ok", "symbol", "amount", "price", "new_entry", "new_modal", "error"}."""
+    symbol = str(symbol).upper().strip()
+    with cancelled_deal_price_lock:
+        cd = dict(cancelled_deal_price.get(symbol, {}))
+    if not cd:
+        return {"ok": False, "error": f"{symbol} tidak ada di cancelled_deal_price"}
+    try:
+        if not ensure_spot_usdt(add_usd):
+            return {"ok": False, "error": "Saldo USDT tidak cukup (termasuk setelah coba redeem Earn Flexible)"}
+        result = binance_buy_market(symbol, add_usd)
+        qty = result.get('qty', 0)
+        if qty <= 0:
+            return {"ok": False, "error": "Order gagal/qty 0"}
+        old_entry = float(cd.get('entry_price', 0) or 0)
+        # fallback ke base_usd strategi kalau target_usd belum ada (entry lama dari SEBELUM
+        # patch ini, direkam cancel_deal_action() versi lama tanpa target_usd) -- TANPA ini,
+        # old_modal=0 bikin formula di bawah buang entry_price asli & pakai harga fill baru
+        # doang, salah hitung rata-rata buat posisi yang SUDAH ada isinya
+        old_modal = float(cd.get('target_usd', 0) or 0) or get_strategy_base_usd(cd.get('strategy', ''))
+        new_modal = old_modal + add_usd
+        if old_entry > 0 and old_modal > 0:
+            new_entry = new_modal / (old_modal / old_entry + add_usd / result['price_avg'])
+        else:
+            new_entry = result['price_avg']
+        with cancelled_deal_price_lock:
+            if symbol in cancelled_deal_price:
+                cancelled_deal_price[symbol]['entry_price'] = new_entry
+                cancelled_deal_price[symbol]['target_usd'] = new_modal
+                cancelled_deal_price[symbol]['below_ema20'] = False
+        save_cancelled_deal_price()
+        return {"ok": True, "symbol": symbol, "amount": add_usd, "price": result['price_avg'],
+                "new_entry": new_entry, "new_modal": new_modal}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 AUTOFUND_OPEN_MIN_IDLE_AGE_SEC = 24 * 3600  # 17/09/2026, permintaan Mas Budi -- lihat docstring
 
 def auto_fund_open_from_idle_asset(needed_usd: float) -> dict:
@@ -7885,6 +7947,35 @@ def check_kb12h_smallstart_reclaim(symbol: str, deal: dict, tolerance_pct: float
             if symbol in active_deals:
                 active_deals[symbol]['smallstart_below_ema20'] = True
         save_active_deals()
+        was_below = True
+    if not was_below:
+        return False
+    thresh = ema20_now * (1 - tolerance_pct / 100)
+    return close_now >= thresh
+
+def check_kb12h_orphan_reclaim(symbol: str, cd: dict, tolerance_pct: float = 0.0) -> bool:
+    """Varian check_kb12h_smallstart_reclaim() KHUSUS coin "orphan" (sudah lepas dari
+    active_deals lewat cancel_deal_action(), lihat cancelled_deal_price) -- patch
+    "orphan-reclaim-addfund" (01/11/2026, permintaan eksplisit Mas Budi "YA SANGAT MAU
+    BANGET", lihat REMARK lengkap di ORPHAN_RECLAIM_SCAN_INTERVAL). Logika IDENTIK PERSIS
+    dgn versi asli (gap-cap, EMA20 1h, dst) -- SENGAJA DIDUPLIKASI (bukan modifikasi fungsi
+    asli) supaya jalur deal AKTIF (yang sudah live & teruji) TIDAK tersentuh sama sekali --
+    satu-satunya beda: flag "pernah di bawah" disimpan di cancelled_deal_price[symbol]
+    ('below_ema20'), BUKAN active_deals (symbol ini sudah TIDAK ADA di situ lagi)."""
+    live = get_live_ema20_1h_closed(symbol)
+    if live is None:
+        return False
+    close_now, ema20_now = live
+    was_below = bool(cd.get('below_ema20', False))
+    entry_price = float(cd.get('entry_price', 0) or 0)
+    arm_level = ema20_now
+    if entry_price > 0:
+        arm_level = max(ema20_now, entry_price * (1 - KB12H_RECLAIM_GAP_CAP_PCT / 100))
+    if close_now < arm_level and not was_below:
+        with cancelled_deal_price_lock:
+            if symbol in cancelled_deal_price:
+                cancelled_deal_price[symbol]['below_ema20'] = True
+        save_cancelled_deal_price()
         was_below = True
     if not was_below:
         return False
@@ -15790,7 +15881,9 @@ def cancel_deal_action(sym: str, pct: float = 100, reason: str = "") -> dict:
     # removed_deal SUDAH rata-rata tertimbang yang benar, termasuk kalau sempat add-fund
     # berkali-kali -- lihat REMARK record_cancelled_deal_price/execute_add_fund) supaya nanti
     # floating P&L-nya bisa dihitung kalau wallet masih menyimpannya.
-    record_cancelled_deal_price(sym, removed_deal.get('entry_price', 0), removed_deal.get('strategy', '-'))
+    record_cancelled_deal_price(sym, removed_deal.get('entry_price', 0), removed_deal.get('strategy', '-'),
+                                 target_usd=removed_deal.get('target_usd', 0),
+                                 reclaim_add_count=removed_deal.get('reclaim_addfund_count', 0))
     # 21/10/2026 (permintaan Mas Budi, insiden PUMP/USDT Decouple-4h -- buka/armed/cancel 3x
     # dalam 32 menit): jalur CANCEL ini TIDAK PERNAH memanggil record_closed() sejak awal --
     # beda dari bug whitelist basi semalam (6f4b165) yang cuma menutup jalur CLOSE biasa, celah
@@ -15805,6 +15898,118 @@ def cancel_deal_action(sym: str, pct: float = 100, reason: str = "") -> dict:
            else f"Cancel sebagian {pct:.0f}%. Koin TIDAK dijual, tetap di wallet.")
     )
     return {"ok": True, "symbol": sym, "pct": pct}
+
+
+# Patch "orphan-reclaim-addfund" (01/11/2026, permintaan eksplisit Mas Budi, "YA SANGAT MAU
+# BANGET" -- lahir dari pertanyaan "aturan cancel (sejak 20/10) bikin rusak fitur gap-cap
+# 8%/5%/3% itu gak?"): sebelum patch ini, coin yang kena cancel_deal_action() di atas LANGSUNG
+# lepas tangan 100% -- gap-cap reclaim add-fund yang sedang "armed" (nunggu pola turun-lalu-
+# reclaim) di deal itu IKUT HILANG selamanya begitu di-cancel, walau harga belakangan beneran
+# reclaim. Diukur dulu (3 fork backtest, 01/11/2026) seberapa sering ini kejadian nyata:
+# KeltnerBreak-12h & Decouple-4h = TIDAK PERNAH (0/6.448 dan 0/25.159 -- alasan beda-beda,
+# lihat commit message/REMARK terkait), TAPI TrenKonfirmasi-4h = NYATA, ~1 dari 50 deal yang
+# sempat armed (195/9.787 = 1,99%), dan 95,9% dari situ kemungkinan besar bakal reclaim kalau
+# TIDAK di-cancel (model v2, fix ATR live + jalur arm BB-Upper -- model v1 TIDAK valid, gak
+# bisa reproduksi trailing-loss sama sekali, lihat tc4h_cancel_race_v2.py di scratchpad sesi
+# ini). Jadi fitur ini REAL, bukan teoritis -- disetujui dibangun.
+#
+# Mekanisme: thread terpisah (run_thread_orphan_reclaim) memantau SEMUA entry di
+# cancelled_deal_price milik 3 strategi yg punya gap-cap (KeltnerBreak-12h/TrenKonfirmasi-4h/
+# Decouple-4h -- RVolBreak-8h TIDAK, strategi itu tidak punya gap-cap dari awal), pakai syarat
+# reclaim YANG PERSIS SAMA (constants sama, cuma sumber state-nya beda -- lihat
+# check_kb12h_orphan_reclaim()/execute_orphan_addfund()). Kalau reclaim kejadian, bot BELI LAGI
+# coin itu (nambah modal, turunin harga rata-rata) -- TAPI TIDAK PERNAH menghidupkan lagi
+# pengelolaan exit (hard-stop/trailing/dll). Coin ini TETAP TIDAK AKAN PERNAH dijual otomatis
+# sesudahnya -- jaminan asli fitur cancel ("kamu jangan sell") TIDAK berubah sama sekali, cuma
+# modal yang bisa nambah. RISIKO YANG DISADARI & DIKONFIRMASI ke Mas Budi sebelum dibangun:
+# ini BUKAN "menyelamatkan peluang" gratis -- ini BENERAN nambah komitmen modal baru ke posisi
+# yang sudah diputuskan ditinggalkan; kalau harga lanjut jatuh lagi setelah ditambah, modal
+# tambahan itu ikut nyangkut juga (dan tetap tidak akan dijual otomatis).
+ORPHAN_RECLAIM_SCAN_INTERVAL = 60  # detik -- jauh lebih longgar drpd T2 (15 detik), posisi
+                                    # orphan TIDAK time-critical (tidak ada exit yg dikelola
+                                    # sama sekali, cuma nunggu peluang reclaim)
+ORPHAN_RECLAIM_GAPCAP_STRATEGIES = ('brkX2_12h_closed', 'trend_confirm_4h', 'decouple_4h')
+
+def run_thread_orphan_reclaim():
+    while True:
+        try:
+            with cancelled_deal_price_lock:
+                snapshot = dict(cancelled_deal_price)
+            for sym, cd in snapshot.items():
+                strat = cd.get('strategy', '')
+                if strat not in ORPHAN_RECLAIM_GAPCAP_STRATEGIES:
+                    continue
+                entry_price = float(cd.get('entry_price', 0) or 0)
+                if entry_price <= 0:
+                    continue
+                add_count = int(cd.get('reclaim_add_count', 0) or 0)
+                if strat == 'brkX2_12h_closed':
+                    max_adds   = KB12H_RECLAIM_ADDFUND_MAX_ADDS
+                    step_usd   = KB12H_RECLAIM_ADDFUND_STEP_USD
+                    base_target = SMALLSTART_FULL_TARGET_USD.get('brkX2_12h_closed', 60.0)
+                elif strat == 'trend_confirm_4h':
+                    max_adds   = TRENDCONFIRM_RECLAIM_ADDFUND_MAX_ADDS
+                    step_usd   = TRENDCONFIRM_RECLAIM_ADDFUND_STEP_USD
+                    base_target = SMALLSTART_FULL_TARGET_USD.get('trend_confirm_4h', 40.0)
+                else:  # decouple_4h -- single-shot, max_adds selalu 1
+                    max_adds   = 1
+                    step_usd   = 0.0
+                    base_target = SMALLSTART_FULL_TARGET_USD.get('decouple_4h', 40.0)
+                if add_count >= max_adds:
+                    continue
+                if not get_deal_override(sym, 'auto_add_fund', True):
+                    continue
+                try:
+                    if strat == 'brkX2_12h_closed':
+                        signal = check_kb12h_orphan_reclaim(sym, cd, KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT)
+                    elif strat == 'trend_confirm_4h':
+                        signal = get_live_ema20_reclaim_signal(
+                            sym, strat, TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES, TRENDCONFIRM_RECLAIM_ADDFUND_RVOL_MIN,
+                            TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT,
+                            entry_price=entry_price, gap_cap_pct=TRENDCONFIRM_RECLAIM_ADDFUND_GAP_CAP_PCT)
+                    else:
+                        signal = get_live_ema20_reclaim_signal(
+                            sym, strat, DECOUPLE_RECLAIM_ADDFUND_N_CANDLES, DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN,
+                            entry_price=entry_price, gap_cap_pct=DECOUPLE_RECLAIM_ADDFUND_GAP_CAP_PCT)
+                except Exception as e:
+                    log(f"WARN [ORPHAN-RECLAIM] {sym} cek sinyal gagal: {e}")
+                    continue
+                if not signal:
+                    continue
+                current_modal = float(cd.get('target_usd', 0) or 0) or get_strategy_base_usd(strat)
+                target_modal = base_target + step_usd * add_count
+                add_usd = round(max(0.0, target_modal - current_modal), 2)
+                if add_usd <= 0:
+                    with cancelled_deal_price_lock:
+                        if sym in cancelled_deal_price:
+                            cancelled_deal_price[sym]['reclaim_add_count'] = add_count + 1
+                            cancelled_deal_price[sym]['below_ema20'] = False
+                    save_cancelled_deal_price()
+                    continue
+                glob_ok, glob_reason = global_deal_limits_ok(planned_usd=add_usd)
+                if not glob_ok:
+                    log(f"[ORPHAN-RECLAIM] {sym} TERPICU tapi kapasitas gabungan penuh ({glob_reason}) -- di-skip, dicoba lagi siklus berikutnya")
+                    continue
+                result = execute_orphan_addfund(sym, add_usd)
+                with cancelled_deal_price_lock:
+                    if sym in cancelled_deal_price:
+                        cancelled_deal_price[sym]['reclaim_add_count'] = add_count + 1
+                save_cancelled_deal_price()
+                if result.get('ok'):
+                    log(f"[ORPHAN-RECLAIM] {sym} ({strat}) TERPICU (add ke-{add_count + 1}/{max_adds}): "
+                        f"tambah modal ${add_usd:.2f} (modal ${current_modal:.0f} -> ${result['new_modal']:.0f})")
+                    send_telegram(
+                        f"🔁 Orphan Reclaim Add-Fund -- {to_display_pair(sym)} (add ke-{add_count + 1}/{max_adds})\n"
+                        f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+                        f"Strategi: {strat} (coin ini sudah di-cancel sebelumnya -- exit TETAP tidak dikelola)\n"
+                        f"Modal ditambah: ${add_usd:.2f} @ {_fmt_price(result['price'])}\n"
+                        f"Modal total: ${current_modal:.0f} -> ${result['new_modal']:.0f}, harga rata-rata baru: {_fmt_price(result['new_entry'])}",
+                        parse_mode=None)
+                else:
+                    log(f"WARN [ORPHAN-RECLAIM] {sym} gagal: {result.get('error')}")
+        except Exception as e:
+            log(f"WARN [ORPHAN-RECLAIM] loop error: {e}")
+        time.sleep(ORPHAN_RECLAIM_SCAN_INTERVAL)
 
 
 def _conditional_rule_execute_action(rule: dict, sym: str) -> dict:
@@ -33614,6 +33819,13 @@ if __name__ == '__main__':
     n_threads += 1
     t_skip_email = threading.Thread(target=run_ai_skip_email_notifier, daemon=True, name="T-AISkipEmail")
     threads.append(t_skip_email)
+    n_threads += 1
+    # 01/11/2026 (patch "orphan-reclaim-addfund"): lihat REMARK lengkap di
+    # ORPHAN_RECLAIM_SCAN_INTERVAL/run_thread_orphan_reclaim() -- selalu jalan (tidak digembok
+    # ENABLED flag), isinya cuma efektif kalau ada entry di cancelled_deal_price milik salah
+    # satu dari 3 strategi gap-cap.
+    t_orphan_reclaim = threading.Thread(target=run_thread_orphan_reclaim, daemon=True, name="T-OrphanReclaim")
+    threads.append(t_orphan_reclaim)
     n_threads += 1
 
     for t in threads: t.start()
