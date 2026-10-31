@@ -7724,46 +7724,51 @@ SMALLSTART_FULL_TARGET_USD = {
 # seluruh rentang tol yg dites, beda dari TC4h yg 5% sengaja dipilih dari puncak 10% krn
 # pertimbangan "jangan terlalu longgar" -- utk KB12h puncaknya sendiri yg dipakai).
 # Hasil TEST (vs baseline 0 add-fund): avg% 4,49%->6,22%, trigger rate 13,8%->23,8% (~1,73x),
-# WR 68,0%->93,7%, rasio untung:rugi 4,22->8,37. TF deteksi TETAP 4h (TIDAK diubah -- 1h
-# sempat ditemukan lebih baik lagi di sweep terpisah tapi itu scope tambahan, BELUM diminta/
-# disetujui Mas Budi, lihat reminder_* kalau mau dikejar lagi nanti).
+# WR 68,0%->93,7%, rasio untung:rugi 4,22->8,37. TF deteksi SEMPAT 4h, lalu 31/10/2026
+# (izin eksplisit Mas Budi, dipicu kasus LSK/USDT hari itu yang exit via trailing-stop di
+# 1j40m -- lebih cepat dari 1 candle 4h pun belum tentu tutup) diganti ke 1h -- backtest
+# 6.448 trade, 237 koin: avg%/trade naik 6,07%->6,87%, WR naik 95,5%->97,3%, trigger rate
+# naik 24%->59%. Khusus subset trade yang SEBELUMNYA gak pernah dapat kesempatan reclaim
+# sama sekali (76% dari semua trade): 46,5% JADI dapat kesempatan, avg% subset itu naik
+# 3,81%->6,95%. Trade yang jadi lebih jelek krn sinyal palsu ADA (24% trade, avg -3,16%)
+# tapi kalah jumlah & besaran dari yang diuntungkan (36% trade, avg +4,33%) -- net positif.
 KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT = 10.0  # 0 (full reclaim) -> 10 (longgar, puncak genuine)
 KB12H_RECLAIM_ADDFUND_MAX_ADDS      = 3     # 1 -> 3
 KB12H_RECLAIM_ADDFUND_STEP_USD      = SMALLSTART_FULL_TARGET_USD['brkX2_12h_closed'] - 8.0
 # step = $52 ($60-$8), SAMA PERSIS besarnya dgn add pertama -- konsisten dgn pola TC4h.
 # TIER_TARGETS efektif: $8 (base) -> $60 (add ke-1) -> $112 (ke-2) -> $164 (ke-3).
 
-LIVE_EMA20_4H_CACHE_SECONDS = 300  # pola sama persis LIVE_BBUPPER_CACHE_SECONDS dkk
-_live_ema20_4h_cache = {}
-_live_ema20_4h_cache_lock = threading.Lock()
+LIVE_EMA20_1H_CACHE_SECONDS = 300  # pola sama persis LIVE_BBUPPER_CACHE_SECONDS dkk
+_live_ema20_1h_cache = {}
+_live_ema20_1h_cache_lock = threading.Lock()
 
-def get_live_ema20_4h_closed(symbol: str):
-    """Return (close, ema20) dari candle 4 jam TERAKHIR YANG SUDAH TUTUP, atau None kalau
+def get_live_ema20_1h_closed(symbol: str):
+    """Return (close, ema20) dari candle 1 jam TERAKHIR YANG SUDAH TUTUP, atau None kalau
     fetch/hitung gagal. KHUSUS dipakai check_kb12h_smallstart_reclaim() -- KeltnerBreak-12h
-    TF native-nya 12h, tapi reclaim smallstart SENGAJA dicek di 4h (lebih cepat, terbukti
-    backtest 25/10/2026 titik terbaik dibanding 12h/8h -- lihat REMARK smallstart-reclaim-addfund
-    di atas)."""
+    TF native-nya 12h, tapi reclaim smallstart dicek lebih cepat. SEMPAT di 4h (terbukti
+    backtest 25/10/2026 titik terbaik dibanding 12h/8h), diganti ke 1h 31/10/2026 (izin
+    eksplisit Mas Budi -- lihat REMARK KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT di atas)."""
     now = time.time()
-    with _live_ema20_4h_cache_lock:
-        cached = _live_ema20_4h_cache.get(symbol)
-        if cached and now - cached[0] < LIVE_EMA20_4H_CACHE_SECONDS:
+    with _live_ema20_1h_cache_lock:
+        cached = _live_ema20_1h_cache.get(symbol)
+        if cached and now - cached[0] < LIVE_EMA20_1H_CACHE_SECONDS:
             return cached[1]
     result = None
     try:
-        frame = get_ohlcv_4h(symbol, limit=35)
+        frame = get_ohlcv(symbol, interval='1h', limit=35)
         if frame is not None and len(frame) >= 22:
             closed = frame.iloc[:-1]  # buang candle yang masih berjalan
             ema20 = ta.ema(closed['close'], length=20)
             if len(ema20) and not pd.isna(ema20.iloc[-1]):
                 result = (float(closed['close'].iloc[-1]), float(ema20.iloc[-1]))
     except Exception as error:
-        log(f"[ADDFUND] live EMA20 4h {symbol} gagal: {error}")
-    with _live_ema20_4h_cache_lock:
-        _live_ema20_4h_cache[symbol] = (now, result)
+        log(f"[ADDFUND] live EMA20 1h {symbol} gagal: {error}")
+    with _live_ema20_1h_cache_lock:
+        _live_ema20_1h_cache[symbol] = (now, result)
     return result
 
 def check_kb12h_smallstart_reclaim(symbol: str, deal: dict, tolerance_pct: float = 0.0) -> bool:
-    """True = candle 4h TERTUTUP terakhir reclaim EMA20 (close >= ema20*(1-tolerance_pct/100))
+    """True = candle 1h TERTUTUP terakhir reclaim EMA20 (close >= ema20*(1-tolerance_pct/100))
     SETELAH deal ini pernah tercatat drop di bawah EMA20 (flag 'smallstart_below_ema20', diset
     True candle manapun sejak entry yang close-nya < ema20 -- garis STRICT ini TIDAK
     terpengaruh tolerance_pct, cuma syarat 'sudah reclaim' yang dilonggarkan). Lookback TIDAK
@@ -7774,6 +7779,9 @@ def check_kb12h_smallstart_reclaim(symbol: str, deal: dict, tolerance_pct: float
     (lihat REMARK lengkap di KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT) -- diverifikasi identik dgn
     formula yg dibacktest (kb12h_reclaim_sweep.py: 'ever_below' di-update pakai garis ketat,
     reclaim-check pakai threshold longgar, DUA SYARAT independen, bukan if/else).
+    31/10/2026 (patch "kb12h-reclaim-1h-granularity"): TF deteksi diganti dari 4h ke 1h (izin
+    eksplisit Mas Budi, dipicu kasus LSK/USDT exit via trailing-stop di 1j40m -- lebih cepat
+    dari candle 4h pun belum tentu tutup, jadi reclaim gak pernah sempat dicek sama sekali).
     False kalau belum reclaim atau belum pernah drop.
     Efek samping: UPDATE flag 'smallstart_below_ema20' jadi True kalau candle sekarang di
     bawah EMA20 (garis ketat, caller TIDAK perlu panggil terpisah). Fungsi ini TIDAK mereset
@@ -7781,7 +7789,7 @@ def check_kb12h_smallstart_reclaim(symbol: str, deal: dict, tolerance_pct: float
     bertanggung jawab reset itu, HANYA pada siklus posisi benar2 underwater (price<entry) dan
     event-nya benar2 "dikonsumsi" (add-fund dieksekusi/diputuskan skip) -- supaya opportunity
     yang terdeteksi SAAT posisi belum underwater tidak keburu hilang sebelum sempat dieksekusi."""
-    live = get_live_ema20_4h_closed(symbol)
+    live = get_live_ema20_1h_closed(symbol)
     if live is None:
         return False
     close_now, ema20_now = live
@@ -11210,8 +11218,9 @@ def thread2_monitor():
         # Patch "smallstart-reclaim-addfund" (25/10/2026, KeltnerBreak-12h) -- lihat REMARK
         # lengkap di SMALLSTART_FULL_TARGET_USD (dekat get_live_ema20_reclaim_signal()).
         # KeltnerBreak-12h TIDAK PUNYA mekanisme reclaim lama (beda dari TrenKonfirmasi-4h di
-        # bawah) -- definisi reclaim-nya SEDERHANA (drop lalu reclaim EMA20 4h, tanpa batas
-        # candle/RVol), PERSIS yang dibacktest. Underwater (price<entry) WAJIB dicek DI SINI,
+        # bawah) -- definisi reclaim-nya SEDERHANA (drop lalu reclaim EMA20 1h sejak 31/10/2026,
+        # sebelumnya 4h, tanpa batas candle/RVol), PERSIS yang dibacktest. Underwater
+        # (price<entry) WAJIB dicek DI SINI,
         # sama alasan spt blok TrenKonfirmasi-4h di bawah.
         # 29/10/2026 (patch "kb12h-reclaim-sensitivity-boost"): GANTI dari fire-once
         # (reclaim_addfund_used, boolean) jadi counter (reclaim_addfund_count, int, field SAMA
@@ -11262,7 +11271,7 @@ def thread2_monitor():
                                 active_deals[sym]['reclaim_addfund_count'] = _kb_add_count + 1
                                 active_deals[sym]['smallstart_below_ema20'] = False
                     else:
-                        log(f"[T2] {sym} smallstart-reclaim TERPICU (add ke-{_kb_add_count + 1}/{KB12H_RECLAIM_ADDFUND_MAX_ADDS}, toleransi {KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%): harga reclaim EMA20 4h setelah sempat drop -- "
+                        log(f"[T2] {sym} smallstart-reclaim TERPICU (add ke-{_kb_add_count + 1}/{KB12H_RECLAIM_ADDFUND_MAX_ADDS}, toleransi {KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%): harga reclaim EMA20 1h setelah sempat drop -- "
                             f"tambah modal ${_kb_modal:.0f} (modal ${_kb_current_modal:.0f} -> target ${_kb_target:.0f})")
                         # 29/10/2026 (patch "reclaim-addfund-shortfall-handling"): GANTI dari
                         # execute_add_fund() langsung ke handle_reclaim_addfund_shortfall() --
