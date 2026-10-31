@@ -798,13 +798,21 @@ DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN  = 1.0  # RVol(20) minimum di candle cross-up 
 # Patch "addfund-reclaim-gapcap" (01/11/2026, sama konsep spt TRENDCONFIRM_RECLAIM_ADDFUND_GAP_CAP_PCT
 # di atas -- lihat REMARK lengkap di sana). Backtest Decouple-4h sendiri (24.669 kandidat
 # underwater, 2022-2026 interleave per-minggu, fee 0,2%): GAP_CAP_PCT=5% (paling ketat yg
-# dites) menang konsisten TRAIN+TEST tapi SANGAT tipis -- avg%/trade naik 1,354%->1,384%
-# (TRAIN), 1,368%->1,392% (TEST). Mekanisme ini sendiri cuma terpicu di ~4-5% kandidat
-# underwater Decouple-4h (vs ~59% KeltnerBreak-12h) -- dampak ke hasil total strategi PALING
-# KECIL dari 3 strategi yg di-gap-cap. Trend grid (5%>8%>10%=15%=20%~baseline) mengindikasikan
-# titik optimal sebenarnya mungkin LEBIH ketat dari 5%, di luar grid yg dites -- dicatat,
-# TIDAK diperluas tanpa backtest lanjutan.
-DECOUPLE_RECLAIM_ADDFUND_GAP_CAP_PCT = 5.0
+# dites di ronde pertama) menang konsisten TRAIN+TEST tapi SANGAT tipis -- avg%/trade naik
+# 1,354%->1,384% (TRAIN), 1,368%->1,392% (TEST). Mekanisme ini sendiri cuma terpicu di ~4-5%
+# kandidat underwater Decouple-4h (vs ~59% KeltnerBreak-12h) -- dampak ke hasil total strategi
+# PALING KECIL dari 3 strategi yg di-gap-cap.
+# 01/11/2026 (ronde kedua, permintaan eksplisit Mas Budi "backtest kan lagi dong di bawah 8%
+# dan di bawah 5%" -- beda dari KeltnerBreak-12h & TrenKonfirmasi-4h yg hasil ronde kedua ini
+# KONSISTEN keduanya lebih baik tetap di angka asal, Decouple-4h TIDAK -- 5->3% GANTI,
+# BUKAN TETAP): sweep {0,5, 1, 2, 3, 4}% vs baseline 5% (n sama persis, 24.669 kandidat).
+# Hasil NON-MONOTON (beda dari 2 strategi lain yg monoton) -- titik tengah 2-4% KALAH BANYAK
+# pada 0,5% (lebih jelek dari baseline tanpa gap-cap sama sekali di KEDUA split) dan menang
+# tipis2 menuju puncak sekitar 3%, lalu turun lagi ke 5%. 3% menang KONSISTEN di TRAIN+TEST vs
+# 5%: avg%/trade 1,384%->1,391% (TRAIN), 1,392%->1,428% (TEST). Efek masih KECIL & n per sel
+# tidak sebesar KeltnerBreak-12h/TrenKonfirmasi-4h -- ranking presisi di antara 2-4% TIDAK
+# sepasti 2 strategi lain, tapi wilayah 2-4% mengalahkan 5% konsisten di kedua split.
+DECOUPLE_RECLAIM_ADDFUND_GAP_CAP_PCT = 3.0
 
 # 17/10/2026 (patch "rvolbreak8h-addfund-reclaim", follow-up SAMA HARI, permintaan eksplisit
 # Mas Budi: blok SENDIRI khusus RVolBreak-8h, bukan digabung dgn Decouple-4h/TrenKonfirmasi-4h
