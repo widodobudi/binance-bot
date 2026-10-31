@@ -2024,12 +2024,14 @@ def is_btc_gate_enabled(strategy: str) -> bool:
     """Gate0 Tahap 2 (10/10/2026, permintaan Mas Budi): toggle "Pakai Syarat BTC" di Strategy
     Control. Default True (checked) -- per 31/10/2026 berlaku utk brkX2_12h_closed (DIPANGGIL
     di KETIGA jalur T1/T1c/T1c-E sejak 27/10/2026, OR sejak 31/10/2026 -- lihat REMARK
-    keltner12h_btc_gate_ok()), decouple_4h (OR, gerbang biasa), trend_confirm_4h (AND, gerbang
-    biasa), mombreak_1h, DAN rvolbreak_8h (30/10/2026, backtest terpisah 142 pair 2023-2026 --
-    lihat REMARK rvolbreak8h_btc_gate_ok()). decouple_4h & trend_confirm_4h SEMPAT dicabut sama
-    hari (31/10/2026) lewat patch yg DIBATALKAN sama hari juga atas permintaan Mas Budi --
-    gerbang asli keduanya dipakai lagi, field 'btc_gate_enabled' tetap fungsional. Uncheck dari
-    dashboard kalau mau matikan sementara tanpa redeploy."""
+    keltner12h_btc_gate_ok()), decouple_4h (OR, gerbang biasa -- sempat dicabut sama hari lalu
+    DIBATALKAN, gerbang asli dipakai lagi), mombreak_1h, DAN rvolbreak_8h (30/10/2026, backtest
+    terpisah 142 pair 2023-2026 -- lihat REMARK rvolbreak8h_btc_gate_ok()). trend_confirm_4h
+    DICABUT dari model gerbang blokir ON/OFF 31/10/2026 dengan izin FINAL tanpa syarat (sempat
+    dicabut, dikembalikan sebentar krn izin sebelumnya bersyarat & belum terpenuhi, lalu dicabut
+    lagi -- lihat REMARK thread_trendconfirm_scan()) -- field 'btc_gate_enabled' di config-nya
+    SEKARANG TIDAK DIBACA lagi (dipertahankan di JSON, tidak fungsional). Uncheck dari dashboard
+    kalau mau matikan sementara tanpa redeploy."""
     cfg = load_strategy_config()
     return cfg.get(strategy, {}).get("btc_gate_enabled", True)
 
@@ -14313,18 +14315,18 @@ def thread_trendconfirm_scan():
     n_active = deal_count_by_strategy('trend_confirm_4h')
     if n_active >= TRENDCONFIRM_MAX_DEALS: return
 
-    # Patch "trendconfirm4h-gate0-removed" (31/10/2026) SEMPAT dicabut lalu DIBATALKAN sama
-    # hari (31/10/2026, permintaan Mas Budi) -- gerbang hard-block ini sempat dilepas tanpa
-    # konfirmasi ulang yang jelas dari Mas Budi (syarat beliau "tunda dulu sampai 3 strategi
-    # lain sebagus TrenKonfirmasi-4h" belum pernah terpenuhi saat dicabut). Dikembalikan ke
-    # gerbang asli persis seperti sebelum 31/10/2026.
-    # Gate0 Tahap 2 (10/10/2026): syarat BTCUSDT HTF 12H DAN 1D keduanya hijau.
-    _tc4h_gate_ok = trendconfirm4h_btc_gate_ok()
-    _notify_btc_gate_transition('trend_confirm_4h', 'TrenKonfirmasi-4h', _tc4h_gate_ok, 'BTCUSDT HTF 12H DAN 1D candle tertutup terakhir keduanya hijau')
-    if not _tc4h_gate_ok:
-        log(f"[T_TRENDCONFIRM] Gate0: syarat BTC (HTF 12H+1D) belum lolos, scan dibatalkan periode ini.")
-        return
-
+    # Patch "trendconfirm4h-gate0-removed" (31/10/2026, izin FINAL tanpa syarat dari Mas Budi --
+    # sempat dicabut lalu dikembalikan jam sebelumnya karena izin saat itu masih bersyarat &
+    # belum terpenuhi, lihat commit a2af615; izin ulang ini eksplisit & tidak bersyarat). Gerbang
+    # hard-block Gate0 (BLOKIR TOTAL scan kalau BTCUSDT HTF 12H+1D gak dua-duanya hijau) DICABUT.
+    # Backtest (147 pair, candle 4h, Okt 2022-2026, 24.740 sinyal mekanis, exit mechanics asli
+    # dari kode) nunjukkin populasi sinyal yg SEKARANG diblokir ("tidak bagus") itu, kalau tetap
+    # dikasih smallstart+reclaim BIASA (BUKAN full-size, sizing gak diubah sama sekali), hasilnya
+    # IDENTIK SECARA STATISTIK sama populasi yg lolos gerbang (WR 98,1% vs 98,1%, avg/trade
+    # +0,580% vs +0,578%) -- konsisten di SEMUA 5 tahun kalender 2022-2026. Mencabutnya dapat
+    # ~2,6x lebih banyak trade tanpa kehilangan kualitas. trendconfirm4h_btc_gate_ok()
+    # DIPERTAHANKAN (referensi), cuma gak dipanggil lagi di sini. Sizing (base_usd $8 + reclaim
+    # EMA20, bisa add-fund berkali-kali kalau kondisi mendukung) TIDAK diubah.
     now_ms = int(time.time() * 1000)
     sec4h  = STRAT4H_SECONDS
     candle_open_ms = (now_ms // (sec4h * 1000)) * (sec4h * 1000)
@@ -17536,10 +17538,13 @@ var SC_PAUSED_LOCKED = {brkX2_crossema: true};
 // terminated) -- 142 pair, candle 8h native, 2023-2026, mekanik Donchian24+RVOL>=3.0 & exit
 // ASLI dari kode. Beda dari 4 strategi lain: buktinya CAMPURAN (TRAIN turun, TEST naik), bukan
 // konsisten -- dipasang atas keputusan eksplisit Mas Budi, bukan rekomendasi default.
-// 31/10/2026 (permintaan Mas Budi): trend_confirm_4h & decouple_4h SEMPAT dikeluarkan dari
-// sini sama hari (gerbang hard-block ON/OFF-nya sempat dicabut/diganti) tapi KEDUANYA
-// DIBATALKAN sama hari juga atas permintaan Mas Budi -- gerbang asli masing2 tetap dipakai.
-var SC_BTC_GATE_HELPED = {brkX2_12h_closed: true, decouple_4h: true, trend_confirm_4h: true, mombreak_1h: true, rvolbreak_8h: true};
+// 31/10/2026 (permintaan Mas Budi): decouple_4h sempat dikeluarkan dari sini sama hari lalu
+// DIBATALKAN (gerbang asli dipakai lagi). trend_confirm_4h DIKELUARKAN dari sini -- gerbang
+// hard-block ON/OFF-nya DICABUT dengan izin FINAL tanpa syarat (lihat
+// SC_BTC_GATE_TOOLTIP_UNTESTED_SPECIFIC; sempat dicabut, dikembalikan sebentar krn izin
+// bersyarat belum terpenuhi, lalu dicabut lagi dgn izin final -- lihat REMARK
+// thread_trendconfirm_scan()).
+var SC_BTC_GATE_HELPED = {brkX2_12h_closed: true, decouple_4h: true, mombreak_1h: true, rvolbreak_8h: true};
 var SC_BTC_GATE_ELAPSED = {mombreak_1h: true};  // satu2nya yg rumusnya punya parameter elapsed %
 var SC_BTC_GATE_TOOLTIP = {
     brkX2_12h_closed: 'Syarat (sejak 31/10/2026): BTCUSDT pada HTF 1D ATAU 3D, cukup SALAH SATU candle tertutup terakhir hijau. Sebelumnya AND (wajib dua-duanya) -- backtest 10/10/2026 dgn AND itu bukti paling kuat dari 7 strategi diuji (WR +2,5pp, avg/trade +0,17pp). Diganti ke OR 31/10/2026 atas keputusan Mas Budi meski bukti OR belum sekuat itu (per-tahun 2023-2026: dekat di 3/4 tahun, 2025 ketinggalan jauh, WR tetap sedikit kalah tiap tahun).',
@@ -17555,7 +17560,8 @@ var SC_BTC_GATE_TOOLTIP_OFF_TESTED = {
 };
 var SC_BTC_GATE_TOOLTIP_UNTESTED_SPECIFIC = {
     brkX2: 'Varian "legacy" (brkx2-12h) sudah tidak buka deal baru sama sekali (cuma arsip deal lama) -- tidak relevan diuji.',
-    topgainers_4h: 'Sengaja didesain TANPA gerbang BTC-HTF sama sekali -- tujuan strategi ini justru mengisi kekosongan deal saat BTC-HTF sedang memblokir strategi lain, jadi tidak relevan diuji/dipasangi gerbang yang sama.'
+    topgainers_4h: 'Sengaja didesain TANPA gerbang BTC-HTF sama sekali -- tujuan strategi ini justru mengisi kekosongan deal saat BTC-HTF sedang memblokir strategi lain, jadi tidak relevan diuji/dipasangi gerbang yang sama.',
+    trend_confirm_4h: 'Gerbang hard-block DICABUT 31/10/2026 (izin final tanpa syarat) -- backtest (147 pair, 2022-2026) nunjukkin sinyal yang diblokir, kalau tetap pakai smallstart+reclaim biasa (BUKAN full-size), hasilnya identik statistik dengan yang lolos gerbang, konsisten di SEMUA 5 tahun kalender. Deal sekarang tetap boleh dibuka walau BTC jelek, sizing tidak berubah.'
 };
 var SC_BTC_GATE_TOOLTIP_UNTESTED = 'Belum pernah diuji -- backtest Gate0 10/10/2026 cuma mencakup 7 strategi (KeltnerBreak-12h, decouple_4h, dipbuy_universe, trend_confirm_4h, mombreak_1h, rvolbreak_1h, brkX2-4h). Strategi ini belum ada datanya sama sekali.';
 function btcGateCellHtml(k, cfg) {
@@ -27961,10 +27967,8 @@ def run_web_dashboard():
                 },
                 "trend_confirm_4h": {
                     "label": "TrenKonfirmasi-4h",
-                    "status": "ok" if trendconfirm4h_btc_gate_ok() else "blocked",
-                    "syarat": "BTCUSDT HTF 12H DAN 1D candle tertutup terakhir keduanya hijau",
-                    "live_detail": _btc_gate_live_detail('trendconfirm4h'),
-                    "candles": {"12H": _candles['12h'], "1D": _candles['1d']},
+                    "status": "na",
+                    "syarat": "Gerbang hard-block DICABUT 31/10/2026 (izin final tanpa syarat) -- backtest nunjukkin sinyal yg diblokir, kalau tetap pakai smallstart+reclaim biasa (bukan full-size), hasilnya identik statistik sama yg lolos gerbang, konsisten di 5 tahun 2022-2026. Sizing ($8+reclaim) TIDAK diubah.",
                 },
                 "bbsnap_4h": {
                     "label": "BBSnap-4h",
