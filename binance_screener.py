@@ -762,6 +762,20 @@ TRENDCONFIRM_RECLAIM_ADDFUND_RVOL_MIN    = 0.0  # 1.0->0 (28/10/2026) -- syarat 
 TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT = 5.0  # BARU (28/10/2026) -- candle cross-up cukup close >= EMA20*(1-5%), tidak wajib PERSIS di atas garis
 TRENDCONFIRM_RECLAIM_ADDFUND_MAX_ADDS    = 2    # BARU (28/10/2026) -- boleh kena add-fund reclaim sampai 2x per deal (dulu cuma 1x)
 TRENDCONFIRM_RECLAIM_ADDFUND_STEP_USD    = 22.0 # BARU (28/10/2026) -- step tambahan ke-2 dst, SAMA BESAR dgn step ke-1 ($8->$30 = +$22), lihat thread2_monitor()
+# Patch "addfund-reclaim-gapcap" (01/11/2026, permintaan eksplisit Mas Budi -- "ayo patch
+# ketiga strategi itu", sama konsep & REMARK lengkap spt KB12H_RECLAIM_GAP_CAP_PCT di
+# get_live_ema20_1h_closed()/check_kb12h_smallstart_reclaim()): syarat "pernah di bawah EMA20"
+# di get_live_ema20_reclaim_signal() (dipakai TrenKonfirmasi-4h & Decouple-4h, LIHAT TIDAK
+# RVolBreak-8h -- backtest terpisah menemukan gap-cap TIDAK membantu RVolBreak-8h, mekanisme
+# itu sengaja TIDAK diubah) di-cap jadi max(EMA20, harga_beli*(1-GAP_CAP_PCT/100)) -- EMA20
+# jauh di bawah harga beli tidak lagi jadi penghalang mutlak. Backtest TRAIN/TEST interleave
+# per-minggu ISO 2022-2026, semua coin kedua kelompok, fee 0,2%: GAP_CAP_PCT=5% menang
+# konsisten (TRAIN+TEST) tapi tipis -- avg%/trade naik 1,873%->1,895% (TRAIN), 1,665%->1,684%
+# (TEST); trigger rate mekanisme ini sendiri jauh lebih jarang drpd KeltnerBreak-12h (~13%
+# vs ~59%), jadi dampak ke hasil total strategi kecil. 8%/10%/15%/20% hampir identik dgn
+# baseline (cap jadi gak pernah kebentur, karena entry TrenKonfirmasi-4h gak sejauh breakout
+# KeltnerBreak-12h dari EMA20-nya).
+TRENDCONFIRM_RECLAIM_ADDFUND_GAP_CAP_PCT = 5.0
 
 # 17/10/2026 (patch "decouple-addfund-reclaim", follow-up SAMA HARI, permintaan eksplisit
 # Mas Budi: blok SENDIRI khusus Decouple-4h, BUKAN digabung generik dgn TrenKonfirmasi-4h
@@ -781,6 +795,16 @@ TRENDCONFIRM_RECLAIM_ADDFUND_STEP_USD    = 22.0 # BARU (28/10/2026) -- step tamb
 # recheck RVolBreak-8h beda lagi), tidak ikut mengubah strategi lain.
 DECOUPLE_RECLAIM_ADDFUND_N_CANDLES = 5    # maks jarak candle (TF native strategi) antara cross-down EMA20 dan cross-up (reclaim)
 DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN  = 1.0  # RVol(20) minimum di candle cross-up (reclaim) -- JANGAN dinaikkan tanpa backtest ulang
+# Patch "addfund-reclaim-gapcap" (01/11/2026, sama konsep spt TRENDCONFIRM_RECLAIM_ADDFUND_GAP_CAP_PCT
+# di atas -- lihat REMARK lengkap di sana). Backtest Decouple-4h sendiri (24.669 kandidat
+# underwater, 2022-2026 interleave per-minggu, fee 0,2%): GAP_CAP_PCT=5% (paling ketat yg
+# dites) menang konsisten TRAIN+TEST tapi SANGAT tipis -- avg%/trade naik 1,354%->1,384%
+# (TRAIN), 1,368%->1,392% (TEST). Mekanisme ini sendiri cuma terpicu di ~4-5% kandidat
+# underwater Decouple-4h (vs ~59% KeltnerBreak-12h) -- dampak ke hasil total strategi PALING
+# KECIL dari 3 strategi yg di-gap-cap. Trend grid (5%>8%>10%=15%=20%~baseline) mengindikasikan
+# titik optimal sebenarnya mungkin LEBIH ketat dari 5%, di luar grid yg dites -- dicatat,
+# TIDAK diperluas tanpa backtest lanjutan.
+DECOUPLE_RECLAIM_ADDFUND_GAP_CAP_PCT = 5.0
 
 # 17/10/2026 (patch "rvolbreak8h-addfund-reclaim", follow-up SAMA HARI, permintaan eksplisit
 # Mas Budi: blok SENDIRI khusus RVolBreak-8h, bukan digabung dgn Decouple-4h/TrenKonfirmasi-4h
@@ -7619,7 +7643,8 @@ LIVE_EMA20_RECLAIM_CACHE_SECONDS = 300  # pola sama persis LIVE_SUPERTREND_CACHE
 _live_ema20_reclaim_cache = {}
 _live_ema20_reclaim_cache_lock = threading.Lock()
 
-def get_live_ema20_reclaim_signal(symbol: str, strategy: str, n_candles: int, rvol_min: float, tolerance_pct: float = 0.0):
+def get_live_ema20_reclaim_signal(symbol: str, strategy: str, n_candles: int, rvol_min: float, tolerance_pct: float = 0.0,
+                                   entry_price: float | None = None, gap_cap_pct: float | None = None):
     """True = candle TERTUTUP terakhir di TF native strategi adalah candle "reclaim": close
     cross-up EMA20(20) DENGAN RVol(20) candle itu >= rvol_min, DAN ada cross-down EMA20 di
     salah satu dari n_candles SEBELUM candle reclaim itu (patch "tc-addfund-reclaim-swap",
@@ -7637,12 +7662,21 @@ def get_live_ema20_reclaim_signal(symbol: str, strategy: str, n_candles: int, rv
     cukup close >= EMA20*(1-tolerance_pct/100). Syarat "was below" (candle SEBELUM reclaim
     harus close < EMA20) SENGAJA TETAP STRICT, tidak ikut dilonggarkan -- backtest 28/10/2026
     menemukan melonggarkan DUA-duanya sekaligus justru membalik hasil (dibahas & diperbaiki
-    saat backtest, lihat REMARK TOLERANCE_PCT di TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT)."""
+    saat backtest, lihat REMARK TOLERANCE_PCT di TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT).
+    entry_price/gap_cap_pct (patch "addfund-reclaim-gapcap", 01/11/2026, default None = perilaku
+    lama PERSIS, caller yang tidak kirim dua parameter ini TIDAK terdampak sama sekali --
+    RVolBreak-8h SENGAJA tidak dikirim, lihat REMARK lengkap di TRENDCONFIRM_RECLAIM_ADDFUND_GAP_CAP_PCT):
+    kalau KEDUANYA dikirim, syarat "below EMA20" (dua tempat: candle sebelum cross-up, DAN
+    pencarian cross-down di window n_candles) di-cap jadi max(ema20, entry_price*(1-gap_cap_pct/100))
+    -- supaya breakout kuat (EMA20 jauh di bawah entry_price) tetap kebagian kesempatan, gak
+    nunggu turun sejauh EMA20 asli. Syarat cross-up/reclaim (thresh di bawah) TIDAK ikut di-cap,
+    tetap EMA20 murni."""
     tf = BB_UPPER_TF_BY_STRATEGY.get(strategy)
     if tf is None:
         return None
     now = time.time()
-    cache_key = (symbol, tf, n_candles, round(rvol_min, 4), round(tolerance_pct, 4))
+    cache_key = (symbol, tf, n_candles, round(rvol_min, 4), round(tolerance_pct, 4),
+                 round(entry_price, 8) if entry_price else None, round(gap_cap_pct, 4) if gap_cap_pct else None)
     with _live_ema20_reclaim_cache_lock:
         cached = _live_ema20_reclaim_cache.get(cache_key)
         if cached and now - cached[0] < LIVE_EMA20_RECLAIM_CACHE_SECONDS:
@@ -7660,14 +7694,18 @@ def get_live_ema20_reclaim_signal(symbol: str, strategy: str, n_candles: int, rv
             n = len(closed)
             last = n - 1
             if last >= 22 and not (pd.isna(ema20[last]) or pd.isna(ema20[last - 1]) or pd.isna(rvol[last])):
-                crossed_up = (close_[last - 1] < ema20[last - 1]) and (close_[last] >= ema20[last] * (1 - tolerance_pct / 100))
+                floor_level = entry_price * (1 - gap_cap_pct / 100) if (entry_price and gap_cap_pct) else None
+                def _below_level(idx):
+                    lvl = ema20[idx]
+                    return max(lvl, floor_level) if floor_level is not None else lvl
+                crossed_up = (close_[last - 1] < _below_level(last - 1)) and (close_[last] >= ema20[last] * (1 - tolerance_pct / 100))
                 rvol_ok = rvol[last] >= rvol_min
                 had_cross_down = False
                 lo_bound = max(1, last - n_candles)
                 for j in range(lo_bound, last):
                     if pd.isna(ema20[j]) or pd.isna(ema20[j - 1]):
                         continue
-                    if close_[j - 1] >= ema20[j - 1] and close_[j] < ema20[j]:
+                    if close_[j - 1] >= _below_level(j - 1) and close_[j] < _below_level(j):
                         had_cross_down = True
                         break
                 signal = bool(crossed_up and rvol_ok and had_cross_down)
@@ -7738,6 +7776,27 @@ KB12H_RECLAIM_ADDFUND_STEP_USD      = SMALLSTART_FULL_TARGET_USD['brkX2_12h_clos
 # step = $52 ($60-$8), SAMA PERSIS besarnya dgn add pertama -- konsisten dgn pola TC4h.
 # TIER_TARGETS efektif: $8 (base) -> $60 (add ke-1) -> $112 (ke-2) -> $164 (ke-3).
 
+# Patch "addfund-reclaim-gapcap" (01/11/2026, permintaan eksplisit Mas Budi -- "ayo patch
+# ketiga strategi itu"): KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT di atas cuma mengatur syarat
+# RECLAIM (naik balik); syarat "pernah DI BAWAH EMA20" dulu (lihat check_kb12h_smallstart_reclaim())
+# TIDAK punya batas jarak -- kalau breakout kuat & EMA20 jauh di bawah harga beli, candle
+# mungkin PERNAH turun tapi gak sampai ke EMA20, jadi gak pernah tercatat "di bawah" sama
+# sekali (0% kesempatan add-fund, kasus nyata: LSK/USDT 31/10/2026). Gap-cap ini nge-CAP jarak
+# itu: syarat "di bawah" jadi max(EMA20, harga_beli*(1-GAP_CAP_PCT/100)) -- kalau EMA20 jauh,
+# yg dipakai GAP_CAP_PCT% dari harga beli (lebih gampang kesentuh), kalau EMA20 deket, EMA20 asli
+# tetap dipakai (TIDAK berubah dari perilaku lama). Syarat reclaim (TOLERANCE_PCT di atas) TIDAK
+# disentuh. CATATAN PENTING (ditemukan & dikonfirmasi ke Mas Budi sebelum di-patch): kalau EMA20
+# jauh di bawah harga beli, begitu harga nyentuh di bawah GAP_CAP_PCT% dari harga beli, syarat
+# reclaim (>=EMA20*0,9) SERINGKALI SUDAH otomatis terpenuhi SAAT ITU JUGA (candle yg sama) --
+# karena level itu masih jauh di atas EMA20 -- jadi utk kasus gap jauh, efeknya lebih mirip
+# "turun sekian % dari harga beli -> langsung add-fund" ketimbang "turun lalu beneran naik balik
+# ke EMA20". Backtest (TRAIN/TEST interleave per-minggu ISO, 2022-2026, semua coin kedua
+# kelompok, fee 0,2%, 6.448 trade basis sama persis spt backtest TOLERANCE_PCT di atas):
+# GAP_CAP_PCT=8% menang vs baseline (tanpa cap) di KEDUA split -- WR 97,3%->~97,6%,
+# avg%/trade 6,87%->~6,93%, avg add/trade 1,40->1,43 (modal naik tipis, bukan 56% spt desain
+# "harga beli doang" yg SUDAH ditolak backtest terpisah). Peningkatan KECIL tapi konsisten.
+KB12H_RECLAIM_GAP_CAP_PCT = 8.0
+
 LIVE_EMA20_1H_CACHE_SECONDS = 300  # pola sama persis LIVE_BBUPPER_CACHE_SECONDS dkk
 _live_ema20_1h_cache = {}
 _live_ema20_1h_cache_lock = threading.Lock()
@@ -7782,9 +7841,13 @@ def check_kb12h_smallstart_reclaim(symbol: str, deal: dict, tolerance_pct: float
     31/10/2026 (patch "kb12h-reclaim-1h-granularity"): TF deteksi diganti dari 4h ke 1h (izin
     eksplisit Mas Budi, dipicu kasus LSK/USDT exit via trailing-stop di 1j40m -- lebih cepat
     dari candle 4h pun belum tentu tutup, jadi reclaim gak pernah sempat dicek sama sekali).
+    01/11/2026 (patch "addfund-reclaim-gapcap", lihat REMARK lengkap di KB12H_RECLAIM_GAP_CAP_PCT):
+    syarat "di bawah" (garis strict) sekarang pakai max(ema20_now, harga_beli*(1-GAP_CAP_PCT/100))
+    bukan ema20_now murni -- biar breakout kuat (EMA20 jauh di bawah harga beli) tetap kebagian
+    kesempatan, gak nunggu turun sejauh itu. Syarat reclaim (thresh di bawah) TIDAK berubah.
     False kalau belum reclaim atau belum pernah drop.
     Efek samping: UPDATE flag 'smallstart_below_ema20' jadi True kalau candle sekarang di
-    bawah EMA20 (garis ketat, caller TIDAK perlu panggil terpisah). Fungsi ini TIDAK mereset
+    bawah level itu (caller TIDAK perlu panggil terpisah). Fungsi ini TIDAK mereset
     flag balik ke False walau reclaim terdeteksi (True) -- caller (thread2_monitor) yang
     bertanggung jawab reset itu, HANYA pada siklus posisi benar2 underwater (price<entry) dan
     event-nya benar2 "dikonsumsi" (add-fund dieksekusi/diputuskan skip) -- supaya opportunity
@@ -7794,7 +7857,11 @@ def check_kb12h_smallstart_reclaim(symbol: str, deal: dict, tolerance_pct: float
         return False
     close_now, ema20_now = live
     was_below = bool(deal.get('smallstart_below_ema20', False))
-    if close_now < ema20_now and not was_below:
+    entry_price = float(deal.get('entry_price', 0) or 0)
+    arm_level = ema20_now
+    if entry_price > 0:
+        arm_level = max(ema20_now, entry_price * (1 - KB12H_RECLAIM_GAP_CAP_PCT / 100))
+    if close_now < arm_level and not was_below:
         with active_deals_lock:
             if symbol in active_deals:
                 active_deals[symbol]['smallstart_below_ema20'] = True
@@ -11272,7 +11339,7 @@ def thread2_monitor():
                                 active_deals[sym]['reclaim_addfund_count'] = _kb_add_count + 1
                                 active_deals[sym]['smallstart_below_ema20'] = False
                     else:
-                        log(f"[T2] {sym} smallstart-reclaim TERPICU (add ke-{_kb_add_count + 1}/{KB12H_RECLAIM_ADDFUND_MAX_ADDS}, toleransi {KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%): harga reclaim EMA20 1h setelah sempat drop -- "
+                        log(f"[T2] {sym} smallstart-reclaim TERPICU (add ke-{_kb_add_count + 1}/{KB12H_RECLAIM_ADDFUND_MAX_ADDS}, toleransi {KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%, gap-cap {KB12H_RECLAIM_GAP_CAP_PCT:g}%): harga reclaim EMA20 1h setelah sempat drop -- "
                             f"tambah modal ${_kb_modal:.0f} (modal ${_kb_current_modal:.0f} -> target ${_kb_target:.0f})")
                         # 29/10/2026 (patch "reclaim-addfund-shortfall-handling"): GANTI dari
                         # execute_add_fund() langsung ke handle_reclaim_addfund_shortfall() --
@@ -11296,7 +11363,7 @@ def thread2_monitor():
                                     (f" [{_kb_label}]" if _kb_mode == 'partial' else "") + "\n"
                                     f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                                     f"Pair    : {to_display_pair(sym)}\n"
-                                    f"Pola    : EMA20 1h cross-down lalu cross-up (reclaim, toleransi {KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%)\n"
+                                    f"Pola    : EMA20 1h cross-down lalu cross-up (reclaim, toleransi {KB12H_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%, gap-cap {KB12H_RECLAIM_GAP_CAP_PCT:g}% dari harga beli)\n"
                                     f"Modal ditambah: ${_kb_result.get('amount',0):.2f} @ {_fmt_price(_kb_result.get('price',0))}" +
                                     (f"\nCatatan: target penuh ${_kb_modal:.0f}, saldo mepet -- {_kb_result.get('ai_reasoning','')}" if _kb_mode == 'partial' else ""),
                                     parse_mode=None
@@ -11325,7 +11392,8 @@ def thread2_monitor():
         if strat == 'trend_confirm_4h' and _rc_add_count < TRENDCONFIRM_RECLAIM_ADDFUND_MAX_ADDS and price < entry:
             _reclaim_signal = get_live_ema20_reclaim_signal(
                 sym, strat, TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES, TRENDCONFIRM_RECLAIM_ADDFUND_RVOL_MIN,
-                TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT)
+                TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT,
+                entry_price=entry, gap_cap_pct=TRENDCONFIRM_RECLAIM_ADDFUND_GAP_CAP_PCT)
             if _reclaim_signal:
                 if not get_deal_override(sym, 'auto_add_fund', True):
                     log(f"[T2] {sym} reclaim-addfund: TERPICU tapi auto_add_fund=OFF (toggle 'Auto Avg Down') -- di-skip, tidak dicoba ulang")
@@ -11356,7 +11424,7 @@ def thread2_monitor():
                             if sym in active_deals:
                                 active_deals[sym]['reclaim_addfund_count'] = _rc_add_count + 1
                     else:
-                        log(f"[T2] {sym} reclaim-addfund TERPICU (add ke-{_rc_add_count + 1}/{TRENDCONFIRM_RECLAIM_ADDFUND_MAX_ADDS}): EMA20 reclaim (<={TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES} candle, toleransi {TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%) "
+                        log(f"[T2] {sym} reclaim-addfund TERPICU (add ke-{_rc_add_count + 1}/{TRENDCONFIRM_RECLAIM_ADDFUND_MAX_ADDS}): EMA20 reclaim (<={TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES} candle, toleransi {TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%, gap-cap {TRENDCONFIRM_RECLAIM_ADDFUND_GAP_CAP_PCT:g}%) "
                             f"+ RVol>={TRENDCONFIRM_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_rc_modal:.0f} (modal ${_rc_current_modal:.0f} -> target ${_rc_target:.0f})")
                         # 29/10/2026 (patch "reclaim-addfund-shortfall-handling", insiden
                         # ENAUSDT 2x TERPICU 2x gagal total -2010): GANTI dari execute_add_fund()
@@ -11380,7 +11448,7 @@ def thread2_monitor():
                                     (f" [{_rc_label}]" if _rc_mode == 'partial' else "") + "\n"
                                     f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                                     f"Pair    : {to_display_pair(sym)}\n"
-                                    f"Pola    : EMA20 cross-down lalu cross-up (reclaim, toleransi {TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%) + RVol\n"
+                                    f"Pola    : EMA20 cross-down lalu cross-up (reclaim, toleransi {TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT:g}%, gap-cap {TRENDCONFIRM_RECLAIM_ADDFUND_GAP_CAP_PCT:g}%) + RVol\n"
                                     f"Modal ditambah: ${_rc_result.get('amount',0):.2f} @ {_fmt_price(_rc_result.get('price',0))}" +
                                     (f"\nCatatan: target penuh ${_rc_modal:.0f}, saldo mepet -- {_rc_result.get('ai_reasoning','')}" if _rc_mode == 'partial' else ""),
                                     parse_mode=None
@@ -11401,7 +11469,8 @@ def thread2_monitor():
         # generik, aman dipakai lintas strategi -- cuma flag per-deal, bukan state bersama).
         if strat == 'decouple_4h' and not d.get('reclaim_addfund_used', False) and price < entry:
             _dc_signal = get_live_ema20_reclaim_signal(
-                sym, strat, DECOUPLE_RECLAIM_ADDFUND_N_CANDLES, DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN)
+                sym, strat, DECOUPLE_RECLAIM_ADDFUND_N_CANDLES, DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN,
+                entry_price=entry, gap_cap_pct=DECOUPLE_RECLAIM_ADDFUND_GAP_CAP_PCT)
             if _dc_signal:
                 if not get_deal_override(sym, 'auto_add_fund', True):
                     log(f"[T2] {sym} reclaim-addfund: TERPICU tapi auto_add_fund=OFF (toggle 'Auto Avg Down') -- di-skip, tidak dicoba ulang")
@@ -11429,7 +11498,7 @@ def thread2_monitor():
                             if sym in active_deals:
                                 active_deals[sym]['reclaim_addfund_used'] = True
                     else:
-                        log(f"[T2] {sym} reclaim-addfund TERPICU: EMA20 reclaim (<={DECOUPLE_RECLAIM_ADDFUND_N_CANDLES} candle) "
+                        log(f"[T2] {sym} reclaim-addfund TERPICU: EMA20 reclaim (<={DECOUPLE_RECLAIM_ADDFUND_N_CANDLES} candle, gap-cap {DECOUPLE_RECLAIM_ADDFUND_GAP_CAP_PCT:g}%) "
                             f"+ RVol>={DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_dc_modal:.0f} (modal ${_dc_current_modal:.0f} -> target ${SMALLSTART_FULL_TARGET_USD.get('decouple_4h', 20.0):.0f})")
                         _dc_result = execute_add_fund(sym, _dc_modal)
                         with active_deals_lock:
@@ -11440,7 +11509,7 @@ def thread2_monitor():
                                 f"📈 Reclaim Add-Fund (Decouple-4h)\n"
                                 f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
                                 f"Pair    : {to_display_pair(sym)}\n"
-                                f"Pola    : EMA20 cross-down lalu cross-up (reclaim) + RVol\n"
+                                f"Pola    : EMA20 cross-down lalu cross-up (reclaim, gap-cap {DECOUPLE_RECLAIM_ADDFUND_GAP_CAP_PCT:g}%) + RVol\n"
                                 f"Modal ditambah: ${_dc_modal:.0f} @ {_fmt_price(_dc_result.get('price',0))}",
                                 parse_mode=None
                             )
