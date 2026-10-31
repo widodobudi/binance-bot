@@ -15431,6 +15431,7 @@ def paper_test_check_exits(strategy: str):
         entry = pos['entry_price']
         pct = (price_now / entry - 1) * 100
         elapsed_h = (now_ms - pos['opened_ts']) / 3_600_000
+        _max_hold_h = PAPER_TEST_MAX_HOLD_HOURS_BY_STRATEGY.get(strategy, PAPER_TEST_MAX_HOLD_HOURS)
         reason = None
         if strategy == 'mombreak_1h':
             peak = max(pos.get('peak', entry), price_now)
@@ -15442,14 +15443,14 @@ def paper_test_check_exits(strategy: str):
                 reason = f"hard-stop {stop_pct:.1f}%"
             elif armed and price_now <= peak * (1 - mombreak_trail_pct() / 100):
                 reason = f"trailing (arm {mombreak_arm_pct():.1f}%, trail {mombreak_trail_pct():.1f}% dari puncak {peak_pct:+.2f}%)"
-            elif elapsed_h >= PAPER_TEST_MAX_HOLD_HOURS:
-                reason = f"timeout {PAPER_TEST_MAX_HOLD_HOURS}j"
+            elif elapsed_h >= _max_hold_h:
+                reason = f"timeout {_max_hold_h:g}j"
         else:
             _, _, hs_pct = hard_stop_pct(pos.get('atr_pct', 3.0) or 3.0, strategy)
             if pct <= -hs_pct:
                 reason = f"hard-stop {hs_pct:.1f}%"
-            elif elapsed_h >= PAPER_TEST_MAX_HOLD_HOURS:
-                reason = f"timeout {PAPER_TEST_MAX_HOLD_HOURS}j"
+            elif elapsed_h >= _max_hold_h:
+                reason = f"timeout {_max_hold_h:g}j"
         if reason is None:
             still_open.append(pos)
             continue
@@ -26694,6 +26695,23 @@ MOMBREAK_LIVE_STOP_PCT          = 1.0   # 14/10/2026: diperketat dari 2.0 -- bac
 MOMBREAK_LIVE_TIMEOUT_CANDLES   = 15    # varian C ronde 1 (15 candle x 1h = 15 jam, naik dari 3m=45 menit
                                          # 14/10/2026 saat TF diganti -- jumlah candle TETAP sama,
                                          # cuma durasinya ikut TF baru, sama pola spt sweep TF)
+
+# Patch "papertest-timeout-per-strategy" (31/10/2026, izin eksplisit Mas Budi -- root cause
+# RVolBreak-8h paper-test WR 0%): paper_test_check_exits() SEBELUMNYA pakai SATU
+# PAPER_TEST_MAX_HOLD_HOURS (48j) rata buat SEMUA strategi paper-test, padahal masing2
+# punya timeout live sendiri yang JAUH beda -- RVolBreak-8h dipotong di 25% dari waktu
+# seharusnya (48j vs 192j asli), mombreak_1h malah DITAHAN 3x lebih lama dari asli (48j vs
+# 15j). Peta ini REPLIKA PERSIS timeout live tiap strategi (candle count x durasi candle-nya),
+# BUKAN angka baru yang perlu dibacktest -- cuma menyamakan paper-test ke apa yang live-nya
+# SUDAH pakai. decouple_4h/rvolbreak_8h/bbsnap_4h pakai cabang "else" (lihat
+# paper_test_check_exits()), mombreak_1h pakai cabang sendiri. Strategi paper-test yang
+# TIDAK ada di peta ini (kalau ada nanti) tetap fallback ke PAPER_TEST_MAX_HOLD_HOURS lama.
+PAPER_TEST_MAX_HOLD_HOURS_BY_STRATEGY = {
+    'mombreak_1h':  MOMBREAK_LIVE_TIMEOUT_CANDLES * 1,    # 15 candle x 1h = 15j
+    'rvolbreak_8h': RVOLBREAK_8H_MAX_HOLD_CANDLES * 8,    # 24 candle x 8h = 192j
+    'decouple_4h':  DECOUPLE_4H_MAX_HOLD_CANDLES * 4,     # 20 candle x 4h = 80j
+    'bbsnap_4h':    BBSNAP_4H_MAX_HOLD_CANDLES * 4,       # 30 candle x 4h = 120j
+}
 MOMBREAK_SCAN_INTERVAL          = 300   # detik (5 menit) -- 14/10/2026: dinaikkan dari 60s (bekas TF
                                          # 3m) krn TF sekarang 1 jam, scan tiap 60s jadi boros/percuma
 MOMBREAK_FWDTEST_TARGET         = 12    # target forward-test awal (permintaan Mas Budi 12/09/2026)
