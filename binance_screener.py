@@ -1513,6 +1513,42 @@ def _binance_still_banned() -> float:
     remaining = until - time.time() * 1000
     return remaining / 1000 if remaining > 0 else 0.0
 
+# Patch "binance-global-rate-gate" (01/11/2026, permintaan eksplisit Mas Budi -- ban Binance
+# yang berulang-ulang jam demi jam, "GALI" akar penyebabnya): _binance_still_banned() di atas
+# SUDAH mencegah nembak SELAMA ban aktif (baik) -- tapi begitu ban HABIS, 15+ thread (T1/T2/T3/
+# T1d/shadow-fwdtest/shadow-hsconfirm/orphan-reclaim/dkk, masing2 jadwal sendiri, TIDAK saling
+# tahu) yang sempat tertahan bisa langsung nembak hampir BERSAMAAN ("thundering herd") --
+# BUKAN masalah satu thread "nakal", tapi TIDAK ADA satu pun titik yang membatasi kecepatan
+# GABUNGAN semua thread sekaligus. Itu cukup buat lewati limit Binance lagi dalam hitungan
+# detik, picu ban BARU, berulang terus -- cocok dgn pola yang ditemukan di log (durasi "sisa
+# ban" kadang malah lebih PANJANG tiap kali terulang, khas pola Binance menghukum lebih berat
+# pelanggaran berulang dalam window singkat).
+# Perbaikan: gerbang kecepatan GLOBAL, bukan per-thread/per-endpoint -- SEMUA request Binance
+# (data API _binance_get() MAUPUN trading API _binance_trading_request()) WAJIB panggil ini
+# tepat sebelum nembak, serialize via lock + jeda minimal. Jadi walau belasan thread "pengen"
+# nembak di detik yang sama (terutama pas ban baru kelar), nyatanya tetap keluar satu-satu
+# dengan jarak aman -- tidak pernah meledak bareng lagi. BINANCE_MIN_REQUEST_INTERVAL_SEC=0.1
+# (maks ~10 request/detik gabungan semua thread, ~600/menit) dipilih konservatif tapi tidak
+# terlalu lambat drpd limit resmi Binance (1200 weight/menit, kebanyakan endpoint di sini
+# berbobot 1-2) -- PERLU DIPANTAU setelah deploy: kalau ban masih berulang, turunkan lagi
+# (interval dinaikkan); kalau scan jadi terasa lambat/menumpuk, bisa dinaikkan dikit.
+BINANCE_MIN_REQUEST_INTERVAL_SEC = 0.1
+_binance_rate_gate_lock = threading.Lock()
+_binance_rate_gate_last_ts = 0.0
+
+def _binance_rate_gate():
+    """Panggil TEPAT SEBELUM tiap request HTTP nyata ke Binance (data maupun trading, termasuk
+    tiap percobaan ulang/retry) -- lihat REMARK lengkap di BINANCE_MIN_REQUEST_INTERVAL_SEC.
+    Blocking (time.sleep) kalau perlu -- begitu return, caller aman langsung nembak."""
+    global _binance_rate_gate_last_ts
+    with _binance_rate_gate_lock:
+        now = time.time()
+        wait = (_binance_rate_gate_last_ts + BINANCE_MIN_REQUEST_INTERVAL_SEC) - now
+        if wait > 0:
+            time.sleep(wait)
+            now = time.time()
+        _binance_rate_gate_last_ts = now
+
 def _binance_get(endpoint: str, params: dict = None, timeout: int = 15):
     """GET ke Binance data API dgn retry otomatis.
     Menangani: timeout, connection error, HTTP 5xx, HTTP 429 (rate limit), HTTP 418 (IP banned).
@@ -1524,6 +1560,7 @@ def _binance_get(endpoint: str, params: dict = None, timeout: int = 15):
     delay = _RETRY_DELAY
     for attempt in range(1, _RETRY_COUNT + 1):
         try:
+            _binance_rate_gate()
             r = session.get(url, params=params, timeout=timeout)
             if r.status_code == 418:
                 try:
@@ -5082,6 +5119,7 @@ def _binance_trading_request(method: str, path: str, params: dict, api_key: str 
     query += f"&signature={sig}"
     url     = f"{BINANCE_TRADING_BASE}{path}?{query}"
     headers = {"X-MBX-APIKEY": api_key}
+    _binance_rate_gate()
     resp    = session.request(method, url, headers=headers, timeout=10)
     data    = resp.json()
     if resp.status_code == 418:
