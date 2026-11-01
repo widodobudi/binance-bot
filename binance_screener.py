@@ -17019,6 +17019,10 @@ refreshShadowChart();
           <div style="font-size:9px;color:var(--muted)">{{ d.get("opened_at","")[:16] if d.get("opened_at") else "-" }}</div>
         </td>
         <td><button type="button" onclick="openTradingViewChart('{{ sym }}','{{ _sm.get(d.get('strategy',''),d.get('strategy','-')) }}')" style="background:#2962ff;color:#fff;border:none;border-radius:4px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Open Chart</button>
+          <!-- 01/11/2026 (permintaan Mas Budi): "Chart Deal" (candlestick custom + marker, sama
+          modal dgn Closed Deals) ditambahkan juga di sini -- lihat REMARK lengkap di
+          openActiveDealChartModal() (dash.js). -->
+          <button type="button" onclick="openActiveDealChartModal('{{ sym }}','{{ _sm.get(d.get('strategy',''),d.get('strategy','-')) }}','{{ d.get('opened_at','') }}',{{ d.get('entry_price',0) }},{{ d.get('last_price',0) }})" title="Chart candle + marker Entry/Average, harga sekarang (di dalam dashboard, deal masih berjalan)" style="margin-top:4px;background:var(--yellow);color:#1a1300;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Chart Deal</button>
           <button type="button" onclick="refreshDealRow('{{ sym }}')" id="rrbtn-{{ sym }}" title="Refresh cuma baris ini (harga, profit, selisih wallet, status tier) -- tidak reload semua deal" style="margin-top:4px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">&#8635; Refresh</button></td>
         <td style="white-space:nowrap">
           <div style="font-size:9px;color:var(--muted);margin-bottom:2px">{{ "Average" if d.get("add_fund_sent") else "Entry" }}</div>
@@ -18829,7 +18833,8 @@ function wibTimeLabel(ms) {
     function p2(n) { return (n < 10 ? '0' : '') + n; }
     return p2(d.getUTCDate()) + '/' + p2(d.getUTCMonth() + 1) + ' ' + p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes());
 }
-function renderDealCandleSVG(candles, openMs, closeMs, basePrice, avgPrice, exitPrice) {
+function renderDealCandleSVG(candles, openMs, closeMs, basePrice, avgPrice, exitPrice, closeLabel) {
+    closeLabel = closeLabel || 'CLOSE';
     if (!candles.length) return '<div style="color:var(--muted);padding:30px;text-align:center">Tidak ada data candle dari Binance utk rentang waktu ini.</div>';
     var W = 1000, H = 420, padL = 58, padR = 14, padT = 14, padB = 26;
     var stepGuess = candles.length > 1 ? (candles[1].t - candles[0].t) : 60000;
@@ -18872,7 +18877,7 @@ function renderDealCandleSVG(candles, openMs, closeMs, basePrice, avgPrice, exit
                '<circle cx="' + toX(closeMs).toFixed(1) + '" cy="' + toY(exitPrice).toFixed(1) + '" r="4" fill="' + exitClr + '" stroke="#fff" stroke-width="1.2"></circle>';
     var labels =
         '<text x="' + toX(openMs).toFixed(1) + '" y="' + (H - padB + 14) + '" text-anchor="middle" font-size="9" fill="#58a6ff">OPEN ' + wibTimeLabel(openMs) + '</text>' +
-        '<text x="' + toX(closeMs).toFixed(1) + '" y="' + (H - padB + 14) + '" text-anchor="middle" font-size="9" fill="' + exitClr + '">CLOSE ' + wibTimeLabel(closeMs) + '</text>' +
+        '<text x="' + toX(closeMs).toFixed(1) + '" y="' + (H - padB + 14) + '" text-anchor="middle" font-size="9" fill="' + exitClr + '">' + closeLabel + ' ' + wibTimeLabel(closeMs) + '</text>' +
         '<text x="' + (padL - 4) + '" y="' + toY(basePrice).toFixed(1) + '" text-anchor="end" dominant-baseline="middle" font-size="9" fill="#58a6ff">' + fmtPriceJs(basePrice) + '</text>' +
         '<text x="' + (padL - 4) + '" y="' + toY(exitPrice).toFixed(1) + '" text-anchor="end" dominant-baseline="middle" font-size="9" fill="' + exitClr + '">' + fmtPriceJs(exitPrice) + '</text>' +
         (hasAddFund ? '<text x="' + (padL - 4) + '" y="' + toY(avgPrice).toFixed(1) + '" text-anchor="end" dominant-baseline="middle" font-size="9" fill="var(--yellow)">' + fmtPriceJs(avgPrice) + '</text>' : '');
@@ -18915,6 +18920,42 @@ function closeDealChartModal() {
     if (modal) modal.style.display = 'none';
 }
 document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeDealChartModal(); });
+
+// 01/11/2026 (permintaan Mas Budi): "Chart Deal" juga di Active Deals (sebelumnya cuma ada di
+// Closed Deals) -- REUSE renderDealCandleSVG()/modal yg sama, bedanya cuma 2: (1) close_time
+// dikirim sebagai JAM SEKARANG (bukan jam deal benar-benar tutup, krn memang belum tutup),
+// candle jalan sampai saat tombol diklik; (2) basePrice==avgPrice (SATU marker "Entry/Average"
+// -- active_deals['entry_price'] SUDAH rata-rata tertimbang yang live-diupdate tiap add-fund,
+// beda dari closed-trades yang avg-nya harus diturunkan balik dari profit_pct krn tidak
+// tersimpan terpisah), exitPrice diisi harga SEKARANG (closeLabel='SEKARANG', bukan 'CLOSE').
+function openActiveDealChartModal(sym, strategyLabel, openedAt, entryPrice, lastPrice) {
+    var modal = document.getElementById('deal-chart-modal');
+    var titleEl = document.getElementById('deal-chart-title');
+    var legendEl = document.getElementById('deal-chart-legend');
+    var bodyEl = document.getElementById('deal-chart-body');
+    titleEl.textContent = sym.replace('USDT', '/USDT') + ' — ' + strategyLabel + ' (masih berjalan)';
+    legendEl.innerHTML = '';
+    bodyEl.innerHTML = '<div style="color:var(--muted);padding:30px;text-align:center">Memuat candle dari Binance...</div>';
+    modal.style.display = 'flex';
+    var nowWib = new Date(Date.now() + 7 * 3600 * 1000);
+    function p2(n) { return (n < 10 ? '0' : '') + n; }
+    var closeTimeStr = nowWib.getUTCFullYear() + '-' + p2(nowWib.getUTCMonth() + 1) + '-' + p2(nowWib.getUTCDate()) +
+        ' ' + p2(nowWib.getUTCHours()) + ':' + p2(nowWib.getUTCMinutes()) + ':' + p2(nowWib.getUTCSeconds());
+    var qs = 'symbol=' + encodeURIComponent(sym) + '&open_time=' + encodeURIComponent(openedAt || '') + '&close_time=' + encodeURIComponent(closeTimeStr);
+    fetch('/api/deal_chart?' + qs).then(function(resp) { return resp.json(); }).then(function(d) {
+        if (!d.ok) { bodyEl.innerHTML = '<div style="color:var(--red);padding:20px;text-align:center">Gagal memuat chart: ' + (d.error || '?') + '</div>'; return; }
+        var entry = parseFloat(entryPrice) || 0;
+        var last = parseFloat(lastPrice) || entry;
+        bodyEl.innerHTML = renderDealCandleSVG(d.candles || [], d.open_ms, d.close_ms, entry, entry, last, 'SEKARANG');
+        var pct = entry > 0 ? ((last / entry - 1) * 100) : 0;
+        legendEl.innerHTML =
+            '<span style="color:#58a6ff">● Entry/Average</span> ' + fmtPriceJs(entry) + ' &nbsp; ' +
+            '<span style="color:' + (last >= entry ? '#3fb950' : '#f85149') + '">● Harga Sekarang</span> ' + fmtPriceJs(last) + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%, belum termasuk fee)' +
+            '<br>Deal MASIH BERJALAN — candle sampai saat tombol ini diklik. Interval: ' + (d.interval || '-') + ' — jam ditampilkan WIB.';
+    }).catch(function(e) {
+        bodyEl.innerHTML = '<div style="color:var(--red);padding:20px;text-align:center">Gagal memuat chart: ' + e + '</div>';
+    });
+}
 
 function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
