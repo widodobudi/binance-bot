@@ -7159,6 +7159,52 @@ def get_orphaned_cancelled_assets(min_value_usdt: float = 5.0) -> list:
 
 AUTOFUND_IDLE_ASSET_BUFFER_PCT = 5.0  # jual sedikit lebih dari kebutuhan pas (fee/slippage)
 
+# Patch "combine-idle-coins-checkin-reminder" (01/11/2026, permintaan eksplisit Mas Budi):
+# auto_fund_addfund_from_idle_asset() di bawah DAN auto_fund_addfund_from_orphaned_profit()
+# (dekat get_orphaned_cancelled_assets()) DUA-duanya mensyaratkan SATU coin nganggur/orphan
+# yang NILAINYA SENDIRIAN cukup menutup seluruh kebutuhan (value_usdt >= needed_with_buffer) --
+# TIDAK PERNAH menggabungkan beberapa coin kecil jadi satu. Mas Budi tanya (01/11/2026) apakah
+# ini bikin rugi peluang nambah modal (contoh nyata: REZ/USDT ke-2 hari itu, butuh $64,
+# auto-convert gagal krn gak ada SATU coin >= $67,2, padahal ada belasan coin orphan/idle kecil-
+# kecil). Investigasi (fork, baca log Railway): hasilnya BELUM BISA disimpulkan -- mekanisme
+# shortfall-handling ini baru 3 hari jalan (sejak 29/10/2026), log Railway cuma nyimpen ~4
+# minggu ke belakang, dan TIDAK ADA log yang menyimpan nilai USD per-coin nganggur satu-satu
+# (cuma jumlah coin + saldo kas) -- jadi gak bisa dihitung ulang "kalau digabung, cukup gak".
+# Ditemukan 15 kegagalan vs 38 keberhasilan di SELURUH riwayat log yang ada (jadi mekanisme
+# single-coin ini SERING berhasil, bukan sering macet); dari 15 kegagalan itu cuma 1 (MORPHO
+# 31/10 22:21, kurang ~$4 doang dari kebutuhan) yang kelihatan JELAS bakal ketolong kalau boleh
+# gabung. Mas Budi putuskan TUNGGU (bukan langsung bangun fitur gabung-coin) -- data perlu
+# numpuk 4-6 minggu lagi dulu baru dicek ulang. ORPHAN_COMBINE_CHECKIN_DUE_WIB di bawah
+# ngatur reminder Telegram SEKALI (lihat check_orphan_combine_checkin_reminder(), dipanggil
+# dari run_thread_orphan_reclaim() tiap siklus) begitu tanggalnya tercapai -- BUKAN mencoba
+# investigasi ulang otomatis di sini (proses Python ini gak punya akses log Railway), cuma
+# ngingetin Mas Budi/sesi Claude berikutnya buat minta investigasi ulang pakai data yang
+# sudah lebih banyak.
+ORPHAN_COMBINE_CHECKIN_DUE_WIB = "2026-12-06"  # ~5 minggu dari 01/11/2026 (diminta: 4-6 minggu)
+ORPHAN_COMBINE_CHECKIN_FLAG_FILE = os.path.join(DATA_DIR, "orphan_combine_checkin_notified.json")
+
+def check_orphan_combine_checkin_reminder():
+    """Kirim Telegram SEKALI (sticky, dicek via file flag) begitu ORPHAN_COMBINE_CHECKIN_DUE_WIB
+    tercapai -- lihat REMARK lengkap di atas. Dipanggil tiap siklus dari run_thread_orphan_reclaim()
+    (~60 detik), aman dipanggil berkali-kali (no-op kalau belum due atau sudah pernah kirim)."""
+    try:
+        if os.path.exists(ORPHAN_COMBINE_CHECKIN_FLAG_FILE):
+            return
+        if now_wib().strftime('%Y-%m-%d') < ORPHAN_COMBINE_CHECKIN_DUE_WIB:
+            return
+        send_telegram(
+            "⏰ REMINDER (dijadwalkan 01/11/2026)\n"
+            "Waktunya cek ulang: apakah mekanisme nambah modal boleh GABUNG beberapa coin kecil "
+            "nganggur/orphan (bukan harus SATU coin yang sendirian cukup)?\n"
+            "01/11/2026 datanya belum cukup buat diputuskan (fitur baru 3 hari, log Railway cuma "
+            "~4 minggu). Minta Claude jalankan ulang investigasinya sekarang -- datanya sudah "
+            "lebih banyak numpuk.",
+            parse_mode=None)
+        with open(ORPHAN_COMBINE_CHECKIN_FLAG_FILE, 'w') as f:
+            json.dump({"notified_at_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S')}, f)
+    except Exception as e:
+        log(f"WARN check_orphan_combine_checkin_reminder: {e}")
+
 def auto_fund_addfund_from_idle_asset(target_symbol: str, needed_usd: float) -> dict:
     """15/09/2026 (permintaan Mas Budi -- ide "convert koin hold_no_sell buat add-fund
     deal yang menarik"): dipanggil dari thread2_monitor() (via _pending_addfund_queue,
@@ -15949,6 +15995,7 @@ ORPHAN_RECLAIM_GAPCAP_STRATEGIES = ('brkX2_12h_closed', 'trend_confirm_4h', 'dec
 def run_thread_orphan_reclaim():
     while True:
         try:
+            check_orphan_combine_checkin_reminder()
             with cancelled_deal_price_lock:
                 snapshot = dict(cancelled_deal_price)
             for sym, cd in snapshot.items():
