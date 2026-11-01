@@ -273,7 +273,23 @@ HARD_STOP_MULT_BY_STRATEGY = {
 # Angka backtest ada di memory project_hardstop_backtest_status. 0 = mati.
 BRKX2_4H_BE_TRIGGER_PCT = 1.0
 # 06/10/2026: impas +1% untuk TrenKonfirmasi-4h (tanpa faktor 0.8). 0 = mati. Hanya aktif setelah di-push.
-TC4H_BE_TRIGGER_PCT = 1.0
+# 01/11/2026 (patch "tc4h-breakeven-disabled", permintaan eksplisit Mas Budi -- "sikap 2" dari 2
+# opsi yg ditawarkan: "ambil untung kecil pasti" vs "tahan, rata-rata lebih untung tapi lebih
+# sering rugi"): DIMATIKAN (1.0 -> 0). Dipicu laporan Mas Budi lihat tabel Closed Deals, dicek
+# manual 6 contoh (campuran), lalu dibacktest penuh (83.337 trade TrenKonfirmasi-4h, 2022-2026,
+# TRAIN/TEST interleave per-minggu ISO, fee 0,2%, model v2 tc4h_cancel_race_v2.py -- ATR live +
+# jalur arm BB-Upper, BUKAN model v1 yg gak valid): 32,9% dari SEMUA deal (27.434) selesai lewat
+# impas ini. Buat subset itu: impas AKTIF selalu +0,79% (100% menang, deterministik by design).
+# Impas DIMATIKAN (biarkan jalan lewat hard-stop/trailing normal): rata-rata naik ke +1,54%, tapi
+# menang cuma 86,2% -- 13,8% dari yg tadinya pasti untung kecil malah jadi rugi. Total (semua
+# deal, bukan cuma subset): avg%/trade naik 1,896%->2,141%, WR turun 85,49%->80,93%. Konsisten
+# arahnya di TRAIN & TEST (bukan noise). Trade-off nyata, bukan bug -- Mas Budi pilih "tahan,
+# untung rata-rata lebih besar, terima lebih sering rugi" setelah penjelasan analogi "ambil
+# untung di tangan vs tahan demi lebih banyak". Backtest: tc4h_breakeven_ab.py (scratchpad sesi
+# 01/11/2026). _be_trig=0 -> _be_active selalu False (lihat thread2_monitor()) -- deal
+# TrenKonfirmasi-4h sekarang jatuh lewat hard-stop/trailing normal persis spt KeltnerBreak-12h/
+# Decouple-4h (yang dari awal TIDAK PERNAH ada di BE_TRIGGER_BY_STRATEGY).
+TC4H_BE_TRIGGER_PCT = 0
 # 16/10/2026: bbsnap_4h/8h dibacktest pakai BE_TRIGGER 1.0% + buffer 0.1% (sama default yg
 # dipakai backtest-nya) -- ditulis eksplisit di sini supaya live PERSIS cocok dgn backtest
 # (tanpa entry eksplisit, defaultnya BE_TRIGGER_BY_STRATEGY.get(strat,0)=0 -- BE mati total).
