@@ -1527,12 +1527,22 @@ def _binance_still_banned() -> float:
 # (data API _binance_get() MAUPUN trading API _binance_trading_request()) WAJIB panggil ini
 # tepat sebelum nembak, serialize via lock + jeda minimal. Jadi walau belasan thread "pengen"
 # nembak di detik yang sama (terutama pas ban baru kelar), nyatanya tetap keluar satu-satu
-# dengan jarak aman -- tidak pernah meledak bareng lagi. BINANCE_MIN_REQUEST_INTERVAL_SEC=0.1
-# (maks ~10 request/detik gabungan semua thread, ~600/menit) dipilih konservatif tapi tidak
-# terlalu lambat drpd limit resmi Binance (1200 weight/menit, kebanyakan endpoint di sini
-# berbobot 1-2) -- PERLU DIPANTAU setelah deploy: kalau ban masih berulang, turunkan lagi
-# (interval dinaikkan); kalau scan jadi terasa lambat/menumpuk, bisa dinaikkan dikit.
-BINANCE_MIN_REQUEST_INTERVAL_SEC = 0.1
+# dengan jarak aman -- tidak pernah meledak bareng lagi.
+# 01/11/2026 (ronde kedua, SAMA HARI, permintaan eksplisit Mas Budi -- ban masih kejadian lagi
+# ~4 menit setelah deploy ronde pertama, sambil itu juga diperbaiki 2 titik yg sama sekali
+# lewat gerbang ini: session.get() langsung ke exchangeInfo di _check_auto_sell_one() dan
+# _binance_format_qty(), lihat REMARK masing2): BUKTI LANGSUNG dari log -- 22:29:35 WIB kena
+# HTTP 429 di /api/v3/klines, 10 DETIK kemudian (22:29:45) langsung kena HTTP 418 ban baru
+# (~88 menit, lebih panjang dari ban sebelumnya -- khas pola Binance menghukum pelanggaran
+# berulang). Jadi 0.1s (~10 request/detik, ~600/menit) TERBUKTI masih kurang ketat --
+# kemungkinan karena banyak panggilan /api/v3/klines di bot ini pakai parameter `limit` yg
+# bobotnya > 1 (skema resmi Binance: limit<=100 bobot 1, 100-500 bobot 2, 500-1000 bobot 5,
+# >1000 bobot 10) -- rata-rata bobot per request kemungkinan besar > 1, bukan cuma soal jumlah
+# request. Diperketat 0.1 -> 0.3 (~3,3 request/detik, ~200/menit) -- jauh di bawah limit resmi
+# 1200 bobot/menit walau rata2 bobot per request sampai 5-6x. Konsekuensi yg disadari: scan
+# semua strategi jadi SEDIKIT lebih lambat (nunggu giliran lebih lama) -- trade-off yg diterima
+# demi berhenti dari siklus ban berulang. PERLU DIPANTAU lagi setelah deploy ini.
+BINANCE_MIN_REQUEST_INTERVAL_SEC = 0.3
 _binance_rate_gate_lock = threading.Lock()
 _binance_rate_gate_last_ts = 0.0
 
@@ -6344,11 +6354,18 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
     try:
         info = _auto_sell_filter_cache.get(symbol)
         if info is None:
-            response = session.get(
-                f"{BINANCE_TRADING_BASE}/api/v3/exchangeInfo?symbol={symbol}",
-                timeout=10,
-            )
-            response.raise_for_status()
+            # 01/11/2026 (patch "binance-global-rate-gate" follow-up, permintaan eksplisit Mas
+            # Budi -- ban Binance masih kejadian lagi walau gerbang kecepatan sudah dipasang):
+            # SEBELUMNYA panggil session.get() LANGSUNG ke api.binance.com, lewat SAMA SEKALI
+            # dari _binance_rate_gate() DAN _binance_still_banned() -- titik buta yang bikin
+            # gerbang kecepatan tidak lengkap. exchangeInfo itu endpoint publik (tidak perlu
+            # signature), jadi dipindah ke data-api.binance.vision via _binance_get() (SAMA
+            # base yg sudah dipakai klines/ticker di seluruh bot) -- otomatis ikut gerbang +
+            # cek ban + retry/backoff yang sudah ada, tanpa endpoint baru yang perlu diurus.
+            response = _binance_get("/api/v3/exchangeInfo", params={"symbol": symbol}, timeout=10)
+            if response is None:
+                log(f"[AUTO-SELL] {symbol} gagal ambil exchangeInfo (ban/gagal fetch) — order dibatalkan")
+                return
             symbols = response.json().get("symbols", [])
             if not symbols or symbols[0].get("status") != "TRADING":
                 log(f"[AUTO-SELL] {symbol} tidak tersedia/aktif di Binance — order dibatalkan")
@@ -6451,8 +6468,13 @@ def _binance_format_qty(symbol: str, qty: float) -> str:
     global _lot_size_cache
     if symbol not in _lot_size_cache:
         try:
-            url  = f"https://api.binance.com/api/v3/exchangeInfo?symbol={symbol}"
-            resp = session.get(url, timeout=10)
+            # 01/11/2026 (patch "binance-global-rate-gate" follow-up): SAMA pola spt perbaikan
+            # di _check_auto_sell_one() -- session.get() langsung ke api.binance.com lewat
+            # gerbang kecepatan/cek-ban sama sekali. Dipindah ke _binance_get() (data-api.
+            # binance.vision, endpoint publik, sama base yg sudah dipakai klines/ticker).
+            resp = _binance_get("/api/v3/exchangeInfo", params={"symbol": symbol}, timeout=10)
+            if resp is None:
+                raise RuntimeError("fetch exchangeInfo gagal/sedang ban")
             info = resp.json()
             for filt in info.get("symbols", [{}])[0].get("filters", []):
                 if filt.get("filterType") == "LOT_SIZE":
