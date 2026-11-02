@@ -16793,12 +16793,12 @@ DASHBOARD_HTML = '''
   :root{--bg:#0f1117;--surface:#1a1d2e;--border:#2a2d3e;--accent:#4f9eff;--green:#00c896;--red:#ff4f6a;--yellow:#ffb84f;--text:#e2e8f0;--muted:#8892a4;--font:'SF Mono','Fira Code',monospace}
   *{box-sizing:border-box;margin:0;padding:0}
     body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;overflow-x:hidden}
-    .header{max-width:1200px;width:calc(100% - 40px);margin:0 auto;background:var(--surface);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;padding:12px 20px;display:flex;align-items:center;gap:16px}
+    .header{max-width:1800px;width:calc(100% - 40px);margin:0 auto;background:var(--surface);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;padding:12px 20px;display:flex;align-items:center;gap:16px}
   .header h1{font-size:15px;color:var(--accent);letter-spacing:.05em}
   .header .status{font-size:11px;color:var(--muted)}
   .dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;margin-right:6px;animation:pulse 2s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-    .container{max-width:1200px;margin:0 auto;padding:12px 20px}
+    .container{max-width:1800px;margin:0 auto;padding:12px 20px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px}
     .container > .card:last-child{margin-bottom:0}
@@ -16844,7 +16844,7 @@ DASHBOARD_HTML = '''
 </div>
 
 <!-- ═══════════════ DASHBOARD TABS ═══════════════ -->
-<div class="dash-tabs" style="display:flex;gap:6px;flex-wrap:wrap;position:sticky;top:0;z-index:50;background:var(--bg);border-bottom:1px solid var(--border);max-width:1200px;width:calc(100% - 40px);margin:0 auto;padding:10px 20px">
+<div class="dash-tabs" style="display:flex;gap:6px;flex-wrap:wrap;position:sticky;top:0;z-index:50;background:var(--bg);border-bottom:1px solid var(--border);max-width:1800px;width:calc(100% - 40px);margin:0 auto;padding:10px 20px">
   <button type="button" class="dash-tab-btn" data-tab="strategies" onclick="selectDashTab('strategies')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">STRATEGIES</button>
   <button type="button" class="dash-tab-btn" data-tab="monitor" onclick="selectDashTab('monitor')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">MONITOR</button>
   <button type="button" class="dash-tab-btn" data-tab="history" onclick="selectDashTab('history')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-family:var(--font)">HISTORY</button>
