@@ -5004,6 +5004,33 @@ def send_email_open_long(subject: str, body: str):
     except Exception as e:
         log(f"WARN send_email: {e}")
 
+# 02/11/2026 (permintaan Mas Budi): WhatsApp pengganti email BTC-gate -- bot ini TIDAK punya
+# integrasi WhatsApp sendiri, jadi direlay lewat proyek "Dahlia Desk Management" (aplikasi lain
+# milik Mas Budi, sudah punya nomor WhatsApp Business Meta yang sudah disetujui + kanal "alert"
+# yang sudah ada, ke nomor Mas Budi sendiri). Dicoba CallMeBot dulu (gratis, lebih simpel) tapi
+# tidak pernah membalas apikey meski sudah 3x diaktivasi -- jadi pakai ini saja. DAHLIA_RELAY_URL/
+# DAHLIA_RELAY_KEY WAJIB diset (Railway variable) -- kalau kosong, fungsi no-op (gagal senyap,
+# tidak mematikan thread manapun).
+DAHLIA_RELAY_URL = os.environ.get("DAHLIA_RELAY_URL", "https://monitor-production-f5cb.up.railway.app/api/relay-alert")
+DAHLIA_RELAY_KEY = os.environ.get("DAHLIA_RELAY_KEY", "")
+
+def send_whatsapp_alert(text: str):
+    """Relay teks bebas ke WhatsApp Mas Budi lewat endpoint /api/relay-alert milik proyek Dahlia
+    Desk Management -- lihat REMARK di atas. Non-blocking/best-effort: gagal cuma di-log, TIDAK
+    pernah melempar exception ke caller (sama pola spt send_telegram/send_email_open_long)."""
+    if not DAHLIA_RELAY_KEY:
+        log("WARN send_whatsapp_alert: DAHLIA_RELAY_KEY belum diset, skip.")
+        return
+    try:
+        resp = session.post(DAHLIA_RELAY_URL, headers={"X-Relay-Key": DAHLIA_RELAY_KEY},
+                             json={"text": text}, timeout=15)
+        if resp.status_code != 200 or not resp.json().get("ok"):
+            log(f"WARN send_whatsapp_alert: HTTP {resp.status_code} {resp.text[:200]}")
+        else:
+            log(f"[WHATSAPP-RELAY] Terkirim: {text[:60]}")
+    except Exception as e:
+        log(f"WARN send_whatsapp_alert: {e}")
+
 # 13/10/2026 (permintaan Mas Budi): notif email edge-triggered tiap kali status Gerbang BTC
 # (Gate0) salah satu dari 4 strategi yang punya gerbang (KeltnerBreak-12h/T1, TrenKonfirmasi-4h,
 # Decouple-4h, MomentumBreak-1h) BERUBAH -- cuma pas transisi (terblok->lolos atau sebaliknya), BUKAN
@@ -5027,8 +5054,11 @@ def _notify_btc_gate_transition(strategy_key: str, display_name: str, now_ok: bo
         subject = f"BTC Gate TERBLOKIR -- {display_name}"
         body = (f"{display_name} TIDAK BISA buka posisi baru sampai syarat BTC terpenuhi lagi.\n"
                 f"Syarat: {syarat_text}\nWaktu: {ts} WIB")
-    send_email_open_long(subject, body)
-    log(f"[BTC-GATE-NOTIF] {display_name}: {'LOLOS' if now_ok else 'TERBLOKIR'} (email terkirim)")
+    # 02/11/2026 (permintaan Mas Budi): email DIMATIKAN -- 29 email lama juga sudah dihapus dari
+    # Gmail. Diganti WhatsApp lewat relay Dahlia (lihat REMARK lengkap di send_whatsapp_alert()
+    # dekat definisinya) -- send_email_open_long(subject, body) SENGAJA tidak dipanggil lagi.
+    send_whatsapp_alert(f"{subject}\n\n{body}")
+    log(f"[BTC-GATE-NOTIF] {display_name}: {'LOLOS' if now_ok else 'TERBLOKIR'} (WhatsApp relay -- {subject})")
 
 def get_binance_usdt_balance() -> float:
     """Baca saldo USDT free dari Binance API (read-only key). Return -1 jika gagal."""
@@ -34146,9 +34176,10 @@ if __name__ == '__main__':
     t_skip_summary = threading.Thread(target=run_ai_skip_summary_notifier, daemon=True, name="T-AISkipSummary")
     threads.append(t_skip_summary)
     n_threads += 1
-    t_skip_email = threading.Thread(target=run_ai_skip_email_notifier, daemon=True, name="T-AISkipEmail")
-    threads.append(t_skip_email)
-    n_threads += 1
+    # 02/11/2026 (permintaan Mas Budi): email "Ringkasan penolakan AI" (run_ai_skip_email_notifier(),
+    # tiap AI_SKIP_EMAIL_INTERVAL_SEC) DIMATIKAN -- tidak dihapus, cukup tidak di-start, supaya
+    # gampang dihidupkan lagi kalau suatu saat mau. Versi Telegram (run_ai_skip_summary_notifier(),
+    # t_skip_summary di atas) TIDAK disentuh, masih jalan seperti biasa.
     # 01/11/2026 (patch "orphan-reclaim-addfund"): lihat REMARK lengkap di
     # ORPHAN_RECLAIM_SCAN_INTERVAL/run_thread_orphan_reclaim() -- selalu jalan (tidak digembok
     # ENABLED flag), isinya cuma efektif kalau ada entry di cancelled_deal_price milik salah
