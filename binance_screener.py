@@ -5123,6 +5123,13 @@ _auto_sell_filter_cache = {}
 # hold_minutes terlewati, entry ini dihapus (batal, harus crossing baru dari nol).
 # In-memory saja -- restart Railway = reset (sama seperti cache lain di modul ini).
 _auto_sell_armed_since: dict = {}
+# 02/11/2026 (permintaan Mas Budi): symbol -> harga PUNCAK tertinggi sejak crossing, dipakai
+# HANYA kalau trailing_enabled=True (jalur TERPISAH dari _auto_sell_armed_since/hold_minutes
+# di atas -- 1 asset cuma pakai salah satu, tidak pernah dua-duanya, lihat _check_auto_sell_one()).
+# Beda dari hold_minutes yang punya batas waktu tetap, trailing TIDAK punya batas waktu --
+# terus mencatat puncak baru selama harga masih naik, baru jual begitu turun trailing_pct%
+# dari puncak itu. In-memory saja, reset tiap restart (sama pola spt cache lain di modul ini).
+_auto_sell_trail_peak: dict = {}
 # 01/10/2026 (permintaan Mas Budi, kasus MOVR -- dust 0,001443 sisa setelah sell_pct=100%
 # tereksekusi tetap di bawah LOT_SIZE/MIN_NOTIONAL Binance, jadi retry gagal terus tiap
 # siklus tanpa pernah berhenti sendiri sampai dust-sweep mingguan Minggu dini hari membersihkan
@@ -5399,6 +5406,12 @@ def save_auto_sell_config(config: dict) -> None:
             # kebuang tiap save walau upsert_auto_sell_asset() sudah benar menyertakannya,
             # jadi persentase jual yang diubah user selalu balik ke 95 (bug, lapor Mas Budi).
             "sell_pct": min(100.0, max(1.0, float(cfg.get("sell_pct", 95) or 95))),
+            # 02/11/2026 (permintaan Mas Budi): mode trailing, alternatif dari Tahan Konfirmasi
+            # -- lihat REMARK lengkap di _check_auto_sell_one(). Default OFF (checkbox default
+            # no), trailing_pct default 0 (diisi otomatis via /api/auto_sell_trailing_suggest
+            # saat checkbox dicentang di dashboard, atau manual).
+            "trailing_enabled": bool(cfg.get("trailing_enabled", False)),
+            "trailing_pct": max(0.0, float(cfg.get("trailing_pct", 0) or 0)),
         }
     with open(AUTO_SELL_CONFIG_FILE, "w", encoding="utf-8") as file:
         json.dump({"assets": clean}, file, indent=2)
@@ -5406,13 +5419,16 @@ def save_auto_sell_config(config: dict) -> None:
 
 def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg_price: float = None,
                             convert_leftover_bnb: bool = None, hold_minutes: float = None,
-                            sell_pct: float = None) -> dict:
+                            sell_pct: float = None, trailing_enabled: bool = None,
+                            trailing_pct: float = None) -> dict:
     """Tambah/update 1 entry asset di auto-sell config, tanpa ganggu asset lain.
-    avg_price/convert_leftover_bnb/hold_minutes/sell_pct=None -> pertahankan nilai yang
-    sudah ada (kalau ada). sell_pct (08/09/2026, permintaan Mas Budi): persentase saldo
-    yang dijual begitu crossing kena, default 95 (sama persis perilaku lama). Cuma kalau
-    >=95 sisa-nya bisa auto-convert ke BNB (lihat _check_auto_sell_one) -- di bawah itu
-    sisanya kebesaran buat di-dump ke BNB begitu saja, jadi dibiarkan."""
+    avg_price/convert_leftover_bnb/hold_minutes/sell_pct/trailing_enabled/trailing_pct=None
+    -> pertahankan nilai yang sudah ada (kalau ada). sell_pct (08/09/2026, permintaan Mas
+    Budi): persentase saldo yang dijual begitu crossing kena, default 95 (sama persis
+    perilaku lama). Cuma kalau >=95 sisa-nya bisa auto-convert ke BNB (lihat
+    _check_auto_sell_one) -- di bawah itu sisanya kebesaran buat di-dump ke BNB begitu
+    saja, jadi dibiarkan. trailing_enabled/trailing_pct (02/11/2026, permintaan Mas Budi):
+    lihat REMARK lengkap di _check_auto_sell_one()."""
     config = load_auto_sell_config()
     asset = str(asset).upper()
     existing = config["assets"].get(asset, {})
@@ -5424,16 +5440,23 @@ def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg
         hold_minutes = existing.get("hold_minutes", 0)
     if sell_pct is None:
         sell_pct = existing.get("sell_pct", 95)
-    # Threshold berubah (mis. user naikkan target) -> timer konfirmasi yg lagi jalan
-    # (kalau ada) jadi tidak relevan lagi, reset supaya dihitung ulang dari nol thd
+    if trailing_enabled is None:
+        trailing_enabled = existing.get("trailing_enabled", False)
+    if trailing_pct is None:
+        trailing_pct = existing.get("trailing_pct", 0)
+    # Threshold berubah (mis. user naikkan target) -> timer konfirmasi/trailing yg lagi
+    # jalan (kalau ada) jadi tidak relevan lagi, reset supaya dihitung ulang dari nol thd
     # threshold baru, bukan diam-diam lanjut pakai target lama.
     if float(existing.get("threshold_usdt", 0) or 0) != float(threshold_usdt):
         _auto_sell_armed_since.pop(asset + "USDT", None)
+        _auto_sell_trail_peak.pop(asset + "USDT", None)
     config["assets"][asset] = {
         "enabled": bool(enabled), "threshold_usdt": float(threshold_usdt),
         "avg_price": float(avg_price or 0), "convert_leftover_bnb": bool(convert_leftover_bnb),
         "hold_minutes": max(0.0, float(hold_minutes or 0)),
         "sell_pct": min(100.0, max(1.0, float(sell_pct or 95))),
+        "trailing_enabled": bool(trailing_enabled),
+        "trailing_pct": max(0.0, float(trailing_pct or 0)),
     }
     save_auto_sell_config(config)
     return config
@@ -6327,13 +6350,55 @@ def dust_sweep_weekly_tick():
     run_dust_sweep()
 
 
+AUTO_SELL_TRAILING_ATR_RATIO = 0.25   # trailing_pct saran = ATR%(4h, 14) x rasio ini
+AUTO_SELL_TRAILING_MIN_PCT   = 0.3
+AUTO_SELL_TRAILING_MAX_PCT   = 3.0
+AUTO_SELL_TRAILING_FALLBACK_PCT = 1.0  # dipakai kalau data ATR gagal diambil
+
+def compute_suggested_trailing_pct(asset: str) -> float:
+    """Saran awal Trailing Deviation (%), dipanggil dashboard begitu checkbox Trailing
+    dicentang (02/11/2026, permintaan Mas Budi). Rumus: ATR%(candle 4h, length 14)
+    dikali AUTO_SELL_TRAILING_ATR_RATIO, dibatasi [MIN_PCT, MAX_PCT] -- koin lebih tenang
+    (ATR% kecil) dapat trailing lebih ketat, koin lebih liar dapat trailing lebih longgar,
+    supaya tidak gampang kesenggol noise normalnya sendiri.
+    Rasio 0,25 ditarik dari SATU titik data tervalidasi (backtest Orphan Take-Profit
+    01-02/11/2026: TRAIL=0,75% optimal utk TrenKonfirmasi-4h, yang mayoritas sinyalnya di
+    ATR% tier 'Aktif/Volatil', ~3% ATR -> 0,75%/3% = 0,25) -- BELUM dibacktest terpisah
+    khusus utk Auto Sell Asset (koin apa pun, bukan 1 strategi/1 pola sinyal), jadi
+    anggap ini titik awal yang masuk akal, bukan angka final. Mas Budi tetap bisa
+    override manual di field-nya."""
+    try:
+        frame = get_ohlcv(asset.upper() + "USDT", interval="4h", limit=60)
+        if frame is None or len(frame) < 20:
+            return AUTO_SELL_TRAILING_FALLBACK_PCT
+        atr = ta.atr(frame['high'], frame['low'], frame['close'], length=14)
+        last_close = float(frame['close'].iloc[-1])
+        last_atr = float(atr.iloc[-1]) if atr is not None and not pd.isna(atr.iloc[-1]) else 0.0
+        if last_close <= 0 or last_atr <= 0:
+            return AUTO_SELL_TRAILING_FALLBACK_PCT
+        atr_pct = last_atr / last_close * 100
+        return round(min(AUTO_SELL_TRAILING_MAX_PCT, max(AUTO_SELL_TRAILING_MIN_PCT, atr_pct * AUTO_SELL_TRAILING_ATR_RATIO)), 2)
+    except Exception as e:
+        log(f"WARN compute_suggested_trailing_pct {asset}: {e}")
+        return AUTO_SELL_TRAILING_FALLBACK_PCT
+
+
 def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: bool = False,
-                          hold_minutes: float = 0, sell_pct: float = 95.0) -> None:
+                          hold_minutes: float = 0, sell_pct: float = 95.0,
+                          trailing_enabled: bool = False, trailing_pct: float = 0.0) -> None:
     """Cek 1 asset: begitu harga >= threshold, mulai hitung masa tunggu konfirmasi
     (hold_minutes, default 0 = eksekusi instan seperti sebelumnya). Kalau harga
     BERTAHAN >= threshold sepanjang durasi itu, baru jual sell_pct% saldo bebasnya.
     Kalau harga sempat turun lagi di bawah threshold sebelum durasi terlewati, timer
     DIBATALKAN TOTAL -- harus nunggu crossing baru dari nol, bukan pause-lalu-lanjut.
+
+    02/11/2026 (permintaan Mas Budi): trailing_enabled=True mengganti SELURUH jalur
+    hold_minutes di atas dengan mode trailing -- begitu harga >= threshold, TIDAK ada
+    batas waktu, bot terus mencatat harga PUNCAK tertinggi, baru jual begitu harga turun
+    >= trailing_pct% dari puncak itu (lihat compute_suggested_trailing_pct() di atas utk
+    saran awal angkanya). 1 asset cuma pakai SATU jalur (trailing ATAU hold_minutes),
+    tidak pernah digabung -- trailing_enabled=True membuat hold_minutes diabaikan total
+    utk asset itu.
     05/09/2026 (permintaan Mas Budi): sebelum ini, crossing sesaat (wick) langsung
     dieksekusi walau momentum naiknya sebenarnya masih lanjut.
     convert_leftover_bnb: kalau True DAN sell_pct>=95, sisa saldo yg nggak ikut dijual
@@ -6348,23 +6413,48 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
     price = get_price_now(symbol)
     if price <= 0:
         return
-    if price < threshold:
-        if _auto_sell_armed_since.pop(symbol, None) is not None:
-            log(f"[AUTO-SELL] {symbol} turun ke {price} di bawah threshold {threshold} sebelum konfirmasi selesai -- timer dibatalkan")
-        _auto_sell_dust_fail_count.pop(symbol, None)
-        return
-    armed_since = _auto_sell_armed_since.get(symbol)
-    if armed_since is None:
-        _auto_sell_armed_since[symbol] = armed_since = time.time()
-        if hold_minutes > 0:
-            log(f"[AUTO-SELL] {symbol} ARMED @ {price} (threshold {threshold}), menunggu konfirmasi {hold_minutes:.0f} menit")
+    if trailing_enabled and trailing_pct > 0:
+        # ── mode trailing (02/11/2026) -- lihat REMARK lengkap di atas ──────────────
+        if price < threshold:
+            if _auto_sell_trail_peak.pop(symbol, None) is not None:
+                log(f"[AUTO-SELL] {symbol} turun ke {price} di bawah threshold {threshold} sebelum trailing armed -- dibatalkan")
+            return
+        peak = _auto_sell_trail_peak.get(symbol)
+        if peak is None:
+            _auto_sell_trail_peak[symbol] = price
+            log(f"[AUTO-SELL] {symbol} TRAILING ARMED @ {price} (threshold {threshold}, trail {trailing_pct:g}%)")
             send_telegram(
-                f"AUTO SELL {asset}/USDT — ARMED\n"
+                f"AUTO SELL {asset}/USDT — TRAILING ARMED\n"
                 f"Harga {_fmt_price(price)} sudah >= target {_fmt_price(threshold)}.\n"
-                f"Menunggu konfirmasi {hold_minutes:.0f} menit (batal otomatis kalau harga turun lagi di bawah target sebelum itu)."
+                f"Menunggu turun {trailing_pct:g}% dari puncak sebelum dijual (tidak ada batas waktu -- "
+                f"terus mencatat puncak baru selama harga masih naik)."
             )
-    if hold_minutes > 0 and (time.time() - armed_since) < hold_minutes * 60:
-        return
+            return
+        if price > peak:
+            _auto_sell_trail_peak[symbol] = price
+            return
+        if price > peak * (1 - trailing_pct / 100):
+            return
+        # harga sudah turun >= trailing_pct% dari puncak -> lanjut ke eksekusi jual di bawah
+    else:
+        # ── mode lama: instan / tahan konfirmasi (hold_minutes) -- TIDAK diubah ─────
+        if price < threshold:
+            if _auto_sell_armed_since.pop(symbol, None) is not None:
+                log(f"[AUTO-SELL] {symbol} turun ke {price} di bawah threshold {threshold} sebelum konfirmasi selesai -- timer dibatalkan")
+            _auto_sell_dust_fail_count.pop(symbol, None)
+            return
+        armed_since = _auto_sell_armed_since.get(symbol)
+        if armed_since is None:
+            _auto_sell_armed_since[symbol] = armed_since = time.time()
+            if hold_minutes > 0:
+                log(f"[AUTO-SELL] {symbol} ARMED @ {price} (threshold {threshold}), menunggu konfirmasi {hold_minutes:.0f} menit")
+                send_telegram(
+                    f"AUTO SELL {asset}/USDT — ARMED\n"
+                    f"Harga {_fmt_price(price)} sudah >= target {_fmt_price(threshold)}.\n"
+                    f"Menunggu konfirmasi {hold_minutes:.0f} menit (batal otomatis kalau harga turun lagi di bawah target sebelum itu)."
+                )
+        if hold_minutes > 0 and (time.time() - armed_since) < hold_minutes * 60:
+            return
     # 16/09/2026 (permintaan Mas Budi, root cause insiden QQQB/ENSO/TRB "manual reconcile"):
     # SEBELUMNYA quantity diambil dari SALDO TOTAL wallet, tanpa mengurangi qty yg sedang
     # ditrack aktif oleh strategi lain (Akumulasi-4h/brkX2/dst) untuk asset yg sama -- kalau
@@ -6424,6 +6514,7 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
                     save_auto_sell_config(cfg_all)
                 _auto_sell_dust_fail_count.pop(symbol, None)
                 _auto_sell_armed_since.pop(symbol, None)
+                _auto_sell_trail_peak.pop(symbol, None)
                 log(f"[AUTO-SELL] {symbol} {fail_n}x berturut-turut di bawah filter Binance (dust tidak bisa "
                     f"dijual) -- dinonaktifkan otomatis, tidak retry lagi")
                 send_telegram(
@@ -6453,6 +6544,7 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
     # timer lama. Mas Budi hapus manual lewat tombol Hapus kalau tidak mau lanjut.
     _auto_sell_armed_since.pop(symbol, None)
     _auto_sell_dust_fail_count.pop(symbol, None)
+    _auto_sell_trail_peak.pop(symbol, None)
     msg = (
         f"AUTO SELL {asset}/USDT\n"
         f"Harga crossing: {_fmt_price(price)} USDT\n"
@@ -6482,7 +6574,9 @@ def check_auto_sell_crossing() -> None:
             _check_auto_sell_one(str(asset).upper(), float(cfg.get("threshold_usdt", 0) or 0),
                                   bool(cfg.get("convert_leftover_bnb", False)),
                                   float(cfg.get("hold_minutes", 0) or 0),
-                                  float(cfg.get("sell_pct", 95) or 95))
+                                  float(cfg.get("sell_pct", 95) or 95),
+                                  bool(cfg.get("trailing_enabled", False)),
+                                  float(cfg.get("trailing_pct", 0) or 0))
         except Exception as error:
             log(f"WARN [AUTO-SELL] {asset}: {error}")
 
@@ -18626,7 +18720,13 @@ function renderAutoSellTable(assets) {
             '<td style="padding:5px 6px" id="auto-sell-avggap-' + asset + '">-</td>' +
             '<td style="padding:5px 6px"><input type="number" min="0" step="0.00000001" value="' + cfg.threshold_usdt + '" id="auto-sell-thr-' + asset + '" style="width:100px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"><div id="auto-sell-breakeven-' + asset + '" style="color:var(--muted);font-size:9px"></div></td>' +
             '<td style="padding:5px 6px"><input type="number" min="1" max="100" step="1" value="' + (cfg.sell_pct || 95) + '" id="auto-sell-sellpct-' + asset + '" oninput="updateBnbCheckboxState(\\'' + asset + '\\')" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"></td>' +
-            '<td style="padding:5px 6px"><input type="number" min="0" step="1" value="' + (cfg.hold_minutes || 0) + '" id="auto-sell-hold-' + asset + '" style="width:70px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"></td>' +
+            '<td style="padding:5px 6px">' +
+                '<input type="number" min="0" step="1" value="' + (cfg.hold_minutes || 0) + '" id="auto-sell-hold-' + asset + '" style="width:70px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px">' +
+                '<div style="margin-top:4px;white-space:nowrap" title="Ganti cara tunggu: bukan tahan N menit, tapi tunggu harga turun sekian % dari puncak tertinggi sejak target kena -- tidak ada batas waktu. Mengabaikan Tahan Konfirmasi di atas kalau dicentang.">' +
+                    '<label style="cursor:pointer"><input type="checkbox" ' + (cfg.trailing_enabled ? 'checked' : '') + ' id="auto-sell-trailchk-' + asset + '" onchange="onAutoSellTrailingToggle(\\'' + asset + '\\')" style="vertical-align:middle"> Trailing</label> ' +
+                    '<input type="number" min="0" step="0.01" value="' + (cfg.trailing_pct || '') + '" id="auto-sell-trailpct-' + asset + '" placeholder="%" style="width:48px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:10px">%' +
+                '</div>' +
+            '</td>' +
             '<td style="padding:5px 6px" id="auto-sell-gap-' + asset + '">-</td>' +
             '<td style="padding:5px 6px">' +
                 '<input type="number" min="0" step="0.01" placeholder="mis. 5" id="auto-sell-desired-' + asset + '" oninput="computeDesiredProfit(\\'' + asset + '\\')" style="width:80px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px">' +
@@ -18656,6 +18756,24 @@ function updateBnbCheckboxState(asset) {
     if (!pctEl || !bnbEl) return;
     var pct = parseFloat(pctEl.value);
     bnbEl.disabled = !isNaN(pct) && pct < 95;
+}
+
+// 02/11/2026 (permintaan Mas Budi): begitu checkbox Trailing dicentang DAN field %-nya masih
+// kosong/0, hitungkan saran otomatis (ATR%-based, lihat compute_suggested_trailing_pct() di
+// server). Kalau field sudah ada isinya (mis. Mas Budi override manual sebelumnya), TIDAK
+// ditimpa -- cuma dihitung ulang kalau dicentang lagi setelah field dikosongkan manual.
+function onAutoSellTrailingToggle(asset) {
+    var chkEl = document.getElementById('auto-sell-trailchk-' + asset);
+    var pctEl = document.getElementById('auto-sell-trailpct-' + asset);
+    if (!chkEl || !pctEl) return;
+    if (!chkEl.checked) return;
+    var current = parseFloat(pctEl.value);
+    if (!isNaN(current) && current > 0) return;
+    pctEl.placeholder = '...';
+    fetch('/api/auto_sell_trailing_suggest?asset=' + encodeURIComponent(asset)).then(function(r){ return r.json(); }).then(function(d){
+        pctEl.placeholder = '%';
+        if (d.ok && d.trailing_pct) pctEl.value = d.trailing_pct;
+    }).catch(function(){ pctEl.placeholder = '%'; });
 }
 
 function refreshAutoSellRowPrice(asset) {
@@ -18725,13 +18843,19 @@ function saveAutoSellRow(asset) {
     var bnbEl = document.getElementById('auto-sell-bnb-' + asset);
     var holdEl = document.getElementById('auto-sell-hold-' + asset);
     var sellPctEl = document.getElementById('auto-sell-sellpct-' + asset);
+    var trailChkEl = document.getElementById('auto-sell-trailchk-' + asset);
+    var trailPctEl = document.getElementById('auto-sell-trailpct-' + asset);
     var enabled = chkEl ? chkEl.checked : false;
     var threshold = parseFloat(thrEl ? thrEl.value : 0) || 0;
     var holdMinutes = Math.max(0, parseFloat(holdEl ? holdEl.value : 0) || 0);
     var sellPct = Math.min(100, Math.max(1, parseFloat(sellPctEl ? sellPctEl.value : 95) || 95));
     var avgPrice = avgEl && avgEl.value !== '' ? parseFloat(avgEl.value) : null;
+    var trailingEnabled = trailChkEl ? trailChkEl.checked : false;
+    var trailingPct = Math.max(0, parseFloat(trailPctEl ? trailPctEl.value : 0) || 0);
     if (enabled && threshold <= 0) { alert('Isi threshold harga yang valid.'); return; }
-    var body = {asset:asset, enabled:enabled, threshold_usdt:threshold, convert_leftover_bnb: bnbEl ? bnbEl.checked : false, hold_minutes: holdMinutes, sell_pct: sellPct};
+    if (enabled && trailingEnabled && trailingPct <= 0) { alert('Trailing dicentang tapi Trailing Deviation masih 0 -- isi dulu (atau centang ulang supaya dihitung otomatis).'); return; }
+    var body = {asset:asset, enabled:enabled, threshold_usdt:threshold, convert_leftover_bnb: bnbEl ? bnbEl.checked : false,
+                hold_minutes: holdMinutes, sell_pct: sellPct, trailing_enabled: trailingEnabled, trailing_pct: trailingPct};
     if (avgPrice !== null) body.avg_price = avgPrice;
     fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
         .then(function(r){ return r.json(); }).then(function(d){
@@ -30429,13 +30553,21 @@ def run_web_dashboard():
                 asset_cfg = config.get("assets", {}).get(asset, {})
                 threshold = float(asset_cfg.get("threshold_usdt", 0) or 0)
                 hold_minutes = float(asset_cfg.get("hold_minutes", 0) or 0)
+                trailing_enabled = bool(asset_cfg.get("trailing_enabled", False))
+                trailing_pct = float(asset_cfg.get("trailing_pct", 0) or 0)
                 gap_pct = ((threshold / price) - 1) * 100 if threshold > 0 else 0
-                armed_since = _auto_sell_armed_since.get(symbol)
                 hold_status = ""
-                if armed_since and hold_minutes > 0:
-                    remaining_min = hold_minutes - (time.time() - armed_since) / 60.0
-                    hold_status = (f"menunggu konfirmasi, tersisa {max(0, remaining_min):.1f} menit"
-                                   if remaining_min > 0 else "konfirmasi terpenuhi, menunggu eksekusi")
+                if trailing_enabled and trailing_pct > 0:
+                    peak = _auto_sell_trail_peak.get(symbol)
+                    if peak:
+                        sell_at = peak * (1 - trailing_pct / 100)
+                        hold_status = f"trailing armed, puncak {_fmt_price(peak)} -- jual kalau turun ke {_fmt_price(sell_at)}"
+                else:
+                    armed_since = _auto_sell_armed_since.get(symbol)
+                    if armed_since and hold_minutes > 0:
+                        remaining_min = hold_minutes - (time.time() - armed_since) / 60.0
+                        hold_status = (f"menunggu konfirmasi, tersisa {max(0, remaining_min):.1f} menit"
+                                       if remaining_min > 0 else "konfirmasi terpenuhi, menunggu eksekusi")
                 avg_info = get_hold_no_sell_price(asset)
                 avg_price = get_effective_avg_price(asset)
                 cfg_manual = float(config.get("assets", {}).get(asset, {}).get("avg_price", 0) or 0)
@@ -30507,8 +30639,27 @@ def run_web_dashboard():
                         hold_minutes = float(hold_minutes) if hold_minutes not in (None, "") else None
                         sell_pct = payload.get("sell_pct", None)
                         sell_pct = float(sell_pct) if sell_pct not in (None, "") else None
-                        upsert_auto_sell_asset(asset, enabled, threshold, avg_price, convert_bnb, hold_minutes, sell_pct)
+                        trailing_enabled = payload.get("trailing_enabled", None)
+                        trailing_enabled = bool(trailing_enabled) if trailing_enabled is not None else None
+                        trailing_pct = payload.get("trailing_pct", None)
+                        trailing_pct = float(trailing_pct) if trailing_pct not in (None, "") else None
+                        upsert_auto_sell_asset(asset, enabled, threshold, avg_price, convert_bnb, hold_minutes,
+                                                sell_pct, trailing_enabled, trailing_pct)
                 return jsonify({"ok": True, **load_auto_sell_config()})
+            except Exception as error:
+                return jsonify({"ok": False, "error": str(error)}), 500
+
+        @app.route("/api/auto_sell_trailing_suggest")
+        def api_auto_sell_trailing_suggest():
+            """02/11/2026 (permintaan Mas Budi): saran awal Trailing Deviation %, dipanggil
+            dashboard begitu checkbox Trailing dicentang -- lihat REMARK lengkap di
+            compute_suggested_trailing_pct()."""
+            asset = str(request.args.get("asset", "")).upper().strip()
+            if not asset.isalnum():
+                return jsonify({"ok": False, "error": "Asset tidak valid"}), 400
+            try:
+                pct = compute_suggested_trailing_pct(asset)
+                return jsonify({"ok": True, "trailing_pct": pct})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
 
