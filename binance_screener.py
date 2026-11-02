@@ -16052,14 +16052,126 @@ ORPHAN_RECLAIM_SCAN_INTERVAL = 60  # detik -- jauh lebih longgar drpd T2 (15 det
                                     # sama sekali, cuma nunggu peluang reclaim)
 ORPHAN_RECLAIM_GAPCAP_STRATEGIES = ('brkX2_12h_closed', 'trend_confirm_4h', 'decouple_4h')
 
+# Patch "orphan-takeprofit-autoclose" (02/11/2026, permintaan Mas Budi langsung setelah kasus
+# nyata OGN/USDT -- di-cancel 12:17 WIB krn trailing mau trigger saat posisi lagi rugi tipis
+# [patch "negative-exit-cancel" 20/10/2026], lalu ~2 jam kemudian harganya pulih untung, TAPI
+# nyaris tidak kepantau krn mekanisme reclaim di atas TERBUKTI TIDAK PERNAH auto-sell orphan
+# sama sekali -- pesan Telegram-nya sendiri bilang eksplisit "exit TETAP tidak dikelola". Mas
+# Budi kebetulan lihat Binance sendiri dan jual manual; beliau minta solusi karena "belum tentu
+# saya selalu lihat Binance". Mekanisme BARU ini TERPISAH dari reclaim-addfund di atas (yang
+# TIDAK diubah sama sekali) -- berlaku utk SEMUA orphan apapun strateginya (bukan cuma 3 di
+# ORPHAN_RECLAIM_GAPCAP_STRATEGIES), karena tujuannya jaring pengaman umum, bukan spesifik gap-cap.
+# Logika: begitu untung (vs entry rata2 di cancelled_deal_price) >= ARM_PCT, trailing orphan ini
+# "arm" (dicatat tp_armed+tp_peak_price); abis itu tiap kali harga bikin puncak baru, puncak
+# diupdate; begitu harga turun >= TRAIL_PCT dari puncak situ, JUAL TOTAL otomatis (lihat
+# check_orphan_takeprofit()/execute_orphan_takeprofit_close()). Angka di bawah BELUM dibacktest
+# (kejadian baru sekali, OGN), dipilih konservatif sbg titik awal yg masuk akal -- beri tahu
+# Mas Budi kalau mau diubah, bisa di-tune kapan saja tanpa pengaruh ke reclaim-addfund.
+ORPHAN_TAKEPROFIT_ARM_PCT = 3.0    # harus untung >= ini (vs entry rata2) dulu baru trailing-nya aktif
+ORPHAN_TAKEPROFIT_TRAIL_PCT = 1.5  # begitu aktif, turun >= ini dari puncak sejak aktif -> jual SEMUA
+
+def check_orphan_takeprofit(symbol: str, cd: dict, price: float) -> bool:
+    """True = saatnya jual TOTAL orphan ini sekarang (lihat REMARK ORPHAN_TAKEPROFIT_ARM_PCT di
+    atas). Dipanggil utk SEMUA orphan di cancelled_deal_price.json, apapun strateginya -- beda
+    dari check reclaim-addfund di bawah yang cuma utk ORPHAN_RECLAIM_GAPCAP_STRATEGIES. Side
+    effect: update tp_armed/tp_peak_price di cancelled_deal_price[symbol] begitu arm pertama kali
+    atau puncak naik -- caller TIDAK perlu simpan sendiri, fungsi ini sudah save sendiri."""
+    entry_price = float(cd.get('entry_price', 0) or 0)
+    if entry_price <= 0 or price <= 0:
+        return False
+    profit_pct = (price / entry_price - 1) * 100
+    armed = bool(cd.get('tp_armed', False))
+    if not armed:
+        if profit_pct >= ORPHAN_TAKEPROFIT_ARM_PCT:
+            with cancelled_deal_price_lock:
+                if symbol in cancelled_deal_price:
+                    cancelled_deal_price[symbol]['tp_armed'] = True
+                    cancelled_deal_price[symbol]['tp_peak_price'] = price
+            save_cancelled_deal_price()
+        return False
+    peak = float(cd.get('tp_peak_price', 0) or 0)
+    if price > peak:
+        with cancelled_deal_price_lock:
+            if symbol in cancelled_deal_price:
+                cancelled_deal_price[symbol]['tp_peak_price'] = price
+        save_cancelled_deal_price()
+        return False
+    return peak > 0 and price <= peak * (1 - ORPHAN_TAKEPROFIT_TRAIL_PCT / 100)
+
+def execute_orphan_takeprofit_close(symbol: str, cd: dict) -> dict:
+    """Jual SELURUH saldo bebas asset orphan ini (reuse sell_to_usdt(), sama persis dipakai
+    auto-convert idle-asset), lalu: (1) catat ke Closed Deals CSV via csv_log_close() -- ini
+    SATU-SATUNYA cara orphan akhirnya punya histori permanen, cancel sendiri memang sengaja
+    tidak pernah menulis CSV; (2) transfer bagian UNTUNG SAJA ke Master via
+    transfer_profit_to_master() -- pola SAMA PERSIS dipakai SEMUA jalur close lain di kode ini
+    (permintaan eksplisit Mas Budi 02/11/2026: profit orphan jangan mengendap di Spot Sub);
+    (3) hapus dari cancelled_deal_price.json (selesai, tidak orphan lagi)."""
+    entry_price = float(cd.get('entry_price', 0) or 0)
+    strategy = cd.get('strategy', '')
+    sell = sell_to_usdt(symbol)
+    if not sell.get('ok'):
+        return {"ok": False, "error": sell.get('error')}
+    exit_price = float(sell.get('price_avg', 0) or 0)
+    qty_sold = float(sell.get('qty_sold', 0) or 0)
+    proceeds = float(sell.get('proceeds_usdt', 0) or 0)
+    profit_pct = (exit_price / entry_price - 1) * 100 if entry_price > 0 else 0.0
+    cost_basis = entry_price * qty_sold
+    profit_usd = round(proceeds - cost_basis, 2)
+    csv_log_close(symbol, now_wib().strftime('%Y-%m-%d %H:%M:%S'), exit_price, round(profit_pct, 2),
+                  "Orphan take-profit (sempat di-cancel, pulih untung, auto-close)",
+                  strategy=strategy, base_usd=(cost_basis or None), exit_ticker=exit_price)
+    with cancelled_deal_price_lock:
+        cancelled_deal_price.pop(symbol, None)
+    save_cancelled_deal_price()
+    _earn_line = ""
+    if profit_usd > 0:
+        _earn_res = transfer_profit_to_master(profit_usd, context=f"{to_display_pair(symbol)}/{strategy} (ORPHAN-TP)")
+        if _earn_res["ok"]:
+            _earn_line = f"\nProfit->Master: ${profit_usd:.2f}"
+    send_telegram(
+        f"✅ Orphan Take-Profit -- {to_display_pair(symbol)} DITUTUP OTOMATIS\n"
+        f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+        f"Strategi: {strategy} (sempat di-cancel, sekarang pulih & dijual sendiri tanpa perlu Mas Budi pantau)\n"
+        f"Entry rata-rata: {_fmt_price(entry_price)} -> Exit: {_fmt_price(exit_price)} ({profit_pct:+.2f}%)\n"
+        f"Proceeds: ${proceeds:.2f}{_earn_line}",
+        parse_mode=None)
+    return {"ok": True, "exit_price": exit_price, "profit_pct": profit_pct, "profit_usd": profit_usd}
+
 def run_thread_orphan_reclaim():
     while True:
         try:
             check_orphan_combine_checkin_reminder()
             with cancelled_deal_price_lock:
                 snapshot = dict(cancelled_deal_price)
+            try:
+                _price_map = {t.get("symbol"): float(t.get("lastPrice", 0) or 0) for t in (get_ticker_24h() or [])}
+            except Exception as e:
+                log(f"WARN [ORPHAN-TP] gagal ambil ticker: {e}")
+                _price_map = {}
+            try:
+                _auto_sell_assets = load_auto_sell_config().get("assets", {})
+            except Exception:
+                _auto_sell_assets = {}
             for sym, cd in snapshot.items():
                 strat = cd.get('strategy', '')
+                # Patch "orphan-takeprofit-autoclose" (02/11/2026): dicek LEBIH DULU, utk SEMUA
+                # orphan apapun strateginya -- lihat REMARK lengkap di ORPHAN_TAKEPROFIT_ARM_PCT.
+                # Asset dgn rule Auto-Sell-Crossing aktif DIKECUALIKAN, sama alasan persis spt
+                # get_orphaned_cancelled_assets() -- jangan sampai 2 mekanisme otomatis rebutan.
+                _asset = sym.replace("USDT", "")
+                if not _auto_sell_assets.get(_asset, {}).get("enabled", False):
+                    try:
+                        _price_now = _price_map.get(sym, 0.0)
+                        if check_orphan_takeprofit(sym, cd, _price_now):
+                            _tp_result = execute_orphan_takeprofit_close(sym, cd)
+                            if _tp_result.get('ok'):
+                                log(f"[ORPHAN-TP] {sym} ({strat}) auto-close: exit {_tp_result['exit_price']:.6g} "
+                                    f"({_tp_result['profit_pct']:+.2f}%), profit ${_tp_result['profit_usd']:.2f}")
+                            else:
+                                log(f"WARN [ORPHAN-TP] {sym} gagal close: {_tp_result.get('error')}")
+                            continue
+                    except Exception as e:
+                        log(f"WARN [ORPHAN-TP] {sym} cek takeprofit gagal: {e}")
                 if strat not in ORPHAN_RECLAIM_GAPCAP_STRATEGIES:
                     continue
                 entry_price = float(cd.get('entry_price', 0) or 0)
