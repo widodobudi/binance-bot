@@ -16064,11 +16064,21 @@ ORPHAN_RECLAIM_GAPCAP_STRATEGIES = ('brkX2_12h_closed', 'trend_confirm_4h', 'dec
 # Logika: begitu untung (vs entry rata2 di cancelled_deal_price) >= ARM_PCT, trailing orphan ini
 # "arm" (dicatat tp_armed+tp_peak_price); abis itu tiap kali harga bikin puncak baru, puncak
 # diupdate; begitu harga turun >= TRAIL_PCT dari puncak situ, JUAL TOTAL otomatis (lihat
-# check_orphan_takeprofit()/execute_orphan_takeprofit_close()). Angka di bawah BELUM dibacktest
-# (kejadian baru sekali, OGN), dipilih konservatif sbg titik awal yg masuk akal -- beri tahu
-# Mas Budi kalau mau diubah, bisa di-tune kapan saja tanpa pengaruh ke reclaim-addfund.
-ORPHAN_TAKEPROFIT_ARM_PCT = 3.0    # harus untung >= ini (vs entry rata2) dulu baru trailing-nya aktif
-ORPHAN_TAKEPROFIT_TRAIL_PCT = 1.5  # begitu aktif, turun >= ini dari puncak sejak aktif -> jual SEMUA
+# check_orphan_takeprofit()/execute_orphan_takeprofit_close()).
+# 02/11/2026 DIBACKTEST (permintaan eksplisit Mas Budi "angka ini better dibacktest dulu"),
+# scratchpad orphan_tp_backtest.py/orphan_tp_grid_results.csv: 6.871 kejadian cancel
+# TrenKonfirmasi-4h 2022-2026, TRAIN/TEST per minggu ISO, sweep ARM 1-7% x TRAIL 0,5-3%.
+# Pola konsisten TRAIN+TEST, monoton naik di seluruh grid (ARM lebih tinggi + TRAIL lebih
+# ketat sama2 menang) -- titik baliknya BELUM ketemu sampai ujung grid yg diuji (ARM=7%/
+# TRAIL=0,5% masih menang lebih banyak lagi dari 5%/1%). 3,0/1,5 (titik awal sebelum
+# dibacktest) = tertangkap 81,1%, rata2 +3,73%/tangkapan. 5,0/1,0 (dipilih, TITIK TENGAH
+# sengaja TIDAK dilompat ke ujung grid yg belum terbukti batasnya) = tertangkap 74,2%,
+# rata2 +6,56%/tangkapan, total nilai +61% dari 3,0/1,5, menang konsisten di TRAIN & TEST.
+# KeltnerBreak-12h & Decouple-4h: 0 kejadian cancel historis (cocok temuan terpisah sesi
+# ini jg) -- fitur ini praktis tidak pernah kepakai utk 2 strategi itu. Strategi lain
+# (RVolBreak-8h dkk) BELUM diuji saat angka ini dipilih -- lihat REMARK susulan kalau ada.
+ORPHAN_TAKEPROFIT_ARM_PCT = 5.0    # harus untung >= ini (vs entry rata2) dulu baru trailing-nya aktif
+ORPHAN_TAKEPROFIT_TRAIL_PCT = 1.0  # begitu aktif, turun >= ini dari puncak sejak aktif -> jual SEMUA
 
 def check_orphan_takeprofit(symbol: str, cd: dict, price: float) -> bool:
     """True = saatnya jual TOTAL orphan ini sekarang (lihat REMARK ORPHAN_TAKEPROFIT_ARM_PCT di
