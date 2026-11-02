@@ -10411,10 +10411,18 @@ def heartbeat_general_tick():
                      # RETIRED. Data mentahnya (shadow_fwdtest.json) TIDAK disentuh, tetap tersedia
                      # via /api/shadow_fwdtest_raw kalau suatu saat dibutuhkan lagi.
                      f"    {_fmt_shadow('dipbuy_bluechip', SHADOW_DIPBUY_BC_TARGET)}\n"
-                     f"    {_fmt_shadow('decouple_4h', SHADOW_DECOUPLE_TARGET, label='decouple_4h-shadow (RETIRED, formula sudah live)')}\n"
-                     f"    {_fmt_shadow('keltnerbreak_12h', SHADOW_KELTNERBREAK_TARGET, label='keltnerbreak_12h-shadow (RETIRED, formula sudah live)')}\n"
-                     f"    {_fmt_shadow('oscconfluence_4h', SHADOW_OSCCONFLUENCE_TARGET)}\n"
-                     f"    {_fmt_shadow('rvolbreak_1h', SHADOW_RVOLBREAK_TARGET, label='rvolbreak_1h-shadow (RETIRED, formula sudah live)')}\n"
+                     # 02/11/2026 (permintaan Mas Budi, "yang sudah tidak ada dihilangkan"): 4 baris
+                     # shadow di bawah ini DIHAPUS dari heartbeat -- sama pola persis spt
+                     # dipbuy_universe-shadow di atas (data mentah TIDAK disentuh, tetap ada di
+                     # shadow_fwdtest.json/API kalau dibutuhkan lagi):
+                     #   - decouple_4h-shadow / keltnerbreak_12h-shadow / rvolbreak_1h-shadow: sudah
+                     #     ditandai RETIRED sebelumnya (formula masing2 sudah live), tinggal
+                     #     dieksekusi penghapusan barisnya -- sebelumnya cuma diberi label, belum
+                     #     benar2 dihapus.
+                     #   - oscconfluence_4h: ide ini sendiri sudah DIBATALKAN Mas Budi 03/10/2026
+                     #     (gagal lolos signifikansi TRAIN p=0.094, lihat memory
+                     #     project_oscconfluence_rejected.md) -- shadow trackernya sudah TERCAPAI
+                     #     target (22/20) dgn hasil -53,9%, konsisten dgn keputusan itu.
                      f"{_fmt_hsconfirm_status()}")
     # Slot semua
     n_cx = sum(1 for d in active_deals.values() if d.get('strategy') == 'brkX2_crossema')
