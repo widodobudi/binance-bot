@@ -5017,13 +5017,15 @@ DAHLIA_RELAY_KEY = os.environ.get("DAHLIA_RELAY_KEY", "")
 def send_whatsapp_alert(text: str):
     """Relay teks bebas ke WhatsApp Mas Budi lewat endpoint /api/relay-alert milik proyek Dahlia
     Desk Management -- lihat REMARK di atas. Non-blocking/best-effort: gagal cuma di-log, TIDAK
-    pernah melempar exception ke caller (sama pola spt send_telegram/send_email_open_long)."""
+    pernah melempar exception ke caller (sama pola spt send_telegram/send_email_open_long).
+    02/11/2026 (permintaan Mas Budi): diberi awalan "📈 Trading -- " supaya pesan dari bot ini
+    tidak tertukar/bingung dengan pesan Dahlia/Runchise yang lewat nomor WhatsApp SAMA."""
     if not DAHLIA_RELAY_KEY:
         log("WARN send_whatsapp_alert: DAHLIA_RELAY_KEY belum diset, skip.")
         return
     try:
         resp = session.post(DAHLIA_RELAY_URL, headers={"X-Relay-Key": DAHLIA_RELAY_KEY},
-                             json={"text": text}, timeout=15)
+                             json={"text": f"📈 Trading -- {text}"}, timeout=15)
         if resp.status_code != 200 or not resp.json().get("ok"):
             log(f"WARN send_whatsapp_alert: HTTP {resp.status_code} {resp.text[:200]}")
         else:
