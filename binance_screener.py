@@ -27900,7 +27900,7 @@ def run_web_dashboard():
                 return None
             if session.get("dashboard_authenticated"):
                 return None
-            if request.path in {"/login", "/logout", "/dash.js", "/tradingview_webhook", "/api/diag_avg_price"} or request.method == "OPTIONS":
+            if request.path in {"/login", "/logout", "/dash.js", "/tradingview_webhook", "/api/diag_avg_price", "/api/diag_ai_decisions_log"} or request.method == "OPTIONS":
                 return None
             if request.path.startswith("/api/") or request.is_json:
                 return jsonify({"ok": False, "error": "login diperlukan"}), 401
@@ -30949,6 +30949,42 @@ def run_web_dashboard():
             Drive API, tanpa retry -- kalau gagal/rate-limited, teksnya hilang permanen dari Drive,
             cuma ter-WARN di log Railway yang ephemeral. File lokal ini ditulis sinkron, tidak
             bergantung Drive sama sekali, jadi selalu lengkap)."""
+            strategy = request.args.get("strategy", "").strip()
+            symbol   = request.args.get("symbol", "").strip().upper()
+            n        = request.args.get("n", 20, type=int)
+            n = max(1, min(n, 200))
+            if not os.path.exists(AI_DECISIONS_LOG):
+                return jsonify({"ok": False, "error": "File belum ada (belum pernah ada keputusan AI tercatat)."})
+            try:
+                with open(AI_DECISIONS_LOG, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)})
+            sep = "─" * 36
+            blocks = [b.strip() for b in content.split(sep) if b.strip()]
+            if strategy:
+                blocks = [b for b in blocks if strategy.lower() in b.lower()]
+            if symbol:
+                blocks = [b for b in blocks if symbol in b.upper()]
+            total = len(blocks)
+            tail = blocks[-n:]
+            tail.reverse()  # terbaru duluan
+            return jsonify({"ok": True, "total_matching": total, "returned": len(tail), "blocks": tail})
+
+        # 02/11/2026 (permintaan Mas Budi, "km kan bisa akses Railway, masakan gak mau grab kan
+        # datanya"): dikecualikan dari login dashboard (lihat dashboard_login_required() -- path
+        # dicek thd set pengecualian) tapi DIPROTEKSI token acak terpisah (AI_LOG_DIAG_TOKEN env
+        # var, di-generate Claude sendiri, BUKAN password/TOTP dashboard pribadi Mas Budi dan
+        # BUKAN DIAG_TOKEN yg dipakai /api/diag_avg_price -- token sendiri, scope-nya cuma baca
+        # ai_decisions_log.txt). Sama pola persis /api/diag_avg_price. Logic baca/filter sama
+        # persis /api/ai_decisions_log di atas, cuma gerbang auth-nya beda. TIDAK ADA aksi
+        # jual/beli/ubah config di sini -- murni baca.
+        @app.route("/api/diag_ai_decisions_log")
+        def api_diag_ai_decisions_log():
+            token = request.args.get("token", "")
+            expected = os.environ.get("AI_LOG_DIAG_TOKEN", "")
+            if not expected or token != expected:
+                return jsonify({"ok": False, "error": "token salah/belum di-set"}), 403
             strategy = request.args.get("strategy", "").strip()
             symbol   = request.args.get("symbol", "").strip().upper()
             n        = request.args.get("n", 20, type=int)
