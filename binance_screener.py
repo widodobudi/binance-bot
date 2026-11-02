@@ -16075,10 +16075,26 @@ ORPHAN_RECLAIM_GAPCAP_STRATEGIES = ('brkX2_12h_closed', 'trend_confirm_4h', 'dec
 # sengaja TIDAK dilompat ke ujung grid yg belum terbukti batasnya) = tertangkap 74,2%,
 # rata2 +6,56%/tangkapan, total nilai +61% dari 3,0/1,5, menang konsisten di TRAIN & TEST.
 # KeltnerBreak-12h & Decouple-4h: 0 kejadian cancel historis (cocok temuan terpisah sesi
-# ini jg) -- fitur ini praktis tidak pernah kepakai utk 2 strategi itu. Strategi lain
-# (RVolBreak-8h dkk) BELUM diuji saat angka ini dipilih -- lihat REMARK susulan kalau ada.
-ORPHAN_TAKEPROFIT_ARM_PCT = 5.0    # harus untung >= ini (vs entry rata2) dulu baru trailing-nya aktif
-ORPHAN_TAKEPROFIT_TRAIL_PCT = 1.0  # begitu aktif, turun >= ini dari puncak sejak aktif -> jual SEMUA
+# ini jg) -- fitur ini praktis tidak pernah kepakai utk 2 strategi itu. brkX2-4h & BBSnap-8h
+# (sampel besar) jg 0 kejadian -- stop-loss keduanya sengaja dibikin ketat. Dip-Buy Universe
+# 0 kejadian tapi sampel cuma 8 sinyal -- BELUM teruji kuat, parameternya mirip TC4h.
+# Strategi lain (RVolBreak-8h dkk) sedang paused/paper-test -- tidak ada risiko uang real.
+#
+# 02/11/2026 GRID DIPERHALUS (permintaan Mas Budi): ARM 3,0-7,5% tiap 0,5%, TRAIL 0,5-3,0%
+# (9 titik), 90 kombinasi x 6.871 kejadian cancel yang SAMA (dipakai ulang, bukan dihitung
+# ulang -- titik overlap 5,0/1,0 hasilnya identik ke angka terakhir, scratchpad
+# orphan_tp_grid_fine.csv). Pola TETAP monoton sempurna sampai resolusi 0,5% -- tidak ada
+# titik balik tersembunyi; 5,0/1,0 lama ada di peringkat #38/90, BUKAN kebetulan dekat
+# optimal (memang sengaja "langkah aman", bukan klaim terbaik).
+# Temuan baru dari grid halus: TRAIL=0,5% menang di SETIAP level ARM yang diuji (3,0-7,5%),
+# bukan sekadar trade-off seperti dikira sebelumnya. Tapi TRAIL 0,5% dianggap terlalu mepet
+# utk eksekusi live (backtest pakai high/low candle 4 jam = seolah bisa jual di harga
+# terbaik, padahal bot live cuma cek tiap ~60 detik -- ruang gerak 0,5% rawan kelewat/slip
+# nyata). Mas Budi pilih ARM=4,5%/TRAIL=0,75% (peringkat #39/90, total 32.468 vs 33.865 di
+# 4,5/0,5 -- cuma ~4% lebih rendah tapi jauh lebih longgar drpd 0,5%, dan tertangkap 76,3%
+# vs 74,2% di 5,0/1,0 lama): tertangkap 76,32%, rata2 +6,19%/tangkapan.
+ORPHAN_TAKEPROFIT_ARM_PCT = 4.5    # harus untung >= ini (vs entry rata2) dulu baru trailing-nya aktif
+ORPHAN_TAKEPROFIT_TRAIL_PCT = 0.75 # begitu aktif, turun >= ini dari puncak sejak aktif -> jual SEMUA
 
 def check_orphan_takeprofit(symbol: str, cd: dict, price: float) -> bool:
     """True = saatnya jual TOTAL orphan ini sekarang (lihat REMARK ORPHAN_TAKEPROFIT_ARM_PCT di
