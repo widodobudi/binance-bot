@@ -28760,6 +28760,15 @@ def run_web_dashboard():
             # supaya tidak redundan ke Binance. live_detail/candles cuma utk strategi yg
             # gate-nya BENERAN berlaku ("ok"/"blocked") -- status "na" tidak perlu keduanya.
             _candles = {tf: _recent_btc_candles(tf) for tf in ('1d', '3d', '12h', '1h')}
+            # 02/11/2026 (permintaan Mas Budi, "ini mana sebenarnya yang sudah tidak LIVE lagi,
+            # kok masih muncul?"): mombreak_1h & rvolbreak_8h sebelumnya SELALU dicek "ok"/
+            # "blocked" di sini tanpa peduli strategi-nya sendiri sedang di-pause (strategy_enabled
+            # False) atau tidak -- kelihatan seolah gerbangnya masih relevan/live dicek padahal
+            # strateginya sama sekali tidak buka deal baru. Sekarang dicek dulu is_strategy_enabled()
+            # -- kalau sedang di-pause, status dipaksa "na" dgn keterangan jelas, BUKAN ditampilkan
+            # seolah aktif. keltner12h/trend_confirm_4h TIDAK diberi cek ini -- keduanya memang live.
+            _mombreak_live = is_strategy_enabled('mombreak_1h')
+            _rvolbreak8h_live = is_strategy_enabled('rvolbreak_8h')
             return jsonify({
                 "brkX2": {
                     "label": "brkx2-12h",
@@ -28781,7 +28790,7 @@ def run_web_dashboard():
                 "decouple_4h": {
                     "label": "Decouple-4h",
                     "status": "na",
-                    "syarat": "Gerbang hard-block DICABUT 31/10/2026 -- deal tetap boleh dibuka walau BTCUSDT HTF 12H merah, cuma syarat selisih-vs-BTC dinaikin 2x (DECOUPLE_REL_MIN_PCT_BAD_BTC_MULT) saat itu. Paper-test, dievaluasi di 20 deal baru.",
+                    "syarat": "Gerbang hard-block DICABUT 31/10/2026 -- deal tetap boleh dibuka walau BTCUSDT HTF 12H merah, cuma syarat selisih-vs-BTC dinaikin 2x (DECOUPLE_REL_MIN_PCT_BAD_BTC_MULT) saat itu. (Strategi sedang di-pause -- paper-test saja, belum ada deal uang real.)",
                 },
                 "dipbuy_universe": {
                     "label": "Dip-Buy Universe",
@@ -28790,17 +28799,19 @@ def run_web_dashboard():
                 },
                 "mombreak_1h": {
                     "label": "MomentumBreak-1h",
-                    "status": "ok" if mombreak_btc_gate_ok() else "blocked",
-                    "syarat": f"Candle 1 jam BTCUSDT terakhir naik >= {MOMBREAK_BTC_GATE_GENDUT_PCT}%",
-                    "live_detail": _btc_gate_live_detail('mombreak'),
-                    "candles": {"1H": _candles['1h']},
+                    "status": ("ok" if mombreak_btc_gate_ok() else "blocked") if _mombreak_live else "na",
+                    "syarat": (f"Candle 1 jam BTCUSDT terakhir naik >= {MOMBREAK_BTC_GATE_GENDUT_PCT}%" if _mombreak_live
+                               else "(Strategi sedang di-pause -- gerbang ini tidak relevan dicek sampai diaktifkan lagi.)"),
+                    "live_detail": _btc_gate_live_detail('mombreak') if _mombreak_live else None,
+                    "candles": {"1H": _candles['1h']} if _mombreak_live else None,
                 },
                 "rvolbreak_8h": {
                     "label": "RVolBreak-8h",
-                    "status": "ok" if rvolbreak8h_btc_gate_ok() else "blocked",
-                    "syarat": "BTCUSDT HTF 12H ATAU 1D candle tertutup terakhir, minimal salah satu hijau",
-                    "live_detail": _btc_gate_live_detail('rvolbreak8h'),
-                    "candles": {"12H": _candles['12h'], "1D": _candles['1d']},
+                    "status": ("ok" if rvolbreak8h_btc_gate_ok() else "blocked") if _rvolbreak8h_live else "na",
+                    "syarat": ("BTCUSDT HTF 12H ATAU 1D candle tertutup terakhir, minimal salah satu hijau" if _rvolbreak8h_live
+                               else "(Strategi sedang di-pause -- gerbang ini tidak relevan dicek sampai diaktifkan lagi.)"),
+                    "live_detail": _btc_gate_live_detail('rvolbreak8h') if _rvolbreak8h_live else None,
+                    "candles": {"12H": _candles['12h'], "1D": _candles['1d']} if _rvolbreak8h_live else None,
                 },
                 "trend_confirm_4h": {
                     "label": "TrenKonfirmasi-4h",
