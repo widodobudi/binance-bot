@@ -16096,6 +16096,12 @@ ORPHAN_RECLAIM_GAPCAP_STRATEGIES = ('brkX2_12h_closed', 'trend_confirm_4h', 'dec
 ORPHAN_TAKEPROFIT_ARM_PCT = 4.5    # harus untung >= ini (vs entry rata2) dulu baru trailing-nya aktif
 ORPHAN_TAKEPROFIT_TRAIL_PCT = 0.75 # begitu aktif, turun >= ini dari puncak sejak aktif -> jual SEMUA
 
+# Patch "orphan-stale-entry-cleanup" (02/11/2026) -- lihat REMARK lengkap di
+# run_thread_orphan_reclaim(). Ambang "dianggap kosong" dalam USD, bukan qty mentah (qty
+# bervariasi jauh antar koin) -- sengaja kecil, cuma utk tangkap "sudah benar2 habis/dijual
+# di luar bot", bukan utk nge-dust koin yg masih punya nilai riil.
+ORPHAN_STALE_DUST_USD = 1.0
+
 def check_orphan_takeprofit(symbol: str, cd: dict, price: float) -> bool:
     """True = saatnya jual TOTAL orphan ini sekarang (lihat REMARK ORPHAN_TAKEPROFIT_ARM_PCT di
     atas). Dipanggil utk SEMUA orphan di cancelled_deal_price.json, apapun strateginya -- beda
@@ -16180,11 +16186,32 @@ def run_thread_orphan_reclaim():
                 _auto_sell_assets = {}
             for sym, cd in snapshot.items():
                 strat = cd.get('strategy', '')
+                _asset = sym.replace("USDT", "")
+                # Patch "orphan-stale-entry-cleanup" (02/11/2026, kasus OGN/USDT -- Mas Budi
+                # jual manual langsung di Binance, di luar bot; catatan orphan-nya nyangkut
+                # selamanya di cancelled_deal_price.json krn tidak pernah dicek ulang terhadap
+                # saldo wallet asli). Dicek PALING AWAL, sebelum take-profit/reclaim apa pun:
+                # kalau saldo asli sudah di bawah ORPHAN_STALE_DUST_USD, anggap "sudah
+                # ditangani di luar bot" (dijual manual, atau sebab lain) -- hapus catatannya
+                # dan skip, tidak perlu Mas Budi lapor manual tiap kejadian serupa ke depan.
+                # Gagal fetch saldo (qty_real < 0) SENGAJA TIDAK dianggap kosong -- fail-safe
+                # ke "masih dianggap orphan", supaya galat API sesaat tidak salah hapus catatan
+                # yang sebenarnya masih berlaku.
+                try:
+                    _qty_real = binance_get_asset_qty(_asset)
+                    _price_chk = _price_map.get(sym, 0.0)
+                    if _qty_real >= 0 and (_qty_real * _price_chk) < ORPHAN_STALE_DUST_USD:
+                        with cancelled_deal_price_lock:
+                            cancelled_deal_price.pop(sym, None)
+                        save_cancelled_deal_price()
+                        log(f"[ORPHAN-TP] {sym} ({strat}) catatan orphan dihapus -- saldo wallet sudah kosong (ditangani di luar bot)")
+                        continue
+                except Exception as e:
+                    log(f"WARN [ORPHAN-TP] {sym} cek saldo stale gagal: {e}")
                 # Patch "orphan-takeprofit-autoclose" (02/11/2026): dicek LEBIH DULU, utk SEMUA
                 # orphan apapun strateginya -- lihat REMARK lengkap di ORPHAN_TAKEPROFIT_ARM_PCT.
                 # Asset dgn rule Auto-Sell-Crossing aktif DIKECUALIKAN, sama alasan persis spt
                 # get_orphaned_cancelled_assets() -- jangan sampai 2 mekanisme otomatis rebutan.
-                _asset = sym.replace("USDT", "")
                 if not _auto_sell_assets.get(_asset, {}).get("enabled", False):
                     try:
                         _price_now = _price_map.get(sym, 0.0)
