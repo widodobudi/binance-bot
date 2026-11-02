@@ -10403,7 +10403,10 @@ def heartbeat_general_tick():
                      f"  - trend_confirm_4h: {_fmt_hunting_live(prog_trend)}\n"
                      f"    trend_confirm_4h review hard-stop K1.5/cap10.8: {tc_hardstop_progress_line()}\n"
                      f"    jual-sebagian->Earn (KeltnerBreak-12h 75%): {earn_partial_progress_line()}\n"
-                     f"  - mombreak_1h  : {_fmt_hunting_live(prog_mombreak)}\n"
+                     # 02/11/2026 (permintaan Mas Budi): baris "mombreak_1h: LIVE" DIHAPUS -- strategi
+                     # ini sedang di-pause (PAUSED_HIDDEN_STRATEGIES) dengan cuma 1 trade historis,
+                     # Mas Budi pilih hapus (bukan dipertahankan spt pola Reversal-8h yg di-pause tapi
+                     # tetap tampil). prog_mombreak TIDAK dihapus dari kode (data mentah tetap ada).
                      f"  - Shadow (paper, bukan live):\n"
                      f"    {_fmt_shadow('conf3_stochrsibb', SHADOW_CONF3_TARGET)}\n"
                      # 11/10/2026 (permintaan Mas Budi): baris dipbuy_universe-shadow DIHAPUS dari
@@ -21923,7 +21926,13 @@ def _shadow_akuma_check_exits(data: dict) -> None:
 def _shadow_conf3_try_open(data: dict) -> None:
     """Scan universe likuid (sama ambang AKUM_MIN_VOL_USD) cari sinyal 6Confluence
     'stoch+rsi+bb' (stoch_static AND rsi_lt20 AND bb_crossup0) di candle LIVE terbaru --
-    reuse _multi_ind_precompute()/_multi_ind_signal_arrays() persis yg dibacktest."""
+    reuse _multi_ind_precompute()/_multi_ind_signal_arrays() persis yg dibacktest.
+    02/11/2026 (permintaan eksplisit Mas Budi, "Hentikan sekarang"): DIHENTIKAN sebelum sampai
+    titik review yg direncanakan (21-40 deal) -- hasil sejauh ini #9/20 (1W/8L, -38,9%) sudah
+    dianggap cukup jelek utk tidak perlu ditunggu lagi. TIDAK buka posisi paper BARU lagi mulai
+    sekarang; posisi yg masih 'open' (kalau ada) tetap dibiarkan jalan sampai exit alami lewat
+    _shadow_conf3_check_exits() (tidak disentuh), supaya catatannya tetap lengkap/jujur."""
+    return
     if len(data['conf3_stochrsibb']['open']) >= SHADOW_MAX_OPEN_PER_COMBO:
         return
     open_syms = {p['sym'] for p in data['conf3_stochrsibb']['open']}
