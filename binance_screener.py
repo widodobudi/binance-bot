@@ -10374,7 +10374,17 @@ def heartbeat_general_tick():
     # cumulative) yg tersisa -- strategi ini di-pause 29/09/2026 (b7425d2, performa real 10W/3L
     # termasuk 3 hard-stop & skid -22,68% di 6 trade terakhir, bukan 10W/0L yg kelihatan di
     # panel default), reaktivasi live masih menunggu konfirmasi terpisah.
-    prog_4h2   = csv_progress('brkX2_4h',    offset=STRAT4H_LIVE_BASELINE)
+    # 02/11/2026 (permintaan Mas Budi, setelah review backtest fase-2): counter "2nd" brkX2-4h
+    # DIRESET ke since_open_wib='2026-10-14 00:00:00' (hari hard-stop K dipindah 0,88->0,30,
+    # lihat REMARK lengkap di HARD_STOP_MULT_BY_STRATEGY) -- SEBELUMNYA pakai offset=
+    # STRAT4H_LIVE_BASELINE (dari 29/08/2026) yg TIDAK PERNAH direset sejak itu, jadi angkanya
+    # bercampur 3 rezim berbeda (formula lama, K=0,88, K=0,30) -- backtest 02/11/2026 (79.667
+    # sinyal 2022-2026, formula K=0,30 yg SEKARANG) konfirmasi -15,5%/19 deal masih dalam
+    # rentang wajar (1 dari 6 rentetan 19-transaksi senilai itu), tapi direset di sini supaya
+    # review BERIKUTNYA murni dari satu formula konsisten, bukan campuran. offset lama (30)
+    # TIDAK dipakai lagi bareng since_open_wib -- since_open_wib sudah cukup, keduanya kalau
+    # digabung malah salah hitung (lihat urutan filter di csv_progress()).
+    prog_4h2   = csv_progress('brkX2_4h',    since_open_wib='2026-10-14 00:00:00')
     prog_hunt2 = csv_progress('hunting_4h',  offset=HUNTING_FWDTEST_PHASE_OFFSET + HUNTING_LIVE_BASELINE)
     # 02/10/2026 (permintaan Mas Budi): KeltnerBreak-12h disederhanakan jadi cuma "LIVE" (prog_brk,
     # cumulative sejak FWDTEST_BRKX2_PHASE_OFFSET) -- "3rd" sudah dihapus 985dae9, "2nd" dihapus
