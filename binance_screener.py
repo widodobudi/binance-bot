@@ -10003,7 +10003,11 @@ def get_ohlcv_4h(symbol: str, limit: int = 300):
 # thread1d_scan_4h() tidak pernah menerima data kosong/salah karena desain ini.
 BX4H_WS_BACKFILL_LIMIT       = 500   # samakan dgn limit terbesar yg dipakai brkX2-4h (filter pair baru <500 candle)
 BX4H_WS_GLOBAL_STALE_SEC     = 120   # kalau >2 menit TANPA pesan WS sama sekali (simbol manapun) -> anggap koneksi mati, fallback REST semua
-BX4H_WS_BACKFILL_STAGGER_SEC = 0.12  # jarak antar REST call saat backfill awal, hindari membanjiri Binance
+BX4H_WS_BACKFILL_STAGGER_SEC = 0.6   # jarak antar REST call saat backfill awal, hindari membanjiri Binance
+BX4H_WS_BACKFILL_START_DELAY_SEC = 60  # tunda mulai backfill stlh startup -- 03/11/2026: backfill yg langsung
+# tembak di detik-0 KETEMU ban 418 baru (deploy 7326f10, 16:56 WIB) krn numpuk sama proses startup bot lain
+# (sync saldo, exchangeInfo, ticker) yg juga pakai REST Binance -- delay ini beri jarak, sama pola dgn
+# time.sleep(30) di run_thread1d_4h().
 
 bx4h_ws_lock = threading.Lock()
 BX4H_WS_CLOSED: dict  = {}     # symbol -> DataFrame candle 4h TERTUTUP (kolom sama persis get_ohlcv_4h)
@@ -10067,6 +10071,8 @@ def run_thread_bx4h_klines_ws() -> None:
     if not STRAT4H_ENABLED:
         return
     import websocket as _ws_lib
+
+    time.sleep(BX4H_WS_BACKFILL_START_DELAY_SEC)  # beri jarak dari proses startup bot lain yg jg pakai REST Binance
 
     ticker  = get_ticker_24h()
     symbols = sorted({t["symbol"] for t in (ticker or [])
