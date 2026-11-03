@@ -6152,6 +6152,57 @@ def ensure_spot_usdt(min_needed: float, wait_seconds: int = 12) -> bool:
 
 _last_balance_log_ts = 0.0
 
+# 03/11/2026 (permintaan Mas Budi): startup reconcile (lihat REMARK "Reconciliation startup"
+# di loader active_deals) cuma jalan SEKALI saat bot baru nyala -- qty_wallet/qty_diff jadi
+# basi kalau Mas Budi menambah koin ke wallet manual (mis. convert dari orphan di luar jalur
+# bot) SETELAH bot hidup. WALLET_RECONCILE_INTERVAL_SEC bikin thread2_monitor() ulangi cek
+# yang SAMA tiap 3 menit utk SEMUA deal aktif sekaligus -- 1x /api/v3/account per siklus
+# (binance_get_all_balances_total(), bukan N panggilan terpisah), beban ke Binance kecil
+# (endpoint akun, bukan klines) apapun jumlah deal aktifnya. Nilai USDT wallet sebenarnya
+# (qty_wallet x harga sekarang) ditampilkan di dashboard, computed di template, tidak perlu
+# field baru -- lihat FRAGMENT_ACTIVE_DEALS di DASHBOARD_HTML.
+WALLET_RECONCILE_INTERVAL_SEC = 180
+_last_wallet_reconcile_ts = 0.0
+
+def reconcile_active_deals_wallet_qty():
+    """Update qty_wallet/qty_diff SEMUA deal aktif dari saldo Binance riil (1 REST call via
+    binance_get_all_balances_total()) -- versi BERKALA dari reconcile startup, dipanggil
+    dari thread2_monitor() tiap WALLET_RECONCILE_INTERVAL_SEC. Fail-soft: kalau fetch gagal
+    (dict kosong), skip diam-diam, qty_wallet lama tetap dipakai sampai siklus berikutnya
+    berhasil -- TIDAK pernah menimpa data lama dengan 0 cuma krn satu kali gagal fetch."""
+    global _last_wallet_reconcile_ts
+    if not USE_BINANCE_DIRECT:
+        return
+    if time.time() - _last_wallet_reconcile_ts < WALLET_RECONCILE_INTERVAL_SEC:
+        return
+    _last_wallet_reconcile_ts = time.time()
+    with active_deals_lock:
+        syms = list(active_deals.keys())
+    if not syms:
+        return
+    balances = binance_get_all_balances_total()
+    if not balances:
+        return
+    changed = False
+    for sym in syms:
+        asset = sym.replace("USDT", "")
+        qty_total = balances.get(asset, 0.0)
+        if qty_total <= 0:
+            continue
+        with active_deals_lock:
+            if sym not in active_deals:
+                continue
+            qty_coin_saved = float(active_deals[sym].get("qty_coin", 0) or 0)
+            diff = qty_total - qty_coin_saved
+            active_deals[sym]["qty_wallet"] = qty_total
+            active_deals[sym]["qty_diff"] = diff
+            changed = True
+        if qty_coin_saved > 0 and abs(diff) > qty_coin_saved * RECONCILE_QTY_TOL_PCT / 100:
+            log(f"[WALLET-RECONCILE] {sym}: wallet {qty_total:.4f} vs bot {qty_coin_saved:.4f} "
+                f"(selisih {diff:+.4f} {asset})")
+    if changed:
+        save_active_deals()
+
 
 def _convert_leftover_to_bnb(asset: str, symbol: str, filter_info: dict):
     """Jual sisa saldo asset (leftover ~5% stlh auto-sell utama) -> USDT -> beli BNB,
@@ -6651,6 +6702,22 @@ def binance_get_asset_qty_total(asset: str) -> float:
     except Exception as e:
         log(f"WARN [BINANCE] get_asset_qty_total {asset}: {e}")
         return -1.0
+
+
+def binance_get_all_balances_total() -> dict:
+    """03/11/2026 (permintaan Mas Budi, fitur reconcile wallet berkala): baca SEMUA saldo
+    (free+locked) SEKALIGUS dari /api/v3/account -- 1 REST call, dipakai oleh
+    reconcile_active_deals_wallet_qty() supaya N deal aktif TIDAK memicu N panggilan
+    /api/v3/account terpisah (beda dari binance_get_asset_qty_total() di atas, yang
+    cocok dipakai utk 1 symbol spesifik tapi boros kalau dipanggil berulang per-deal
+    dalam 1 siklus). Return {} kalau gagal (caller skip reconcile siklus itu, coba lagi
+    siklus berikutnya -- sama pola fail-soft spt qty_wallet startup reconcile)."""
+    try:
+        data = _binance_trading_request("GET", "/api/v3/account", {})
+        return {b["asset"]: float(b["free"]) + float(b.get("locked", 0)) for b in data.get("balances", [])}
+    except Exception as e:
+        log(f"WARN [BINANCE] get_all_balances_total: {e}")
+        return {}
 
 
 def sync_base_usd_from_binance():
@@ -11794,6 +11861,10 @@ def thread2_monitor():
             log(f"[T2] Saldo USDT Spot wallet: free=${_usdt_free:.2f} locked=${_usdt_locked:.2f}")
         except Exception as _e:
             log(f"WARN [T2] gagal cek saldo USDT: {_e}")
+    try:
+        reconcile_active_deals_wallet_qty()
+    except Exception as _e:
+        log(f"WARN [T2] reconcile_active_deals_wallet_qty error: {_e}")
     try:
         check_auto_sell_crossing()
     except Exception as error:
@@ -17744,9 +17815,14 @@ refreshShadowChart();
             estd {{ "%.2f"|format(d.get("total_usd_display",0) / d.get("entry_price",1)) }} {{ sym.replace("USDT","") }}
           </div>
           {% if d.get("qty_wallet") is not none %}
-          <div style="font-size:9px;color:{{ 'var(--muted)' if (d.get('qty_diff',0)|abs) <= (d.get('qty_coin',0)|float * 0.0001) else '#f85149' }}" title="Saldo wallet Binance saat pengecekan terakhir (saat bot start). Selisih = wallet dikurangi qty yang dicatat bot. Toleransi 0,01%.">
+          <div style="font-size:9px;color:{{ 'var(--muted)' if (d.get('qty_diff',0)|abs) <= (d.get('qty_coin',0)|float * 0.0001) else '#f85149' }}" title="Saldo wallet Binance, dicek ulang tiap 3 menit (lihat reconcile_active_deals_wallet_qty()). Selisih = wallet dikurangi qty yang dicatat bot. Toleransi 0,01%.">
             wallet {{ "%.4f"|format(d.get("qty_wallet",0)) }} {{ sym.replace("USDT","") }}{% if (d.get('qty_diff',0)|abs) > (d.get('qty_coin',0)|float * 0.0001) %} (selisih {{ "%+.4f"|format(d.get("qty_diff",0)) }}){% else %} ✓{% endif %}
           </div>
+          {% if d.get("last_price",0) > 0 %}
+          <div style="font-size:9px;color:var(--accent)" title="Nilai USDT saldo wallet riil sekarang (qty wallet x harga sekarang) -- BUKAN modal yang dicatat bot, ikut termasuk penambahan manual (mis. convert dari koin orphan).">
+            &#8776; ${{ "%.2f"|format(d.get("qty_wallet",0) * d.get("last_price",0)) }}
+          </div>
+          {% endif %}
           {% endif %}
           {% endif %}
         </td>
