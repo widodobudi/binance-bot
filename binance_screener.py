@@ -17336,10 +17336,9 @@ function confirmRule(parsed) {
             <label style="display:flex;align-items:center;gap:6px;color:var(--muted)">
                 <span>Mode:</span>
                 <select id="ai-provider-mode" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px">
-                    <option value="anthropic_alibaba_gemini">Anthropic → Alibaba → Gemini otomatis</option>
+                    <option value="anthropic_alibaba_gemini">Anthropic → Alibaba otomatis</option>
                     <option value="anthropic_only">Anthropic saja</option>
                     <option value="alibaba_only">Alibaba Qwen saja</option>
-                    <option value="gemini_only">Gemini AI Studio saja</option>
                     <option value="rule_based">Rule-based Python saja</option>
                 </select>
             </label>
@@ -18838,10 +18837,9 @@ function loadAIProviderConfig() {
         var mode = document.getElementById('ai-provider-mode');
         var status = document.getElementById('ai-provider-status');
         if (mode) mode.value = d.mode || 'anthropic_alibaba_gemini';
-        if (status) status.innerHTML = 'Mode aktif: ' + (mode && mode.options[mode.selectedIndex] ? mode.options[mode.selectedIndex].text : 'Anthropic → Alibaba → Gemini otomatis')
+        if (status) status.innerHTML = 'Mode aktif: ' + (mode && mode.options[mode.selectedIndex] ? mode.options[mode.selectedIndex].text : 'Anthropic → Alibaba otomatis')
             + ' | ' + _aiHealthHtml('Anthropic', d.anthropic_configured, d.anthropic_health)
             + ' | ' + _aiHealthHtml('Alibaba', d.alibaba_configured, d.alibaba_health)
-            + ' | ' + _aiHealthHtml('Gemini', d.gemini_configured, d.gemini_health)
             + ' | Terakhir: ' + (d.last_provider || 'Belum ada keputusan AI');
     });
 }
