@@ -8580,6 +8580,147 @@ def get_ohlcv(symbol: str, interval=TIMEFRAME, limit=120):
     except Exception:
         return None
 
+# ══════════════════════════════════════════════════════════════════════════════
+# KeltnerBreak-12h: feeder WebSocket kline_12h (Fase 2a WS migration, 03/11/2026,
+# permintaan Mas Budi lanjutkan setelah brkX2-4h). Sama pola persis dgn blok BX4H
+# (brkX2-4h, lihat REMARK panjang di get_ohlcv_4h_bx4h_ws()), interval beda (12h,
+# bukan 4h) & nama kolom DataFrame beda -- ikuti PERSIS kolom get_ohlcv() asli
+# (ot/vol/qav/nt/tbbav/tbqav/ig, bukan ts/qvol/ntrades/tbbv/tbqv punya get_ohlcv_4h).
+# Audit 27/10/2026 (lihat REMARK thread1c_scan_intrabar()) nemu ~100% deal
+# KeltnerBreak-12h RIIL lewat T1c/T1c-E (bukan T1 closed-candle) -- scan tiap 4-5
+# menit lintas seluruh universe USDT, salah satu beban REST terbesar setelah
+# brkX2-4h. Dipakai HANYA di 3 titik scan live (T1/T1c/T1c-E); get_ohlcv() sendiri
+# TIDAK disentuh (dipakai Reversal-8h dkk dgn interval lain).
+KB12H_WS_BACKFILL_LIMIT           = 120  # satu2nya limit yg dipakai T1/T1c/T1c-E
+KB12H_WS_GLOBAL_STALE_SEC         = 120
+KB12H_WS_BACKFILL_STAGGER_SEC     = 0.6
+KB12H_WS_BACKFILL_START_DELAY_SEC = 90   # digeser dari BX4H (60s) biar backfill 2 fitur WS ini tidak numpuk bareng
+
+kb12h_ws_lock = threading.Lock()
+KB12H_WS_CLOSED: dict  = {}     # symbol -> DataFrame candle 12h TERTUTUP (kolom sama persis get_ohlcv())
+KB12H_WS_FORMING: dict = {}     # symbol -> dict 1 baris, candle 12h yg SEDANG berjalan
+KB12H_WS_LAST_ANY_MSG  = [0.0]
+KB12H_WS_BACKFILL_DONE = [False]
+
+def _kb12h_ws_row_from_kline(k: dict) -> dict:
+    return {
+        "ot": int(k["t"]), "open": float(k["o"]), "high": float(k["h"]),
+        "low": float(k["l"]), "close": float(k["c"]), "vol": float(k["v"]),
+        "ct": int(k["T"]), "qav": float(k["q"]), "nt": int(k.get("n", 0)),
+        "tbbav": float(k.get("V", 0)), "tbqav": float(k.get("Q", 0)), "ig": k.get("B", "0"),
+    }
+
+def _kb12h_ws_apply_kline_msg(k: dict) -> None:
+    """Terapkan 1 pesan kline_12h WS ke cache -- sama pola dgn _bx4h_ws_apply_kline_msg()."""
+    sym = k.get("s")
+    if not sym:
+        return
+    row = _kb12h_ws_row_from_kline(k)
+    is_closed = bool(k.get("x"))
+    with kb12h_ws_lock:
+        if is_closed:
+            df_closed = KB12H_WS_CLOSED.get(sym)
+            if df_closed is None or len(df_closed) == 0:
+                KB12H_WS_CLOSED[sym] = pd.DataFrame([row])
+            elif row["ot"] > int(df_closed.iloc[-1]["ot"]):
+                combined = pd.concat([df_closed, pd.DataFrame([row])], ignore_index=True)
+                if len(combined) > KB12H_WS_BACKFILL_LIMIT:
+                    combined = combined.iloc[-KB12H_WS_BACKFILL_LIMIT:].reset_index(drop=True)
+                KB12H_WS_CLOSED[sym] = combined
+            KB12H_WS_FORMING.pop(sym, None)
+        else:
+            KB12H_WS_FORMING[sym] = row
+        KB12H_WS_LAST_ANY_MSG[0] = time.time()
+
+def get_ohlcv_12h_kb_ws(symbol: str, limit: int = 120):
+    """Versi KeltnerBreak-12h (KHUSUS, BUKAN pengganti get_ohlcv()): baca cache WS
+    kline_12h kalau backfill selesai & koneksi masih hidup, else fallback REST
+    get_ohlcv() -- perilaku lama, TIDAK berubah. Dipakai HANYA di T1/T1c/T1c-E."""
+    if KB12H_WS_BACKFILL_DONE[0] and (time.time() - KB12H_WS_LAST_ANY_MSG[0]) <= KB12H_WS_GLOBAL_STALE_SEC:
+        with kb12h_ws_lock:
+            df_closed = KB12H_WS_CLOSED.get(symbol)
+            forming   = KB12H_WS_FORMING.get(symbol)
+        if df_closed is not None and len(df_closed) > 0:
+            full = pd.concat([df_closed, pd.DataFrame([forming])], ignore_index=True) if forming else df_closed
+            return full.tail(limit).reset_index(drop=True)
+    return get_ohlcv(symbol, interval=TIMEFRAME, limit=limit)
+
+def run_thread_kb12h_klines_ws() -> None:
+    """Thread T-KB12H-WS: backfill histori 12h (REST, SEKALI saat startup, delay
+    KB12H_WS_BACKFILL_START_DELAY_SEC agar tidak numpuk dgn T-BX4H-WS/startup lain)
+    lalu pegang 1 koneksi WebSocket kline_12h terus-menerus utk semua simbol USDT.
+    Sama pola persis dgn run_thread_bx4h_klines_ws()."""
+    import websocket as _ws_lib
+    time.sleep(KB12H_WS_BACKFILL_START_DELAY_SEC)
+
+    ticker  = get_ticker_24h()
+    symbols = sorted({t["symbol"] for t in (ticker or [])
+                       if t.get("symbol", "").endswith("USDT")
+                       and t["symbol"] not in SYMBOL_BLACKLIST})
+    log(f"[T-KB12H-WS] Backfill histori 12h {len(symbols)} simbol (sekali, sebelum WS connect)...")
+    ok = 0
+    for i, sym in enumerate(symbols):
+        try:
+            df = get_ohlcv(sym, interval=TIMEFRAME, limit=KB12H_WS_BACKFILL_LIMIT)
+            if df is not None and len(df) > 1:
+                last_row = df.iloc[-1]   # candle terakhir masih forming saat backfill
+                with kb12h_ws_lock:
+                    KB12H_WS_CLOSED[sym]  = df.iloc[:-1].reset_index(drop=True)
+                    KB12H_WS_FORMING[sym] = {
+                        "ot": int(last_row["ot"]), "open": float(last_row["open"]),
+                        "high": float(last_row["high"]), "low": float(last_row["low"]),
+                        "close": float(last_row["close"]), "vol": float(last_row["vol"]),
+                        "ct": int(last_row["ct"]), "qav": float(last_row["qav"]),
+                        "nt": int(last_row["nt"]), "tbbav": float(last_row["tbbav"]),
+                        "tbqav": float(last_row["tbqav"]), "ig": last_row["ig"],
+                    }
+                ok += 1
+        except Exception as e:
+            log(f"WARN [T-KB12H-WS] backfill {sym}: {e}")
+        if (i + 1) % 50 == 0:
+            log(f"[T-KB12H-WS] Backfill {i+1}/{len(symbols)}...")
+        time.sleep(KB12H_WS_BACKFILL_STAGGER_SEC)
+    KB12H_WS_BACKFILL_DONE[0] = True
+    log(f"[T-KB12H-WS] Backfill selesai: {ok}/{len(symbols)} simbol siap, mulai koneksi WS.")
+
+    def on_open(ws):
+        for i in range(0, len(symbols), 100):
+            batch  = symbols[i:i + 100]
+            params = [f"{s.lower()}@kline_12h" for s in batch]
+            try:
+                ws.send(json.dumps({"method": "SUBSCRIBE", "params": params, "id": i + 1}))
+            except Exception as e:
+                log(f"WARN [T-KB12H-WS] subscribe batch {i}: {e}")
+            time.sleep(0.3)
+        log(f"[T-KB12H-WS] Connected & subscribe {len(symbols)} simbol kline_12h.")
+
+    def on_message(ws, message):
+        try:
+            payload = json.loads(message)
+            k = payload.get("k")
+            if k:
+                _kb12h_ws_apply_kline_msg(k)
+        except Exception as e:
+            log(f"WARN [T-KB12H-WS] parse pesan: {e}")
+
+    def on_error(ws, error):
+        log(f"WARN [T-KB12H-WS] error: {error}")
+
+    def on_close(ws, code, msg):
+        log(f"[T-KB12H-WS] closed ({code}): {msg}")
+
+    while True:
+        try:
+            app = _ws_lib.WebSocketApp(
+                "wss://stream.binance.com:9443/ws",
+                on_open=on_open, on_message=on_message,
+                on_error=on_error, on_close=on_close,
+            )
+            app.run_forever(ping_interval=180, ping_timeout=10, reconnect=5)
+        except Exception as e:
+            log(f"WARN [T-KB12H-WS] run_forever crash: {e}")
+        time.sleep(5)
+
 def get_price_now(symbol: str) -> float:
     """Harga pasar Binance terkini — dipakai sbg entry_price (opsi a) & monitor."""
     r = _binance_get("/api/v3/ticker/price", params={'symbol':symbol}, timeout=10)
@@ -10987,7 +11128,7 @@ def thread1_scan():
         with active_deals_lock:
             if sym in active_deals: continue
         if sym in SYMBOL_BLACKLIST: continue
-        df = get_ohlcv(sym, limit=120)
+        df = get_ohlcv_12h_kb_ws(sym, limit=120)  # Fase 2a WS (03/11/2026) -- fallback REST otomatis, lihat REMARK di get_ohlcv_12h_kb_ws()
         if df is None: continue
         # mode (a): pastikan candle terakhir SUDAH tutup
         # candle tutup saat ct < waktu sekarang (ms)
@@ -13303,7 +13444,7 @@ def thread1c_scan_intrabar():
         # Candle 12h TERAKHIR YANG SUDAH TUTUP -> level Keltner (EMA20+2xATR10,
         # kc_upper sudah dihitung di compute_indicators(), sama persis dgn check_entry()
         # closed-candle -- lihat REMARK di sana).
-        df12 = get_ohlcv(sym, interval=TIMEFRAME, limit=120)
+        df12 = get_ohlcv_12h_kb_ws(sym, limit=120)  # Fase 2a WS (03/11/2026) -- fallback REST otomatis, lihat REMARK di get_ohlcv_12h_kb_ws()
         if df12 is None: continue
         if df12['ct'].iloc[-1] >= now_ms:
             df12 = df12.iloc[:-1]
@@ -13540,7 +13681,7 @@ def thread1c_scan_intrabar_early():
         # Candle 12h TERAKHIR YANG SUDAH TUTUP -> level Keltner (EMA20+2xATR10),
         # sama persis dgn check_entry() closed-candle & thread1c_scan_intrabar() --
         # lihat REMARK di sana.
-        df12 = get_ohlcv(sym, interval=TIMEFRAME, limit=120)
+        df12 = get_ohlcv_12h_kb_ws(sym, limit=120)  # Fase 2a WS (03/11/2026) -- fallback REST otomatis, lihat REMARK di get_ohlcv_12h_kb_ws()
         if df12 is None: continue
         # Buang candle yang sedang berjalan (belum tutup)
         if df12['ct'].iloc[-1] >= now_ms:
@@ -14975,7 +15116,7 @@ def thread_trendconfirm_scan():
 
         try:
             scan_total_tc += 1
-            df = get_ohlcv_4h(sym, limit=max(TRENDCONFIRM_ATR_MEDIAN_WINDOW + 20, 200))
+            df = get_ohlcv_4h_bx4h_ws(sym, limit=max(TRENDCONFIRM_ATR_MEDIAN_WINDOW + 20, 200))  # Fase 2a WS (03/11/2026) -- reuse cache BX4H (interval sama 4h), fallback REST otomatis
             if df is None or len(df) < TRENDCONFIRM_ATR_MEDIAN_WINDOW + 20:
                 count_blocker(scan_blockers_tc, "Data OHLCV kurang", True)
                 continue
@@ -34472,12 +34613,16 @@ if __name__ == '__main__':
     except Exception as e:
         log(f"   WARN init gating candle gagal: {e}")
 
-    n_threads = 4
+    n_threads = 5
     t1  = threading.Thread(target=run_thread1, daemon=True, name="T1-Screener")
     t2  = threading.Thread(target=run_thread2, daemon=True, name="T2-Monitor")
     t3  = threading.Thread(target=run_thread3_intrabar, daemon=True, name="T3-Intrabar")
     t3r = threading.Thread(target=run_thread_rev_intrabar, daemon=True, name="T3-REV")
-    threads = [t1, t2, t3, t3r]
+    # 03/11/2026: feeder WebSocket kline_12h khusus KeltnerBreak-12h (Fase 2a WS migration,
+    # lihat REMARK panjang di get_ohlcv_12h_kb_ws()) -- KeltnerBreak-12h tidak punya flag
+    # "ENABLED" tunggal spt STRAT4H_ENABLED, jadi thread ini SELALU jalan sama seperti T1/T3.
+    t_kb12h_ws = threading.Thread(target=run_thread_kb12h_klines_ws, daemon=True, name="T-KB12H-WS")
+    threads = [t1, t2, t3, t3r, t_kb12h_ws]
     if STRAT4H_ENABLED:
         t4 = threading.Thread(target=run_thread1d_4h, daemon=True, name="T1d-4h")
         threads.append(t4)
