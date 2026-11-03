@@ -19410,22 +19410,25 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
       <tbody id="ct-body"><tr><td colspan="14" style="color:var(--muted);padding:12px 8px;text-align:center">Pilih filter (opsional), lalu klik Reload untuk muat data</td></tr></tbody>
     </table>
   </div>
-  <!-- 25/10/2026 (permintaan Mas Budi): modal "Chart Deal" -- candlestick custom (data Binance
-       langsung, BUKAN TradingView -- lihat chat soal kredensial/API TradingView, platform itu
-       tidak expose cara utk suntik marker custom ke chart publiknya) dgn marker Base Order/
-       Average Order/Close digambar sendiri lewat renderDealCandleSVG(). Tombol TradingView lama
-       TETAP ada di kolom Chart (permintaan Mas Budi: biar bisa dibandingkan dulu). -->
-  <div id="deal-chart-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:1000;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) closeDealChartModal()">
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;max-width:1000px;width:100%;max-height:92vh;overflow:auto">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:10px">
-        <div id="deal-chart-title" style="font-size:13px;font-weight:600"></div>
-        <button onclick="closeDealChartModal()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;white-space:nowrap">✕ Tutup</button>
-      </div>
-      <div id="deal-chart-legend" style="font-size:9px;color:var(--muted);margin-bottom:6px"></div>
-      <div id="deal-chart-body" style="font-size:11px"></div>
-    </div>
-  </div>
 </div>
+</div>
+<!-- 03/11/2026 (bug ditemukan Mas Budi: "Chart Deal" diklik di tab Monitor tidak ada efek):
+     modal "Chart Deal" (25/10/2026, dulu nested di dalam .card tab History) dipindah ke sini
+     jadi SIBLING berdiri sendiri dgn data-tab="__none__" -- pola sama persis dgn fix #convert-modal
+     (lihat REMARK panjang di bawah dekat elemen itu). Akar masalah: openActiveDealChartModal()
+     (dipakai dari tab Monitor, ditambahkan 01/11/2026) reuse modal ini, tapi modal-nya masih
+     nested di dalam .container[data-tab="history"] -- begitu tab aktif BUKAN History, ancestor-
+     nya display:none, jadi modal.style.display='flex' sukses dieksekusi (nol error) tapi visual
+     tetap tidak muncul sama sekali (getBoundingClientRect() 0x0, confirmed via console test). -->
+<div id="deal-chart-modal" class="dash-section-start" data-tab="__none__" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:1000;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) closeDealChartModal()">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;max-width:1000px;width:100%;max-height:92vh;overflow:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:10px">
+      <div id="deal-chart-title" style="font-size:13px;font-weight:600"></div>
+      <button onclick="closeDealChartModal()" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;white-space:nowrap">✕ Tutup</button>
+    </div>
+    <div id="deal-chart-legend" style="font-size:9px;color:var(--muted);margin-bottom:6px"></div>
+    <div id="deal-chart-body" style="font-size:11px"></div>
+  </div>
 </div>
 <!-- ═══════════════ ANALISIS (20/10/2026, permintaan Mas Budi: dipindah keluar dari History,
      jadi tab sendiri di antara History dan Control) ═══════════════ -->
