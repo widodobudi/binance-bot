@@ -9990,6 +9990,152 @@ def get_ohlcv_4h(symbol: str, limit: int = 300):
         log(f"  [4h] parse error {symbol}: {e}")
         return None
 
+# ══════════════════════════════════════════════════════════════════════════════
+# brkX2-4h: feeder WebSocket kline_4h (Fase 1 WS migration, 03/11/2026, persetujuan
+# Mas Budi "SETUJU" atas rencana bertahap).
+# Latar: investigasi 01-03/11/2026 nemu root cause ban 418 berulang = flood REST
+# /api/v3/klines dari thread1d_scan_4h() (scan brkX2-4h tiap 3 menit, ratusan simbol,
+# 1 REST klines call PER SIMBOL per siklus -- paling berat dari 12 thread strategi
+# yang ada). Fase 1: ganti SUMBER data brkX2-4h SAJA (bukan 10+ strategi 4h lain yang
+# juga baca get_ohlcv_4h() -- fungsi itu TIDAK disentuh) jadi WebSocket kline_4h 1
+# koneksi terus-menerus, nol biaya REST per siklus scan setelah backfill awal. REST
+# (get_ohlcv_4h() asli) tetap jalan sbg fallback otomatis kalau WS basi/belum siap --
+# thread1d_scan_4h() tidak pernah menerima data kosong/salah karena desain ini.
+BX4H_WS_BACKFILL_LIMIT       = 500   # samakan dgn limit terbesar yg dipakai brkX2-4h (filter pair baru <500 candle)
+BX4H_WS_GLOBAL_STALE_SEC     = 120   # kalau >2 menit TANPA pesan WS sama sekali (simbol manapun) -> anggap koneksi mati, fallback REST semua
+BX4H_WS_BACKFILL_STAGGER_SEC = 0.12  # jarak antar REST call saat backfill awal, hindari membanjiri Binance
+
+bx4h_ws_lock = threading.Lock()
+BX4H_WS_CLOSED: dict  = {}     # symbol -> DataFrame candle 4h TERTUTUP (kolom sama persis get_ohlcv_4h)
+BX4H_WS_FORMING: dict = {}     # symbol -> dict 1 baris, candle 4h yg SEDANG berjalan (live, belum closed)
+BX4H_WS_LAST_ANY_MSG  = [0.0]  # timestamp pesan WS terakhir (simbol manapun) -- deteksi koneksi mati
+BX4H_WS_BACKFILL_DONE = [False]
+
+def _bx4h_ws_row_from_kline(k: dict) -> dict:
+    return {
+        "ts": int(k["t"]), "open": float(k["o"]), "high": float(k["h"]),
+        "low": float(k["l"]), "close": float(k["c"]), "vol": float(k["v"]),
+        "ct": int(k["T"]), "qvol": float(k["q"]), "ntrades": int(k.get("n", 0)),
+        "tbbv": float(k.get("V", 0)), "tbqv": float(k.get("Q", 0)), "ig": k.get("B", "0"),
+    }
+
+def _bx4h_ws_apply_kline_msg(k: dict) -> None:
+    """Terapkan 1 pesan kline_4h WS ke cache. Dipanggil dari callback on_message --
+    SENGAJA ringan (cuma dict/concat kecil), tidak pernah menunggu AI/REST di sini."""
+    sym = k.get("s")
+    if not sym:
+        return
+    row = _bx4h_ws_row_from_kline(k)
+    is_closed = bool(k.get("x"))
+    with bx4h_ws_lock:
+        if is_closed:
+            df_closed = BX4H_WS_CLOSED.get(sym)
+            if df_closed is None or len(df_closed) == 0:
+                BX4H_WS_CLOSED[sym] = pd.DataFrame([row])
+            elif row["ts"] > int(df_closed.iloc[-1]["ts"]):
+                combined = pd.concat([df_closed, pd.DataFrame([row])], ignore_index=True)
+                if len(combined) > BX4H_WS_BACKFILL_LIMIT:
+                    combined = combined.iloc[-BX4H_WS_BACKFILL_LIMIT:].reset_index(drop=True)
+                BX4H_WS_CLOSED[sym] = combined
+            # row["ts"] <= ts terakhir: pesan closed duplikat/telat (reconnect dsb) -- diamkan saja
+            BX4H_WS_FORMING.pop(sym, None)
+        else:
+            BX4H_WS_FORMING[sym] = row
+        BX4H_WS_LAST_ANY_MSG[0] = time.time()
+
+def get_ohlcv_4h_bx4h_ws(symbol: str, limit: int = 300):
+    """Versi brkX2-4h (KHUSUS, BUKAN pengganti get_ohlcv_4h()): baca cache WebSocket
+    kline_4h kalau backfill sudah selesai & koneksi masih hidup (<=BX4H_WS_GLOBAL_
+    STALE_SEC tanpa pesan sama sekali), else fallback REST get_ohlcv_4h() -- perilaku
+    lama, TIDAK berubah. Dipakai HANYA di 2 titik panggil brkX2-4h (thread1d_scan_4h);
+    get_ohlcv_4h() sendiri TIDAK disentuh krn dipakai 10+ strategi 4h lain."""
+    if BX4H_WS_BACKFILL_DONE[0] and (time.time() - BX4H_WS_LAST_ANY_MSG[0]) <= BX4H_WS_GLOBAL_STALE_SEC:
+        with bx4h_ws_lock:
+            df_closed = BX4H_WS_CLOSED.get(symbol)
+            forming   = BX4H_WS_FORMING.get(symbol)
+        if df_closed is not None and len(df_closed) > 0:
+            full = pd.concat([df_closed, pd.DataFrame([forming])], ignore_index=True) if forming else df_closed
+            return full.tail(limit).reset_index(drop=True)
+    return get_ohlcv_4h(symbol, limit=limit)
+
+def run_thread_bx4h_klines_ws() -> None:
+    """Thread T-BX4H-WS: backfill histori 4h (REST, SEKALI saat startup) lalu pegang 1
+    koneksi WebSocket kline_4h terus-menerus utk SEMUA simbol USDT, isi BX4H_WS_CLOSED/
+    BX4H_WS_FORMING. Simbol baru (listing setelah backfill) otomatis fallback REST lewat
+    get_ohlcv_4h_bx4h_ws() sampai bot di-restart/deploy berikutnya -- bukan bug, trade-off
+    yang sengaja diambil utk Fase 1 (lihat REMARK blok BX4H di atas get_ohlcv_4h_bx4h_ws)."""
+    if not STRAT4H_ENABLED:
+        return
+    import websocket as _ws_lib
+
+    ticker  = get_ticker_24h()
+    symbols = sorted({t["symbol"] for t in (ticker or [])
+                       if t.get("symbol", "").endswith("USDT")
+                       and t["symbol"] not in SYMBOL_BLACKLIST})
+    log(f"[T-BX4H-WS] Backfill histori 4h {len(symbols)} simbol (sekali, sebelum WS connect)...")
+    ok = 0
+    for i, sym in enumerate(symbols):
+        try:
+            df = get_ohlcv_4h(sym, limit=BX4H_WS_BACKFILL_LIMIT)
+            if df is not None and len(df) > 1:
+                last_row = df.iloc[-1]   # candle terakhir masih forming saat backfill -- seed BX4H_WS_FORMING, bukan dibuang
+                with bx4h_ws_lock:
+                    BX4H_WS_CLOSED[sym]  = df.iloc[:-1].reset_index(drop=True)
+                    BX4H_WS_FORMING[sym] = {
+                        "ts": int(last_row["ts"]), "open": float(last_row["open"]),
+                        "high": float(last_row["high"]), "low": float(last_row["low"]),
+                        "close": float(last_row["close"]), "vol": float(last_row["vol"]),
+                        "ct": int(last_row["ct"]), "qvol": float(last_row["qvol"]),
+                        "ntrades": int(last_row["ntrades"]), "tbbv": float(last_row["tbbv"]),
+                        "tbqv": float(last_row["tbqv"]), "ig": last_row["ig"],
+                    }
+                ok += 1
+        except Exception as e:
+            log(f"WARN [T-BX4H-WS] backfill {sym}: {e}")
+        if (i + 1) % 50 == 0:
+            log(f"[T-BX4H-WS] Backfill {i+1}/{len(symbols)}...")
+        time.sleep(BX4H_WS_BACKFILL_STAGGER_SEC)
+    BX4H_WS_BACKFILL_DONE[0] = True
+    log(f"[T-BX4H-WS] Backfill selesai: {ok}/{len(symbols)} simbol siap, mulai koneksi WS.")
+
+    def on_open(ws):
+        for i in range(0, len(symbols), 100):
+            batch  = symbols[i:i + 100]
+            params = [f"{s.lower()}@kline_4h" for s in batch]
+            try:
+                ws.send(json.dumps({"method": "SUBSCRIBE", "params": params, "id": i + 1}))
+            except Exception as e:
+                log(f"WARN [T-BX4H-WS] subscribe batch {i}: {e}")
+            time.sleep(0.3)
+        log(f"[T-BX4H-WS] Connected & subscribe {len(symbols)} simbol kline_4h.")
+
+    def on_message(ws, message):
+        try:
+            payload = json.loads(message)
+            k = payload.get("k")
+            if k:
+                _bx4h_ws_apply_kline_msg(k)
+        except Exception as e:
+            log(f"WARN [T-BX4H-WS] parse pesan: {e}")
+
+    def on_error(ws, error):
+        log(f"WARN [T-BX4H-WS] error: {error}")
+
+    def on_close(ws, code, msg):
+        log(f"[T-BX4H-WS] closed ({code}): {msg}")
+
+    while True:
+        try:
+            app = _ws_lib.WebSocketApp(
+                "wss://stream.binance.com:9443/ws",
+                on_open=on_open, on_message=on_message,
+                on_error=on_error, on_close=on_close,
+            )
+            app.run_forever(ping_interval=180, ping_timeout=10, reconnect=5)
+        except Exception as e:
+            log(f"WARN [T-BX4H-WS] run_forever crash: {e}")
+        time.sleep(5)
+
 def compute_indicators_4h(df):
     """Hitung indikator entry 4h: Supertrend, MACD, ATR%, Vol MA, Vol24h, Stoch, BB%b, WR, CCI, OBV."""
     import pandas_ta as _pta
@@ -13886,7 +14032,7 @@ def thread1d_scan_4h():
 
         try:
             scan_total_4h += 1
-            df = get_ohlcv_4h(sym, limit=500)
+            df = get_ohlcv_4h_bx4h_ws(sym, limit=500)  # Fase 1 WS (03/11/2026) -- fallback REST otomatis, lihat REMARK di get_ohlcv_4h_bx4h_ws()
             if df is None or len(df) < 500:
                 count_blocker(scan_blockers_4h, "Data OHLCV kurang", True)
                 continue  # filter pair baru (<~83 hari listing)
@@ -13964,7 +14110,7 @@ def thread1d_scan_4h():
         _rsi_val_bx = None
         _rvol_bx = 0.0; _bb_bx = 0.0; _gap_bx = 0.0
         try:
-            _df_ai4 = get_ohlcv_4h(sym, limit=100)
+            _df_ai4 = get_ohlcv_4h_bx4h_ws(sym, limit=100)  # Fase 1 WS (03/11/2026) -- fallback REST otomatis, lihat REMARK di get_ohlcv_4h_bx4h_ws()
             if _df_ai4 is not None and len(_df_ai4) >= 30:
                 _df_ai4 = compute_indicators_4h(_df_ai4)
                 _r_ai4 = _df_ai4.iloc[-1]
@@ -34330,6 +34476,12 @@ if __name__ == '__main__':
         t4 = threading.Thread(target=run_thread1d_4h, daemon=True, name="T1d-4h")
         threads.append(t4)
         n_threads = 5
+        # 03/11/2026: feeder WebSocket kline_4h khusus brkX2-4h (Fase 1 WS migration,
+        # lihat REMARK panjang di get_ohlcv_4h_bx4h_ws()) -- thread sendiri krn run_forever()
+        # blocking selama koneksi hidup, sama seperti T-TopGainers-WS.
+        t_bx4h_ws = threading.Thread(target=run_thread_bx4h_klines_ws, daemon=True, name="T-BX4H-WS")
+        threads.append(t_bx4h_ws)
+        n_threads += 1
     if STRAT_CROSSEMA_ENABLED:
         t_cx = threading.Thread(target=run_thread_crossema, daemon=True, name="T-CrossEMA")
         threads.append(t_cx)
