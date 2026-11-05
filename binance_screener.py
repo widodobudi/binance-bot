@@ -8788,6 +8788,144 @@ def run_thread_kb12h_klines_ws() -> None:
             log(f"WARN [T-KB12H-WS] run_forever crash: {e}")
         time.sleep(5)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BBSnap-8h & RVolBreak-8h: feeder WebSocket kline_8h (Fase 2c WS migration, 05/11/2026,
+# permintaan Mas Budi tuntaskan semua strategi aktif malam ini). Sama pola persis dgn
+# blok KB12H di atas, interval beda (8h) -- 1 KONEKSI dipakai BERSAMA oleh 2 strategi
+# (BBSnap-8h/thread_bbsnap_scan('8h') & RVolBreak-8h/thread_rvolbreak8h_scan() +
+# _paper_test_scan_rvolbreak8h()), karena keduanya baca candle 8h simbol yg sama --
+# data candle TIDAK beda per-strategi, cuma syarat entry-nya yg beda. Kolom DataFrame
+# SAMA PERSIS get_ohlcv() generik (ot/vol/qav/nt/tbbav/tbqav), bukan get_ohlcv_4h().
+WS8H_BACKFILL_LIMIT           = 120  # cukup utk BBSnap-8h (120) & RVolBreak-8h (80), limit terbesar menang
+WS8H_GLOBAL_STALE_SEC         = 120
+WS8H_BACKFILL_STAGGER_SEC     = 0.6
+WS8H_BACKFILL_START_DELAY_SEC = 120  # digeser dari BX4H (60s)/KB12H (90s) biar backfill 3 fitur WS ini tidak numpuk bareng
+
+ws8h_lock = threading.Lock()
+WS8H_CLOSED: dict  = {}
+WS8H_FORMING: dict = {}
+WS8H_LAST_ANY_MSG  = [0.0]
+WS8H_BACKFILL_DONE = [False]
+
+def _ws8h_row_from_kline(k: dict) -> dict:
+    return {
+        "ot": int(k["t"]), "open": float(k["o"]), "high": float(k["h"]),
+        "low": float(k["l"]), "close": float(k["c"]), "vol": float(k["v"]),
+        "ct": int(k["T"]), "qav": float(k["q"]), "nt": int(k.get("n", 0)),
+        "tbbav": float(k.get("V", 0)), "tbqav": float(k.get("Q", 0)), "ig": k.get("B", "0"),
+    }
+
+def _ws8h_apply_kline_msg(k: dict) -> None:
+    """Terapkan 1 pesan kline_8h WS ke cache -- sama pola dgn _kb12h_ws_apply_kline_msg()."""
+    sym = k.get("s")
+    if not sym:
+        return
+    row = _ws8h_row_from_kline(k)
+    is_closed = bool(k.get("x"))
+    with ws8h_lock:
+        if is_closed:
+            df_closed = WS8H_CLOSED.get(sym)
+            if df_closed is None or len(df_closed) == 0:
+                WS8H_CLOSED[sym] = pd.DataFrame([row])
+            elif row["ot"] > int(df_closed.iloc[-1]["ot"]):
+                combined = pd.concat([df_closed, pd.DataFrame([row])], ignore_index=True)
+                if len(combined) > WS8H_BACKFILL_LIMIT:
+                    combined = combined.iloc[-WS8H_BACKFILL_LIMIT:].reset_index(drop=True)
+                WS8H_CLOSED[sym] = combined
+            WS8H_FORMING.pop(sym, None)
+        else:
+            WS8H_FORMING[sym] = row
+        WS8H_LAST_ANY_MSG[0] = time.time()
+
+def get_ohlcv_8h_ws(symbol: str, limit: int = 120):
+    """Versi 8h (KHUSUS BBSnap-8h/RVolBreak-8h, BUKAN pengganti get_ohlcv()): baca cache WS
+    kline_8h kalau backfill selesai & koneksi masih hidup, else fallback REST get_ohlcv()
+    -- perilaku lama, TIDAK berubah."""
+    if WS8H_BACKFILL_DONE[0] and (time.time() - WS8H_LAST_ANY_MSG[0]) <= WS8H_GLOBAL_STALE_SEC:
+        with ws8h_lock:
+            df_closed = WS8H_CLOSED.get(symbol)
+            forming   = WS8H_FORMING.get(symbol)
+        if df_closed is not None and len(df_closed) > 0:
+            full = pd.concat([df_closed, pd.DataFrame([forming])], ignore_index=True) if forming else df_closed
+            return full.tail(limit).reset_index(drop=True)
+    return get_ohlcv(symbol, interval="8h", limit=limit)
+
+def run_thread_ws8h_klines_ws() -> None:
+    """Thread T-WS8H-WS: backfill histori 8h (REST, SEKALI saat startup, delay
+    WS8H_BACKFILL_START_DELAY_SEC) lalu pegang 1 koneksi WebSocket kline_8h terus-menerus
+    utk semua simbol USDT -- dipakai BERSAMA BBSnap-8h & RVolBreak-8h. Sama pola persis
+    dgn run_thread_kb12h_klines_ws()."""
+    import websocket as _ws_lib
+    time.sleep(WS8H_BACKFILL_START_DELAY_SEC)
+
+    ticker  = get_ticker_24h()
+    symbols = sorted({t["symbol"] for t in (ticker or [])
+                       if t.get("symbol", "").endswith("USDT")
+                       and t["symbol"] not in SYMBOL_BLACKLIST})
+    log(f"[T-WS8H-WS] Backfill histori 8h {len(symbols)} simbol (sekali, sebelum WS connect)...")
+    ok = 0
+    for i, sym in enumerate(symbols):
+        try:
+            df = get_ohlcv(sym, interval="8h", limit=WS8H_BACKFILL_LIMIT)
+            if df is not None and len(df) > 1:
+                last_row = df.iloc[-1]
+                with ws8h_lock:
+                    WS8H_CLOSED[sym]  = df.iloc[:-1].reset_index(drop=True)
+                    WS8H_FORMING[sym] = {
+                        "ot": int(last_row["ot"]), "open": float(last_row["open"]),
+                        "high": float(last_row["high"]), "low": float(last_row["low"]),
+                        "close": float(last_row["close"]), "vol": float(last_row["vol"]),
+                        "ct": int(last_row["ct"]), "qav": float(last_row["qav"]),
+                        "nt": int(last_row["nt"]), "tbbav": float(last_row["tbbav"]),
+                        "tbqav": float(last_row["tbqav"]), "ig": last_row["ig"],
+                    }
+                ok += 1
+        except Exception as e:
+            log(f"WARN [T-WS8H-WS] backfill {sym}: {e}")
+        if (i + 1) % 50 == 0:
+            log(f"[T-WS8H-WS] Backfill {i+1}/{len(symbols)}...")
+        time.sleep(WS8H_BACKFILL_STAGGER_SEC)
+    WS8H_BACKFILL_DONE[0] = True
+    log(f"[T-WS8H-WS] Backfill selesai: {ok}/{len(symbols)} simbol siap, mulai koneksi WS.")
+
+    def on_open(ws):
+        for i in range(0, len(symbols), 100):
+            batch  = symbols[i:i + 100]
+            params = [f"{s.lower()}@kline_8h" for s in batch]
+            try:
+                ws.send(json.dumps({"method": "SUBSCRIBE", "params": params, "id": i + 1}))
+            except Exception as e:
+                log(f"WARN [T-WS8H-WS] subscribe batch {i}: {e}")
+            time.sleep(0.3)
+        log(f"[T-WS8H-WS] Connected & subscribe {len(symbols)} simbol kline_8h.")
+
+    def on_message(ws, message):
+        try:
+            payload = json.loads(message)
+            k = payload.get("k")
+            if k:
+                _ws8h_apply_kline_msg(k)
+        except Exception as e:
+            log(f"WARN [T-WS8H-WS] parse pesan: {e}")
+
+    def on_error(ws, error):
+        log(f"WARN [T-WS8H-WS] error: {error}")
+
+    def on_close(ws, code, msg):
+        log(f"[T-WS8H-WS] closed ({code}): {msg}")
+
+    while True:
+        try:
+            app = _ws_lib.WebSocketApp(
+                "wss://stream.binance.com:9443/ws",
+                on_open=on_open, on_message=on_message,
+                on_error=on_error, on_close=on_close,
+            )
+            app.run_forever(ping_interval=180, ping_timeout=10, reconnect=5)
+        except Exception as e:
+            log(f"WARN [T-WS8H-WS] run_forever crash: {e}")
+        time.sleep(5)
+
 def get_price_now(symbol: str) -> float:
     """Harga pasar Binance terkini — dipakai sbg entry_price (opsi a) & monitor."""
     r = _binance_get("/api/v3/ticker/price", params={'symbol':symbol}, timeout=10)
@@ -24279,7 +24417,7 @@ def thread_rvolbreak8h_scan() -> None:
         if is_cooldown_enabled('rvolbreak_8h') and cooldown_remaining(sym) > 0: continue
         if sizing_fail_remaining(sym) > 0: continue
         try:
-            df = get_ohlcv(sym, interval="8h", limit=80)
+            df = get_ohlcv_8h_ws(sym, limit=80)  # Fase 2c WS (05/11/2026)
             if df is None or len(df) < 50: continue
             if df['ct'].iloc[-1] >= int(time.time() * 1000):
                 df = df.iloc[:-1]
@@ -24431,7 +24569,7 @@ def _paper_test_scan_rvolbreak8h():
         if sym in paper_open_syms:
             continue
         try:
-            df = get_ohlcv(sym, interval="8h", limit=80)
+            df = get_ohlcv_8h_ws(sym, limit=80)  # Fase 2c WS (05/11/2026)
             if df is None or len(df) < 50: continue
             if df['ct'].iloc[-1] >= int(time.time() * 1000):
                 df = df.iloc[:-1]
@@ -24515,11 +24653,11 @@ def thread_bbsnap_scan(tf_label: str) -> None:
         if is_cooldown_enabled(strategy) and cooldown_remaining(sym) > 0: continue
         if sizing_fail_remaining(sym) > 0: continue
         try:
-            # Fase 2b WS (05/11/2026): BBSnap-4h numpang cache brkX2-4h (kolom close/high/low/vol/ct
-            # SAMA persis dgn get_ohlcv() generik, cuma itu yg dipakai fungsi ini -- aman dicampur).
-            # BBSnap-8h TETAP REST sampai Fase 2c (WS 8h baru) selesai.
+            # Fase 2b/2c WS (05/11/2026): BBSnap-4h numpang cache brkX2-4h, BBSnap-8h numpang
+            # cache WS8H baru (kolom close/high/low/vol/ct SAMA persis dgn get_ohlcv() generik,
+            # cuma itu yg dipakai fungsi ini -- aman dicampur).
             df = (get_ohlcv_4h_bx4h_ws(sym, limit=cfg['limit']) if tf_label == '4h'
-                  else get_ohlcv(sym, interval=cfg['interval'], limit=cfg['limit']))
+                  else get_ohlcv_8h_ws(sym, limit=cfg['limit']))
             if df is None or len(df) < 60: continue
             if df['ct'].iloc[-1] >= int(time.time() * 1000):
                 df = df.iloc[:-1]
@@ -34711,7 +34849,7 @@ if __name__ == '__main__':
     except Exception as e:
         log(f"   WARN init gating candle gagal: {e}")
 
-    n_threads = 5
+    n_threads = 6
     t1  = threading.Thread(target=run_thread1, daemon=True, name="T1-Screener")
     t2  = threading.Thread(target=run_thread2, daemon=True, name="T2-Monitor")
     t3  = threading.Thread(target=run_thread3_intrabar, daemon=True, name="T3-Intrabar")
@@ -34720,7 +34858,12 @@ if __name__ == '__main__':
     # lihat REMARK panjang di get_ohlcv_12h_kb_ws()) -- KeltnerBreak-12h tidak punya flag
     # "ENABLED" tunggal spt STRAT4H_ENABLED, jadi thread ini SELALU jalan sama seperti T1/T3.
     t_kb12h_ws = threading.Thread(target=run_thread_kb12h_klines_ws, daemon=True, name="T-KB12H-WS")
-    threads = [t1, t2, t3, t3r, t_kb12h_ws]
+    # 05/11/2026: feeder WebSocket kline_8h dipakai BERSAMA BBSnap-8h & RVolBreak-8h (Fase 2c
+    # WS migration, lihat REMARK panjang di get_ohlcv_8h_ws()) -- BBSnap-8h tidak punya flag
+    # "ENABLED" tunggal (T-BBSnap8h selalu jalan) & RVolBreak-8h paper-test juga selalu jalan,
+    # jadi thread ini SELALU jalan sama seperti T-KB12H-WS.
+    t_ws8h = threading.Thread(target=run_thread_ws8h_klines_ws, daemon=True, name="T-WS8H-WS")
+    threads = [t1, t2, t3, t3r, t_kb12h_ws, t_ws8h]
     if STRAT4H_ENABLED:
         t4 = threading.Thread(target=run_thread1d_4h, daemon=True, name="T1d-4h")
         threads.append(t4)
