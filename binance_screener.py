@@ -23979,7 +23979,7 @@ def thread_decouple_scan() -> None:
         return
 
     try:
-        btc_df = get_ohlcv_4h('BTCUSDT', limit=SQUIZED_BB_LOOKBACK + 50)
+        btc_df = get_ohlcv_4h_bx4h_ws('BTCUSDT', limit=SQUIZED_BB_LOOKBACK + 50)  # Fase 2b WS (05/11/2026) -- numpang cache brkX2-4h, fallback REST otomatis
         if btc_df is not None and len(btc_df) and btc_df['ct'].iloc[-1] >= int(time.time() * 1000):
             btc_df = btc_df.iloc[:-1]
         if btc_df is None or len(btc_df) <= DECOUPLE_LOOKBACK + 1:
@@ -24007,7 +24007,7 @@ def thread_decouple_scan() -> None:
         if is_cooldown_enabled('decouple_4h') and cooldown_remaining(sym) > 0: continue
         if sizing_fail_remaining(sym) > 0: continue
         try:
-            df = get_ohlcv_4h(sym, limit=SQUIZED_BB_LOOKBACK + 50)
+            df = get_ohlcv_4h_bx4h_ws(sym, limit=SQUIZED_BB_LOOKBACK + 50)  # Fase 2b WS (05/11/2026) -- numpang cache brkX2-4h, fallback REST otomatis
             if df is None or len(df) < SQUIZED_BB_LOOKBACK + 25: continue
             if df['ct'].iloc[-1] >= int(time.time() * 1000):
                 df = df.iloc[:-1]
@@ -24193,7 +24193,7 @@ def _paper_test_scan_decouple4h():
         log(f"WARN [PAPER-DECOUPLE4H] gagal ambil universe: {e}")
         return
     try:
-        btc_df = get_ohlcv_4h('BTCUSDT', limit=SQUIZED_BB_LOOKBACK + 50)
+        btc_df = get_ohlcv_4h_bx4h_ws('BTCUSDT', limit=SQUIZED_BB_LOOKBACK + 50)  # Fase 2b WS (05/11/2026) -- numpang cache brkX2-4h, fallback REST otomatis
         if btc_df is not None and len(btc_df) and btc_df['ct'].iloc[-1] >= int(time.time() * 1000):
             btc_df = btc_df.iloc[:-1]
         if btc_df is None or len(btc_df) <= DECOUPLE_LOOKBACK + 1:
@@ -24211,7 +24211,7 @@ def _paper_test_scan_decouple4h():
         if sym in paper_open_syms:
             continue
         try:
-            df = get_ohlcv_4h(sym, limit=SQUIZED_BB_LOOKBACK + 50)
+            df = get_ohlcv_4h_bx4h_ws(sym, limit=SQUIZED_BB_LOOKBACK + 50)  # Fase 2b WS (05/11/2026) -- numpang cache brkX2-4h, fallback REST otomatis
             if df is None or len(df) < SQUIZED_BB_LOOKBACK + 25: continue
             if df['ct'].iloc[-1] >= int(time.time() * 1000):
                 df = df.iloc[:-1]
@@ -24515,7 +24515,11 @@ def thread_bbsnap_scan(tf_label: str) -> None:
         if is_cooldown_enabled(strategy) and cooldown_remaining(sym) > 0: continue
         if sizing_fail_remaining(sym) > 0: continue
         try:
-            df = get_ohlcv(sym, interval=cfg['interval'], limit=cfg['limit'])
+            # Fase 2b WS (05/11/2026): BBSnap-4h numpang cache brkX2-4h (kolom close/high/low/vol/ct
+            # SAMA persis dgn get_ohlcv() generik, cuma itu yg dipakai fungsi ini -- aman dicampur).
+            # BBSnap-8h TETAP REST sampai Fase 2c (WS 8h baru) selesai.
+            df = (get_ohlcv_4h_bx4h_ws(sym, limit=cfg['limit']) if tf_label == '4h'
+                  else get_ohlcv(sym, interval=cfg['interval'], limit=cfg['limit']))
             if df is None or len(df) < 60: continue
             if df['ct'].iloc[-1] >= int(time.time() * 1000):
                 df = df.iloc[:-1]
@@ -24703,7 +24707,7 @@ def _paper_test_scan_bbsnap4h():
         if sym in paper_open_syms:
             continue
         try:
-            df = get_ohlcv(sym, interval=cfg['interval'], limit=cfg['limit'])
+            df = get_ohlcv_4h_bx4h_ws(sym, limit=cfg['limit'])  # Fase 2b WS (05/11/2026) -- cfg selalu '4h' di fungsi paper ini, numpang cache brkX2-4h
             if df is None or len(df) < 60: continue
             if df['ct'].iloc[-1] >= int(time.time() * 1000):
                 df = df.iloc[:-1]
@@ -24780,7 +24784,7 @@ def thread_dipbuy_universe_scan() -> None:
         try:
             # limit lebih panjang dari shadow (10) -- ATR(14) butuh histori lebih, trailing baru
             # di Tahap ini, shadow lama tidak pernah hitung ATR krn TP/SL-nya tetap.
-            df = get_ohlcv_4h(sym, limit=40)
+            df = get_ohlcv_4h_bx4h_ws(sym, limit=40)  # Fase 2b WS (05/11/2026) -- numpang cache brkX2-4h, fallback REST otomatis
             if df is None or len(df) < 20: continue
             if df['ct'].iloc[-1] >= int(time.time() * 1000):
                 df = df.iloc[:-1]
