@@ -35022,7 +35022,7 @@ if __name__ == '__main__':
     if STRAT4H_ENABLED:
         t4 = threading.Thread(target=run_thread1d_4h, daemon=True, name="T1d-4h")
         threads.append(t4)
-        n_threads = 5
+        n_threads += 1
         # 03/11/2026: feeder WebSocket kline_4h khusus brkX2-4h (Fase 1 WS migration,
         # lihat REMARK panjang di get_ohlcv_4h_bx4h_ws()) -- thread sendiri krn run_forever()
         # blocking selama koneksi hidup, sama seperti T-TopGainers-WS.
