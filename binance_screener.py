@@ -12435,18 +12435,35 @@ def thread2_monitor():
             log(f"[T2] {sym} trailing ARMED via {_arm_via} (peak profit {prof_peak:.2f}%, ATR% live {live_atrp:.2f}%, "
                 f"BB Upper live {_fmt_price(live_bb_upper) if live_bb_upper else '—'})")
             # Simpan waktu arm, ATR% live saat arm (acuan un-arm), dan stoch saat arm
+            _armed_now_ts = time.time()
             with active_deals_lock:
                 if sym in active_deals:
                     active_deals[sym]['armed_at_wib'] = now_wib().strftime('%d/%m/%Y %H:%M')
                     active_deals[sym]['armed_price']   = peak
                     active_deals[sym]['armed_prof_pct'] = prof_peak
-                    active_deals[sym]['armed_since_ts'] = time.time()
+                    active_deals[sym]['armed_since_ts'] = _armed_now_ts
                     active_deals[sym]['armed_live_atr']  = live_atrp
                     # 19/10/2026 (patch "tc4h-armdini-short-cooldown"): dicatat supaya cooldown AI
                     # close (di bawah, titik close_ai_hold_until) bisa tahu apakah arm ini lewat
                     # BB Upper arm-dini dgn cushion tipis -- lihat REMARK di titik itu.
                     active_deals[sym]['armed_via_bbupper'] = bool(_bbupper_touched and prof_peak < _cur_arm_pct)
             save_active_deals()
+            # 05/11/2026 (bug ditemukan Mas Budi -- notifikasi ARMED LSKUSDT spam tiap ~15-20 detik
+            # tanpa henti, log_oac check di bawah nunjukkin pola IDENTIK 08:50-14:40 WIB berturut2):
+            # 'd' adalah snapshot LOKAL yang diambil di AWAL iterasi loop ini, SEBELUM blok arm di
+            # atas menulis armed_since_ts/armed_live_atr ke active_deals[sym] (dict GLOBAL). Cek
+            # UN-ARM tepat di bawah ini -- SATU iterasi yang SAMA, bukan siklus berikutnya -- baca
+            # field itu dari 'd' yang masih basi. Kalau siklus SEBELUMNYA sempat un-arm (field
+            # di-pop dari active_deals[sym], lihat blok un-arm di bawah), 'd' tidak punya field itu
+            # sama sekali: _armed_since fallback ke 0 (epoch) -> _armed_min jadi raksasa -> LOLOS
+            # syarat UNARM_MIN_ARMED_MINUTES; _armed_ref_atr fallback ke 'atrp' yang lebih basi dari
+            # 'live_atrp' -> LOLOS syarat UNARM_ATR_MARGIN_PP juga. Kombinasi keduanya bikin arm yang
+            # BARU SAJA terjadi langsung di-un-arm lagi DI SIKLUS YANG SAMA, berulang selamanya --
+            # bukan cuma LSKUSDT/trend_confirm_4h, mekanisme arm/un-arm ini dipakai hampir semua
+            # strategi (lihat guard 'not _is_akum and strat != mombreak_1h' di blok un-arm). Sinkron
+            # 'd' di sini supaya cek UN-ARM di bawah pakai data yang BENAR-BENAR baru ditulis.
+            d['armed_since_ts'] = _armed_now_ts
+            d['armed_live_atr'] = live_atrp
             log_oac('ARMED', sym, d.get('strategy', 'brkX2'), {
                 'peak_profit':  f"{prof_peak:.2f}%",
                 'arm_pct':      f"{_cur_arm_pct:.1f}%",
