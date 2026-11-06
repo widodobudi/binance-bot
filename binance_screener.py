@@ -15943,6 +15943,10 @@ def run_thread_trendconfirm():
 # Kondisi: price_live >= EMA20 AND price_live >= EMA50 AND ST dir == +1
 # Output : append ke tes6.txt di folder proyek + notifikasi Telegram ringkas
 # ══════════════════════════════════════════════════════════════════════════════
+# 07/11/2026 (permintaan Mas Budi): DIMATIKAN -- observasi kalibrasi utk Hunting-4h, yg sendiri
+# sudah di-TERMINATE 03/10/2026 (HUNTING_ENABLED=False). Scan REST semua pair >=$3jt tiap 15 menit
+# cuma utk nulis tes6.txt yg tidak dibaca di mana pun -- beban Binance tanpa manfaat.
+STRAT6_ENABLED       = False
 STRAT6_SCAN_INTERVAL = 900   # scan tiap 15 menit
 STRAT6_MIN_VOL_USD   = 3_000_000
 
@@ -16676,6 +16680,7 @@ _dashboard_state = {
         "BBSnap-4h": [],
         "BBSnap-8h": [],
         "Top Gainers-4h": [],
+        "RVolTrend-1d": [],
     },
     "last_scan": {},
 }
@@ -16696,9 +16701,10 @@ _dashboard_lock = threading.Lock()
 # closed paper-test lebih cepat tercapai (permintaan Mas Budi) -- backtest ADX<25 msh
 # WR~50.7%, median POSITIF (+0.21%), konsisten train/test (47.7%/53.0% WR), tahan uji
 # leave-top-symbol-out & lintas parameter RVol lain -- cuma dikit lbh longgar drpd <20.
-# Scan tiap 4 JAM (bukan tiap 5 menit kayak strategi lain) krn sinyalnya HARIAN, jadi
-# cek sesering itu cuma buang2 request ke Binance -- relevan khusus malam ini krn bot
-# baru kena ban IP berkali-kali gara2 kebanyakan REST call.
+# Scan tiap 4 JAM (bukan tiap 5 menit kayak strategi lain) krn sinyalnya HARIAN. Candle
+# diambil dari cache WebSocket brkX2-4h (get_ohlcv_4h_bx4h_ws, pola sama TrenKonfirmasi-4h),
+# bukan REST -- scan ratusan simbol via REST sekaligus = persis pola ledakan request yg
+# bikin bot kena ban IP 418 berulang malam ini.
 RVOLTREND1D_RVOL_UP           = 2.0
 RVOLTREND1D_RVOL_DOWN         = 1.0
 RVOLTREND1D_ADX_MAX           = 25.0
@@ -16732,7 +16738,7 @@ def get_rvoltrend1d_signal(symbol: str):
     None kalau data kurang/gagal hitung."""
     try:
         import pandas_ta as _pta
-        df4h = get_ohlcv_4h(symbol, limit=500)
+        df4h = get_ohlcv_4h_bx4h_ws(symbol, limit=500)  # numpang cache WS brkX2-4h, fallback REST otomatis
         if df4h is None or len(df4h) < 200:
             return None
         if df4h['ct'].iloc[-1] >= int(time.time() * 1000):
@@ -16758,7 +16764,7 @@ def get_rvoltrend1d_signal(symbol: str):
                     and st_dir == 1 and adx_val < RVOLTREND1D_ADX_MAX)
         exit_ok = rvol_now < RVOLTREND1D_RVOL_DOWN
         return {"entry_ok": entry_ok, "exit_ok": exit_ok, "close": close_now,
-                "rvol": rvol_now, "adx": adx_val, "st_dir": st_dir}
+                "rvol": rvol_now, "adx": adx_val, "st_dir": st_dir, "bullish": bullish_now}
     except Exception as e:
         log(f"WARN [RVOLTREND1D] {symbol} gagal hitung sinyal: {e}")
         return None
@@ -16784,6 +16790,8 @@ def _paper_test_scan_rvoltrend1d():
     now_s = time.time()
     if now_s - _paper_test_last_scan.get('rvoltrend_1d', 0) < RVOLTREND1D_SCAN_INTERVAL_SEC:
         return
+    if STRAT4H_ENABLED and not BX4H_WS_BACKFILL_DONE[0]:
+        return   # tunggu cache WS terisi -- kalau scan sekarang, semua simbol jatuh ke REST sekaligus
     _paper_test_last_scan['rvoltrend_1d'] = now_s
     with _paper_test_lock:
         if len(_paper_test_state['rvoltrend_1d']['closed']) >= PAPER_TEST_TARGET:
@@ -16802,13 +16810,29 @@ def _paper_test_scan_rvoltrend1d():
         return
     with _paper_test_lock:
         paper_open_syms = {p['sym'] for p in _paper_test_state['rvoltrend_1d']['open']}
+    near_miss_rt = []   # tab "Kandidat Terdekat" -- lolos 3 dari 4 syarat
     for sym in universe:
         if sym in paper_open_syms:
             continue
         sig = get_rvoltrend1d_signal_cached(sym)
-        if sig is None or not sig['entry_ok']:
+        if sig is None:
             continue
-        _paper_test_open('rvoltrend_1d', sym, sig['close'], 0.0)
+        if sig['entry_ok']:
+            _paper_test_open('rvoltrend_1d', sym, sig['close'], 0.0)
+            continue
+        fails = []
+        if sig['rvol'] < RVOLTREND1D_RVOL_UP:
+            fails.append(f"RVol {sig['rvol']:.2f}x < {RVOLTREND1D_RVOL_UP:g}x")
+        if not sig['bullish']:
+            fails.append("candle 1D merah")
+        if sig['st_dir'] != 1:
+            fails.append("Supertrend downtrend")
+        if sig['adx'] >= RVOLTREND1D_ADX_MAX:
+            fails.append(f"ADX {sig['adx']:.1f} >= {RVOLTREND1D_ADX_MAX:g}")
+        if len(fails) == 1:
+            near_miss_rt.append((3, sym, fails, 4))
+    near_miss_rt.sort(key=lambda x: x[1])
+    update_dashboard_near_miss("RVolTrend-1d", near_miss_rt[:30])
 
 # ── PAPER TEST STATE (18/10/2026, permintaan Mas Budi -- MomentumBreak-1h & RVolBreak-8h
 # ditarik dari LIVE balik ke PAPER sampai 15 deal closed) ───────────────────────────────
@@ -35483,9 +35507,10 @@ if __name__ == '__main__':
     t_hsconfirm = threading.Thread(target=run_thread_shadow_hsconfirm, daemon=True, name="T-ShadowHSConfirm")
     threads.append(t_hsconfirm)
     n_threads += 1
-    t_s6 = threading.Thread(target=run_thread_strat6, daemon=True, name="T-Strat6")
-    threads.append(t_s6)
-    n_threads += 1
+    if STRAT6_ENABLED:
+        t_s6 = threading.Thread(target=run_thread_strat6, daemon=True, name="T-Strat6")
+        threads.append(t_s6)
+        n_threads += 1
     t_mombreak = threading.Thread(target=run_thread_mombreak, daemon=True, name="T-MomentumBreak")
     threads.append(t_mombreak)
     n_threads += 1
