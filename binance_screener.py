@@ -6288,8 +6288,85 @@ def reconcile_active_deals_wallet_qty():
         if qty_coin_saved > 0 and abs(diff) > qty_coin_saved * RECONCILE_QTY_TOL_PCT / 100:
             log(f"[WALLET-RECONCILE] {sym}: wallet {qty_total:.4f} vs bot {qty_coin_saved:.4f} "
                 f"(selisih {diff:+.4f} {asset})")
+            # Patch "auto-sync-manual-addfund" (06/11/2026, permintaan eksplisit Mas Budi): diff
+            # POSITIF (wallet > catatan bot) = kemungkinan besar beli manual di Binance, di luar
+            # jalur add-fund bot -- coba sinkronkan qty_coin & entry_price ke kondisi riil.
+            # Diff NEGATIF (wallet < catatan bot) SENGAJA TIDAK disentuh di sini (bisa macam2
+            # sebab -- bug, dijual manual, dll -- lihat REMARK lengkap di auto_sync_manual_buy()).
+            if diff > 0:
+                auto_sync_manual_buy(sym, asset, qty_total, qty_coin_saved)
     if changed:
         save_active_deals()
+
+# Patch "auto-sync-manual-addfund" (06/11/2026, permintaan eksplisit Mas Budi setelah ditemukan
+# dashboard cuma TAMPILKAN selisih wallet vs bot [qty_wallet/qty_diff di atas], tapi qty_coin &
+# entry_price (basis profit% & exit nanti) TIDAK ikut berubah kalau Mas Budi beli manual langsung
+# di Binance, di luar jalur add-fund bot -- profit%/exit size tetap pakai catatan LAMA bot, bukan
+# kondisi riil). Dipanggil dari reconcile_active_deals_wallet_qty() (tiap WALLET_RECONCILE_INTERVAL_SEC
+# = 3 menit) tiap kali wallet > qty_coin bot. BEDA dari /fix_deal_qty (endpoint manual lama, perlu
+# &force=1 utk selisih besar, dan cuma benerin qty_coin -- entry_price TIDAK ikut dihitung ulang):
+# ini (1) OTOMATIS, (2) ikut membenerkan entry_price juga, pakai get_binance_avg_cost() (myTrades,
+# rata-rata tertimbang riwayat trade ASLI, bukan asumsi harga sekarang).
+# Hanya utk SURPLUS (wallet > bot) -- defisit (wallet < bot) TETAP tidak disentuh otomatis, SAMA
+# alasan proteksi /fix_deal_qty (insiden SOLV/USDT 16/10/2026: selisih besar bisa jadi BUG, bukan
+# cuma "lupa dicatat" -- defisit lebih berisiko diasumsikan "aman" tanpa dicek manual dulu).
+# Syarat konsistensi SEBELUM dipercaya (toleransi 20%, SAMA PERSIS dgn qty_match di get_dust_report()
+# -- bukan angka baru): qty hasil hitung ulang dari myTrades (_binance_avg_pos_qty) harus kira2
+# cocok sama saldo wallet. Kalau meleset jauh (mis. myTrades kepotong limit 1000 trade, atau coin
+# masuk dari airdrop/transfer bukan trade), JANGAN dipercaya -- dilewati, qty_wallet/qty_diff tetap
+# ke-update (display saja) seperti sebelum patch ini, tapi qty_coin/entry_price TIDAK disentuh.
+def auto_sync_manual_buy(sym: str, asset: str, qty_wallet: float, qty_coin_old: float) -> bool:
+    """Return True kalau berhasil sync, False kalau dilewati (gagal ambil data / qty dari
+    myTrades tidak cocok wallet)."""
+    try:
+        avg_cost = get_binance_avg_cost(asset, ttl_seconds=60)
+    except Exception as e:
+        log(f"WARN [AUTO-SYNC-MANUAL] {sym} gagal ambil avg cost: {e}")
+        return False
+    if avg_cost <= 0:
+        return False
+    pos_qty_from_trades = float(_binance_avg_pos_qty.get(asset, 0) or 0)
+    if pos_qty_from_trades <= 0 or abs(pos_qty_from_trades - qty_wallet) / qty_wallet > 0.20:
+        log(f"WARN [AUTO-SYNC-MANUAL] {sym}: qty dari myTrades ({pos_qty_from_trades:.4f}) tidak cocok "
+            f"wallet ({qty_wallet:.4f}) -- dilewati, tidak di-auto-sync (cuma display yg ke-update)")
+        return False
+    new_target_usd = round(qty_wallet * avg_cost, 2)
+    with active_deals_lock:
+        if sym not in active_deals:
+            return False
+        old_entry = float(active_deals[sym].get('entry_price', 0) or 0)
+        old_target = float(active_deals[sym].get('target_usd', 0) or 0)
+        active_deals[sym]['qty_coin']    = qty_wallet
+        active_deals[sym]['entry_price'] = avg_cost
+        active_deals[sym]['target_usd']  = new_target_usd
+        active_deals[sym]['qty_wallet']  = qty_wallet
+        active_deals[sym]['qty_diff']    = 0.0
+        # 21/09/2026 (lihat REMARK lengkap di send_add_funds()): peak/trailing_armed WAJIB direset
+        # stlh basis entry berubah, supaya trailing tidak "armed" seketika pakai peak lama vs entry baru.
+        active_deals[sym]['peak']          = max(avg_cost, float(active_deals[sym].get('peak', 0) or 0))
+        active_deals[sym]['trailing_armed'] = False
+        for _k in ("trail_htf_grace_started_at", "armed_at_wib", "armed_price", "armed_prof_pct"):
+            active_deals[sym].pop(_k, None)
+    save_active_deals()
+    with _tp_tier_lock:
+        overrides = load_deal_overrides()
+        entry = overrides.get(sym, {})
+        tiers = entry.get('tp_tiers', [])
+        if tiers and not any(t.get('done') for t in tiers):
+            entry['tp_tiers_base_qty'] = qty_wallet
+            overrides[sym] = entry
+            save_deal_overrides(overrides)
+    log(f"[AUTO-SYNC-MANUAL] {sym}: qty {qty_coin_old:.4f}->{qty_wallet:.4f}, avg {old_entry:.6g}->{avg_cost:.6g}, "
+        f"modal ${old_target:.2f}->${new_target_usd:.2f} (terdeteksi add manual di luar bot)")
+    send_telegram(
+        f"\U0001F501 <b>Add Manual Tersinkron Otomatis</b> -- {to_display_pair(sym)}\n"
+        f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+        f"Terdeteksi beli manual di Binance (di luar jalur bot) -- qty & harga average disamakan ke riwayat trade asli (myTrades).\n"
+        f"Qty: {qty_coin_old:.4f} -> {qty_wallet:.4f} {asset}\n"
+        f"Average: {_fmt_price(old_entry)} -> {_fmt_price(avg_cost)}\n"
+        f"Modal tercatat: ${old_target:.2f} -> ${new_target_usd:.2f}",
+        parse_mode=None)
+    return True
 
 
 def _convert_leftover_to_bnb(asset: str, symbol: str, filter_info: dict):
