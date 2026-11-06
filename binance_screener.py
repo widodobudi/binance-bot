@@ -4844,6 +4844,11 @@ def estimate_deal_total_usd(deal: dict) -> float:
     1) qty_coin * entry_price saat Binance direct mode (aktual fill / posisi real)
     2) base_usd + add_usd jika data tersimpan
     3) target_usd fallback
+    PENTING (06/11/2026, lihat REMARK "reclaim-addfund-current-modal-fix" di thread2_monitor()):
+    d['target_usd'] cuma modal ASLI saat open, TIDAK PERNAH diupdate stlh add-fund apa pun --
+    ini (prioritas 1, qty_coin*entry_price) adalah SATU-SATUNYA cara yang benar dapat "modal
+    SEKARANG" (sudah termasuk add-fund), dipakai csv_log_close()/dashboard SEJAK fix insiden
+    T/USDT 14/09/2026 -- JANGAN baca d['target_usd'] langsung kalau maksudnya "modal sekarang".
     """
     try:
         qty = float(deal.get('qty_coin', 0) or 0)
@@ -6315,6 +6320,12 @@ def reconcile_active_deals_wallet_qty():
 # cocok sama saldo wallet. Kalau meleset jauh (mis. myTrades kepotong limit 1000 trade, atau coin
 # masuk dari airdrop/transfer bukan trade), JANGAN dipercaya -- dilewati, qty_wallet/qty_diff tetap
 # ke-update (display saja) seperti sebelum patch ini, tapi qty_coin/entry_price TIDAK disentuh.
+# 06/11/2026 (revisi kecil, ditemukan sambil patch "reclaim-addfund-current-modal-fix"): SENGAJA
+# TIDAK menulis ke d['target_usd'] (beda dari versi awal patch ini) -- field itu dipakai di tempat
+# lain (mis. tooltip size-cut dashboard ~baris 28940) sbg "modal ASLI saat open", bukan "modal
+# sekarang". qty_coin & entry_price yang disinkronkan di sini SUDAH cukup -- estimate_deal_total_usd()
+# otomatis baca qty_coin*entry_price (prioritas 1), jadi "modal sekarang" tetap benar di mana pun
+# tanpa perlu ikut menimpa target_usd.
 def auto_sync_manual_buy(sym: str, asset: str, qty_wallet: float, qty_coin_old: float) -> bool:
     """Return True kalau berhasil sync, False kalau dilewati (gagal ambil data / qty dari
     myTrades tidak cocok wallet)."""
@@ -6330,15 +6341,13 @@ def auto_sync_manual_buy(sym: str, asset: str, qty_wallet: float, qty_coin_old: 
         log(f"WARN [AUTO-SYNC-MANUAL] {sym}: qty dari myTrades ({pos_qty_from_trades:.4f}) tidak cocok "
             f"wallet ({qty_wallet:.4f}) -- dilewati, tidak di-auto-sync (cuma display yg ke-update)")
         return False
-    new_target_usd = round(qty_wallet * avg_cost, 2)
     with active_deals_lock:
         if sym not in active_deals:
             return False
         old_entry = float(active_deals[sym].get('entry_price', 0) or 0)
-        old_target = float(active_deals[sym].get('target_usd', 0) or 0)
+        old_total = estimate_deal_total_usd(active_deals[sym])
         active_deals[sym]['qty_coin']    = qty_wallet
         active_deals[sym]['entry_price'] = avg_cost
-        active_deals[sym]['target_usd']  = new_target_usd
         active_deals[sym]['qty_wallet']  = qty_wallet
         active_deals[sym]['qty_diff']    = 0.0
         # 21/09/2026 (lihat REMARK lengkap di send_add_funds()): peak/trailing_armed WAJIB direset
@@ -6347,6 +6356,7 @@ def auto_sync_manual_buy(sym: str, asset: str, qty_wallet: float, qty_coin_old: 
         active_deals[sym]['trailing_armed'] = False
         for _k in ("trail_htf_grace_started_at", "armed_at_wib", "armed_price", "armed_prof_pct"):
             active_deals[sym].pop(_k, None)
+        new_total = qty_wallet * avg_cost
     save_active_deals()
     with _tp_tier_lock:
         overrides = load_deal_overrides()
@@ -6357,14 +6367,14 @@ def auto_sync_manual_buy(sym: str, asset: str, qty_wallet: float, qty_coin_old: 
             overrides[sym] = entry
             save_deal_overrides(overrides)
     log(f"[AUTO-SYNC-MANUAL] {sym}: qty {qty_coin_old:.4f}->{qty_wallet:.4f}, avg {old_entry:.6g}->{avg_cost:.6g}, "
-        f"modal ${old_target:.2f}->${new_target_usd:.2f} (terdeteksi add manual di luar bot)")
+        f"modal ${old_total:.2f}->${new_total:.2f} (terdeteksi add manual di luar bot)")
     send_telegram(
         f"\U0001F501 <b>Add Manual Tersinkron Otomatis</b> -- {to_display_pair(sym)}\n"
         f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
         f"Terdeteksi beli manual di Binance (di luar jalur bot) -- qty & harga average disamakan ke riwayat trade asli (myTrades).\n"
         f"Qty: {qty_coin_old:.4f} -> {qty_wallet:.4f} {asset}\n"
         f"Average: {_fmt_price(old_entry)} -> {_fmt_price(avg_cost)}\n"
-        f"Modal tercatat: ${old_target:.2f} -> ${new_target_usd:.2f}",
+        f"Modal sekarang: ${old_total:.2f} -> ${new_total:.2f}",
         parse_mode=None)
     return True
 
@@ -12570,7 +12580,12 @@ def thread2_monitor():
                             active_deals[sym]['reclaim_addfund_count'] = _kb_add_count + 1
                             active_deals[sym]['smallstart_below_ema20'] = False
                 else:
-                    _kb_current_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('brkX2_12h_closed'))
+                    # Patch "reclaim-addfund-current-modal-fix" (06/11/2026, lihat REMARK lengkap
+                    # di estimate_deal_total_usd()): d['target_usd'] = modal ASLI saat open, TIDAK
+                    # PERNAH diupdate stlh add-fund apa pun (beda dari yg diasumsikan kode lama di
+                    # sini) -- pakai estimate_deal_total_usd() (qty_coin*entry_price aktual, SUDAH
+                    # jadi standar "modal sekarang" di seluruh file ini sejak fix T/USDT 14/09/2026).
+                    _kb_current_modal = estimate_deal_total_usd(d) or get_strategy_base_usd('brkX2_12h_closed')
                     _kb_target = SMALLSTART_FULL_TARGET_USD.get('brkX2_12h_closed', 60.0) + KB12H_RECLAIM_ADDFUND_STEP_USD * _kb_add_count
                     _kb_modal = round(max(0.0, _kb_target - _kb_current_modal), 2)
                     if _kb_modal <= 0:
@@ -12657,7 +12672,13 @@ def thread2_monitor():
                     # 17/10/2026. Lihat REMARK lengkap di SMALLSTART_FULL_TARGET_USD.
                     # 28/10/2026: target add ke-2 = target ke-1 + STEP_USD, SAMA besar step-nya dgn
                     # add ke-1 (01/11/2026: $8->$40->$72), lihat REMARK TRENDCONFIRM_RECLAIM_ADDFUND_STEP_USD.
-                    _rc_current_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('trend_confirm_4h'))
+                    # 06/11/2026 (patch "reclaim-addfund-current-modal-fix", insiden MARSCOIN/USDT:
+                    # log add-fund ke-2 bilang "modal $8 -> target $72" padahal modal SEBENARNYA
+                    # sudah $40 dari add ke-1 -- d['target_usd'] memang modal ASLI saat open, TIDAK
+                    # PERNAH diupdate stlh add-fund apa pun, lihat REMARK lengkap di
+                    # estimate_deal_total_usd()): pakai estimate_deal_total_usd() (qty_coin*entry_price
+                    # aktual) sebagai "modal sekarang", BUKAN target_usd yang basi.
+                    _rc_current_modal = estimate_deal_total_usd(d) or get_strategy_base_usd('trend_confirm_4h')
                     _rc_target = SMALLSTART_FULL_TARGET_USD.get('trend_confirm_4h', 40.0) + TRENDCONFIRM_RECLAIM_ADDFUND_STEP_USD * _rc_add_count
                     _rc_modal = round(max(0.0, _rc_target - _rc_current_modal), 2)
                     if _rc_modal <= 0:
@@ -12732,7 +12753,10 @@ def thread2_monitor():
                     # (SMALLSTART_FULL_TARGET_USD) -- trigger/syarat reclaim-nya TIDAK disentuh,
                     # tetap PERSIS sama spt yang sudah live sejak 17/10/2026. Pola identik dgn
                     # TrenKonfirmasi-4h, lihat REMARK lengkap di SMALLSTART_FULL_TARGET_USD.
-                    _dc_current_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('decouple_4h'))
+                    # 06/11/2026 (patch "reclaim-addfund-current-modal-fix", lihat REMARK lengkap
+                    # di estimate_deal_total_usd() / blok TrenKonfirmasi-4h di atas): target_usd
+                    # tidak pernah terupdate stlh add-fund -- pakai estimate_deal_total_usd().
+                    _dc_current_modal = estimate_deal_total_usd(d) or get_strategy_base_usd('decouple_4h')
                     _dc_modal = round(max(0.0, SMALLSTART_FULL_TARGET_USD.get('decouple_4h', 40.0) - _dc_current_modal), 2)
                     if _dc_modal <= 0:
                         log(f"[T2] {sym} reclaim-addfund TERPICU tapi modal (${_dc_current_modal:.0f}) sudah >= target normal -- tidak ada yg perlu ditambah")
@@ -12790,7 +12814,10 @@ def thread2_monitor():
                     # diubah dari "dobel modal awal" jadi "sampai modal normal penuh"
                     # (SMALLSTART_FULL_TARGET_USD) -- trigger/syarat reclaim-nya TIDAK disentuh.
                     # Pola identik dgn TrenKonfirmasi-4h/Decouple-4h di atas.
-                    _rv_current_modal = float(d.get('target_usd', 0) or get_strategy_base_usd('rvolbreak_8h'))
+                    # 06/11/2026 (patch "reclaim-addfund-current-modal-fix", lihat REMARK lengkap
+                    # di estimate_deal_total_usd() / blok TrenKonfirmasi-4h di atas): target_usd
+                    # tidak pernah terupdate stlh add-fund -- pakai estimate_deal_total_usd().
+                    _rv_current_modal = estimate_deal_total_usd(d) or get_strategy_base_usd('rvolbreak_8h')
                     _rv_modal = round(max(0.0, SMALLSTART_FULL_TARGET_USD.get('rvolbreak_8h', 50.0) - _rv_current_modal), 2)
                     if _rv_modal <= 0:
                         log(f"[T2] {sym} reclaim-addfund TERPICU tapi modal (${_rv_current_modal:.0f}) sudah >= target normal -- tidak ada yg perlu ditambah")
