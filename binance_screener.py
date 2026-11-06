@@ -11394,6 +11394,7 @@ def heartbeat_general_tick():
                      # RETIRED. Data mentahnya (shadow_fwdtest.json) TIDAK disentuh, tetap tersedia
                      # via /api/shadow_fwdtest_raw kalau suatu saat dibutuhkan lagi.
                      f"    {_fmt_shadow('dipbuy_bluechip', SHADOW_DIPBUY_BC_TARGET)}\n"
+                     f"    {_fmt_paper_test_progress('rvoltrend_1d')}\n"
                      # 02/11/2026 (permintaan Mas Budi, "yang sudah tidak ada dihilangkan"): 4 baris
                      # shadow di bawah ini DIHAPUS dari heartbeat -- sama pola persis spt
                      # dipbuy_universe-shadow di atas (data mentah TIDAK disentuh, tetap ada di
@@ -16880,6 +16881,20 @@ def _save_paper_test_state():
             json.dump(snap, f, indent=2, default=str)
     except Exception as e:
         log(f"WARN gagal simpan paper_test.json: {e}")
+
+def _fmt_paper_test_progress(strategy: str) -> str:
+    """1 baris progress paper-test utk heartbeat General."""
+    label = PAPER_TEST_LABELS.get(strategy, strategy)
+    with _paper_test_lock:
+        closed = list(_paper_test_state.get(strategy, {}).get('closed', []))
+        n_open = len(_paper_test_state.get(strategy, {}).get('open', []))
+    open_tag = f" | {n_open} open" if n_open else ""
+    if not closed:
+        return f"{label} (paper): #0/{PAPER_TEST_TARGET} (belum ada closed){open_tag}"
+    wins = sum(1 for c in closed if c.get('pct', 0) > 0)
+    total = sum(c.get('pct', 0) for c in closed)
+    return (f"{label} (paper): #{len(closed)}/{PAPER_TEST_TARGET} "
+            f"({wins}W/{len(closed) - wins}L, total {total:+.1f}%){open_tag}")
 
 def _paper_test_open(strategy: str, sym: str, entry_price: float, atr_pct: float):
     """25/10/2026 (patch 'paper-test-cooldown-fix', ketahuan dari review RVolBreak-8h --
