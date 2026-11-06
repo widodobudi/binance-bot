@@ -16681,6 +16681,135 @@ _dashboard_state = {
 }
 _dashboard_lock = threading.Lock()
 
+# ══════════════════════════════════════════════════════════════════════════════
+# RVolTrend-1d (07/11/2026, riset RVol lifecycle semalam + persetujuan Mas Budi):
+# strategi PAPER-TEST baru. Entry = RVol(1D, candle 1D hasil resample 6x candle 4h,
+# SAMA PERSIS metodologi backtest -- bukan pembulatan ke batas hari kalender UTC)
+# confirmed-naik (RVol>=2.0x rata2 volume 20 hari + candle bullish) + Supertrend(10,3.0)
+# Uptrend + ADX(14) < 25 (trend yg masih MUDA, belum matang -- backtest nunjukkin ini
+# jauh lebih baik drpd ADX tinggi/trend sudah established). Exit = RVol(1D) confirmed-
+# turun (<1.0x), TANPA hard-stop performa (backtest: stop-loss justru MEMPERBURUK hasil,
+# dicoba trailing/armed-trailing/floor macam2 -- semua lebih jelek drpd exit RVol-turun
+# polos) -- cuma ada pagar darurat -35% dari entry sbg jaring pengaman terakhir (bukan
+# utk perbaiki performa), permintaan eksplisit Mas Budi. ADX<25 dipakai (bukan <20 yg
+# sedikit lebih bersih di backtest: WR 52.4% median +0.61%) SENGAJA biar target 15
+# closed paper-test lebih cepat tercapai (permintaan Mas Budi) -- backtest ADX<25 msh
+# WR~50.7%, median POSITIF (+0.21%), konsisten train/test (47.7%/53.0% WR), tahan uji
+# leave-top-symbol-out & lintas parameter RVol lain -- cuma dikit lbh longgar drpd <20.
+# Scan tiap 4 JAM (bukan tiap 5 menit kayak strategi lain) krn sinyalnya HARIAN, jadi
+# cek sesering itu cuma buang2 request ke Binance -- relevan khusus malam ini krn bot
+# baru kena ban IP berkali-kali gara2 kebanyakan REST call.
+RVOLTREND1D_RVOL_UP           = 2.0
+RVOLTREND1D_RVOL_DOWN         = 1.0
+RVOLTREND1D_ADX_MAX           = 25.0
+RVOLTREND1D_RVOL_LOOKBACK     = 20
+RVOLTREND1D_SAFETY_FLOOR_PCT  = 35.0
+RVOLTREND1D_SCAN_INTERVAL_SEC = 4 * 3600
+RVOLTREND1D_SIG_CACHE_TTL_SEC = 3600
+
+_rvoltrend1d_sig_cache = {}
+_rvoltrend1d_sig_cache_lock = threading.Lock()
+
+def _rvoltrend1d_resample_to_1d(df4h: pd.DataFrame):
+    """Candle 4h -> 1D dgn grouping 6 candle berurutan (metodologi backtest persis),
+    BUKAN pembulatan ke batas hari kalender UTC."""
+    factor = 6
+    n = len(df4h) // factor
+    if n < 25:   # minimal ~25 hari utk warmup RVol(20)/ADX(14)/Supertrend(10)
+        return None
+    trimmed = df4h.iloc[len(df4h) - n * factor:].reset_index(drop=True)
+    g = trimmed.groupby(trimmed.index // factor)
+    out = pd.DataFrame({
+        "open": g["open"].first(), "high": g["high"].max(),
+        "low": g["low"].min(), "close": g["close"].last(), "vol": g["vol"].sum(),
+    }).reset_index(drop=True)
+    out["rvol"] = out["vol"] / out["vol"].rolling(RVOLTREND1D_RVOL_LOOKBACK).mean()
+    out["bullish"] = out["close"] > out["open"]
+    return out
+
+def get_rvoltrend1d_signal(symbol: str):
+    """Hitung sinyal RVolTrend-1d (entry_ok, exit_ok) dari candle 1D (resample 4h).
+    None kalau data kurang/gagal hitung."""
+    try:
+        import pandas_ta as _pta
+        df4h = get_ohlcv_4h(symbol, limit=500)
+        if df4h is None or len(df4h) < 200:
+            return None
+        if df4h['ct'].iloc[-1] >= int(time.time() * 1000):
+            df4h = df4h.iloc[:-1]   # candle 4h terakhir masih forming (belum closed), buang
+        if len(df4h) < 200:
+            return None
+        day = _rvoltrend1d_resample_to_1d(df4h)
+        if day is None or len(day) < 25:
+            return None
+        st = _pta.supertrend(day["high"], day["low"], day["close"],
+                              length=SUPERTREND_LENGTH, multiplier=SUPERTREND_MULT)
+        st_col = [c for c in st.columns if 'SUPERTd' in c]
+        st_dir = int(st[st_col[0]].iloc[-1]) if st_col and not pd.isna(st[st_col[0]].iloc[-1]) else None
+        adx_df = _pta.adx(day["high"], day["low"], day["close"], length=14)
+        adx_col = [c for c in adx_df.columns if c.startswith('ADX_')]
+        adx_val = float(adx_df[adx_col[0]].iloc[-1]) if adx_col and not pd.isna(adx_df[adx_col[0]].iloc[-1]) else None
+        rvol_now = float(day["rvol"].iloc[-1]) if not pd.isna(day["rvol"].iloc[-1]) else None
+        if rvol_now is None or st_dir is None or adx_val is None:
+            return None
+        bullish_now = bool(day["bullish"].iloc[-1])
+        close_now = float(day["close"].iloc[-1])
+        entry_ok = (rvol_now >= RVOLTREND1D_RVOL_UP and bullish_now
+                    and st_dir == 1 and adx_val < RVOLTREND1D_ADX_MAX)
+        exit_ok = rvol_now < RVOLTREND1D_RVOL_DOWN
+        return {"entry_ok": entry_ok, "exit_ok": exit_ok, "close": close_now,
+                "rvol": rvol_now, "adx": adx_val, "st_dir": st_dir}
+    except Exception as e:
+        log(f"WARN [RVOLTREND1D] {symbol} gagal hitung sinyal: {e}")
+        return None
+
+def get_rvoltrend1d_signal_cached(symbol: str):
+    """Wrapper get_rvoltrend1d_signal() dgn cache per-symbol (TTL 1 jam) -- dipakai di
+    exit-check (dipanggil tiap 60s oleh run_thread_paper_test() per posisi terbuka;
+    tanpa cache ini artinya REST klines fetch tiap 60s per posisi -- terlalu berat utk
+    sinyal yg cuma berubah 1x/hari)."""
+    now_s = time.time()
+    with _rvoltrend1d_sig_cache_lock:
+        cached = _rvoltrend1d_sig_cache.get(symbol)
+        if cached and (now_s - cached[0]) < RVOLTREND1D_SIG_CACHE_TTL_SEC:
+            return cached[1]
+    sig = get_rvoltrend1d_signal(symbol)
+    with _rvoltrend1d_sig_cache_lock:
+        _rvoltrend1d_sig_cache[symbol] = (now_s, sig)
+    return sig
+
+def _paper_test_scan_rvoltrend1d():
+    """Entry PAPER RVolTrend-1d. Lihat REMARK blok konstanta RVOLTREND1D_* di atas.
+    _paper_test_open() dipanggil, TIDAK ADA order asli."""
+    now_s = time.time()
+    if now_s - _paper_test_last_scan.get('rvoltrend_1d', 0) < RVOLTREND1D_SCAN_INTERVAL_SEC:
+        return
+    _paper_test_last_scan['rvoltrend_1d'] = now_s
+    with _paper_test_lock:
+        if len(_paper_test_state['rvoltrend_1d']['closed']) >= PAPER_TEST_TARGET:
+            return
+    try:
+        pairs = get_usdt_spot_pairs()
+        ticker = get_ticker_24h()
+        volmap = {}
+        for t in (ticker or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
+                    and p not in SYMBOL_BLACKLIST and not is_bstock_symbol(p)]
+    except Exception as e:
+        log(f"WARN [PAPER-RVOLTREND1D] gagal ambil universe: {e}")
+        return
+    with _paper_test_lock:
+        paper_open_syms = {p['sym'] for p in _paper_test_state['rvoltrend_1d']['open']}
+    for sym in universe:
+        if sym in paper_open_syms:
+            continue
+        sig = get_rvoltrend1d_signal_cached(sym)
+        if sig is None or not sig['entry_ok']:
+            continue
+        _paper_test_open('rvoltrend_1d', sym, sig['close'], 0.0)
+
 # ── PAPER TEST STATE (18/10/2026, permintaan Mas Budi -- MomentumBreak-1h & RVolBreak-8h
 # ditarik dari LIVE balik ke PAPER sampai 15 deal closed) ───────────────────────────────
 # TERISOLASI PENUH dari active_deals/send_open_long/order Binance asli manapun -- posisi
@@ -16691,7 +16820,8 @@ PAPER_TEST_TARGET = 15
 PAPER_TEST_MAX_HOLD_HOURS = 48
 PAPER_TEST_FILE = os.path.join(DATA_DIR, "paper_test.json")
 PAPER_TEST_LABELS = {"mombreak_1h": "MomentumBreak-1h", "rvolbreak_8h": "RVolBreak-8h",
-                      "bbsnap_4h": "BBSnap-4h", "decouple_4h": "Decouple-4h"}
+                      "bbsnap_4h": "BBSnap-4h", "decouple_4h": "Decouple-4h",
+                      "rvoltrend_1d": "RVolTrend-1d"}
 # 25/10/2026: BBSnap-4h ditarik ke paper juga. 26/10/2026 (permintaan Mas Budi): Decouple-4h
 # JUGA masuk paper test (bukan langsung live) -- target 15 closed sama spt RVolBreak-8h, baru
 # dianalisis bareng keduanya setelah 15-15 terkumpul apakah layak live.
@@ -16699,7 +16829,8 @@ _paper_test_lock = threading.Lock()
 _paper_test_state = {"mombreak_1h": {"open": [], "closed": []},
                       "rvolbreak_8h": {"open": [], "closed": []},
                       "bbsnap_4h": {"open": [], "closed": []},
-                      "decouple_4h": {"open": [], "closed": []}}
+                      "decouple_4h": {"open": [], "closed": []},
+                      "rvoltrend_1d": {"open": [], "closed": []}}
 
 def load_paper_test_state():
     global _paper_test_state
@@ -16807,6 +16938,19 @@ def paper_test_check_exits(strategy: str):
                 reason = f"trailing (arm {mombreak_arm_pct():.1f}%, trail {mombreak_trail_pct():.1f}% dari puncak {peak_pct:+.2f}%)"
             elif elapsed_h >= _max_hold_h:
                 reason = f"timeout {_max_hold_h:g}j"
+        elif strategy == 'rvoltrend_1d':
+            # exit = RVol(1D) confirmed-turun (backtest: lebih baik drpd hard-stop/trailing
+            # apapun -- lihat REMARK RVOLTREND1D_*), pagar darurat -35% cuma jaring pengaman
+            # terakhir, _max_hold_h (180 hari, lihat PAPER_TEST_MAX_HOLD_HOURS_BY_STRATEGY)
+            # jaring pengaman kedua (dead-man's switch), BUKAN driver performa.
+            if pct <= -RVOLTREND1D_SAFETY_FLOOR_PCT:
+                reason = f"pagar darurat -{RVOLTREND1D_SAFETY_FLOOR_PCT:.0f}% dari entry"
+            else:
+                sig = get_rvoltrend1d_signal_cached(sym)
+                if sig is not None and sig.get('exit_ok'):
+                    reason = "RVol(1D) confirmed-turun"
+            if reason is None and elapsed_h >= _max_hold_h:
+                reason = f"timeout jaring-pengaman {_max_hold_h:g}j"
         else:
             _, _, hs_pct = hard_stop_pct(pos.get('atr_pct', 3.0) or 3.0, strategy)
             if pct <= -hs_pct:
@@ -16846,7 +16990,8 @@ def run_thread_paper_test() -> None:
             _paper_test_scan_rvolbreak8h()
             _paper_test_scan_bbsnap4h()
             _paper_test_scan_decouple4h()
-            for strat in ("mombreak_1h", "rvolbreak_8h", "bbsnap_4h", "decouple_4h"):
+            _paper_test_scan_rvoltrend1d()
+            for strat in ("mombreak_1h", "rvolbreak_8h", "bbsnap_4h", "decouple_4h", "rvoltrend_1d"):
                 paper_test_check_exits(strat)
         except Exception as e:
             log(f"WARN T-PaperTest: {e}")
@@ -18286,7 +18431,10 @@ var SHADOW_LABELS = {
   // 25/10/2026: BBSnap-4h ditarik dari LIVE balik ke paper test (sama pola mombreak_1h/rvolbreak_8h).
   'bbsnap_4h': 'BBSnap-4h (paper)',
   // 26/10/2026: Decouple-4h JUGA ditarik ke paper test (target 15, sama spt RVolBreak-8h).
-  'decouple_4h': 'Decouple-4h (paper)'
+  'decouple_4h': 'Decouple-4h (paper)',
+  // 07/11/2026: RVolTrend-1d -- strategi BARU, lahir dari riset RVol lifecycle, langsung
+  // masuk paper test (belum pernah live).
+  'rvoltrend_1d': 'RVolTrend-1d (paper)'
 };
 function refreshShadowChart() {
   fetch('/api/shadow_fwdtest_status')
@@ -28440,6 +28588,8 @@ PAPER_TEST_MAX_HOLD_HOURS_BY_STRATEGY = {
     'rvolbreak_8h': RVOLBREAK_8H_MAX_HOLD_CANDLES * 8,    # 24 candle x 8h = 192j
     'decouple_4h':  DECOUPLE_4H_MAX_HOLD_CANDLES * 4,     # 20 candle x 4h = 80j
     'bbsnap_4h':    BBSNAP_4H_MAX_HOLD_CANDLES * 4,       # 30 candle x 4h = 120j
+    'rvoltrend_1d': 180 * 24,   # 180 hari -- jaring pengaman TERAKHIR saja (dead-man's switch),
+                                # bukan driver performa; exit normalnya RVol(1D) confirmed-turun
 }
 MOMBREAK_SCAN_INTERVAL          = 300   # detik (5 menit) -- 14/10/2026: dinaikkan dari 60s (bekas TF
                                          # 3m) krn TF sekarang 1 jam, scan tiap 60s jadi boros/percuma
@@ -28735,7 +28885,8 @@ def thread_mombreak_scan():
         log(f"WARN [MOMBREAK] scan error: {e}")
 
 
-_paper_test_last_scan = {"mombreak_1h": 0, "rvolbreak_8h": 0, "bbsnap_4h": 0, "decouple_4h": 0}
+_paper_test_last_scan = {"mombreak_1h": 0, "rvolbreak_8h": 0, "bbsnap_4h": 0, "decouple_4h": 0,
+                          "rvoltrend_1d": 0}
 PAPER_TEST_SCAN_INTERVAL = {"mombreak_1h": MOMBREAK_SCAN_INTERVAL, "rvolbreak_8h": 300,
                              "bbsnap_4h": BBSNAP_SCAN_INTERVAL,
                              "decouple_4h": DECOUPLE_4H_SCAN_INTERVAL}  # sama interval scan live-nya
@@ -32669,7 +32820,7 @@ def run_web_dashboard():
             # endpoint/kartu baru.
             with _paper_test_lock:
                 paper_snap = {k: {"open": list(v["open"]), "closed": list(v["closed"])} for k, v in _paper_test_state.items()}
-            for key in ("mombreak_1h", "rvolbreak_8h", "bbsnap_4h", "decouple_4h"):
+            for key in ("mombreak_1h", "rvolbreak_8h", "bbsnap_4h", "decouple_4h", "rvoltrend_1d"):
                 closed = paper_snap[key]['closed']
                 n = len(closed)
                 wins = [c for c in closed if c['pct'] > 0]
