@@ -2269,15 +2269,103 @@ def save_hold_no_sell_price():
     except Exception as e:
         log(f"WARN gagal simpan hold_no_sell_price.json: {e}")
 
-def record_hold_no_sell_price(symbol: str, entry_price: float, strategy: str):
+def record_hold_no_sell_price(symbol: str, entry_price: float, strategy: str, mark_price: float = 0.0):
+    """entry_price = cost basis (dipakai fitur lama, convert/Auto Sell Asset, JANGAN diubah
+    artinya). mark_price (patch "hold-no-sell-safety-floor", 06/11/2026, lihat REMARK lengkap
+    di HOLD_NO_SELL_SAFETY_FLOOR_PCT) = harga pantauan SAAT hold_no_sell ini dimulai -- dasar
+    pagar kedua, field BARU & opsional (0.0/tidak dikirim = sama seperti sebelum patch ini,
+    pagar kedua otomatis tidak aktif utk entry itu)."""
     with hold_no_sell_price_lock:
         hold_no_sell_price[symbol] = {"entry_price": float(entry_price), "strategy": strategy, "ts": time.time()}
+        if mark_price and float(mark_price) > 0:
+            hold_no_sell_price[symbol]["hold_mark_price"] = float(mark_price)
     save_hold_no_sell_price()
 
 def get_hold_no_sell_price(asset: str):
     """Return {'entry_price','strategy','ts'} kalau asset ini punya riwayat hold-no-sell, else None."""
     with hold_no_sell_price_lock:
         return hold_no_sell_price.get(str(asset).upper() + "USDT")
+
+
+# Patch "hold-no-sell-safety-floor" (06/11/2026, permintaan eksplisit Mas Budi setelah investigasi
+# MARSCOIN/USDT -12,96%): hold_no_sell (lihat REMARK panjang di thread2_monitor() dekat
+# "_hold_no_sell") artinya begitu hard-stop/timeout-loss kena, koin TIDAK PERNAH dijual otomatis --
+# dibiarkan di wallet tanpa proteksi apapun sampai Mas Budi sempat jual manual. Kasus MARSCOIN:
+# dibiarkan ~8 jam 39 menit, harga turun LAGI dari 0,0465 (harga pantauan saat hold_no_sell mulai)
+# ke 0,0435 -- rugi RIIL ~-18,5% begitu akhirnya terjual manual, lebih dalam dari -12,96% yang
+# tercatat di CSV/dashboard (berhenti di harga pantauan saat hold_no_sell mulai, bukan harga jual
+# sebenarnya). Prinsip "hold dulu, jangan buru-buru jual" TETAP DIPERTAHANKAN (permintaan asli Mas
+# Budi, TIDAK dibatalkan) -- ini HANYA pagar darurat paling bawah: kalau SETELAH hold_no_sell
+# dimulai harga masih terus turun >= HOLD_NO_SELL_SAFETY_FLOOR_PCT LAGI dari harga saat hold_no_sell
+# mulai (hold_mark_price, BEDA dari entry_price/cost-basis -- lihat record_hold_no_sell_price()),
+# BARU dijual otomatis (sell_to_usdt(), fungsi SAMA dipakai jalur manual/webhook). Entry hold_no_sell
+# LAMA (sebelum patch ini, tidak punya field hold_mark_price) SENGAJA DILEWATI -- tidak retroaktif,
+# supaya tidak ada yang kejual otomatis mendadak begitu patch ini deploy padahal sudah dibiarkan
+# lama dgn asumsi "tidak akan pernah dijual". Angka 5% BELUM dibacktest -- permintaan langsung Mas
+# Budi, bukan hasil sweep.
+HOLD_NO_SELL_SAFETY_FLOOR_PCT = 5.0
+HOLD_NO_SELL_SAFETY_FLOOR_SCAN_INTERVAL = 60  # detik -- cadence sama dgn ORPHAN_RECLAIM_SCAN_INTERVAL
+
+def execute_hold_no_sell_safety_floor_close(symbol: str, hns: dict) -> dict:
+    """Jual SELURUH saldo bebas asset ini (reuse sell_to_usdt(), pola sama persis
+    execute_orphan_takeprofit_close()) krn pagar kedua hold_no_sell kena, lalu hapus field
+    hold_mark_price dari hold_no_sell_price.json (selesai dipantau pagar ini -- entry_price/
+    strategy/ts dibiarkan, masih dipakai fitur Auto Sell Asset/convert lama). Return
+    {'ok','exit_price','drop_from_hold_pct','proceeds_usdt','error'}."""
+    hold_mark_price = float(hns.get('hold_mark_price', 0) or 0)
+    strategy = hns.get('strategy', '')
+    sell = sell_to_usdt(symbol)
+    if not sell.get('ok'):
+        return {"ok": False, "error": sell.get('error')}
+    exit_price = float(sell.get('price_avg', 0) or 0)
+    proceeds = float(sell.get('proceeds_usdt', 0) or 0)
+    drop_pct = ((hold_mark_price - exit_price) / hold_mark_price * 100) if exit_price > 0 and hold_mark_price > 0 else 0.0
+    with hold_no_sell_price_lock:
+        if symbol in hold_no_sell_price:
+            hold_no_sell_price[symbol].pop('hold_mark_price', None)
+    save_hold_no_sell_price()
+    send_telegram(
+        f"\U0001F6D1 <b>Pagar Darurat Hold-No-Sell</b> -- {to_display_pair(symbol)} DIJUAL OTOMATIS\n"
+        f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+        f"Strategi: {strategy} (sudah hold_no_sell, lalu turun lagi >= {HOLD_NO_SELL_SAFETY_FLOOR_PCT:g}% dari harga saat hold_no_sell mulai)\n"
+        f"Harga saat hold_no_sell mulai: {_fmt_price(hold_mark_price)} -> Harga jual sekarang: {_fmt_price(exit_price)} (turun {drop_pct:.2f}% lagi)\n"
+        f"Proceeds: ${proceeds:.2f}\n"
+        f"Catatan: prinsip \"hold dulu\" TETAP berlaku utk hold_no_sell lain -- ini cuma pagar darurat paling bawah.",
+        parse_mode=None)
+    log(f"[HOLD-SAFETY-FLOOR] {symbol} ({strategy}) dijual otomatis: {_fmt_price(hold_mark_price)} -> {_fmt_price(exit_price)} (turun {drop_pct:.2f}% lagi), proceeds ${proceeds:.2f}")
+    return {"ok": True, "exit_price": exit_price, "drop_from_hold_pct": drop_pct, "proceeds_usdt": proceeds}
+
+def run_thread_hold_no_sell_safety_floor():
+    while True:
+        try:
+            with hold_no_sell_price_lock:
+                snapshot = dict(hold_no_sell_price)
+            try:
+                _auto_sell_assets = load_auto_sell_config().get("assets", {})
+            except Exception:
+                _auto_sell_assets = {}
+            for sym, hns in snapshot.items():
+                hold_mark_price = float(hns.get('hold_mark_price', 0) or 0)
+                if hold_mark_price <= 0:
+                    continue   # entry lama (sebelum patch ini) -- tidak retroaktif, lihat REMARK di atas
+                _asset = sym.replace("USDT", "")
+                if _auto_sell_assets.get(_asset, {}).get("enabled", False):
+                    continue   # sudah ada rule Auto-Sell-Crossing manual sendiri -- jangan rebutan, sama pola run_thread_orphan_reclaim()
+                try:
+                    price_now = get_price_now(sym)
+                except Exception as e:
+                    log(f"WARN [HOLD-SAFETY-FLOOR] {sym} gagal ambil harga: {e}")
+                    continue
+                if price_now <= 0:
+                    continue
+                drop_pct = (hold_mark_price - price_now) / hold_mark_price * 100
+                if drop_pct >= HOLD_NO_SELL_SAFETY_FLOOR_PCT:
+                    _result = execute_hold_no_sell_safety_floor_close(sym, hns)
+                    if not _result.get('ok'):
+                        log(f"WARN [HOLD-SAFETY-FLOOR] {sym} gagal jual: {_result.get('error')}")
+        except Exception as e:
+            log(f"WARN [HOLD-SAFETY-FLOOR] loop error: {e}")
+        time.sleep(HOLD_NO_SELL_SAFETY_FLOOR_SCAN_INTERVAL)
 
 
 # ── CANCELLED-DEAL PRICE (19/10/2026, permintaan Mas Budi -- "orphaned coin reclaim") ──
@@ -7735,7 +7823,17 @@ def execute_add_fund_from_asset(source_asset: str, target_symbol: str, pct: floa
 def handle_reclaim_addfund_shortfall(symbol: str, strategy: str, deal: dict, target_usd: float,
                                       add_index: int, max_adds: int) -> dict:
     """Return dict {"ok", "mode" ("full"/"converted"/"partial"/"skipped"), "amount", "price",
-    "error", "ai_reasoning"}. Lihat REMARK lengkap di atas definisi ini utk urutan & kebijakan."""
+    "error", "ai_reasoning"}. Lihat REMARK lengkap di atas definisi ini utk urutan & kebijakan.
+    Patch "reclaim-addfund-trend-gate" (06/11/2026, lihat REMARK lengkap di
+    RECLAIM_ADDFUND_TREND_GATE_ADX_MAX): cek tren dulu SEBELUM langkah manapun di bawah --
+    dulu cuma dicek kalau kebetulan masuk cabang AI shortfall (saldo kurang), sekarang berlaku
+    walau saldo cukup juga (persis kasus add-fund ke-1 MARSCOIN)."""
+    _trend_ok, _trend_note = reclaim_addfund_trend_gate_ok(symbol)
+    if not _trend_ok:
+        log(f"[T2] {symbol} reclaim-addfund: TERPICU tapi ditahan trend-gate -- {_trend_note}")
+        return {"ok": False, "mode": "skipped", "amount": 0.0,
+                "error": f"Trend gate: {_trend_note}", "ai_reasoning": _trend_note}
+
     free_usdt_now, _ = get_usdt_balance()
     if free_usdt_now >= target_usd:
         result = execute_add_fund(symbol, target_usd)
@@ -8103,6 +8201,49 @@ def get_live_ema20_reclaim_signal(symbol: str, strategy: str, n_candles: int, rv
     with _live_ema20_reclaim_cache_lock:
         _live_ema20_reclaim_cache[cache_key] = (now, signal)
     return signal
+
+# Patch "reclaim-addfund-trend-gate" (06/11/2026, insiden MARSCOIN/USDT -12,96% trend_confirm_4h
+# 04/11/2026): add-fund ke-1 LOLOS tanpa cek tren sama sekali (saldo cukup -> langsung eksekusi di
+# handle_reclaim_addfund_shortfall() step 1), padahal 74 detik kemudian add-fund ke-2 DITOLAK AI
+# (ai_decide_reclaim_addfund_shortfall()) persis karena "4H downtrend (ST=Downtrend) dengan ADX
+# lemah (22,7)" -- kondisi itu baca candle 4h TERTUTUP yang SAMA (candle 4h belum mungkin ganti
+# dalam <2 menit), jadi hampir pasti SUDAH ada juga 74 detik sebelumnya, cuma tidak pernah dicek
+# krn saldo kebetulan cukup. Permintaan eksplisit Mas Budi: cek tren yang SAMA (ST Downtrend +
+# ADX lemah) sekarang WAJIB sebelum SEMUA add-fund dieksekusi (handle_reclaim_addfund_shortfall(),
+# dipakai trend_confirm_4h & KeltnerBreak-12h smallstart-reclaim), bukan cuma pas saldo kurang.
+# ADX<25 dipilih krn itu ambang umum "tren lemah/sideways" (cocok dgn AI bilang 22,7 "lemah") --
+# BELUM dibacktest terpisah (beda dari parameter lain di blok reclaim-addfund yang semua sudah
+# dibacktest), murni mencocokkan kondisi yang sudah terbukti dipakai AI di kasus nyata ini.
+# Fail-OPEN (anggap tren OK) kalau indikator gagal diambil -- SENGAJA beda dari
+# ai_decide_reclaim_addfund_shortfall() yang fail-closed (itu khusus kasus saldo sudah mepet;
+# di sini gagal fetch indikator bukan alasan menahan add-fund yang bahkan belum tentu underwater).
+RECLAIM_ADDFUND_TREND_GATE_ADX_MAX = 25.0
+
+def reclaim_addfund_trend_gate_ok(symbol: str) -> tuple:
+    """True = boleh lanjut add-fund. False = ST(4h) Downtrend + ADX(4h) < RECLAIM_ADDFUND_TREND_GATE_ADX_MAX
+    -- kondisi SAMA yang bikin AI TUNDA add-fund ke-2 MARSCOIN. Return (ok: bool, note: str),
+    note kosong kalau ok=True."""
+    try:
+        import pandas_ta as _pta
+        df4 = get_ohlcv_4h(symbol, limit=60)
+        if df4 is None or len(df4) < 20:
+            return True, ""
+        closed4 = df4.iloc[:-1]  # candle 4h TERTUTUP terakhir, sama pola get_live_ema20_reclaim_signal()
+        if len(closed4) < 15:
+            return True, ""
+        st = _pta.supertrend(closed4['high'], closed4['low'], closed4['close'],
+                              length=SUPERTREND_LENGTH, multiplier=SUPERTREND_MULT)
+        st_col = [c for c in st.columns if 'SUPERTd' in c]
+        st_dir = int(st[st_col[0]].iloc[-1]) if st_col and not pd.isna(st[st_col[0]].iloc[-1]) else None
+        adx_df = _pta.adx(closed4['high'], closed4['low'], closed4['close'], length=14)
+        adx_col = [c for c in adx_df.columns if c.startswith('ADX_')]
+        adx_val = float(adx_df[adx_col[0]].iloc[-1]) if adx_col and not pd.isna(adx_df[adx_col[0]].iloc[-1]) else None
+        if st_dir == -1 and adx_val is not None and adx_val < RECLAIM_ADDFUND_TREND_GATE_ADX_MAX:
+            return False, f"4H downtrend (ST=Downtrend) dengan ADX lemah ({adx_val:.1f}) -- sinyal reclaim belum terkonfirmasi kuat"
+        return True, ""
+    except Exception as e:
+        log(f"WARN [T2] reclaim-addfund trend-gate {symbol} gagal cek: {e}")
+        return True, ""
 
 # ── Patch "smallstart-reclaim-addfund" (25/10/2026) ──────────────────────────────────────
 # Permintaan Mas Budi setelah investigasi ERA/ALT (KeltnerBreak-12h Ekstrem, rugi dalam):
@@ -13470,7 +13611,7 @@ def thread2_monitor():
                 if strat == 'akum_entry_a' and d.get('akum2'): record_akum2_close(sym, prof_from_entry)
                 if _hold_no_sell:
                     record_hold_no_sell_closed(sym)
-                    record_hold_no_sell_price(sym, d.get('entry_price', 0) or 0, strat)
+                    record_hold_no_sell_price(sym, d.get('entry_price', 0) or 0, strat, mark_price=price)
 
                 # progress forward-test PER STRATEGI
                 if strat == 'reversal':
@@ -35112,6 +35253,13 @@ if __name__ == '__main__':
     # satu dari 3 strategi gap-cap.
     t_orphan_reclaim = threading.Thread(target=run_thread_orphan_reclaim, daemon=True, name="T-OrphanReclaim")
     threads.append(t_orphan_reclaim)
+    n_threads += 1
+    # 06/11/2026 (patch "hold-no-sell-safety-floor"): lihat REMARK lengkap di
+    # HOLD_NO_SELL_SAFETY_FLOOR_PCT -- selalu jalan (tidak digembok ENABLED flag), isinya cuma
+    # efektif kalau ada entry hold_no_sell_price BARU (punya field hold_mark_price) yang turun
+    # lagi >= 5% dari harga saat hold_no_sell mulai.
+    t_hold_safety_floor = threading.Thread(target=run_thread_hold_no_sell_safety_floor, daemon=True, name="T-HoldSafetyFloor")
+    threads.append(t_hold_safety_floor)
     n_threads += 1
 
     for t in threads: t.start()
