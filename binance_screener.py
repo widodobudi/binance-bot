@@ -11705,6 +11705,89 @@ def _hb_since_lines(since_dt) -> list:
         lines.append("• Binance: aman, tidak ada ban")
     return lines
 
+# Patch "heartbeat-closing-speed-line" (07/11/2026, permintaan Mas Budi): tiap strategi di blok LIVE & PERCOBAAN dapat SATU baris
+# tambahan "⚡ kecepatan closing profit · kapan terakhir · koin terakhir" -- angka SAMA dgn kolom TOTAL%/CLOSING/Terakhir profit di tabel
+# Performa dashboard (closing PROFIT POSITIF saja). Harus muat SATU baris di Telegram (~45-50 karakter), jadi teksnya sengaja pendek.
+_HB_UNIT_SHORT = {'hari': 'D', 'minggu': 'W', 'bulan': 'M'}
+
+def _hb_num(x: float, nd: int = 2) -> str:
+    """Angka dgn koma desimal ala Indonesia; '5,10' -> '5,1', '7,00' -> '7'."""
+    s = f"{x:.{nd}f}"
+    if '.' in s:
+        s = s.rstrip('0').rstrip('.')
+    return s.replace('.', ',')
+
+def _hb_interval_text(days: float) -> str:
+    """Interval rata2 antar closing profit -- format SAMA dgn formatInterval() di dashboard: < 1 hari -> jam (j), selebihnya hari (D), 1 desimal."""
+    if days is None:
+        return '?'
+    if days < 1:
+        return f"{_hb_num(days * 24, 1)}j"
+    return f"{_hb_num(days, 1)}D"
+
+def _hb_age_text(since: datetime) -> str:
+    """'7j lalu' dst. since = waktu WIB naive."""
+    secs = max(0, (now_wib() - since).total_seconds())
+    if secs < 3600:
+        return f"{int(secs // 60)}m lalu"
+    if secs < 86400:
+        return f"{int(secs // 3600)}j lalu"
+    return f"{int(secs // 86400)}D lalu"   # sama dgn timeAgoWib() di dashboard (m / jam / D)
+
+def _hb_speed_stats_from_wins(wins: list) -> dict:
+    """Utk strategi PERCOBAAN (state di memori/JSON, bukan CSV): wins = [(waktu_WIB_naive, simbol)] closing PROFIT POSITIF.
+    Hasilnya berbentuk sama dgn satu entri strategy_recent_close_stats() supaya dirender oleh fungsi yg sama."""
+    if not wins:
+        return None
+    now = now_wib()
+    out = {'rate': 0.0, 'rate_unit': None, 'interval_days': None}
+    for w, unit, days_per_unit in STRATEGY_CLOSE_FREQ_TIERS:
+        n = sum(1 for t, _ in wins if t >= now - timedelta(days=w))
+        if n > 0:
+            out['rate'] = round(n / (w / days_per_unit), 2)
+            out['rate_unit'] = unit
+            out['interval_days'] = round(w / n, 3)
+            break
+    last_t, last_sym = max(wins, key=lambda x: x[0])
+    out['last_win_close_wib'] = last_t.strftime('%Y-%m-%d %H:%M:%S')
+    out['last_win_symbol'] = last_sym
+    return out
+
+def _hb_closed_wins(closed: list) -> list:
+    """Dari list closed strategi percobaan -> [(waktu_WIB_naive, simbol)] utk closing pct > 0. Toleran thd nama field yg beda antar tracker."""
+    wins = []
+    for c in closed or []:
+        try:
+            if float(c.get('pct', 0) or 0) <= 0:
+                continue
+            ts = c.get('closed_ts')
+            if ts:
+                t = now_wib() - timedelta(seconds=max(0.0, time.time() - float(ts)))
+            else:
+                raw = c.get('closed_wib') or c.get('closed_at') or c.get('t_close')
+                t = datetime.strptime(str(raw)[:19], '%Y-%m-%d %H:%M:%S')
+            wins.append((t, c.get('symbol') or c.get('sym') or '?'))
+        except Exception:
+            continue
+    return wins
+
+def _hb_speed_line(st) -> str:
+    """Satu baris ringkas: '⚡ 4,71/D (1x/5,1j) · 7j lalu · RAY/USDT'. st = dict statistik (lihat strategy_recent_close_stats) atau None."""
+    if not st or not st.get('last_win_close_wib'):
+        return "⚡ belum ada closing profit"
+    try:
+        last_t = datetime.strptime(st['last_win_close_wib'], '%Y-%m-%d %H:%M:%S')
+        sym = st.get('last_win_symbol') or '?'
+        sym_txt = to_display_pair(sym) if sym != '?' else '?'
+        if st.get('rate_unit'):
+            speed = f"{_hb_num(st['rate'])}/{_HB_UNIT_SHORT.get(st['rate_unit'], '?')} (1x/{_hb_interval_text(st.get('interval_days'))})"
+        else:
+            speed = "jarang"
+        return f"⚡ {speed} · {_hb_age_text(last_t)} · {sym_txt}"
+    except Exception as e:
+        log(f"WARN [HB-GEN] gagal bentuk baris kecepatan closing: {e}")
+        return "⚡ data kecepatan closing tidak terbaca"
+
 def _hb_paper_lines() -> list:
     lines = []
     with _paper_test_lock:
@@ -11714,6 +11797,7 @@ def _hb_paper_lines() -> list:
     if rt_open:
         s += f" · {rt_open} jalan"
     lines.append(s)
+    lines.append(_hb_speed_line(_hb_speed_stats_from_wins(_hb_closed_wins(rt_closed))))
     try:
         with _shadow_fwdtest_lock:
             sdata = _load_shadow_fwdtest()
@@ -11727,6 +11811,7 @@ def _hb_paper_lines() -> list:
         if n_open:
             s += f" · {n_open} jalan"
         lines.append(s)
+        lines.append(_hb_speed_line(_hb_speed_stats_from_wins(_hb_closed_wins(closed))))
     try:
         hs = _load_shadow_hsconfirm()
     except Exception:
@@ -11738,6 +11823,7 @@ def _hb_paper_lines() -> list:
         if n_open:
             s += f" · {n_open} jalan"
         lines.append(s)
+        lines.append(_hb_speed_line(_hb_speed_stats_from_wins(_hb_closed_wins(closed))))
     return lines
 
 def heartbeat_general_tick():
@@ -11955,8 +12041,15 @@ def heartbeat_general_tick():
         since_dt = heartbeat_gen_window_start
         since_title = f"🔔 Sejak notif terakhir ({heartbeat_gen_window_start.strftime('%H:%M')})"
     live_lines = []
-    for p, label in ((prog_trend, 'TrenKonfirmasi-4h'), (prog_brk, 'KeltnerBreak-12h'), (prog_4h, 'brkX2-4h')):
+    try:
+        _hb_recent = strategy_recent_close_stats()
+    except Exception as e:
+        log(f"WARN [HB-GEN] gagal baca statistik kecepatan closing: {e}")
+        _hb_recent = {}
+    for p, label, skey in ((prog_trend, 'TrenKonfirmasi-4h', 'trend_confirm_4h'), (prog_brk, 'KeltnerBreak-12h', 'brkX2_12h_closed'),
+                           (prog_4h, 'brkX2-4h', 'brkX2_4h')):
         live_lines.append(f"• {label}  {_hb_detail(p['n'], p['win'], p['total_pct']) if p else _hb_detail(0, 0, 0.0)}")
+        live_lines.append(_hb_speed_line(_hb_recent.get(skey)))
     msg_parts = [
         f"💓 Bot HIDUP — {now_dt.strftime('%H:%M')} WIB\nNotif berikutnya {next_hb} WIB",
         since_title + "\n" + "\n".join(_hb_since_lines(since_dt)),
