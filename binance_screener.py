@@ -1488,6 +1488,8 @@ _binance_ban_lock = threading.Lock()
 _binance_ban_until_ms = 0.0
 _binance_ban_last_logged = 0.0  # throttle log biar tidak banjir tiap siklus selama ban aktif
 
+_binance_events = []   # (ts, '418'|'429') -- dibaca heartbeat General ("sejak notif terakhir")
+
 def _binance_register_ban(msg: str):
     """Baca 'banned until <ms>' dari pesan error 418 Binance, simpan ke state global supaya
     SEMUA pemanggil (data API maupun trading API) berhenti menembak sampai waktu itu lewat."""
@@ -1497,6 +1499,9 @@ def _binance_register_ban(msg: str):
     should_log = False
     with _binance_ban_lock:
         if until_ms > _binance_ban_until_ms:
+            if _binance_ban_until_ms < time.time() * 1000:
+                _binance_events.append((time.time(), '418'))
+                del _binance_events[:-200]
             _binance_ban_until_ms = until_ms
         if (time.time() - _binance_ban_last_logged) > 30:
             _binance_ban_last_logged = time.time()
@@ -1530,6 +1535,8 @@ def _binance_register_rate_limit(resp, endpoint: str):
     global _binance_ban_until_ms
     with _binance_ban_lock:
         _binance_ban_until_ms = max(_binance_ban_until_ms, time.time() * 1000 + pause * 1000)
+        _binance_events.append((time.time(), '429'))
+        del _binance_events[:-200]
     log(f"WARN [Binance] HTTP 429 di {endpoint} -- SEMUA request Binance direm {pause}s "
         f"(Retry-After), supaya tidak naik jadi ban 418")
 
@@ -11376,6 +11383,105 @@ def heartbeat_crossema_tick():
 heartbeat_gen_last_sent:    float = 0.0
 heartbeat_gen_window_start        = None
 
+# Patch "heartbeat-general-readable" (07/11/2026, permintaan Mas Budi -- notif "susah dibaca,
+# mesti lama baru paham"). Format lama: "Progress (gabungan)" yg TIDAK memuat TrenKonfirmasi-4h
+# tapi memuat 4 strategi yg sudah mati, nama kode campur nama tampilan, singkatan W/L/#/krn,
+# catatan review statis tiap 2 jam, "total %" = jumlah persen per deal (bukan untung uang).
+# Format baru (disetujui Mas Budi): 3 blok -- apa yg BERUBAH sejak notif terakhir, LIVE, PERCOBAAN.
+# Catatan review hard-stop TC4h & jual-sebagian->Earn cuma ikut di notif pertama tiap hari.
+HB_STRAT_LABEL = {
+    'brkX2': 'KeltnerBreak-12h', 'brkX2_closed': 'KeltnerBreak-12h', 'brkX2_intrabar': 'KeltnerBreak-12h',
+    'brkX2_12h_closed': 'KeltnerBreak-12h', 'brkX2_4h': 'brkX2-4h', 'trend_confirm_4h': 'TrenKonfirmasi-4h',
+    'reversal': 'Reversal-8h', 'brkX2_crossema': 'CrossEMA-4h', 'hunting_4h': 'Hunting-4h',
+    'akum_entry_a': 'Akumulasi-4h A', 'akum_entry_b': 'Akumulasi-4h B', 'mombreak_1h': 'MomentumBreak-1h',
+    'decouple_4h': 'Decouple-4h', 'rvolbreak_8h': 'RVolBreak-8h', 'dipbuy_universe': 'Dip-Buy Universe',
+    'bbsnap_4h': 'BBSnap-4h', 'bbsnap_8h': 'BBSnap-8h', 'topgainers_4h': 'Top Gainers-4h',
+}
+_hb_daily_notes_date = [None]
+
+def _hb_win_line(n: int, win: int) -> str:
+    return f"{n} deal · menang {round(win / n * 100)}%" if n else "belum ada deal selesai"
+
+def _hb_since_lines(since_dt) -> list:
+    """Baris blok 'sejak notif terakhir': deal LIVE tutup/buka sejak since_dt + status Binance."""
+    since_str = since_dt.strftime('%Y-%m-%d %H:%M:%S')
+    closed_lines, n_opened = [], 0
+    try:
+        with trades_csv_lock:
+            with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                rows = list(csv.DictReader(f))
+        for r in rows:
+            label = HB_STRAT_LABEL.get(r.get('strategy') or 'brkX2', r.get('strategy') or '?')
+            if (r.get('open_time_wib') or '').strip() >= since_str:
+                n_opened += 1
+            ct = (r.get('close_time_wib') or '').strip()
+            if r.get('status') == 'CLOSED' and ct >= since_str:
+                try:
+                    pct = f"{float(r.get('profit_pct') or 0):+.1f}%".replace('.', ',')
+                except (TypeError, ValueError):
+                    pct = "?"
+                closed_lines.append(f"• Tutup: {label} {r.get('symbol', '?')} {pct}")
+    except Exception as e:
+        log(f"WARN [HB-GEN] gagal baca CSV utk blok 'sejak notif terakhir': {e}")
+    lines = closed_lines[-5:]
+    if len(closed_lines) > 5:
+        lines.insert(0, f"• {len(closed_lines)} deal tutup (5 terakhir):")
+    if n_opened:
+        lines.append(f"• {n_opened} deal baru dibuka")
+    if not closed_lines and not n_opened:
+        lines.append("• Tidak ada deal LIVE yang buka/tutup")
+    since_ts = time.time() - (now_wib() - since_dt).total_seconds()   # since_dt naive WIB, server UTC
+    with _binance_ban_lock:
+        ev = [t for ts, t in _binance_events if ts >= since_ts]
+    n418, n429 = ev.count('418'), ev.count('429')
+    if n418 or n429:
+        parts = ([f"kena ban {n418}x"] if n418 else []) + ([f"direm 429 {n429}x"] if n429 else [])
+        lines.append("• Binance: " + ", ".join(parts))
+    else:
+        lines.append("• Binance: aman, tidak ada ban")
+    return lines
+
+def _hb_paper_lines() -> list:
+    lines = []
+    with _paper_test_lock:
+        rt = _paper_test_state.get('rvoltrend_1d', {"open": [], "closed": []})
+        rt_closed, rt_open = list(rt['closed']), len(rt['open'])
+    rt_win = sum(1 for c in rt_closed if c.get('pct', 0) > 0)
+    s = f"• RVolTrend-1d  {len(rt_closed)} dari {PAPER_TEST_TARGET} selesai"
+    if rt_closed:
+        s += f" · menang {rt_win}"
+    if rt_open:
+        s += f" · {rt_open} jalan"
+    lines.append(s)
+    try:
+        with _shadow_fwdtest_lock:
+            sdata = _load_shadow_fwdtest()
+    except Exception:
+        sdata = {}
+    for key, label, target in (('conf3_stochrsibb', 'Conf3 StochRSI', SHADOW_CONF3_TARGET),
+                               ('dipbuy_bluechip', 'Dip-Buy Bluechip', SHADOW_DIPBUY_BC_TARGET)):
+        closed = sdata.get(key, {}).get('closed', [])
+        n_open = len(sdata.get(key, {}).get('open', []))
+        if not closed and not n_open:
+            lines.append(f"• {label}  0 dari {target} · belum ada sinyal")
+            continue
+        s = f"• {label}  {len(closed)} dari {target} · menang {sum(1 for c in closed if c.get('pct', 0) > 0)}"
+        if n_open:
+            s += f" · {n_open} jalan"
+        lines.append(s)
+    try:
+        hs = _load_shadow_hsconfirm()
+    except Exception:
+        hs = {}
+    for strat, label in (('trend_confirm_4h', 'TrenKonf'), ('brkX2', 'Keltner')):
+        closed = hs.get(strat, {}).get('closed', [])
+        n_open = len(hs.get(strat, {}).get('open', []))
+        s = f"• Jeda-konfirmasi {label}  {_hb_win_line(len(closed), sum(1 for c in closed if c.get('pct', 0) > 0))}"
+        if n_open:
+            s += f" · {n_open} jalan"
+        lines.append(s)
+    return lines
+
 def heartbeat_general_tick():
     """Heartbeat General — dikirim paling akhir, berisi semua strategi + progress gabungan."""
     global heartbeat_gen_last_sent, heartbeat_gen_window_start
@@ -11580,12 +11686,33 @@ def heartbeat_general_tick():
     except: pass
     near_section = ("\n---\nKandidat terdekat:\n" + "\n".join(near_lines)) if near_lines else ""
 
-    if HEARTBEAT_GENERAL_ENABLED: send_telegram(
-        f"{header}\n"
-        f"---\n"
-        f"{prog_line}\n\n"
-        f"Bot HIDUP & terus memantau."
-    )
+    # Format baru (patch "heartbeat-general-readable", lihat REMARK di HB_STRAT_LABEL).
+    # prog_line/slot_line/near_section lama TIDAK dikirim lagi -- variabelnya dibiarkan
+    # (masih dipakai blok milestone brkX2-4h di bawah & gampang dikembalikan kalau perlu).
+    next_hb = next_scheduled_heartbeat_wib().strftime('%H:%M')
+    if first_time:
+        since_dt = now_dt - timedelta(hours=2)
+        since_title = "🔔 2 jam terakhir (bot baru nyala/restart)"
+    else:
+        since_dt = heartbeat_gen_window_start
+        since_title = f"🔔 Sejak notif terakhir ({heartbeat_gen_window_start.strftime('%H:%M')})"
+    live_lines = []
+    for p, label in ((prog_trend, 'TrenKonfirmasi-4h'), (prog_brk, 'KeltnerBreak-12h'), (prog_4h, 'brkX2-4h')):
+        n = p['n'] if p else 0
+        live_lines.append(f"• {label}  {_hb_win_line(n, p['win'] if p else 0)}")
+    msg_parts = [
+        f"💓 Bot HIDUP — {now_dt.strftime('%H:%M')} WIB\nNotif berikutnya {next_hb} WIB",
+        since_title + "\n" + "\n".join(_hb_since_lines(since_dt)),
+        "🟢 LIVE (uang asli) — sejak awal\n" + "\n".join(live_lines),
+        "🧪 PERCOBAAN (bukan uang asli)\n" + "\n".join(_hb_paper_lines()),
+    ]
+    today_str = now_dt.strftime('%Y-%m-%d')
+    if _hb_daily_notes_date[0] != today_str:
+        _hb_daily_notes_date[0] = today_str
+        msg_parts.append("📝 Catatan harian\n"
+                         f"• Review hard-stop TrenKonfirmasi: {tc_hardstop_progress_line()}\n"
+                         f"• Jual-sebagian ke Earn (KeltnerBreak): {earn_partial_progress_line()}")
+    if HEARTBEAT_GENERAL_ENABLED: send_telegram("\n\n".join(msg_parts), parse_mode=None)
     log(f"[HB-GEN] Heartbeat General terkirim")
 
     # ── Milestone reminder: analisis waktu terbaik deal ──────────────────────
