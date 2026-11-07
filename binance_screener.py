@@ -5240,6 +5240,16 @@ def rule_watch_tick():
             send_telegram(f"📊 Rule-watch {label}: {len(done)} kejadian sudah tutup (hasil akhir rata-rata "
                           f"{avg_out:+.2f}%/deal). Waktunya ditinjau -- bilang ke Claude \"review rule-watch\".",
                           parse_mode=None)
+            # 07/11/2026 (permintaan Mas Budi): kabar review JUGA lewat email, bukan cuma Telegram.
+            detail = "\n".join(
+                f"- {to_display_pair(d['symbol'])} ({d['strategy']}), dibuka {d['opened_at']}: hasil akhir "
+                f"{d['outcome_pct']:+.2f}%" + (f", saat Supertrend berbalik {d['r2']['pct']:+.2f}% ({d['r2']['at']})"
+                                               if rule == "r2" else f", {d.get('r3_detail', '')}")
+                for d in done)
+            send_email_open_long(f"Rule-watch {rule.upper()}: {len(done)} kejadian siap ditinjau",
+                                 f"Rule-watch {label}\n\n{len(done)} kejadian sudah tutup, hasil akhir rata-rata "
+                                 f"{avg_out:+.2f}%/deal.\nBilang ke Claude \"review rule-watch\" untuk ditinjau.\n\n"
+                                 f"Daftar kejadian:\n{detail}\n")
     if changed:
         with _rule_watch_lock:
             cur = _rule_watch_load()
