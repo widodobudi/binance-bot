@@ -1513,6 +1513,76 @@ def _binance_still_banned() -> float:
     remaining = until - time.time() * 1000
     return remaining / 1000 if remaining > 0 else 0.0
 
+# Patch "binance-429-global-brake" (07/11/2026, permintaan Mas Budi, riset ban 06-07/11):
+# dokumentasi resmi Binance: "HTTP 418 ... when an IP has been auto-banned for continuing to
+# send requests after receiving 429 codes". Sebelumnya 429 cuma bikin SATU request itu tidur
+# 10s lalu coba lagi (data API) / langsung raise (trading API) -- ~20 thread lain tetap nembak,
+# persis syarat ban 418. Sekarang 429 = SEMUA request (data & trading) berhenti selama
+# Retry-After (detik, dikirim Binance di header 429), pakai state ban yg sama.
+BINANCE_429_DEFAULT_PAUSE_SEC = 60
+
+def _binance_register_rate_limit(resp, endpoint: str):
+    try:
+        pause = int(float(resp.headers.get("Retry-After", BINANCE_429_DEFAULT_PAUSE_SEC)))
+    except Exception:
+        pause = BINANCE_429_DEFAULT_PAUSE_SEC
+    pause = max(pause, 1)
+    global _binance_ban_until_ms
+    with _binance_ban_lock:
+        _binance_ban_until_ms = max(_binance_ban_until_ms, time.time() * 1000 + pause * 1000)
+    log(f"WARN [Binance] HTTP 429 di {endpoint} -- SEMUA request Binance direm {pause}s "
+        f"(Retry-After), supaya tidak naik jadi ban 418")
+
+# Patch "binance-used-weight-guard" (07/11/2026, sama paket dgn di atas): tiap jawaban Binance
+# membawa header X-MBX-USED-WEIGHT-1M (bobot terpakai IP ini di menit berjalan). Request DATA
+# (_binance_get) berhenti sampai menit berikutnya kalau sudah >= BINANCE_WEIGHT_SOFT_PCT dari
+# jatah -- SEBELUM Binance sempat kirim 429. Request TRADING (order/jual) SENGAJA tidak ikut
+# direm di sini (sisa jatah cukup, jangan sampai exit tertunda) -- trading cuma berhenti kalau
+# 429/418 betulan. Jatah dibaca dari exchangeInfo rateLimits (get_usdt_spot_pairs), default 6000
+# (contoh di dokumentasi resmi). Puncak per jendela dicatat ke log tiap
+# BINANCE_WEIGHT_LOG_INTERVAL_SEC -- supaya angka pemakaian bot akhirnya terukur, bukan tebakan.
+BINANCE_WEIGHT_SOFT_PCT = 0.80
+BINANCE_WEIGHT_LOG_INTERVAL_SEC = 300
+_binance_weight_limit_1m = 6000
+_binance_weight_lock = threading.Lock()
+_binance_data_soft_pause_until = 0.0
+_binance_weight_peak = {"data": 0, "trading": 0}
+_binance_weight_last_log = [0.0]
+
+def _binance_note_used_weight(resp, source: str):
+    global _binance_data_soft_pause_until
+    raw = resp.headers.get("X-MBX-USED-WEIGHT-1M") or resp.headers.get("X-MBX-USED-WEIGHT-1m")
+    if raw is None:
+        return
+    try:
+        used = int(raw)
+    except Exception:
+        return
+    now = time.time()
+    peak_line = None
+    with _binance_weight_lock:
+        if used > _binance_weight_peak.get(source, 0):
+            _binance_weight_peak[source] = used
+        limit = _binance_weight_limit_1m
+        if source == "data" and used >= BINANCE_WEIGHT_SOFT_PCT * limit and now >= _binance_data_soft_pause_until:
+            _binance_data_soft_pause_until = (int(now // 60) + 1) * 60 + 1
+            log(f"WARN [Binance] bobot terpakai {used}/{limit} (>= {BINANCE_WEIGHT_SOFT_PCT:.0%}) -- "
+                f"request DATA direm s/d menit berikutnya (~{_binance_data_soft_pause_until - now:.0f}s)")
+        if now - _binance_weight_last_log[0] >= BINANCE_WEIGHT_LOG_INTERVAL_SEC:
+            _binance_weight_last_log[0] = now
+            peak_line = (f"[Binance-WEIGHT] puncak {BINANCE_WEIGHT_LOG_INTERVAL_SEC // 60} menit terakhir: "
+                         f"data={_binance_weight_peak['data']} trading={_binance_weight_peak['trading']} "
+                         f"(jatah {limit}/menit)")
+            _binance_weight_peak["data"] = 0
+            _binance_weight_peak["trading"] = 0
+    if peak_line:
+        log(peak_line)
+
+def _binance_data_soft_paused() -> float:
+    with _binance_weight_lock:
+        remaining = _binance_data_soft_pause_until - time.time()
+    return remaining if remaining > 0 else 0.0
+
 # Patch "binance-global-rate-gate" (01/11/2026, permintaan eksplisit Mas Budi -- ban Binance
 # yang berulang-ulang jam demi jam, "GALI" akar penyebabnya): _binance_still_banned() di atas
 # SUDAH mencegah nembak SELAMA ban aktif (baik) -- tapi begitu ban HABIS, 15+ thread (T1/T2/T3/
@@ -1534,12 +1604,12 @@ def _binance_still_banned() -> float:
 # _binance_format_qty(), lihat REMARK masing2): BUKTI LANGSUNG dari log -- 22:29:35 WIB kena
 # HTTP 429 di /api/v3/klines, 10 DETIK kemudian (22:29:45) langsung kena HTTP 418 ban baru
 # (~88 menit, lebih panjang dari ban sebelumnya -- khas pola Binance menghukum pelanggaran
-# berulang). Jadi 0.1s (~10 request/detik, ~600/menit) TERBUKTI masih kurang ketat --
-# kemungkinan karena banyak panggilan /api/v3/klines di bot ini pakai parameter `limit` yg
-# bobotnya > 1 (skema resmi Binance: limit<=100 bobot 1, 100-500 bobot 2, 500-1000 bobot 5,
-# >1000 bobot 10) -- rata-rata bobot per request kemungkinan besar > 1, bukan cuma soal jumlah
-# request. Diperketat 0.1 -> 0.3 (~3,3 request/detik, ~200/menit) -- jauh di bawah limit resmi
-# 1200 bobot/menit walau rata2 bobot per request sampai 5-6x. Konsekuensi yg disadari: scan
+# berulang). Jadi 0.1s (~10 request/detik, ~600/menit) TERBUKTI masih kurang ketat.
+# KOREKSI 07/11/2026 (dicek langsung ke dokumentasi resmi Binance): bobot /api/v3/klines itu
+# RATA 2 berapa pun `limit`-nya (BUKAN bertingkat 1/2/5/10 spt ditulis di sini sebelumnya);
+# yg mahal justru /api/v3/ticker/24hr tanpa symbol (80) & exchangeInfo (20) -- keduanya
+# sekarang di-cache, lihat get_ticker_24h()/get_usdt_spot_pairs(). Jatah contoh di dokumentasi
+# 6000 bobot/menit per IP (bukan 1200). Diperketat 0.1 -> 0.3 (~3,3 request/detik). Konsekuensi yg disadari: scan
 # semua strategi jadi SEDIKIT lebih lambat (nunggu giliran lebih lama) -- trade-off yg diterima
 # demi berhenti dari siklus ban berulang. PERLU DIPANTAU lagi setelah deploy ini.
 BINANCE_MIN_REQUEST_INTERVAL_SEC = 0.3
@@ -1566,12 +1636,15 @@ def _binance_get(endpoint: str, params: dict = None, timeout: int = 15):
     ATAU sedang dalam masa ban aktif (lihat _binance_register_ban di atas)."""
     if _binance_still_banned() > 0:
         return None  # jangan nembak sama sekali selama ban aktif -- mencegah ban makin panjang
+    if _binance_data_soft_paused() > 0:
+        return None  # bobot menit ini sudah dekat jatah -- lihat REMARK binance-used-weight-guard
     url = f"{BASE}{endpoint}"
     delay = _RETRY_DELAY
     for attempt in range(1, _RETRY_COUNT + 1):
         try:
             _binance_rate_gate()
             r = session.get(url, params=params, timeout=timeout)
+            _binance_note_used_weight(r, "data")
             if r.status_code == 418:
                 try:
                     _binance_register_ban(r.json().get("msg", ""))
@@ -1579,11 +1652,9 @@ def _binance_get(endpoint: str, params: dict = None, timeout: int = 15):
                     _binance_register_ban("")
                 return None
             if r.status_code == 429:
-                # Rate limited: tunggu extra sebelum retry
-                log(f"WARN [Binance] HTTP 429 rate limit di {endpoint} (attempt {attempt})"
-                    f" — tunggu {_RATE_LIMIT_SLEEP}s")
-                time.sleep(_RATE_LIMIT_SLEEP)
-                continue
+                # rem global, JANGAN retry -- lihat REMARK binance-429-global-brake
+                _binance_register_rate_limit(r, endpoint)
+                return None
             if r.status_code >= 500:
                 log(f"WARN [Binance] HTTP {r.status_code} server error di {endpoint} (attempt {attempt})")
                 if attempt < _RETRY_COUNT:
@@ -5249,7 +5320,7 @@ def _binance_trading_request(method: str, path: str, params: dict, api_key: str 
     if banned_for > 0:
         # 28/10/2026: lihat REMARK _binance_register_ban() -- jangan nembak sama sekali selama
         # ban IP aktif (ban ini dishare dgn _binance_get, bisa saja ter-trigger dari sana).
-        raise RuntimeError(f"Binance API sedang IP-banned, sisa ~{banned_for:.0f}s -- request dilewati")
+        raise RuntimeError(f"Binance API sedang IP-banned/direm (418 atau 429), sisa ~{banned_for:.0f}s -- request dilewati")
     api_key    = api_key or os.environ.get("BINANCE_TRADING_KEY", "")
     api_secret = api_secret or os.environ.get("BINANCE_TRADING_SECRET", "")
     if not api_key or not api_secret:
@@ -5263,9 +5334,12 @@ def _binance_trading_request(method: str, path: str, params: dict, api_key: str 
     headers = {"X-MBX-APIKEY": api_key}
     _binance_rate_gate()
     resp    = session.request(method, url, headers=headers, timeout=10)
+    _binance_note_used_weight(resp, "trading")
     data    = resp.json()
     if resp.status_code == 418:
         _binance_register_ban(data.get("msg", ""))
+    if resp.status_code == 429:
+        _binance_register_rate_limit(resp, path)
     if resp.status_code != 200:
         raise RuntimeError(f"Binance API {resp.status_code}: {data}")
     return data
@@ -8818,11 +8892,41 @@ def send_start_trailing(symbol: str, strategy: str = 'brkX2') -> bool:
         "delay_seconds":COMMAS_DELAY_SEC,"pair":to_commas_pair(symbol)}, "start_trailing")
 
 # ===================== DATA =====================
+# Patch "binance-shared-ticker-exchangeinfo-cache" (07/11/2026, permintaan Mas Budi): dua fungsi
+# ini dipanggil di ~78 tempat (hampir tiap scan tiap strategi, masing2 ambil sendiri) padahal
+# datanya identik -- /api/v3/ticker/24hr tanpa symbol = bobot 80, exchangeInfo = bobot 20
+# (dokumentasi resmi Binance, dicek 07/11/2026). Sekarang diambil sekali lalu dipakai bersama:
+# ticker 60 detik (cuma dipakai saring volume 24 jam), exchangeInfo 15 menit (daftar pair jarang
+# berubah). Gagal ambil TIDAK di-cache. Lock dipegang selama fetch -> thread yg datang barengan
+# nunggu hasil yg sama, bukan nembak dobel.
+TICKER_24H_CACHE_TTL_SEC  = 60
+USDT_PAIRS_CACHE_TTL_SEC  = 900
+_ticker_24h_cache = {"ts": 0.0, "data": None}
+_ticker_24h_cache_lock = threading.Lock()
+_usdt_pairs_cache = {"ts": 0.0, "data": None}
+_usdt_pairs_cache_lock = threading.Lock()
+
 def get_usdt_spot_pairs():
+    with _usdt_pairs_cache_lock:
+        if _usdt_pairs_cache["data"] and time.time() - _usdt_pairs_cache["ts"] < USDT_PAIRS_CACHE_TTL_SEC:
+            return list(_usdt_pairs_cache["data"])
+        out = _fetch_usdt_spot_pairs()
+        if out:
+            _usdt_pairs_cache["data"] = list(out)
+            _usdt_pairs_cache["ts"] = time.time()
+        return out
+
+def _fetch_usdt_spot_pairs():
+    global _binance_weight_limit_1m
     r = _binance_get("/api/v3/exchangeInfo", timeout=30)
     if r is None: return []
     try:
         info = r.json()
+        for rl in info.get('rateLimits', []):
+            if rl.get('rateLimitType') == 'REQUEST_WEIGHT' and rl.get('interval') == 'MINUTE' \
+                    and int(rl.get('intervalNum', 0)) == 1 and int(rl.get('limit', 0)) > 0:
+                with _binance_weight_lock:
+                    _binance_weight_limit_1m = int(rl['limit'])
         out=[]
         for s in info.get('symbols',[]):
             if s.get('quoteAsset')!='USDT': continue
@@ -8854,12 +8958,20 @@ def get_usdt_spot_pairs():
         log(f"WARN gagal parse exchangeInfo: {e}"); return []
 
 def get_ticker_24h():
-    r = _binance_get("/api/v3/ticker/24hr", timeout=30)
-    if r is None: return []
-    try:
-        return r.json()
-    except Exception as e:
-        log(f"WARN gagal parse ticker24h: {e}"); return []
+    with _ticker_24h_cache_lock:
+        if _ticker_24h_cache["data"] and time.time() - _ticker_24h_cache["ts"] < TICKER_24H_CACHE_TTL_SEC:
+            return list(_ticker_24h_cache["data"])
+        r = _binance_get("/api/v3/ticker/24hr", timeout=30)
+        if r is None: return []
+        try:
+            data = r.json()
+        except Exception as e:
+            log(f"WARN gagal parse ticker24h: {e}"); return []
+        if isinstance(data, list) and data:
+            _ticker_24h_cache["data"] = data
+            _ticker_24h_cache["ts"] = time.time()
+            return list(data)
+        return data if isinstance(data, list) else []
 
 def get_ohlcv(symbol: str, interval=TIMEFRAME, limit=120):
     r = _binance_get("/api/v3/klines",
