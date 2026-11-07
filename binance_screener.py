@@ -8152,6 +8152,8 @@ def process_addfund_conditional(slot_end_ms: int):
         for o in pending:
             if o.get("last_slot_ms") == slot_end_ms:
                 continue
+            if slot_end_ms <= float(o.get("created_ts", 0)) * 1000:
+                continue   # batas 30 menit SEBELUM antrean dibuat -- tidak dihitung
             o["last_slot_ms"] = slot_end_ms
             with active_deals_lock:
                 deal_alive = o["target_symbol"] in active_deals
@@ -8200,7 +8202,9 @@ def process_addfund_conditional(slot_end_ms: int):
         save_addfund_conditional(orders)
 
 def run_thread_addfund_conditional():
-    last_done = 0
+    # Mulai dari batas 30 menit BERIKUTNYA -- batas yg sudah lewat saat bot (re)start TIDAK diproses:
+    # data yg tersedia saat itu sudah data "sekarang", bukan data di batas itu (beda dgn backtest).
+    last_done = int(time.time() // ADDFUND_COND_SLOT_SEC) * ADDFUND_COND_SLOT_SEC
     while True:
         try:
             now = time.time()
