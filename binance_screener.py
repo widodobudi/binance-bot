@@ -5103,6 +5103,149 @@ def add_to_active_deals(symbol: str, data: dict):
         _shadow_hsconfirm_spawn(symbol, enriched)
     except Exception as e:
         log(f"WARN [SHADOW-HSCONFIRM] gagal spawn {symbol}: {e}")
+    try:
+        rule_watch_on_open(symbol, enriched)
+    except Exception as e:
+        log(f"WARN [RULE-WATCH] gagal catat open {symbol}: {e}")
+
+# ── Patch "rule-watch-log-only" (07/11/2026, keputusan Mas Budi stlh kasus SUPER/USDT) ──────────
+# CATAT SAJA, TIDAK mengubah perilaku bot. Backtest 297 deal (07/11/2026, scratchpad
+# super_rules_bt/) belum cukup utk memasang 2 aturan ini sbg rem:
+#  R3 (saringan entry): saat open TrenKonfirmasi-4h/KeltnerBreak-12h, candle 4h tutup terakhir =
+#     histogram MACD positif tapi memendek DAN lonjakan volume (RVol >= RULE_WATCH_R3_RVOL_MIN).
+#     Backtest: 7 deal, -1,01%/deal (kebanyakan dari 1000CAT) -- terlalu tipis.
+#  R2 (keluar lebih awal): Supertrend 4h berbalik dari naik ke turun saat deal sedang rugi.
+#     Backtest: cuma 4/297 deal, CLOSE vs CANCEL belum jelas mana lebih baik.
+# Tiap kejadian dicatat ke RULE_WATCH_FILE + log [RULE-WATCH], hasil akhir deal ditempel saat
+# deal tutup. Telegram SEKALI per aturan begitu RULE_WATCH_REVIEW_TARGET kejadian sudah tutup
+# -> bilang ke Claude "review rule-watch" utk ditinjau ulang (R1/syarat volume-MACD add fund
+# TIDAK dicatat -- backtest menunjukkan arah yg salah).
+RULE_WATCH_FILE = os.path.join(DATA_DIR, "rule_watch.json")
+RULE_WATCH_STRATEGIES = {'trend_confirm_4h', 'brkX2_12h_closed', 'brkX2', 'brkX2_closed', 'brkX2_intrabar'}
+RULE_WATCH_R3_RVOL_MIN = 3.0
+RULE_WATCH_REVIEW_TARGET = 20
+_rule_watch_lock = threading.Lock()
+
+def _rule_watch_load() -> dict:
+    try:
+        if os.path.exists(RULE_WATCH_FILE):
+            with open(RULE_WATCH_FILE, encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        log(f"WARN [RULE-WATCH] load: {e}")
+    return {"deals": {}, "notified": {}}
+
+def _rule_watch_save(st: dict):
+    try:
+        with open(RULE_WATCH_FILE, 'w', encoding='utf-8') as f:
+            json.dump(st, f, indent=1)
+    except Exception as e:
+        log(f"WARN [RULE-WATCH] save: {e}")
+
+def _rule_watch_ind(symbol: str):
+    """Indikator 4h di candle TUTUP terakhir: (st_dir, hist, hist_prev, rvol, close) atau None."""
+    import pandas_ta as _pta
+    df = get_ohlcv_4h_bx4h_ws(symbol, limit=300)
+    if df is None or len(df) < 60:
+        return None
+    df = df[df['ct'] < int(time.time() * 1000)].reset_index(drop=True)
+    if len(df) < 60:
+        return None
+    st = _pta.supertrend(df['high'], df['low'], df['close'], length=SUPERTREND_LENGTH, multiplier=SUPERTREND_MULT)
+    st_col = [c for c in st.columns if 'SUPERTd' in c]
+    st_dir = int(st[st_col[0]].iloc[-1]) if st_col and not pd.isna(st[st_col[0]].iloc[-1]) else None
+    close = df['close'].astype(float)
+    macd = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
+    hist = (macd - macd.ewm(span=9, adjust=False).mean()).values
+    vol = df['vol'].astype(float)
+    rvol = float(vol.iloc[-1] / vol.rolling(20).mean().iloc[-1])
+    return st_dir, float(hist[-1]), float(hist[-2]), rvol, float(close.iloc[-1])
+
+def rule_watch_on_open(symbol: str, deal: dict):
+    if deal.get('strategy') not in RULE_WATCH_STRATEGIES:
+        return
+    ind = _rule_watch_ind(symbol)
+    if ind is None:
+        return
+    st_dir, h, hp, rv, _c = ind
+    r3 = h > 0 and h < hp and rv >= RULE_WATCH_R3_RVOL_MIN
+    key = f"{symbol}|{deal.get('opened_at')}"
+    with _rule_watch_lock:
+        st = _rule_watch_load()
+        st["deals"][key] = {"symbol": symbol, "strategy": deal.get('strategy'), "opened_at": deal.get('opened_at'),
+                            "entry_price": deal.get('entry_price'), "st_up_seen": st_dir == 1,
+                            "r3": r3, "r3_detail": f"MACD hist {h:.6g} (sblm {hp:.6g}), RVol {rv:.2f}",
+                            "r2": None, "outcome_pct": None}
+        _rule_watch_save(st)
+    if r3:
+        log(f"[RULE-WATCH] R3 {symbol} ({deal.get('strategy')}): dibuka saat MACD 4h memendek di lonjakan "
+            f"volume (hist {h:.6g} < {hp:.6g}, RVol {rv:.2f}) -- dicatat saja, deal TETAP dibuka")
+
+def _rule_watch_find_outcome(symbol: str, opened_at: str):
+    disp = to_display_pair(symbol)
+    try:
+        with trades_csv_lock:
+            with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                rows = list(csv.DictReader(f))
+    except Exception:
+        return None
+    cand = [r for r in rows if r.get('status') == 'CLOSED' and r.get('symbol') in (disp, symbol)
+            and (r.get('close_time_wib') or '') >= (opened_at or '')]
+    if not cand:
+        return None
+    try:
+        return float(cand[-1].get('profit_pct') or 0)
+    except (TypeError, ValueError):
+        return None
+
+def rule_watch_tick():
+    """Dipanggil tiap batas 30 menit (loop T-AddFundCond). Cek R2 utk deal yg masih jalan, tempel
+    hasil akhir utk deal yg sudah tutup, kirim Telegram review sekali per aturan."""
+    with _rule_watch_lock:
+        st = _rule_watch_load()
+    changed = False
+    for key, d in st["deals"].items():
+        if d.get("outcome_pct") is not None:
+            continue
+        sym = d["symbol"]
+        with active_deals_lock:
+            live = active_deals.get(sym)
+            alive = bool(live) and live.get('opened_at') == d.get('opened_at')
+            avg = float((live or {}).get('entry_price') or d.get('entry_price') or 0)
+        if alive:
+            if d.get("r2"):
+                continue
+            ind = _rule_watch_ind(sym)
+            if ind is None:
+                continue
+            st_dir, _h, _hp, _rv, c = ind
+            if st_dir == 1 and not d.get("st_up_seen"):
+                d["st_up_seen"] = True; changed = True
+            elif st_dir == -1 and d.get("st_up_seen") and avg > 0 and c < avg:
+                pct = (c / avg - 1) * 100
+                d["r2"] = {"at": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "close": c, "pct": round(pct, 2)}
+                changed = True
+                log(f"[RULE-WATCH] R2 {sym}: Supertrend 4h berbalik turun saat rugi ({pct:+.2f}%) -- "
+                    f"dicatat saja, deal TETAP jalan")
+        else:
+            out = _rule_watch_find_outcome(sym, d.get("opened_at"))
+            if out is not None:
+                d["outcome_pct"] = out; changed = True
+    for rule, label in (("r3", "R3 saringan entry (MACD memendek + lonjakan volume)"),
+                        ("r2", "R2 keluar lebih awal (Supertrend 4h berbalik saat rugi)")):
+        done = [d for d in st["deals"].values() if d.get(rule) and d.get("outcome_pct") is not None]
+        if len(done) >= RULE_WATCH_REVIEW_TARGET and not st["notified"].get(rule):
+            st["notified"][rule] = True; changed = True
+            avg_out = sum(d["outcome_pct"] for d in done) / len(done)
+            send_telegram(f"📊 Rule-watch {label}: {len(done)} kejadian sudah tutup (hasil akhir rata-rata "
+                          f"{avg_out:+.2f}%/deal). Waktunya ditinjau -- bilang ke Claude \"review rule-watch\".",
+                          parse_mode=None)
+    if changed:
+        with _rule_watch_lock:
+            cur = _rule_watch_load()
+            cur["deals"].update(st["deals"])
+            cur["notified"].update(st["notified"])
+            _rule_watch_save(cur)
 
 def remove_from_active_deals(symbol: str):
     with active_deals_lock:
@@ -8212,6 +8355,10 @@ def run_thread_addfund_conditional():
             if slot_end > last_done and now - slot_end >= ADDFUND_COND_CHECK_DELAY_SEC:
                 last_done = slot_end
                 process_addfund_conditional(slot_end * 1000)
+                try:
+                    rule_watch_tick()   # patch "rule-watch-log-only" -- cuma catat, numpang jadwal 30 menit ini
+                except Exception as e:
+                    log(f"WARN [RULE-WATCH] tick: {e}")
         except Exception as e:
             log(f"WARN [ADDFUND-COND] loop error: {e}")
         time.sleep(15)
