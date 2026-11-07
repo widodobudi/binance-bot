@@ -11582,8 +11582,16 @@ HB_STRAT_LABEL = {
 }
 _hb_daily_notes_date = [None]
 
-def _hb_win_line(n: int, win: int) -> str:
-    return f"{n} deal · menang {round(win / n * 100)}%" if n else "belum ada deal selesai"
+def _hb_detail(n: int, win: int, total_pct: float, target: int = None) -> str:
+    """'#10/20 (1W/9L, -42.8%)' -- format lama yg diminta Mas Budi tetap ada (07/11/2026)."""
+    head = f"#{n}/{target}" if target else f"#{n}"
+    if not n:
+        return f"{head} (belum ada)"
+    return f"{head} ({win}W/{n - win}L, {total_pct:+.1f}%)"
+
+def _hb_closed_detail(closed: list, target: int = None) -> str:
+    return _hb_detail(len(closed), sum(1 for c in closed if c.get('pct', 0) > 0),
+                      sum(float(c.get('pct', 0) or 0) for c in closed), target)
 
 def _hb_since_lines(since_dt) -> list:
     """Baris blok 'sejak notif terakhir': deal LIVE tutup/buka sejak since_dt + status Binance."""
@@ -11600,7 +11608,7 @@ def _hb_since_lines(since_dt) -> list:
             ct = (r.get('close_time_wib') or '').strip()
             if r.get('status') == 'CLOSED' and ct >= since_str:
                 try:
-                    pct = f"{float(r.get('profit_pct') or 0):+.1f}%".replace('.', ',')
+                    pct = f"{float(r.get('profit_pct') or 0):+.1f}%"
                 except (TypeError, ValueError):
                     pct = "?"
                 closed_lines.append(f"• Tutup: {label} {r.get('symbol', '?')} {pct}")
@@ -11629,10 +11637,7 @@ def _hb_paper_lines() -> list:
     with _paper_test_lock:
         rt = _paper_test_state.get('rvoltrend_1d', {"open": [], "closed": []})
         rt_closed, rt_open = list(rt['closed']), len(rt['open'])
-    rt_win = sum(1 for c in rt_closed if c.get('pct', 0) > 0)
-    s = f"• RVolTrend-1d  {len(rt_closed)} dari {PAPER_TEST_TARGET} selesai"
-    if rt_closed:
-        s += f" · menang {rt_win}"
+    s = f"• RVolTrend-1d  {_hb_closed_detail(rt_closed, PAPER_TEST_TARGET)}"
     if rt_open:
         s += f" · {rt_open} jalan"
     lines.append(s)
@@ -11645,10 +11650,7 @@ def _hb_paper_lines() -> list:
                                ('dipbuy_bluechip', 'Dip-Buy Bluechip', SHADOW_DIPBUY_BC_TARGET)):
         closed = sdata.get(key, {}).get('closed', [])
         n_open = len(sdata.get(key, {}).get('open', []))
-        if not closed and not n_open:
-            lines.append(f"• {label}  0 dari {target} · belum ada sinyal")
-            continue
-        s = f"• {label}  {len(closed)} dari {target} · menang {sum(1 for c in closed if c.get('pct', 0) > 0)}"
+        s = f"• {label}  {_hb_closed_detail(closed, target)}"
         if n_open:
             s += f" · {n_open} jalan"
         lines.append(s)
@@ -11659,7 +11661,7 @@ def _hb_paper_lines() -> list:
     for strat, label in (('trend_confirm_4h', 'TrenKonf'), ('brkX2', 'Keltner')):
         closed = hs.get(strat, {}).get('closed', [])
         n_open = len(hs.get(strat, {}).get('open', []))
-        s = f"• Jeda-konfirmasi {label}  {_hb_win_line(len(closed), sum(1 for c in closed if c.get('pct', 0) > 0))}"
+        s = f"• Jeda-konfirmasi {label}  {_hb_closed_detail(closed)}"
         if n_open:
             s += f" · {n_open} jalan"
         lines.append(s)
@@ -11881,8 +11883,7 @@ def heartbeat_general_tick():
         since_title = f"🔔 Sejak notif terakhir ({heartbeat_gen_window_start.strftime('%H:%M')})"
     live_lines = []
     for p, label in ((prog_trend, 'TrenKonfirmasi-4h'), (prog_brk, 'KeltnerBreak-12h'), (prog_4h, 'brkX2-4h')):
-        n = p['n'] if p else 0
-        live_lines.append(f"• {label}  {_hb_win_line(n, p['win'] if p else 0)}")
+        live_lines.append(f"• {label}  {_hb_detail(p['n'], p['win'], p['total_pct']) if p else _hb_detail(0, 0, 0.0)}")
     msg_parts = [
         f"💓 Bot HIDUP — {now_dt.strftime('%H:%M')} WIB\nNotif berikutnya {next_hb} WIB",
         since_title + "\n" + "\n".join(_hb_since_lines(since_dt)),
