@@ -11819,7 +11819,7 @@ def _hb_paper_lines() -> list:
     for strat, label in (('trend_confirm_4h', 'TrenKonf'), ('brkX2', 'Keltner')):
         closed = hs.get(strat, {}).get('closed', [])
         n_open = len(hs.get(strat, {}).get('open', []))
-        s = f"• Jeda-konfirmasi {label}  {_hb_closed_detail(closed)}"
+        s = f"• Jeda {label} {_hb_closed_detail(closed)}"   # 07/11/2026: dipendekkan (dulu "Jeda-konfirmasi X  ..." ~56 kar, terpotong jadi 2 baris di Telegram)
         if n_open:
             s += f" · {n_open} jalan"
         lines.append(s)
