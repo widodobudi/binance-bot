@@ -5070,7 +5070,8 @@ def add_to_active_deals(symbol: str, data: dict):
             log(f"   [TP-RESET] {symbol} target TP lama dibersihkan (deal baru dibuka)")
     except Exception as e:
         log(f"WARN [TP-RESET] {symbol} gagal bersihkan override TP lama: {e}")
-    enriched = {**data, 'opened_at': now_wib().strftime('%Y-%m-%d %H:%M:%S')}
+    enriched = {**data, 'opened_at': now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+                'opened_wall_ts': time.time()}   # 08/11/2026: used by KB12h early watch
     # Patch "size-cut-tooltip" (17/10/2026): tempel alasan size-cut (kalau ada) dari buffer
     # yang diisi open_deal_with_sizing() -- lihat REMARK _pending_size_cut_reason di atas.
     _scr = _pending_size_cut_reason.pop(symbol, None)
@@ -9276,6 +9277,13 @@ def ekstrem_supertrend_size_mult(symbol: str, strategy: str, atr_pct: float | No
     AI yang menilai case-by-case drpd blokir keras, dengan syarat info ke AI harus lengkap.
     Fail-safe AI gagal/tidak tersedia: TETAP CUT (ekstrem_mult normal, bukan FULL) -- sisi
     konservatif yang sama dgn mekanisme BTC lain di fungsi ini."""
+    # 08/11/2026 patch 'kb12h-exit-fix' (2): KB12h Ekstrem + Supertrend 1D down -> BLOCK.
+    # Fail-open (data error = allow), same direction as the other KB12h entry gates.
+    if (strategy in KB12H_STRATS and KB12H_EKSTREM_ST1D_BLOCK
+            and atr_pct is not None and atr_pct >= EKSTREM_ATR_PCT
+            and kb12h_ekstrem_st1d_down(symbol) is True):
+        return 0.0, (f"ATR%={atr_pct:.2f} Ekstrem + Supertrend 1D turun -- BLOKIR "
+                     f"(patch 'kb12h-exit-fix' 08/11/2026, backtest 1 menit 2022-2026)")
     cfg = EKSTREM_SUPERTREND_SIZING.get(strategy)
     if cfg is None:
         return 1.0, ""
@@ -10633,6 +10641,57 @@ def get_btc_chg_pct(window_hours: int):
         log(f"  [BTC-DUMP-EXIT] error: {e}")
         return slot["pct"]
 
+# ── Patch 'kb12h-exit-fix' (08/11/2026, approved by Mas Budi: "BOLEH") ──────────────────────
+# Research on 1-MINUTE candles (4,079 simulated KeltnerBreak-12h deals 2022-2026; 1h-candle
+# backtests turned out far too optimistic for tight trailing): with the old exit KB12h was only
+# break-even (+0.01%/deal, win +2.56% vs loss -5.81%) -- trailing armed too early and then
+# tightened to 0.4%, so good deals were sold at +2-3%. The trailing SHAPE barely mattered; WHEN
+# trailing arms was the lever. Three changes, KeltnerBreak-12h ONLY:
+#  1) KB12H_ARM_MULT: trailing arms at 4x the normal tier threshold (Volatil 2.75% -> 11%).
+#     +0.01 -> +0.36%/deal, better in all 5 years, TRAIN +0.50 / TEST +0.17. Win rate drops
+#     70% -> 41% (fewer but much bigger wins, avg win +8.3%). BB-Upper arm-early/tighten is
+#     switched OFF for KB12h (it would arm early and cancel this; it was never in the backtest).
+#     Locking breakeven after touching the old arm level was tested and REJECTED (kills the gain).
+#  2) KB12H_EKSTREM_ST1D_BLOCK: no new KB12h deal when ATR%(12h) >= 7 (Ekstrem) AND Supertrend
+#     (10,3) of the last CLOSED 1D candle is down (Mas Budi chose this over blocking all Ekstrem:
+#     slightly lower per deal, higher total).
+#  3) KB12H_EARLY_WATCH_*: at minute 5 and 10 after the open, close if price <= entry -2%.
+# Combined: +0.47%/deal, TRAIN +0.58 / TEST +0.32, positive 4/5 years. Hard stop, BTC-dump exit,
+# early-cut 48h and timeout are UNCHANGED. Scripts: scratchpad kb12h_loss_bt/exit_grid*.py,
+# improve.py, combo_choice.py.
+KB12H_STRATS = ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed')
+KB12H_ARM_MULT = 4.0
+KB12H_EKSTREM_ST1D_BLOCK = True
+KB12H_EARLY_WATCH_ENABLED = True
+KB12H_EARLY_WATCH_CHECK_MIN = (5, 10)
+KB12H_EARLY_WATCH_DROP_PCT = 2.0
+KB12H_EARLY_WATCH_MAX_LATE_MIN = 5   # a checkpoint missed by >5 min (bot restart) is skipped
+
+
+def kb12h_ekstrem_st1d_down(symbol: str):
+    """True if Supertrend(10,3) of the last CLOSED 1D candle is down; None on data failure."""
+    now = time.time()
+    key = (symbol, '1d_kb12h')
+    with _live_supertrend_cache_lock:
+        cached = _live_supertrend_cache.get(key)
+        if cached and now - cached[0] < LIVE_SUPERTREND_CACHE_SECONDS:
+            return cached[1]
+    down = None
+    try:
+        frame = get_ohlcv(symbol, interval='1d', limit=60)
+        if frame is not None and len(frame) >= 22:
+            closed = frame.iloc[:-1]
+            st = ta.supertrend(closed['high'], closed['low'], closed['close'], length=10, multiplier=3.0)
+            col = next((c for c in st.columns if 'SUPERTd' in c), None)
+            if col is not None and not pd.isna(st[col].iloc[-1]):
+                down = int(st[col].iloc[-1]) == -1
+    except Exception as e:
+        log(f"WARN [KB12H-ST1D] {symbol} gagal hitung Supertrend 1D: {e}")
+    with _live_supertrend_cache_lock:
+        _live_supertrend_cache[key] = (now, down)
+    return down
+
+
 def get_arm_pct(atr_pct: float, strategy: str = None) -> float:
     """Arm threshold, 5 tier ATR% (konsisten dgn hard_stop_pct()/trailing_dist()).
     Titik Aktif=2.0% & Ekstrem=3.5% tervalidasi backtest_arm_sweep; 3 titik tengah interpolasi.
@@ -10649,11 +10708,16 @@ def get_arm_pct(atr_pct: float, strategy: str = None) -> float:
     """
     if strategy == 'trend_confirm_4h' and atr_pct >= EKSTREM_ATR_PCT:
         return 1.75   # setengah dari 3.5% baseline Ekstrem -- patch 'tc4h-ekstrem-arm-dini'
-    if atr_pct < 1.0:   return 1.0    # Tenang
-    elif atr_pct < 2.0: return 1.5    # Normal
-    elif atr_pct < 4.0: return 2.0    # Aktif
-    elif atr_pct < 7.0: return 2.75   # Volatil
-    else:                return 3.5    # Ekstrem
+    if atr_pct < 1.0:   base = 1.0    # Tenang
+    elif atr_pct < 2.0: base = 1.5    # Normal
+    elif atr_pct < 4.0: base = 2.0    # Aktif
+    elif atr_pct < 7.0: base = 2.75   # Volatil
+    else:                base = 3.5    # Ekstrem
+    # 08/11/2026 patch 'kb12h-arm4x' -- see KB12H_ARM_MULT REMARK. 'strategy and' guard keeps
+    # AST-loaded backtest copies (strategy=None, constant not loaded) working.
+    if strategy and strategy in KB12H_STRATS:
+        return base * KB12H_ARM_MULT
+    return base
 
 
 def trailing_dist_progressive(atr_pct: float, current_profit_pct: float) -> float:
@@ -13849,7 +13913,10 @@ def thread2_monitor():
         # level (BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY), bukan di sini -- supaya tidak dibuat ulang
         # tiap siklus loop.
         _bbupper_min_cushion = BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY.get(strat, 0)
-        _bbupper_touched = (strat != 'hunting_4h' and live_bb_upper is not None and peak >= live_bb_upper
+        # 08/11/2026 patch 'kb12h-exit-fix': BB-Upper arm-early/tighten OFF for KeltnerBreak-12h
+        # (would arm far below the new 4x threshold -- see KB12H_ARM_MULT REMARK).
+        _bbupper_touched = (strat != 'hunting_4h' and strat not in KB12H_STRATS
+                             and live_bb_upper is not None and peak >= live_bb_upper
                              and prof_peak >= _bbupper_min_cushion)
         _bbupper_overshoot_pct = (peak / live_bb_upper - 1) * 100 if _bbupper_touched else 0.0
 
@@ -13879,6 +13946,40 @@ def thread2_monitor():
                 continue  # deal sudah closed & dihapus dari active_deals -- lewati sisa pemrosesan siklus ini
             else:
                 log(f"WARN [T2] {sym} BB12h-cross-up terdeteksi tapi close GAGAL: {_dusk_close_result.get('error')} -- dicoba lagi siklus berikutnya, lanjut proses normal siklus ini")
+
+        # 08/11/2026 patch 'kb12h-exit-fix' (3): early watch -- at minute 5 and 10 after the open,
+        # close if price is already >= KB12H_EARLY_WATCH_DROP_PCT below entry (see KB12H_ARM_MULT
+        # REMARK). Each checkpoint is evaluated once; one missed by a restart is skipped.
+        if strat in KB12H_STRATS and KB12H_EARLY_WATCH_ENABLED and entry > 0:
+            _ew_open = float(d.get('opened_wall_ts', 0) or 0)
+            _ew_done = list(d.get('early_watch_done', []) or [])
+            if _ew_open > 0:
+                _ew_min = (time.time() - _ew_open) / 60.0
+                _ew_due = [m for m in KB12H_EARLY_WATCH_CHECK_MIN
+                           if m not in _ew_done and _ew_min >= m]
+                if _ew_due:
+                    _ew_done += _ew_due
+                    with active_deals_lock:
+                        if sym in active_deals:
+                            active_deals[sym]['early_watch_done'] = _ew_done
+                    save_active_deals()
+                    _ew_m = max(_ew_due)
+                    _ew_chg = (price / entry - 1) * 100
+                    if _ew_min <= _ew_m + KB12H_EARLY_WATCH_MAX_LATE_MIN and _ew_chg <= -KB12H_EARLY_WATCH_DROP_PCT:
+                        _ew_res = execute_close_now(
+                            sym, f"pantau dini menit ke-{_ew_m}: harga {_ew_chg:+.2f}% dari entry "
+                                 f"(ambang -{KB12H_EARLY_WATCH_DROP_PCT:g}%, patch kb12h-exit-fix)",
+                            telegram_header=f"CLOSE {to_display_pair(sym)} (KeltnerBreak-12h pantau dini {_ew_m} menit)",
+                            log_tag="KB12H-EARLY-WATCH", thread_label="T2")
+                        if _ew_res.get('ok'):
+                            log(f"[T2] {sym} DITUTUP pantau dini menit ke-{_ew_m} ({_ew_chg:+.2f}%)")
+                            continue
+                        log(f"WARN [T2] {sym} pantau dini: close GAGAL: {_ew_res.get('error')} -- dicoba lagi siklus berikutnya")
+                        with active_deals_lock:   # undo so the checkpoint is retried
+                            if sym in active_deals:
+                                active_deals[sym]['early_watch_done'] = [m for m in _ew_done if m not in _ew_due]
+                    else:
+                        log(f"[T2] {sym} pantau dini menit ke-{_ew_m}: {_ew_chg:+.2f}% -- lanjut")
 
         # Trailing factor variatif untuk hunting_4h
         if strat == 'hunting_4h':
@@ -14009,7 +14110,10 @@ def thread2_monitor():
             _armed_ref_atr = d.get('armed_live_atr', atrp)
             _armed_since   = d.get('armed_since_ts', 0)
             _armed_min     = (time.time() - _armed_since) / 60.0 if _armed_since > 0 else 999.0
-            if (prof_peak < _cur_arm_pct
+            # 08/11/2026 patch 'kb12h-exit-fix': KB12h deals armed under the OLD (1x) threshold are
+            # un-armed once so open deals follow the new 4x rule (approved by Mas Budi).
+            _kb12h_migrate = strat in KB12H_STRATS and prof_peak < _cur_arm_pct
+            if _kb12h_migrate or (prof_peak < _cur_arm_pct
                     and live_atrp >= _armed_ref_atr + UNARM_ATR_MARGIN_PP
                     and _armed_min >= UNARM_MIN_ARMED_MINUTES):
                 armed = False
