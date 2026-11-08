@@ -4222,6 +4222,20 @@ heartbeat_4h_last_sent     = 0.0
 session = requests.Session()
 session.headers.update({'User-Agent': 'Mozilla/5.0'})
 
+# 08/11/2026 patch 'binance-via-own-ip' (Mas Budi): Railway's static outbound IPs are SHARED and
+# Binance kept banning them because of other tenants (IP already at ~9,700 weight the moment each
+# ban expired; Railway support: no dedicated IPs on any plan). Binance REST calls now go through
+# our own DigitalOcean droplet (binance-proxy-sg, 146.190.93.255, tinyproxy, allow-listed to the
+# Railway IPs + basic auth, filtered to *.binance.com / *.binance.vision). Set Railway variable
+# BINANCE_PROXY_URL (http://user:pass@146.190.93.255:8888); empty = direct as before. Only the
+# Binance hosts below are proxied (Telegram etc. on the same session stay direct). WebSocket
+# streams stay direct (they have no request-weight limit).
+BINANCE_PROXY_URL = os.environ.get("BINANCE_PROXY_URL", "").strip()
+BINANCE_PROXY_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision", "https://fapi.binance.com")
+if BINANCE_PROXY_URL:
+    session.proxies.update({h: BINANCE_PROXY_URL for h in BINANCE_PROXY_HOSTS})
+    print(f"[BINANCE-PROXY] REST Binance lewat proxy {BINANCE_PROXY_URL.rsplit('@', 1)[-1]}", flush=True)
+
 # ===================== UTIL =====================
 def now_wib():
     return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=7))).replace(tzinfo=None)
@@ -5546,9 +5560,10 @@ def get_binance_usdt_balance() -> float:
         params  = f"timestamp={ts}"
         sig     = hmac.new(api_secret.encode(), params.encode(), hashlib.sha256).hexdigest()
         url     = f"https://api.binance.com/api/v3/account?{params}&signature={sig}"
-        req     = _ur.Request(url, headers={"X-MBX-APIKEY": api_key})
-        with _ur.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read())
+        # 08/11/2026: via `session` (not urllib) so it follows BINANCE_PROXY_URL
+        _r = session.get(url, headers={"X-MBX-APIKEY": api_key}, timeout=5)
+        _r.raise_for_status()
+        data = _r.json()
         for b in data.get("balances", []):
             if b["asset"] == "USDT":
                 return float(b["free"])
@@ -5570,9 +5585,10 @@ def get_binance_open_orders_value(symbol: str) -> float:
         params = f"symbol={symbol}&timestamp={ts}"
         sig    = hmac.new(api_secret.encode(), params.encode(), hashlib.sha256).hexdigest()
         url    = f"https://api.binance.com/api/v3/openOrders?{params}&signature={sig}"
-        req    = _ur.Request(url, headers={"X-MBX-APIKEY": api_key})
-        with _ur.urlopen(req, timeout=5) as resp:
-            orders = json.loads(resp.read())
+        # 08/11/2026: via `session` (not urllib) so it follows BINANCE_PROXY_URL
+        _r = session.get(url, headers={"X-MBX-APIKEY": api_key}, timeout=5)
+        _r.raise_for_status()
+        orders = _r.json()
         # Hitung total USDT dari semua BUY order yang aktif
         total = sum(float(o.get("origQty", 0)) * float(o.get("price", 0))
                     for o in orders if o.get("side") == "BUY" and float(o.get("price", 0)) > 0)
