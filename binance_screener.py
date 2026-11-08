@@ -9427,6 +9427,11 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     elif strategy in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed'):
         target  = float(_cfg_base if _cfg_base else BASE_ORDER_VOLUME)
         add_usd = 0
+        # 08/11/2026 patch 'kb12h-aplus': Aktif tier (ATR% 2-4) opens at 3x base ($8 -> $24).
+        if atr_pct is not None and KB12H_AKTIF_ATR_RANGE[0] <= atr_pct < KB12H_AKTIF_ATR_RANGE[1]:
+            target = round(target * KB12H_AKTIF_BASE_MULT, 2)
+            log(f"[SIZING] {symbol} KeltnerBreak-12h tier Aktif (ATR%={atr_pct:.2f}) -> modal ${target:.0f} "
+                f"(x{KB12H_AKTIF_BASE_MULT:g}, patch kb12h-aplus)")
         # Size-cut tier Ekstrem (asalnya 16/10/2026, patch "ekstrem-size-cut", dipicu AVAUSDT
         # -12,72%) sekarang SATU MEKANISME dgn semua strategi lain -- lihat REMARK lengkap &
         # angka per-strategi di EKSTREM_SUPERTREND_SIZING/ekstrem_supertrend_size_mult() di
@@ -10666,6 +10671,76 @@ KB12H_EARLY_WATCH_ENABLED = True
 KB12H_EARLY_WATCH_CHECK_MIN = (5, 10)
 KB12H_EARLY_WATCH_DROP_PCT = 2.0
 KB12H_EARLY_WATCH_MAX_LATE_MIN = 5   # a checkpoint missed by >5 min (bot restart) is skipped
+# ── Patch 'kb12h-aplus' (08/11/2026, approved by Mas Budi: "SETUJU" A+ with Aktif $24) ──────
+# On top of kb12h-exit-fix, same 1-minute backtest (2022-2026): coins in the Aktif tier
+# (ATR%(12h) 2-4%) are the best KB12h tier (+0.95%/deal vs +0.38% Volatil), so their starting
+# order is 3x base_usd ($8 -> $24); and deals may be held 10 x 12h candles (120h) instead of 5.
+# Per $: +0.47% -> +0.69%, positive in all 5 years (TRAIN +0.59 / TEST +0.83). Size curve:
+# $32 still 5/5 years (2025 ~0), from $40 year 2025 turns negative -> $24 now, review for $32
+# after 20-30 live deals (KB12H_APLUS_REVIEW_*, e-mail only, Mas Budi's request). Reclaim
+# add-fund targets are unchanged (the first add simply has less to add for an Aktif deal).
+KB12H_AKTIF_ATR_RANGE = (2.0, 4.0)
+KB12H_AKTIF_BASE_MULT = 3.0
+KB12H_MAX_HOLD_CANDLES = 10
+KB12H_APLUS_SINCE_WIB = "2026-11-08 20:00:00"   # count only KB12h deals opened from this deploy on
+KB12H_APLUS_REVIEW_AT = (20, 30)
+KB12H_APLUS_OK_MIN_PER_USD_PCT = 0.30          # "sesuai" = $-weighted avg >= +0.30% and total $ > 0
+KB12H_APLUS_REVIEW_FLAG_FILE = os.path.join(DATA_DIR, "kb12h_aplus_review_sent.json")
+
+
+def check_kb12h_aplus_review():
+    """E-mail (NOT Telegram) Mas Budi when 20 and 30 KB12h deals opened under patch kb12h-aplus
+    have closed: count, win rate, $-weighted avg %, total $, verdict vs the backtest (raise Aktif
+    base to $32 or not). Reads TRADES_CSV; each checkpoint is sent once (flag file). Never changes
+    sizing by itself -- the raise to $32 stays Mas Budi's decision."""
+    try:
+        sent = {}
+        if os.path.exists(KB12H_APLUS_REVIEW_FLAG_FILE):
+            with open(KB12H_APLUS_REVIEW_FLAG_FILE) as f:
+                sent = json.load(f) or {}
+        if all(str(n) in sent for n in KB12H_APLUS_REVIEW_AT) or not os.path.exists(TRADES_CSV):
+            return
+        rows = []
+        with open(TRADES_CSV, newline='', encoding='utf-8') as f:
+            for r in csv.DictReader(f):
+                if (r.get('status') == 'CLOSED' and r.get('strategy') in KB12H_STRATS
+                        and (r.get('open_time_wib') or '') >= KB12H_APLUS_SINCE_WIB):
+                    try:
+                        rows.append((float(r.get('profit_pct') or 0), float(r.get('base_usd') or 0) or 8.0,
+                                     r.get('symbol', ''), float(r.get('atr_pct') or 0)))
+                    except ValueError:
+                        continue
+        n = len(rows)
+        due = [c for c in KB12H_APLUS_REVIEW_AT if n >= c and str(c) not in sent]
+        if not due:
+            return
+        c = max(due)
+        wins = sum(1 for p, *_ in rows if p > 0)
+        usd = sum(u for _, u, *_ in rows)
+        pnl = sum(p / 100 * u for p, u, *_ in rows)
+        per_usd = pnl / usd * 100 if usd else 0.0
+        akt = [(p, u) for p, u, _, a in rows if KB12H_AKTIF_ATR_RANGE[0] <= a < KB12H_AKTIF_ATR_RANGE[1]]
+        akt_line = (f"Tier Aktif: {len(akt)} deal, rata2 {sum(p for p, _ in akt) / len(akt):+.2f}%"
+                    if akt else "Tier Aktif: belum ada deal")
+        ok = per_usd >= KB12H_APLUS_OK_MIN_PER_USD_PCT and pnl > 0
+        verdict = ("SESUAI -- boleh pertimbangkan naikkan modal Aktif $24 -> $32 (minta Claude patch)."
+                   if ok else "BELUM SESUAI -- modal Aktif tetap $24, jangan dinaikkan dulu.")
+        body = (f"Review KeltnerBreak-12h paket A+ (modal Aktif $24, tahan 120 jam) -- {n} deal tutup "
+                f"sejak {KB12H_APLUS_SINCE_WIB} WIB (checkpoint {c}).\n\n"
+                f"Menang: {wins}/{n} ({wins / n * 100:.0f}%)\n"
+                f"Untung per $ (tertimbang modal): {per_usd:+.2f}%  (backtest: +0,69%, ambang sesuai: "
+                f">= +{KB12H_APLUS_OK_MIN_PER_USD_PCT:.2f}%)\n"
+                f"Total untung/rugi kira2: ${pnl:+.2f}\n{akt_line}\n\n"
+                f"Kesimpulan: {verdict}\n\n"
+                f"Catatan: backtest menang ~37%, jadi banyak deal rugi kecil itu normal; yang dinilai untung per $.")
+        send_email_open_long(f"[Bot] Review KB12h A+ {n} deal: {'SESUAI' if ok else 'BELUM SESUAI'}", body)
+        for d_ in due:
+            sent[str(d_)] = {"at_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "n": n,
+                             "per_usd": round(per_usd, 3), "ok": ok}
+        with open(KB12H_APLUS_REVIEW_FLAG_FILE, 'w') as f:
+            json.dump(sent, f)
+    except Exception as e:
+        log(f"WARN check_kb12h_aplus_review: {e}")
 
 
 def kb12h_ekstrem_st1d_down(symbol: str):
@@ -10773,6 +10848,8 @@ def compute_deal_urgency(sym: str, d: dict):
         hold_limit_sec = (d.get("timeout_candles", AKUM_ENTRY_TIMEOUT) or AKUM_ENTRY_TIMEOUT) * STRAT4H_SECONDS
     elif strat == "topgainers_4h":
         hold_limit_sec = TOPGAINERS_TIMEOUT_HOURS * 3600  # 19/10/2026 -- lihat REMARK di thread2_monitor()
+    elif strat in KB12H_STRATS:
+        hold_limit_sec = KB12H_MAX_HOLD_CANDLES * SECONDS_PER_CANDLE  # 08/11/2026 patch kb12h-aplus
     else:
         hold_limit_sec = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
     hours_to_timeout = max(0.0, (hold_limit_sec - (now - opened_ts)) / 3600) if opened_ts > 0 else None
@@ -14516,6 +14593,10 @@ def thread2_monitor():
                                             f"< {AKUM_TP_MIN_PROFIT_PCT}% -- TP3 ditahan")
                 except Exception as _e:
                     log(f"[T2] {sym} akum TP check error: {_e}")
+        elif strat in KB12H_STRATS:
+            # 08/11/2026 patch 'kb12h-aplus': 10 x 12h (120h) instead of MAX_HOLD_DAYS (5)
+            hold_limit_sec = KB12H_MAX_HOLD_CANDLES * SECONDS_PER_CANDLE
+            hold_label = f"batas {KB12H_MAX_HOLD_CANDLES} candle 12h (KeltnerBreak-12h)"
         else:
             hold_limit_sec = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
             hold_label = f"batas {MAX_HOLD_DAYS} candle"
@@ -14554,6 +14635,7 @@ def thread2_monitor():
                 else BBSNAP_4H_MAX_HOLD_CANDLES if d.get('strategy') == 'bbsnap_4h'
                 else BBSNAP_8H_MAX_HOLD_CANDLES if d.get('strategy') == 'bbsnap_8h'
                 else d.get('timeout_candles', AKUM_ENTRY_TIMEOUT) if d.get('strategy','') in ('akum_entry_a','akum_entry_b')
+                else KB12H_MAX_HOLD_CANDLES if d.get('strategy','brkX2') in KB12H_STRATS
                 else MAX_HOLD_DAYS
             )
             hold_candle_now = int(elapsed_sec / candle_sec)
@@ -18500,6 +18582,7 @@ def run_thread_orphan_reclaim():
     while True:
         try:
             check_orphan_combine_checkin_reminder()
+            check_kb12h_aplus_review()
             with cancelled_deal_price_lock:
                 snapshot = dict(cancelled_deal_price)
             try:
@@ -30278,6 +30361,8 @@ def run_web_dashboard():
                         _hold_limit_sec_d = HUNTING_MAX_HOLD_CANDLES * STRAT4H_SECONDS
                     elif _strat_d in ("akum_entry_a", "akum_entry_b"):
                         _hold_limit_sec_d = (dd.get("timeout_candles", AKUM_ENTRY_TIMEOUT) or AKUM_ENTRY_TIMEOUT) * STRAT4H_SECONDS
+                    elif _strat_d in KB12H_STRATS:
+                        _hold_limit_sec_d = KB12H_MAX_HOLD_CANDLES * SECONDS_PER_CANDLE  # 08/11/2026 kb12h-aplus
                     else:
                         _hold_limit_sec_d = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
                     _candle_sec_d = _candle_seconds_for_strategy(_strat_d)
