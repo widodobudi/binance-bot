@@ -4232,6 +4232,13 @@ session.headers.update({'User-Agent': 'Mozilla/5.0'})
 # streams stay direct (they have no request-weight limit).
 BINANCE_PROXY_URL = os.environ.get("BINANCE_PROXY_URL", "").strip()
 BINANCE_PROXY_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision", "https://fapi.binance.com")
+# Guard (08/11/2026): a malformed value (e.g. only the password pasted) made EVERY Binance call fail
+# with ProxyError and leaked the value into error logs. Require http(s)://user:pass@host:port,
+# otherwise ignore it (direct connection) and log only that the format is wrong, never the value.
+if BINANCE_PROXY_URL and not re.match(r'^https?://[^\s:@/]+:[^\s@/]+@[0-9A-Za-z.\-]+:\d+/?$', BINANCE_PROXY_URL):
+    print("[BINANCE-PROXY] WARN: BINANCE_PROXY_URL formatnya salah (harus http://bot:PASSWORD@IP:8888) "
+          "-- proxy DIMATIKAN, Binance lewat koneksi langsung", flush=True)
+    BINANCE_PROXY_URL = ""
 if BINANCE_PROXY_URL:
     session.proxies.update({h: BINANCE_PROXY_URL for h in BINANCE_PROXY_HOSTS})
     print(f"[BINANCE-PROXY] REST Binance lewat proxy {BINANCE_PROXY_URL.rsplit('@', 1)[-1]}", flush=True)
