@@ -5133,7 +5133,7 @@ def _rule_watch_load() -> dict:
                 return json.load(f)
     except Exception as e:
         log(f"WARN [RULE-WATCH] load: {e}")
-    return {"deals": {}, "notified": {}}
+    return {"deals": {}, "notified": {}, "ai": {}}
 
 def _rule_watch_save(st: dict):
     try:
@@ -5180,6 +5180,107 @@ def rule_watch_on_open(symbol: str, deal: dict):
     if r3:
         log(f"[RULE-WATCH] R3 {symbol} ({deal.get('strategy')}): dibuka saat MACD 4h memendek di lonjakan "
             f"volume (hist {h:.6g} < {hp:.6g}, RVol {rv:.2f}) -- dicatat saja, deal TETAP dibuka")
+        _rule_watch_ai_shadow_spawn("r3", key, symbol, deal.get('strategy'), float(deal.get('entry_price') or 0),
+                                    {"h": h, "hp": hp, "rv": rv})
+
+# ── Patch "rule-watch-ai-shadow" (08/11/2026, pilihan Mas Budi "Uji bayangan dulu") ──────────────
+# Backtest 5 thn (58.118 deal simulasi, 244 coin, 2022-2026, scratchpad r2r3_bt/) menunjukkan R2/R3
+# sbg ATURAN merugikan, tapi Mas Budi ingin tahu apakah AI bisa memakai info R2/R3 dgn lebih pintar
+# (kasus SUPER/USDT). Di tiap kejadian R3/R2 AI ditanya TERPISAH (BUKA/SKIP, CLOSE/HOLD) dan jawabannya
+# HANYA DICATAT ke rule_watch.json bagian "ai" + log [RULE-WATCH-AI] + ai_decisions_log.txt.
+# PENGAMAN (permintaan Mas Budi -- info R2/R3 TIDAK boleh dianggap keputusan reject/close):
+#  1. Prompt AI keputusan ASLI (OPEN/ARMED/CLOSE/ADD-FUND) TIDAK diubah, tidak berisi info R2/R3.
+#  2. R3 ditanya SETELAH deal sudah dibuka & tercatat; R2 tidak terhubung ke jalur jual apa pun.
+#  3. Jawaban cuma DITULIS, tidak ada kode yg MEMBACA bagian "ai" utk membuka/menutup deal (satu2nya
+#     pembaca = ringkasan review di rule_watch_tick()).
+#  4. Jalan di thread daemon terpisah -- AI lambat/error tidak menunda/mengganggu deal.
+RULE_WATCH_AI_SHADOW = True
+
+def _rule_watch_ai_shadow_spawn(rule: str, key: str, symbol: str, strategy: str, avg: float, info: dict):
+    if not RULE_WATCH_AI_SHADOW:
+        return
+    threading.Thread(target=_rule_watch_ai_shadow, args=(rule, key, symbol, strategy, avg, info),
+                     daemon=True, name=f"RW-AI-{rule}-{symbol}").start()
+
+def _rule_watch_ai_shadow(rule: str, key: str, symbol: str, strategy: str, avg: float, info: dict):
+    try:
+        label = HB_STRAT_LABEL.get(strategy or 'brkX2', strategy)
+        price = get_price_now(symbol)
+        ind4h = get_full_4h_indicator_context(symbol) or ""
+        htf = fetch_htf_context_for_ai(symbol) or ""
+        ctx = (f"{ind4h}\n" if ind4h else "") + (f"Konteks HTF:\n{htf}\n" if htf else "")
+        if rule == "r3":
+            prompt = (
+                f"Kamu adalah AI analyst trading crypto. Berikan analisis singkat.\n\n"
+                f"Kandidat OPEN LONG: {to_display_pair(symbol)} | Strategi: {label}\n"
+                f"Harga sekarang: {_fmt_price(price)}\n\n{ctx}\n"
+                f"Catatan tambahan (candle 4h tutup terakhir): histogram MACD masih positif tetapi MEMENDEK "
+                f"({info['h']:.6g}, sebelumnya {info['hp']:.6g}) bersamaan dengan lonjakan volume "
+                f"(RVol {info['rv']:.2f}x rata-rata 20 candle). Pola ini bisa berarti momentum mulai melemah "
+                f"di puncak volume, tapi bisa juga tidak berarti apa-apa -- timbang bersama data lain.\n\n"
+                f"Apakah kandidat ini sebaiknya DIBUKA atau DILEWATI?\n\n"
+                f"Format jawaban (ikuti persis):\nBUKA atau SKIP\nAlasan: alasan singkat\n\n"
+                f"Baris pertama HARUS hanya kata BUKA atau SKIP.")
+            options = ("SKIP", "BUKA")
+        else:
+            pct = (price / avg - 1) * 100 if avg > 0 and price > 0 else 0.0
+            prompt = (
+                f"Kamu adalah AI analyst trading crypto. Berikan analisis singkat.\n\n"
+                f"Deal LONG: {to_display_pair(symbol)} | Strategi: {label}\n"
+                f"Harga rata-rata beli: {_fmt_price(avg)} | Harga sekarang: {_fmt_price(price)} | "
+                f"Profit: {pct:+.2f}%\n\n{ctx}\n"
+                f"Kejadian: Supertrend(10, 3) 4h baru saja berbalik dari Uptrend ke Downtrend (candle 4h tutup "
+                f"terakhir) saat posisi masih rugi. Ini bisa berarti tren sudah patah, tapi bisa juga koreksi "
+                f"sementara -- timbang bersama data lain.\n\n"
+                f"Apakah posisi ini sebaiknya DITUTUP sekarang (cut loss) atau DITAHAN?\n\n"
+                f"Format jawaban (ikuti persis):\nCLOSE atau HOLD\nAlasan: alasan singkat\n\n"
+                f"Baris pertama HARUS hanya kata CLOSE atau HOLD.")
+            options = ("CLOSE", "HOLD")
+        result = _ai_call(prompt, model=AI_DECISION_MODEL_BABAK1)
+        if not result:
+            answer, reason = "N/A", "(AI tidak tersedia)"
+        else:
+            lines = result.strip().split("\n")
+            first = lines[0].strip().upper()
+            answer = next((o for o in options if o in first), "?")
+            reason = "\n".join(lines[1:]).strip()
+        rec = {"answer": answer, "reason": reason[:600], "at": now_wib().strftime('%Y-%m-%d %H:%M:%S'),
+               "price": price, "avg": avg, "provider": AI_LAST_PROVIDER}
+        with _rule_watch_lock:
+            st = _rule_watch_load()
+            st.setdefault("ai", {}).setdefault(key, {})[rule] = rec
+            _rule_watch_save(st)
+        log(f"[RULE-WATCH-AI] {rule.upper()} {symbol} ({label}): AI jawab {answer} "
+            f"(BAYANGAN, tidak dieksekusi) | harga {_fmt_price(price)}")
+        log_ai_decision(
+            f"[{rec['at']} WIB] RULE-WATCH-AI-SHADOW {rule.upper()} | {label} | {to_display_pair(symbol)} | "
+            f"{answer} (BAYANGAN, tidak dieksekusi) | harga={_fmt_price(price)}\n"
+            f"{ctx.strip() + chr(10) if ctx else ''}Alasan AI: {reason or '(tidak ada)'}\n{'─'*36}\n")
+    except Exception as e:
+        log(f"WARN [RULE-WATCH-AI] {rule} {symbol} gagal: {e}")
+
+def _rule_watch_ai_summary(rule: str, done: list, ai: dict) -> str:
+    """Ringkasan review: hasil kalau jawaban AI bayangan diikuti vs tidak (dibaca HANYA di sini)."""
+    rows = [(d, (ai.get(k) or {}).get(rule)) for k, d in done]
+    rows = [(d, a) for d, a in rows if a and a.get("answer") in (("SKIP", "BUKA") if rule == "r3" else ("CLOSE", "HOLD"))]
+    if not rows:
+        return "Jawaban AI bayangan: belum ada yg valid."
+    if rule == "r3":
+        sk = [d["outcome_pct"] for d, a in rows if a["answer"] == "SKIP"]
+        bk = [d["outcome_pct"] for d, a in rows if a["answer"] == "BUKA"]
+        f = lambda xs: f"{len(xs)} deal, rata-rata {sum(xs)/len(xs):+.2f}%" if xs else "0 deal"
+        return (f"AI bayangan jawab SKIP: {f(sk)} | jawab BUKA: {f(bk)}. "
+                f"Kalau saran SKIP diikuti, total berubah {-sum(sk):+.2f}% (positif = lebih baik).")
+    diff, n_close = 0.0, 0
+    for d, a in rows:
+        if a["answer"] == "CLOSE":
+            avg = float(a.get("avg") or d.get("entry_price") or 0)
+            if avg > 0 and a.get("price"):
+                n_close += 1
+                diff += ((a["price"] / avg - 1) * 100 - 0.2) - d["outcome_pct"]
+    return (f"AI bayangan jawab CLOSE {n_close}x, HOLD {sum(1 for _d, a in rows if a['answer'] == 'HOLD')}x. "
+            f"Kalau saran CLOSE diikuti, total berubah {diff:+.2f}% (positif = lebih baik; perkiraan, "
+            f"harga rata-rata beli saat Supertrend berbalik).")
 
 def _rule_watch_find_outcome(symbol: str, opened_at: str):
     disp = to_display_pair(symbol)
@@ -5227,28 +5328,33 @@ def rule_watch_tick():
                 changed = True
                 log(f"[RULE-WATCH] R2 {sym}: Supertrend 4h berbalik turun saat rugi ({pct:+.2f}%) -- "
                     f"dicatat saja, deal TETAP jalan")
+                _rule_watch_ai_shadow_spawn("r2", key, sym, d.get("strategy"), avg, {})
         else:
             out = _rule_watch_find_outcome(sym, d.get("opened_at"))
             if out is not None:
                 d["outcome_pct"] = out; changed = True
     for rule, label in (("r3", "R3 saringan entry (MACD memendek + lonjakan volume)"),
                         ("r2", "R2 keluar lebih awal (Supertrend 4h berbalik saat rugi)")):
-        done = [d for d in st["deals"].values() if d.get(rule) and d.get("outcome_pct") is not None]
+        done_kv = [(k, d) for k, d in st["deals"].items() if d.get(rule) and d.get("outcome_pct") is not None]
+        done = [d for _k, d in done_kv]
         if len(done) >= RULE_WATCH_REVIEW_TARGET and not st["notified"].get(rule):
             st["notified"][rule] = True; changed = True
             avg_out = sum(d["outcome_pct"] for d in done) / len(done)
+            ai_all = st.get("ai", {})
+            ai_line = _rule_watch_ai_summary(rule, done_kv, ai_all)
             send_telegram(f"📊 Rule-watch {label}: {len(done)} kejadian sudah tutup (hasil akhir rata-rata "
-                          f"{avg_out:+.2f}%/deal). Waktunya ditinjau -- bilang ke Claude \"review rule-watch\".",
+                          f"{avg_out:+.2f}%/deal). {ai_line} Waktunya ditinjau -- bilang ke Claude \"review rule-watch\".",
                           parse_mode=None)
             # 07/11/2026 (permintaan Mas Budi): kabar review JUGA lewat email, bukan cuma Telegram.
             detail = "\n".join(
                 f"- {to_display_pair(d['symbol'])} ({d['strategy']}), dibuka {d['opened_at']}: hasil akhir "
                 f"{d['outcome_pct']:+.2f}%" + (f", saat Supertrend berbalik {d['r2']['pct']:+.2f}% ({d['r2']['at']})"
                                                if rule == "r2" else f", {d.get('r3_detail', '')}")
-                for d in done)
+                + f", AI bayangan: {((ai_all.get(k) or {}).get(rule) or {}).get('answer', '-')}"
+                for k, d in done_kv)
             send_email_open_long(f"Rule-watch {rule.upper()}: {len(done)} kejadian siap ditinjau",
                                  f"Rule-watch {label}\n\n{len(done)} kejadian sudah tutup, hasil akhir rata-rata "
-                                 f"{avg_out:+.2f}%/deal.\nBilang ke Claude \"review rule-watch\" untuk ditinjau.\n\n"
+                                 f"{avg_out:+.2f}%/deal.\n{ai_line}\nBilang ke Claude \"review rule-watch\" untuk ditinjau.\n\n"
                                  f"Daftar kejadian:\n{detail}\n")
     if changed:
         with _rule_watch_lock:
