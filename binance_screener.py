@@ -5259,6 +5259,46 @@ def _rule_watch_ai_shadow(rule: str, key: str, symbol: str, strategy: str, avg: 
     except Exception as e:
         log(f"WARN [RULE-WATCH-AI] {rule} {symbol} gagal: {e}")
 
+def rule_watch_ai_status() -> dict:
+    """Patch "rule-watch-ai-display" (08/11/2026, permintaan Mas Budi -- uji bayangan R2/R3 kelihatan di
+    heartbeat Telegram + dashboard). Baca-saja: dipakai tampilan, TIDAK dipakai keputusan deal.
+    Return {"r3": {...}, "r2": {...}, "rows": [...]} -- per aturan: jumlah kejadian, sudah tutup, jawaban AI."""
+    with _rule_watch_lock:
+        st = _rule_watch_load()
+    ai = st.get("ai", {})
+    out = {}
+    for rule, opts in (("r3", ("SKIP", "BUKA")), ("r2", ("CLOSE", "HOLD"))):
+        ev = [(k, d) for k, d in st.get("deals", {}).items() if d.get(rule)]
+        ans = [((ai.get(k) or {}).get(rule) or {}).get("answer") for k, _d in ev]
+        out[rule] = {"n": len(ev), "closed": sum(1 for _k, d in ev if d.get("outcome_pct") is not None),
+                     "target": RULE_WATCH_REVIEW_TARGET, opts[0]: ans.count(opts[0]), opts[1]: ans.count(opts[1])}
+    rows = []
+    for k, d in st.get("deals", {}).items():
+        for rule in ("r3", "r2"):
+            if not d.get(rule):
+                continue
+            a = (ai.get(k) or {}).get(rule) or {}
+            rows.append({"rule": rule.upper(), "pair": to_display_pair(d.get("symbol", "")),
+                         "strategy": HB_STRAT_LABEL.get(d.get("strategy") or 'brkX2', d.get("strategy")),
+                         "opened_at": d.get("opened_at"), "at": a.get("at") or (d["r2"].get("at") if rule == "r2" else d.get("opened_at")),
+                         "ai": a.get("answer", "-"), "reason": (a.get("reason") or "")[:300],
+                         "pct_at_event": d["r2"].get("pct") if rule == "r2" else None,
+                         "outcome_pct": d.get("outcome_pct")})
+    rows.sort(key=lambda r: r.get("at") or "", reverse=True)
+    out["rows"] = rows
+    return out
+
+def rule_watch_ai_hb_lines() -> list:
+    """2 baris pendek utk blok PERCOBAAN di heartbeat General."""
+    try:
+        s = rule_watch_ai_status()
+        r3, r2 = s["r3"], s["r2"]
+        return [f"• Bayangan AI R3 #{r3['closed']}/{r3['target']} (SKIP {r3['SKIP']}·BUKA {r3['BUKA']}) · {r3['n']} kej",
+                f"• Bayangan AI R2 #{r2['closed']}/{r2['target']} (CLOSE {r2['CLOSE']}·HOLD {r2['HOLD']}) · {r2['n']} kej"]
+    except Exception as e:
+        log(f"WARN [RULE-WATCH-AI] baris heartbeat gagal: {e}")
+        return []
+
 def _rule_watch_ai_summary(rule: str, done: list, ai: dict) -> str:
     """Ringkasan review: hasil kalau jawaban AI bayangan diikuti vs tidak (dibaca HANYA di sini)."""
     rows = [(d, (ai.get(k) or {}).get(rule)) for k, d in done]
@@ -12317,7 +12357,7 @@ def heartbeat_general_tick():
         f"💓 Bot HIDUP — {now_dt.strftime('%H:%M')} WIB\nNotif berikutnya {next_hb} WIB",
         since_title + "\n" + "\n".join(_hb_since_lines(since_dt)),
         "🟢 LIVE (uang asli) — sejak awal\n" + "\n".join(live_lines),
-        "🧪 PERCOBAAN (bukan uang asli)\n" + "\n".join(_hb_paper_lines()),
+        "🧪 PERCOBAAN (bukan uang asli)\n" + "\n".join(_hb_paper_lines() + rule_watch_ai_hb_lines()),
     ]
     today_str = now_dt.strftime('%Y-%m-%d')
     if _hb_daily_notes_date[0] != today_str:
@@ -19098,6 +19138,15 @@ function confirmRule(parsed) {
       <div id="shadow-chart"><em style="color:var(--muted);font-size:11px">Memuat...</em></div>
     </div>
   </div>
+  <!-- 08/11/2026 (patch "rule-watch-ai-display", permintaan Mas Budi): hasil uji bayangan AI R2/R3. -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header" onclick="toggleCard(this)">
+        <h2>Uji Bayangan AI R2/R3 <span class="card-toggle">&#9660;</span>&nbsp;<span style="font-size:10px;color:var(--muted);text-transform:none;font-weight:400">Jawaban AI hanya dicatat, TIDAK dieksekusi</span></h2>
+    </div>
+    <div class="card-body">
+      <div id="rwai-panel"><em style="color:var(--muted);font-size:11px">Memuat...</em></div>
+    </div>
+  </div>
 </div>
 <script>
 var PERF_SORT_LABELS = {label: 'Strategi', wl: 'Menang/Kalah', wr: 'WR% (jumlah menang)', total: 'Total%', closing: 'Closing', lastwin: 'Terakhir profit'};
@@ -19354,6 +19403,35 @@ function refreshShadowChart() {
 }
 setInterval(refreshShadowChart, 60000);
 refreshShadowChart();
+
+// 08/11/2026 (patch "rule-watch-ai-display"): tabel uji bayangan AI R2/R3 (baca-saja).
+function _rwaiEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function refreshRuleWatchAi() {
+  fetch('/api/rule_watch_ai')
+    .then(function(r){ return r.json(); })
+    .then(function(data) {
+      var el = document.getElementById('rwai-panel');
+      if (!el) return;
+      if (!data || !data.ok) { el.innerHTML = "<em style='color:var(--muted);font-size:11px'>Gagal memuat.</em>"; return; }
+      var r3 = data.r3, r2 = data.r2;
+      var head = '<div style="font-size:11px;margin-bottom:8px;color:var(--text)">'
+        + 'R3 (saringan entry): <b>' + r3.closed + '/' + r3.target + '</b> tutup, ' + r3.n + ' kejadian &middot; AI: SKIP ' + r3.SKIP + ', BUKA ' + r3.BUKA
+        + '<br>R2 (Supertrend berbalik saat rugi): <b>' + r2.closed + '/' + r2.target + '</b> tutup, ' + r2.n + ' kejadian &middot; AI: CLOSE ' + r2.CLOSE + ', HOLD ' + r2.HOLD + '</div>';
+      if (!data.rows.length) { el.innerHTML = head + "<em style='color:var(--muted);font-size:11px'>Belum ada kejadian.</em>"; return; }
+      var fmt = function(v){ return (v === null || v === undefined) ? '-' : ((v > 0 ? '+' : '') + Number(v).toFixed(2) + '%'); };
+      var rows = data.rows.map(function(r){
+        return '<tr><td>' + _rwaiEsc(r.rule) + '</td><td class="sym">' + _rwaiEsc(r.pair) + '</td><td>' + _rwaiEsc(r.strategy) + '</td>'
+          + '<td style="white-space:nowrap">' + _rwaiEsc((r.at || '').slice(0, 16)) + '</td>'
+          + '<td><b>' + _rwaiEsc(r.ai) + '</b></td><td>' + fmt(r.pct_at_event) + '</td><td>' + fmt(r.outcome_pct) + '</td>'
+          + '<td style="font-size:10px;color:var(--muted);max-width:360px">' + _rwaiEsc(r.reason) + '</td></tr>';
+      }).join('');
+      el.innerHTML = head + '<div style="overflow-x:auto"><table style="min-width:760px"><thead><tr><th>Aturan</th><th>Pair</th><th>Strategi</th>'
+        + '<th>Waktu</th><th>AI jawab</th><th>Saat kejadian</th><th>Hasil akhir</th><th>Alasan AI</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    })
+    .catch(function(){});
+}
+setInterval(refreshRuleWatchAi, 120000);
+refreshRuleWatchAi();
 </script>
 <div class="container dash-section-start" data-tab="monitor">
   <div class="card">
@@ -30594,15 +30672,33 @@ def run_web_dashboard():
                 return jsonify({"ok": False, "error": "nilai tidak valid"})
             if not sym:
                 return jsonify({"ok": False, "error": "sym kosong"})
+            # Patch "edit-deal-keep-trailing" (08/11/2026, persetujuan Mas Budi): koreksi entry_price
+            # dulu SELALU mereset peak + trailing_armed, walau deal sedang untung & trailing sudah aktif.
+            # Kasus DUSK/USDT 17-19/10/2026: armed di puncak +3,66%, entry dikoreksi 2x (18/10 06:32 &
+            # 06:52) -> trailing mati -> kena hard stop -12,37%; salinan bayangan tanpa edit tutup +3,00%.
+            # 15 edit serupa sepanjang Oktober. Sekarang: trailing yg SUDAH aktif DIPERTAHANKAN selama harga
+            # sekarang masih di atas entry baru (deal masih untung thd entry baru); peak = max(peak, harga
+            # sekarang). Kalau belum armed, atau harga <= entry baru, atau harga gagal diambil -> reset spt dulu.
+            price_now = 0.0
+            if field == "entry_price":
+                try:
+                    price_now = float(get_price_now(sym) or 0)
+                except Exception:
+                    price_now = 0.0
             with active_deals_lock:
                 if sym not in active_deals:
                     return jsonify({"ok": False, "error": f"{sym} tidak ada di active_deals"})
                 active_deals[sym][field] = val
                 if field == "entry_price":
-                    # Reset peak dan trailing_armed saat entry dikoreksi
-                    active_deals[sym]["peak"] = val
-                    active_deals[sym]["trailing_armed"] = False
-                    log(f"[EDIT_DEAL] {sym} peak dan trailing_armed direset")
+                    _dl = active_deals[sym]
+                    if _dl.get("trailing_armed") and price_now > val > 0:
+                        _dl["peak"] = max(float(_dl.get("peak") or 0), price_now)
+                        log(f"[EDIT_DEAL] {sym} entry dikoreksi, trailing TETAP aktif (harga {_fmt_price(price_now)} "
+                            f"masih di atas entry baru {_fmt_price(val)}, +{(price_now / val - 1) * 100:.2f}%)")
+                    else:
+                        _dl["peak"] = val
+                        _dl["trailing_armed"] = False
+                        log(f"[EDIT_DEAL] {sym} peak dan trailing_armed direset")
                 d = dict(active_deals)
             # Simpan ke file
             try:
@@ -33708,6 +33804,14 @@ def run_web_dashboard():
                 return jsonify({"ok": True, **status})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
+
+        @app.route("/api/rule_watch_ai")
+        def api_rule_watch_ai():
+            """Patch "rule-watch-ai-display" (08/11/2026): data tabel uji bayangan AI R2/R3 (baca-saja)."""
+            try:
+                return jsonify({"ok": True, **rule_watch_ai_status()})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)})
 
         @app.route("/api/shadow_fwdtest_status")
         def api_shadow_fwdtest_status():
