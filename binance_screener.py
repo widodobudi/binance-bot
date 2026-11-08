@@ -2328,6 +2328,10 @@ HOLD_NO_SELL_PRICE_FILE = os.path.join(DATA_DIR, "hold_no_sell_price.json")
 hold_no_sell_price = {}   # symbol -> {'entry_price':, 'strategy':, 'ts':}
 hold_no_sell_price_lock = threading.Lock()
 
+HOLD_SAFETY_FLOOR_STOP_WATCHING = ('ZAMAUSDT',)
+HOLD_SAFETY_FLOOR_STOP_BEFORE_TS = 1794157200  # 2026-11-09 00:00 WIB -- older entries only
+
+
 def load_hold_no_sell_price():
     global hold_no_sell_price
     if not os.path.exists(HOLD_NO_SELL_PRICE_FILE):
@@ -2336,7 +2340,19 @@ def load_hold_no_sell_price():
         with open(HOLD_NO_SELL_PRICE_FILE, 'r') as f: data = json.load(f)
         with hold_no_sell_price_lock:
             hold_no_sell_price = data
+            # 08/11/2026 (Mas Budi: "MAU"): ZAMA is no longer in the wallet, so the safety floor kept
+            # trying to sell it every minute ("Saldo ZAMA tidak ada / habis"). Stop watching ONLY the old
+            # entry (recorded before this cutoff); a future hold of ZAMA is watched as usual.
+            _drop = []
+            for _s in HOLD_SAFETY_FLOOR_STOP_WATCHING:
+                _e = hold_no_sell_price.get(_s)
+                if _e and _e.get('hold_mark_price') and float(_e.get('ts', 0) or 0) < HOLD_SAFETY_FLOOR_STOP_BEFORE_TS:
+                    _e.pop('hold_mark_price', None)
+                    _drop.append(_s)
         log(f"   Loaded hold_no_sell_price: {len(hold_no_sell_price)} symbol.")
+        if _drop:
+            log(f"   [HOLD-SAFETY-FLOOR] berhenti memantau (koin sudah tidak ada di wallet): {', '.join(_drop)}")
+            save_hold_no_sell_price()
     except Exception as e:
         log(f"WARN gagal baca hold_no_sell_price.json: {e}")
 
@@ -4242,6 +4258,37 @@ if BINANCE_PROXY_URL and not re.match(r'^https?://[^\s:@/]+:[^\s@/]+@[0-9A-Za-z.
 if BINANCE_PROXY_URL:
     session.proxies.update({h: BINANCE_PROXY_URL for h in BINANCE_PROXY_HOSTS})
     print(f"[BINANCE-PROXY] REST Binance lewat proxy {BINANCE_PROXY_URL.rsplit('@', 1)[-1]}", flush=True)
+
+# Proxy health watch (08/11/2026, Mas Budi: "kabari kalau IP Railway sudah boleh dihapus di Binance"):
+# every Binance call through `session` is checked; a ProxyError or a -2015 (key/IP rejected) marks a
+# "problem". check_binance_proxy_health_email() e-mails once when the proxy has run 24h with no problem,
+# meaning the Railway IPs can be removed from the API-key whitelists.
+_proxy_health = {"ok": 0, "last_problem": 0.0, "first_ok": 0.0}
+_proxy_health_lock = threading.Lock()
+_session_send_orig = session.send
+
+
+def _session_send_watched(request, **kwargs):
+    proxied = bool(BINANCE_PROXY_URL) and any(request.url.startswith(h) for h in BINANCE_PROXY_HOSTS)
+    try:
+        resp = _session_send_orig(request, **kwargs)
+    except requests.exceptions.ProxyError:
+        if proxied:
+            with _proxy_health_lock:
+                _proxy_health["last_problem"] = time.time()
+        raise
+    if proxied:
+        with _proxy_health_lock:
+            if resp.status_code in (401, 400) and '"code":-2015' in (resp.text or "")[:200].replace(" ", ""):
+                _proxy_health["last_problem"] = time.time()
+            elif resp.status_code < 400:
+                _proxy_health["ok"] += 1
+                if not _proxy_health["first_ok"]:
+                    _proxy_health["first_ok"] = time.time()
+    return resp
+
+
+session.send = _session_send_watched
 
 # ===================== UTIL =====================
 def now_wib():
@@ -10709,6 +10756,54 @@ KB12H_APLUS_SINCE_WIB = "2026-11-08 20:00:00"   # count only KB12h deals opened 
 KB12H_APLUS_REVIEW_AT = (20, 30)
 KB12H_APLUS_OK_MIN_PER_USD_PCT = 0.30          # "sesuai" = $-weighted avg >= +0.30% and total $ > 0
 KB12H_APLUS_REVIEW_FLAG_FILE = os.path.join(DATA_DIR, "kb12h_aplus_review_sent.json")
+
+
+BINANCE_PROXY_HEALTH_FILE = os.path.join(DATA_DIR, "binance_proxy_health.json")
+BINANCE_PROXY_CLEAN_HOURS = 24
+
+
+def check_binance_proxy_health_email():
+    """E-mail Mas Budi ONCE when Binance calls have gone through our own proxy for
+    BINANCE_PROXY_CLEAN_HOURS with no ProxyError and no -2015 (see _session_send_watched): the
+    Railway IPs (208.77.246.240-242) can then be removed from the Binance API-key whitelists.
+    State persists in BINANCE_PROXY_HEALTH_FILE across restarts. Called from run_thread_orphan_reclaim()."""
+    try:
+        if not BINANCE_PROXY_URL:
+            return
+        st = {}
+        if os.path.exists(BINANCE_PROXY_HEALTH_FILE):
+            with open(BINANCE_PROXY_HEALTH_FILE) as f:
+                st = json.load(f) or {}
+        with _proxy_health_lock:
+            mem = dict(_proxy_health)
+        changed = False
+        if mem["first_ok"] and not st.get("first_ok"):
+            st["first_ok"] = mem["first_ok"]; changed = True
+        if mem["last_problem"] > float(st.get("last_problem", 0) or 0):
+            st["last_problem"] = mem["last_problem"]; changed = True
+        if changed:
+            with open(BINANCE_PROXY_HEALTH_FILE, 'w') as f:
+                json.dump(st, f)
+        if st.get("sent") or not st.get("first_ok") or not mem["ok"]:
+            return
+        clean_since = max(float(st["first_ok"]), float(st.get("last_problem", 0) or 0))
+        if time.time() - clean_since < BINANCE_PROXY_CLEAN_HOURS * 3600:
+            return
+        since_wib = datetime.fromtimestamp(clean_since, tz=timezone.utc).astimezone(timezone(timedelta(hours=7)))
+        body = (f"Koneksi Binance lewat IP sendiri (droplet DigitalOcean 146.190.93.255) sudah stabil "
+                f"{BINANCE_PROXY_CLEAN_HOURS} jam tanpa gangguan (sejak {since_wib.strftime('%d/%m/%Y %H:%M')} WIB): "
+                f"tidak ada error proxy dan tidak ada penolakan API key (-2015).\n\n"
+                f"Artinya IP Railway sudah BOLEH dihapus dari daftar IP di API key Binance:\n"
+                f"  208.77.246.240, 208.77.246.241, 208.77.246.242\n\n"
+                f"Lakukan di Binance > API Management untuk:\n"
+                f"  - key Sub Account (trading bot)\n  - railway-binance (Master)\n  - BINANCE_FUTURES_KEY (kalau ada)\n\n"
+                f"JANGAN hapus 146.190.93.255. Droplet DigitalOcean binance-proxy-sg jangan di-Destroy.")
+        send_email_open_long("[Bot] IP Railway sudah boleh dihapus dari API key Binance", body)
+        st["sent"] = time.time()
+        with open(BINANCE_PROXY_HEALTH_FILE, 'w') as f:
+            json.dump(st, f)
+    except Exception as e:
+        log(f"WARN check_binance_proxy_health_email: {e}")
 
 
 def check_kb12h_aplus_review():
@@ -18606,6 +18701,7 @@ def run_thread_orphan_reclaim():
         try:
             check_orphan_combine_checkin_reminder()
             check_kb12h_aplus_review()
+            check_binance_proxy_health_email()
             with cancelled_deal_price_lock:
                 snapshot = dict(cancelled_deal_price)
             try:
