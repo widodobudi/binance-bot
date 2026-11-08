@@ -7996,6 +7996,10 @@ def check_orphan_combine_checkin_reminder():
     tercapai -- lihat REMARK lengkap di atas. Dipanggil tiap siklus dari run_thread_orphan_reclaim()
     (~60 detik), aman dipanggil berkali-kali (no-op kalau belum due atau sudah pernah kirim)."""
     try:
+        # 08/11/2026: gabung-coin sudah diputuskan & dipasang (patch "addfund-shortfall-combine-and-partial",
+        # lihat ADDFUND_COMBINE_ENABLED) -- pengingat 06/12 utk memutuskan hal yg sama tidak perlu lagi.
+        if globals().get('ADDFUND_COMBINE_ENABLED'):
+            return
         if os.path.exists(ORPHAN_COMBINE_CHECKIN_FLAG_FILE):
             return
         if now_wib().strftime('%Y-%m-%d') < ORPHAN_COMBINE_CHECKIN_DUE_WIB:
@@ -8547,6 +8551,62 @@ def run_thread_addfund_conditional():
 # terpakai dari jatah MAX_ADDS (permintaan eksplisit Mas Budi) -- caller (thread2_monitor) yang
 # menaikkan counter reclaim_addfund_count, SAMA kebijakannya dgn toggle-off/capacity-penuh/
 # modal<=0 yang sudah berlaku sebelumnya (lihat REMARK TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES).
+# ── Patch "addfund-shortfall-combine-and-partial" (08/11/2026, keputusan Mas Budi "(c) keduanya") ────
+# Dulu: saldo kurang -> auto-convert HANYA kalau ada SATU coin yg sendirian cukup -> kalau gagal, AI
+# pilih SEMUA/SEPARUH/TUNDA dari sisa USDT -- dan di ZEC/MUBARAK/ARB/SUPER (06/11) AI SELALU TUNDA.
+# Mas Budi: "jangan dibatalkan -- tetap convert (pilih yg layak), dan sisa USDT yg kurang tetap dipakai".
+# Uji (08/11/2026, scratchpad r2r3_bt/addfund_partial.py, TrenKonfirmasi-4h 244 coin 2022-2026, ~6.000
+# deal kena add fund): add sebagian > TUNDA (1/2 & penuh menang di 5/5 tahun, TRAIN & TEST; makin besar
+# makin baik, +0,14%/+0,30%/+0,41% per $ tambahan); coin orphan sesudah hard stop kalau DITAHAN: median
+# -2,2% (7 hari), -8,1% (30 hari), 47% turun >10% lagi -> menjualnya utk add fund layak.
+# Urutan sekarang: (1) saldo cukup -> penuh; (2) satu coin cukup -> auto-convert lama (tidak diubah);
+# (3) BARU: GABUNG beberapa coin -- orphan cancelled yg UNTUNG dulu (paling untung dulu, yg rugi tetap
+# dibiarkan spt aturan lama Mas Budi), lalu aset nganggur yg diketahui rugi (paling jelek dulu), lalu
+# yg asal-usulnya tidak diketahui (terkecil dulu) -- dijual ke USDT sampai kekurangan tertutup;
+# (4) BARU: pakai SISA USDT yg ada (boleh kurang dari target) TANPA ditunda AI. Hanya di bawah
+# BINANCE_MIN_NOTIONAL_SAFE_USD ($6, minimum order Binance + jarak aman) add fund dilewati.
+ADDFUND_COMBINE_ENABLED = True
+
+def _gather_usdt_from_idle_assets(shortfall_usd: float, exclude_asset: str) -> dict:
+    """Jual BEBERAPA coin nganggur/orphan ke USDT sampai `shortfall_usd` (+buffer) tertutup atau
+    kandidat habis. Return {"proceeds": float, "sold": [(asset, usdt), ...]}. Tiap penjualan minimal
+    BINANCE_MIN_NOTIONAL_SAFE_USD (order lebih kecil ditolak Binance)."""
+    need = shortfall_usd * (1 + AUTOFUND_IDLE_ASSET_BUFFER_PCT / 100)
+    min_sell = BINANCE_MIN_NOTIONAL_SAFE_USD
+    pool, seen = [], {exclude_asset}
+    try:
+        orph = [a for a in get_orphaned_cancelled_assets(min_value_usdt=min_sell) if (a['floating_pct'] or 0) > 0]
+        orph.sort(key=lambda a: -a['floating_pct'])
+        idle = get_idle_wallet_assets(min_value_usdt=min_sell)
+        known = sorted([a for a in idle if a['floating_pct'] is not None], key=lambda a: a['floating_pct'])
+        unknown = sorted([a for a in idle if a['floating_pct'] is None], key=lambda a: a['value_usdt'])
+        for a in orph + known + unknown:
+            if a['asset'] not in seen:
+                seen.add(a['asset']); pool.append(a)
+    except Exception as e:
+        log(f"WARN [ADDFUND-COMBINE] daftar kandidat gagal: {e}")
+    proceeds, sold = 0.0, []
+    for a in pool:
+        if proceeds >= need:
+            break
+        rest = need - proceeds
+        value = float(a['value_usdt'])
+        if value < min_sell:
+            continue
+        frac = 1.0 if (rest >= value or value - rest < min_sell) else max(rest, min_sell) / value
+        try:
+            r = sell_to_usdt(a['asset'] + "USDT", qty=float(a['free']) * frac)
+        except Exception as e:
+            r = {"ok": False, "error": str(e)}
+        if r.get("ok") and float(r.get("proceeds_usdt", 0) or 0) > 0:
+            got = float(r["proceeds_usdt"])
+            proceeds += got
+            sold.append((a['asset'], got, a.get('floating_pct')))
+            log(f"[ADDFUND-COMBINE] {a['asset']} dijual ${got:.2f} ({frac * 100:.0f}% dari ${value:.2f})")
+        else:
+            log(f"WARN [ADDFUND-COMBINE] jual {a['asset']} gagal: {r.get('error')}")
+    return {"proceeds": proceeds, "sold": sold}
+
 def handle_reclaim_addfund_shortfall(symbol: str, strategy: str, deal: dict, target_usd: float,
                                       add_index: int, max_adds: int) -> dict:
     """Return dict {"ok", "mode" ("full"/"converted"/"partial"/"skipped"), "amount", "price",
@@ -8575,6 +8635,32 @@ def handle_reclaim_addfund_shortfall(symbol: str, strategy: str, deal: dict, tar
     if conv.get('ok'):
         return {"ok": True, "mode": "converted", "amount": target_usd,
                 "price": conv.get('avg_price', 0), "source_asset": conv.get('source_asset')}
+
+    if ADDFUND_COMBINE_ENABLED:
+        # Patch "addfund-shortfall-combine-and-partial" (lihat REMARK di atas _gather_usdt_from_idle_assets).
+        free_now, _ = get_usdt_balance()
+        gathered = {"proceeds": 0.0, "sold": []}
+        if free_now < target_usd:
+            log(f"[T2] {symbol} reclaim-addfund: tidak ada SATU coin yg cukup -- gabung beberapa coin nganggur/orphan "
+                f"utk kekurangan ${target_usd - free_now:.2f}")
+            gathered = _gather_usdt_from_idle_assets(target_usd - free_now, symbol.replace("USDT", ""))
+            free_now, _ = get_usdt_balance()
+        amount = round(min(target_usd, free_now - 0.05), 2)
+        sold_txt = ", ".join(f"{a} ${u:.2f}" + (f" ({p:+.1f}%)" if p is not None else "") for a, u, p in gathered["sold"])
+        if amount < BINANCE_MIN_NOTIONAL_SAFE_USD:
+            note = (f"saldo USDT setelah gabung coin cuma ${max(free_now, 0):.2f} (< ${BINANCE_MIN_NOTIONAL_SAFE_USD:.0f}, "
+                    f"minimum order Binance)" + (f"; terjual: {sold_txt}" if sold_txt else "; tidak ada coin nganggur yg layak"))
+            return {"ok": False, "mode": "skipped", "amount": amount, "error": note, "ai_reasoning": note}
+        note = (f"pakai ${amount:.2f} dari target ${target_usd:.2f}" + (f"; gabung coin: {sold_txt}" if sold_txt else
+                "; dari sisa USDT"))
+        if sold_txt:
+            send_telegram(f"🔁 AUTO-CONVERT gabungan utk Add Fund {to_display_pair(symbol)}\n"
+                          f"Terjual: {sold_txt}\nAdd fund: ${amount:.2f} (butuh ${target_usd:.2f})", parse_mode=None)
+        result = execute_add_fund(symbol, amount)
+        mode = "full" if amount >= target_usd - 0.01 else "partial"
+        if result.get('ok'):
+            return {"ok": True, "mode": mode, "amount": amount, "price": result.get('price', 0), "ai_reasoning": note}
+        return {"ok": False, "mode": mode, "amount": amount, "error": result.get('error'), "ai_reasoning": note}
 
     log(f"[T2] {symbol} reclaim-addfund: auto-convert juga gagal/tidak ada kandidat cukup -- minta AI putuskan porsi dari sisa saldo")
     decision = ai_decide_reclaim_addfund_shortfall(symbol, strategy, deal, target_usd, free_usdt_now, add_index, max_adds)
@@ -13514,7 +13600,7 @@ def thread2_monitor():
                             if _kb_mode == 'converted':
                                 log(f"[T2] {sym} smallstart-reclaim: dana dari auto-convert ({_kb_result.get('source_asset')}) -- modal penuh ${_kb_modal:.0f} tercukupi")
                             else:
-                                _kb_label = "SEBAGIAN (AI, saldo mepet)" if _kb_mode == 'partial' else "penuh"
+                                _kb_label = "SEBAGIAN, saldo mepet" if _kb_mode == 'partial' else "penuh"
                                 send_telegram(
                                     f"📈 Smallstart Reclaim Add-Fund (KeltnerBreak-12h) -- ke-{_kb_add_count + 1}/{KB12H_RECLAIM_ADDFUND_MAX_ADDS}" +
                                     (f" [{_kb_label}]" if _kb_mode == 'partial' else "") + "\n"
@@ -13605,7 +13691,7 @@ def thread2_monitor():
                             if _rc_mode == 'converted':
                                 log(f"[T2] {sym} reclaim-addfund: dana dari auto-convert ({_rc_result.get('source_asset')}) -- modal penuh ${_rc_modal:.0f} tercukupi")
                             else:
-                                _rc_label = "SEBAGIAN (AI, saldo mepet)" if _rc_mode == 'partial' else "penuh"
+                                _rc_label = "SEBAGIAN, saldo mepet" if _rc_mode == 'partial' else "penuh"
                                 send_telegram(
                                     f"📈 Reclaim Add-Fund (TrenKonfirmasi-4h) -- ke-{_rc_add_count + 1}/{TRENDCONFIRM_RECLAIM_ADDFUND_MAX_ADDS}" +
                                     (f" [{_rc_label}]" if _rc_mode == 'partial' else "") + "\n"
