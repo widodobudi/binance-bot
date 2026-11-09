@@ -6752,6 +6752,13 @@ def reconcile_active_deals_wallet_qty():
             diff = qty_total - qty_coin_saved
             active_deals[sym]["qty_wallet"] = qty_total
             active_deals[sym]["qty_diff"] = diff
+            # 09/11/2026 'auto-sync-manual-fallback': coins already in the wallet within 10 min of the
+            # open = leftovers from an older deal (baseline, never merged); later growth = manual add.
+            _dd = active_deals[sym]
+            if "wallet_base_diff" not in _dd and qty_coin_saved > 0:
+                _opened = float(_dd.get("opened_wall_ts") or _dd.get("opened_ts") or 0)
+                _dd["wallet_base_diff"] = max(0.0, diff) if (_opened and time.time() - _opened < 600) else 0.0
+            base_diff = float(_dd.get("wallet_base_diff", 0) or 0)
             changed = True
         if qty_coin_saved > 0 and abs(diff) > qty_coin_saved * RECONCILE_QTY_TOL_PCT / 100:
             log(f"[WALLET-RECONCILE] {sym}: wallet {qty_total:.4f} vs bot {qty_coin_saved:.4f} "
@@ -6762,7 +6769,7 @@ def reconcile_active_deals_wallet_qty():
             # Diff NEGATIF (wallet < catatan bot) SENGAJA TIDAK disentuh di sini (bisa macam2
             # sebab -- bug, dijual manual, dll -- lihat REMARK lengkap di auto_sync_manual_buy()).
             if diff > 0:
-                auto_sync_manual_buy(sym, asset, qty_total, qty_coin_saved)
+                auto_sync_manual_buy(sym, asset, qty_total, qty_coin_saved, base_diff)
     if changed:
         save_active_deals()
 
@@ -6789,7 +6796,31 @@ def reconcile_active_deals_wallet_qty():
 # sekarang". qty_coin & entry_price yang disinkronkan di sini SUDAH cukup -- estimate_deal_total_usd()
 # otomatis baca qty_coin*entry_price (prioritas 1), jadi "modal sekarang" tetap benar di mana pun
 # tanpa perlu ikut menimpa target_usd.
-def auto_sync_manual_buy(sym: str, asset: str, qty_wallet: float, qty_coin_old: float) -> bool:
+def _manual_extra_price(asset: str, extra_qty: float):
+    """Price for coins added manually outside MET/USDT spot trades (see auto_sync_manual_buy).
+    Returns (price, source_note); price 0 if unknown."""
+    try:
+        now_ms = int(time.time() * 1000)
+        data = _binance_trading_request("GET", "/sapi/v1/convert/tradeFlow",
+                                        {"startTime": now_ms - 24 * 3600 * 1000, "endTime": now_ms, "limit": 100})
+        q = c = 0.0
+        for it in (data or {}).get("list", []):
+            if (it.get("toAsset") == asset and it.get("fromAsset") in ("USDT", "USDC", "FDUSD")
+                    and str(it.get("orderStatus", "SUCCESS")).upper() == "SUCCESS"):
+                q += float(it.get("toAmount", 0) or 0)
+                c += float(it.get("fromAmount", 0) or 0)
+        if q > 0 and abs(q - extra_qty) / extra_qty <= 0.20:
+            return c / q, "riwayat Convert Binance"
+    except Exception as e:
+        log(f"[AUTO-SYNC-MANUAL] {asset}: riwayat Convert tidak terbaca ({e}) -- pakai harga pasar")
+    try:
+        p = float(get_price_now(asset + "USDT") or 0)
+        return p, "harga pasar saat terdeteksi (riwayat trade/Convert tidak cocok)"
+    except Exception:
+        return 0.0, ""
+
+
+def auto_sync_manual_buy(sym: str, asset: str, qty_wallet: float, qty_coin_old: float, base_diff: float = 0.0) -> bool:
     """Return True kalau berhasil sync, False kalau dilewati (gagal ambil data / qty dari
     myTrades tidak cocok wallet)."""
     try:
@@ -6800,42 +6831,64 @@ def auto_sync_manual_buy(sym: str, asset: str, qty_wallet: float, qty_coin_old: 
     if avg_cost <= 0:
         return False
     pos_qty_from_trades = float(_binance_avg_pos_qty.get(asset, 0) or 0)
+    src_note = "riwayat trade Spot (myTrades)"
+    new_qty = qty_wallet
     if pos_qty_from_trades <= 0 or abs(pos_qty_from_trades - qty_wallet) / qty_wallet > 0.20:
-        log(f"WARN [AUTO-SYNC-MANUAL] {sym}: qty dari myTrades ({pos_qty_from_trades:.4f}) tidak cocok "
-            f"wallet ({qty_wallet:.4f}) -- dilewati, tidak di-auto-sync (cuma display yg ke-update)")
-        return False
+        # 09/11/2026 patch 'auto-sync-manual-fallback' (Mas Budi: "INI BUG", case MET/USDT): a manual add
+        # bought via Convert / Buy Crypto / another quote pair / transfer from Master never shows up in
+        # MET/USDT myTrades, so the old rule skipped the sync forever and the bot would sell only its own
+        # qty at exit, leaving the manual coins behind. Now: price the EXTRA coins from Convert history
+        # (last 24h, stablecoin -> asset) if it matches the extra qty within 20%, else at the market price
+        # when first detected (reconcile runs every 3 min). Coins already in the wallet when the deal was
+        # opened (leftovers of an earlier hold/cancelled deal) are the deal's 'wallet_base_diff' baseline
+        # (see reconcile_active_deals_wallet_qty) and are NOT merged -- only growth after the open is.
+        extra = qty_wallet - qty_coin_old - max(0.0, base_diff)
+        if extra <= qty_coin_old * RECONCILE_QTY_TOL_PCT / 100:
+            return False
+        new_qty = qty_coin_old + extra
+        px, src_note = _manual_extra_price(asset, extra)
+        if px <= 0:
+            log(f"WARN [AUTO-SYNC-MANUAL] {sym}: harga tambahan manual tidak bisa ditentukan -- dilewati")
+            return False
+        with active_deals_lock:
+            if sym not in active_deals:
+                return False
+            _old_e = float(active_deals[sym].get('entry_price', 0) or 0)
+        if _old_e <= 0:
+            return False
+        avg_cost = (qty_coin_old * _old_e + extra * px) / new_qty
     with active_deals_lock:
         if sym not in active_deals:
             return False
         old_entry = float(active_deals[sym].get('entry_price', 0) or 0)
         old_total = estimate_deal_total_usd(active_deals[sym])
-        active_deals[sym]['qty_coin']    = qty_wallet
+        active_deals[sym]['qty_coin']    = new_qty
         active_deals[sym]['entry_price'] = avg_cost
         active_deals[sym]['qty_wallet']  = qty_wallet
-        active_deals[sym]['qty_diff']    = 0.0
+        active_deals[sym]['qty_diff']    = qty_wallet - new_qty
         # 21/09/2026 (lihat REMARK lengkap di send_add_funds()): peak/trailing_armed WAJIB direset
         # stlh basis entry berubah, supaya trailing tidak "armed" seketika pakai peak lama vs entry baru.
         active_deals[sym]['peak']          = max(avg_cost, float(active_deals[sym].get('peak', 0) or 0))
         active_deals[sym]['trailing_armed'] = False
         for _k in ("trail_htf_grace_started_at", "armed_at_wib", "armed_price", "armed_prof_pct"):
             active_deals[sym].pop(_k, None)
-        new_total = qty_wallet * avg_cost
+        new_total = new_qty * avg_cost
     save_active_deals()
     with _tp_tier_lock:
         overrides = load_deal_overrides()
         entry = overrides.get(sym, {})
         tiers = entry.get('tp_tiers', [])
         if tiers and not any(t.get('done') for t in tiers):
-            entry['tp_tiers_base_qty'] = qty_wallet
+            entry['tp_tiers_base_qty'] = new_qty
             overrides[sym] = entry
             save_deal_overrides(overrides)
-    log(f"[AUTO-SYNC-MANUAL] {sym}: qty {qty_coin_old:.4f}->{qty_wallet:.4f}, avg {old_entry:.6g}->{avg_cost:.6g}, "
+    log(f"[AUTO-SYNC-MANUAL] {sym}: qty {qty_coin_old:.4f}->{new_qty:.4f}, avg {old_entry:.6g}->{avg_cost:.6g}, "
         f"modal ${old_total:.2f}->${new_total:.2f} (terdeteksi add manual di luar bot)")
     send_telegram(
         f"\U0001F501 <b>Add Manual Tersinkron Otomatis</b> -- {to_display_pair(sym)}\n"
         f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-        f"Terdeteksi beli manual di Binance (di luar jalur bot) -- qty & harga average disamakan ke riwayat trade asli (myTrades).\n"
-        f"Qty: {qty_coin_old:.4f} -> {qty_wallet:.4f} {asset}\n"
+        f"Terdeteksi beli manual di Binance (di luar jalur bot) -- qty & harga average disamakan (sumber harga: {src_note}).\n"
+        f"Qty: {qty_coin_old:.4f} -> {new_qty:.4f} {asset}\n"
         f"Average: {_fmt_price(old_entry)} -> {_fmt_price(avg_cost)}\n"
         f"Modal sekarang: ${old_total:.2f} -> ${new_total:.2f}",
         parse_mode=None)
