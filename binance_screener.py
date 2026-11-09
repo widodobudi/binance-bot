@@ -19987,7 +19987,7 @@ refreshRuleWatchAi();
           <!-- 01/11/2026 (permintaan Mas Budi): "Chart Deal" (candlestick custom + marker, sama
           modal dgn Closed Deals) ditambahkan juga di sini -- lihat REMARK lengkap di
           openActiveDealChartModal() (dash.js). -->
-          <button type="button" onclick="openActiveDealChartModal('{{ sym }}','{{ _sm.get(d.get('strategy',''),d.get('strategy','-')) }}','{{ d.get('opened_at','') }}',{{ d.get('entry_price',0) }},{{ d.get('last_price',0) }})" title="Chart candle + marker Entry/Average, harga sekarang (di dalam dashboard, deal masih berjalan)" style="margin-top:4px;background:var(--yellow);color:#1a1300;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Chart Deal</button>
+          <button type="button" onclick="openActiveDealChartModal('{{ sym }}','{{ _sm.get(d.get('strategy',''),d.get('strategy','-')) }}','{{ d.get('opened_at','') }}',{{ d.get('entry_price',0) }},{{ d.get('last_price',0) }},'{{ d.get('strategy','') }}')" title="Chart candle + marker Entry/Average, harga sekarang (di dalam dashboard, deal masih berjalan)" style="margin-top:4px;background:var(--yellow);color:#1a1300;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Chart Deal</button>
           <button type="button" onclick="refreshDealRow('{{ sym }}')" id="rrbtn-{{ sym }}" title="Refresh cuma baris ini (harga, profit, selisih wallet, status tier) -- tidak reload semua deal" style="margin-top:4px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">&#8635; Refresh</button></td>
         <td style="white-space:nowrap">
           <div style="font-size:9px;color:var(--muted);margin-bottom:2px">{{ "Average" if d.get("add_fund_sent") else "Entry" }}</div>
@@ -21899,7 +21899,7 @@ function openDealChartModal(i) {
     legendEl.innerHTML = '';
     bodyEl.innerHTML = '<div style="color:var(--muted);padding:30px;text-align:center">Memuat candle dari Binance...</div>';
     modal.style.display = 'flex';
-    var qs = 'symbol=' + encodeURIComponent(r.symbol) + '&open_time=' + encodeURIComponent(r.open_time || '') + '&close_time=' + encodeURIComponent(r.close_time || '');
+    var qs = 'symbol=' + encodeURIComponent(r.symbol) + '&open_time=' + encodeURIComponent(r.open_time || '') + '&close_time=' + encodeURIComponent(r.close_time || '') + '&strategy=' + encodeURIComponent(r.strategy || '');
     fetch('/api/deal_chart?' + qs).then(function(resp) { return resp.json(); }).then(function(d) {
         if (!d.ok) { bodyEl.innerHTML = '<div style="color:var(--red);padding:20px;text-align:center">Gagal memuat chart: ' + (d.error || '?') + '</div>'; return; }
         var base = parseFloat(r.entry_price);
@@ -21931,7 +21931,7 @@ document.addEventListener('keydown', function(e) { if (e.key === 'Escape') close
 // -- active_deals['entry_price'] SUDAH rata-rata tertimbang yang live-diupdate tiap add-fund,
 // beda dari closed-trades yang avg-nya harus diturunkan balik dari profit_pct krn tidak
 // tersimpan terpisah), exitPrice diisi harga SEKARANG (closeLabel='SEKARANG', bukan 'CLOSE').
-function openActiveDealChartModal(sym, strategyLabel, openedAt, entryPrice, lastPrice) {
+function openActiveDealChartModal(sym, strategyLabel, openedAt, entryPrice, lastPrice, strategyKey) {
     var modal = document.getElementById('deal-chart-modal');
     var titleEl = document.getElementById('deal-chart-title');
     var legendEl = document.getElementById('deal-chart-legend');
@@ -21944,7 +21944,7 @@ function openActiveDealChartModal(sym, strategyLabel, openedAt, entryPrice, last
     function p2(n) { return (n < 10 ? '0' : '') + n; }
     var closeTimeStr = nowWib.getUTCFullYear() + '-' + p2(nowWib.getUTCMonth() + 1) + '-' + p2(nowWib.getUTCDate()) +
         ' ' + p2(nowWib.getUTCHours()) + ':' + p2(nowWib.getUTCMinutes()) + ':' + p2(nowWib.getUTCSeconds());
-    var qs = 'symbol=' + encodeURIComponent(sym) + '&open_time=' + encodeURIComponent(openedAt || '') + '&close_time=' + encodeURIComponent(closeTimeStr);
+    var qs = 'symbol=' + encodeURIComponent(sym) + '&open_time=' + encodeURIComponent(openedAt || '') + '&close_time=' + encodeURIComponent(closeTimeStr) + '&strategy=' + encodeURIComponent(strategyKey || '');
     fetch('/api/deal_chart?' + qs).then(function(resp) { return resp.json(); }).then(function(d) {
         if (!d.ok) { bodyEl.innerHTML = '<div style="color:var(--red);padding:20px;text-align:center">Gagal memuat chart: ' + (d.error || '?') + '</div>'; return; }
         var entry = parseFloat(entryPrice) || 0;
@@ -34249,6 +34249,15 @@ def run_web_dashboard():
                     if total_sec / sec <= 130:
                         interval = name
                         break
+                # 09/11/2026 (Mas Budi: chart deal must use the deal's own strategy timeframe, not 1m):
+                # when ?strategy= is given, candles = that strategy's TF (TC4h -> 4h, KB12h -> 12h,
+                # KB1D -> 1d ...), from 60 candles before the open to 3 candles after the close/now.
+                _tf = BB_UPPER_TF_BY_STRATEGY.get(request.args.get("strategy", "").strip())
+                _tf_sec = dict(INTERVALS).get(_tf)
+                if _tf_sec:
+                    interval = _tf
+                    range_start = open_dt - _dt.timedelta(seconds=60 * _tf_sec)
+                    range_end = close_dt + _dt.timedelta(seconds=3 * _tf_sec)
                 start_ms = int(range_start.timestamp() * 1000)
                 end_ms = int(range_end.timestamp() * 1000)
                 r = _binance_get("/api/v3/klines", params={

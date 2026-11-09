@@ -141,6 +141,10 @@
 - 08/11: saldo kurang → gabung coin orphan/nganggur → pakai sisa USDT (min $6), tanpa ditunda AI
 - Alasan: uji add fund sebagian > TUNDA; orphan cenderung turun
 - Status: berjalan (deploy 09:33 WIB)
+### deal-chart-strategy-tf (09/11)
+- Chart Deal (deal aktif & closed) pakai timeframe strategi: TC4h 4h, KB12h 12h, KB1D 1d; 60 candle sebelum open
+- Alasan: dulu interval otomatis (deal baru → candle 1 menit), beda jauh dgn TradingView
+- Status: deploy 09/11 malam
 ### auto-sync-manual-fallback (16fcf27, tag patch-auto-sync-manual-fallback)
 - 09/11: add manual via Convert ikut tersinkron (harga dari riwayat Convert; cadangan harga pasar saat terdeteksi)
 - Sisa koin lama saat deal dibuka tidak digabung (wallet_base_diff)
