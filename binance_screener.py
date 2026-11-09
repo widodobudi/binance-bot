@@ -776,7 +776,12 @@ TRENDCONFIRM_MAX_HOLD_CANDLES= 15        # timeout 15 candle 4h = 2.5 hari, sama
 TRENDCONFIRM_RECLAIM_ADDFUND_N_CANDLES   = 15   # 5->15 (28/10/2026) -- jendela lookback cross-down, lihat REMARK di atas
 TRENDCONFIRM_RECLAIM_ADDFUND_RVOL_MIN    = 0.0  # 1.0->0 (28/10/2026) -- syarat volume DIHAPUS, lihat REMARK di atas
 TRENDCONFIRM_RECLAIM_ADDFUND_TOLERANCE_PCT = 5.0  # BARU (28/10/2026) -- candle cross-up cukup close >= EMA20*(1-5%), tidak wajib PERSIS di atas garis
-TRENDCONFIRM_RECLAIM_ADDFUND_MAX_ADDS    = 2    # BARU (28/10/2026) -- boleh kena add-fund reclaim sampai 2x per deal (dulu cuma 1x)
+# 09/11/2026 patch 'tc4h-reclaim-addfund-off' (Mas Budi: "YA SUDAH MATIKAN"): 2 -> 0. 1-minute retest of
+# 6,000 TC4h deals 2022-2026 (scratchpad tc4h_1m): with reclaim add-funds the strategy is -0.15% per $;
+# without them per $ is about the same (-0.14%) but total $ loss drops ~40% (-$111 -> -$67), and live
+# since 25/10 the biggest losses were exactly the added deals (ONE $53, SUPER $47, MARSCOIN $40, ZAMA $23).
+# 0 disables BOTH reclaim paths (active deals in thread2_monitor and cancelled-orphan reclaim).
+TRENDCONFIRM_RECLAIM_ADDFUND_MAX_ADDS    = 0    # was 2 (28/10/2026)
 TRENDCONFIRM_RECLAIM_ADDFUND_STEP_USD    = 32.0 # 28/10/2026: 22 (step tambahan ke-2 dst, dulu SAMA BESAR dgn step
                                                  # ke-1 $8->$30=+$22). 01/11/2026: naik ke 32 ikutin SMALLSTART_FULL_TARGET_USD
                                                  # trend_confirm_4h 30->40 (step ke-1 jadi +$32 juga) -- lihat REMARK
