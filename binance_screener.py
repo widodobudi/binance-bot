@@ -9361,11 +9361,14 @@ def ekstrem_supertrend_size_mult(symbol: str, strategy: str, atr_pct: float | No
     konservatif yang sama dgn mekanisme BTC lain di fungsi ini."""
     # 08/11/2026 patch 'kb12h-exit-fix' (2): KB12h Ekstrem + Supertrend 1D down -> BLOCK.
     # Fail-open (data error = allow), same direction as the other KB12h entry gates.
-    if (strategy in KB12H_STRATS and KB12H_EKSTREM_ST1D_BLOCK
-            and atr_pct is not None and atr_pct >= EKSTREM_ATR_PCT
-            and kb12h_ekstrem_st1d_down(symbol) is True):
-        return 0.0, (f"ATR%={atr_pct:.2f} Ekstrem + Supertrend 1D turun -- BLOKIR "
-                     f"(patch 'kb12h-exit-fix' 08/11/2026, backtest 1 menit 2022-2026)")
+    # 09/11/2026 patch 'kb12h-quality-filters' (Mas Budi: "BOLEH"): the Ekstrem rule now blocks ALL
+    # Ekstrem entries, plus three more entry filters -- see kb12h_quality_block().
+    if strategy in KB12H_STRATS and KB12H_EKSTREM_ST1D_BLOCK:
+        if atr_pct is not None and atr_pct >= EKSTREM_ATR_PCT:
+            return 0.0, (f"ATR%={atr_pct:.2f} tier Ekstrem -- BLOKIR (patch 'kb12h-quality-filters' 09/11/2026)")
+        _qb = kb12h_quality_block(symbol)
+        if _qb:
+            return 0.0, f"{_qb} -- BLOKIR (patch 'kb12h-quality-filters' 09/11/2026)"
     cfg = EKSTREM_SUPERTREND_SIZING.get(strategy)
     if cfg is None:
         return 1.0, ""
@@ -10750,7 +10753,7 @@ def get_btc_chg_pct(window_hours: int):
 # early-cut 48h and timeout are UNCHANGED. Scripts: scratchpad kb12h_loss_bt/exit_grid*.py,
 # improve.py, combo_choice.py.
 KB12H_STRATS = ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed')
-KB12H_ARM_MULT = 4.0
+KB12H_ARM_MULT = 6.0   # 09/11/2026 kb12h-quality-filters: 4 -> 6
 KB12H_EKSTREM_ST1D_BLOCK = True
 KB12H_EARLY_WATCH_ENABLED = True
 KB12H_EARLY_WATCH_CHECK_MIN = (5, 10)
@@ -10900,6 +10903,48 @@ def kb12h_ekstrem_st1d_down(symbol: str):
     with _live_supertrend_cache_lock:
         _live_supertrend_cache[key] = (now, down)
     return down
+
+
+# ── Patch 'kb12h-quality-filters' (09/11/2026, Mas Budi: "BOLEH") ──────────────────────────────────
+# 1-minute data, 4,079 KB12h deals 2022-2026. On top of kb12h-exit-fix/aplus:
+#  - block ALL Ekstrem-tier entries (was: only Ekstrem + coin Supertrend 1D down),
+#  - only when BTCUSDT Supertrend(10,3) of the last closed 1D candle is UP,
+#  - RSI(14) of the last CLOSED 12h candle < 65 (don't buy an already overheated coin),
+#  - entry price < 3% above the Keltner upper (EMA20 + 2 x ATR10) of the last closed 12h candle
+#    (don't chase a coin that has already run away),
+#  - trailing arms at 6x the tier threshold (KB12H_ARM_MULT 4 -> 6).
+# Result: +0.47%/deal (live rules) -> +1.29%/deal, TRAIN +1.02 / TEST +1.65, all 5 years positive;
+# arm 4x/5x/8x give +1.03/+1.17/+1.20 (plateau, not a single lucky point). ~28% of the old signals pass.
+# Data errors fail OPEN (allow), like the other KB12h gates. Script: scratchpad newstrat/kb12h_boost.py.
+KB12H_RSI_MAX = 65.0
+KB12H_EXT_MAX_PCT = 3.0
+
+
+def kb12h_quality_block(symbol: str):
+    """Return a reason string if the KB12h quality filters reject this entry, else ''."""
+    try:
+        if kb12h_ekstrem_st1d_down('BTCUSDT') is True:
+            return "BTC Supertrend 1D turun"
+        frame = get_ohlcv(symbol, interval='12h', limit=80)
+        if frame is None or len(frame) < 30:
+            return ""
+        now_ms = int(time.time() * 1000)
+        closed = frame[frame['ct'] < now_ms]
+        if len(closed) < 25:
+            return ""
+        c, h, l = closed['close'].astype(float), closed['high'].astype(float), closed['low'].astype(float)
+        rsi = ta.rsi(c, length=14).iloc[-1]
+        kc = (ta.ema(c, length=KELTNER_EMA_LEN) + KELTNER_MULT * ta.atr(h, l, c, length=KELTNER_ATR_LEN)).iloc[-1]
+        price = get_price_now(symbol)
+        if not pd.isna(rsi) and rsi >= KB12H_RSI_MAX:
+            return f"RSI 12h {rsi:.1f} >= {KB12H_RSI_MAX:g}"
+        if price and not pd.isna(kc) and kc > 0:
+            ext = (price / kc - 1) * 100
+            if ext >= KB12H_EXT_MAX_PCT:
+                return f"harga {ext:.2f}% di atas Keltner 12h (>= {KB12H_EXT_MAX_PCT:g}%)"
+    except Exception as e:
+        log(f"WARN [KB12H-QUALITY] {symbol}: {e} -- lolos (fail-open)")
+    return ""
 
 
 def get_arm_pct(atr_pct: float, strategy: str = None) -> float:
