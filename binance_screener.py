@@ -1908,6 +1908,8 @@ STRATEGY_CONFIG_DEFAULTS = {
     # diturunkan dari $10 ke $6 -- masih di atas minimum exchange ($5), probe makin kecil/makin
     # murah risikonya per entry.
     "topgainers_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 6, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
+    # 09/11/2026 KeltnerBreak-1D (see KB1D_* REMARK): pure rules like its backtest -> no AI open/close.
+    "kb1d": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
 }
 # 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
 # default TRUE di semua strategi (kecuali mombreak_1h, sama seperti ai_call_open -- desain rule-based
@@ -9560,6 +9562,9 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     elif strategy == 'topgainers_4h':
         target  = float(_cfg_base if _cfg_base else 10.0)
         add_usd = 0
+    elif strategy == 'kb1d':   # 09/11/2026 KeltnerBreak-1D: flat base_usd ($8), no add-fund
+        target  = float(_cfg_base if _cfg_base else 8.0)
+        add_usd = 0
     # brkX2_4h di Binance direct: pakai base_usd dari Strategy Control, KECUALI tier
     # conviction (ATR%+Volume tinggi bersamaan di candle sinyal, lihat BRKX2_4H_CONVICTION_*)
     elif strategy == 'brkX2_4h' and USE_BINANCE_DIRECT:
@@ -10759,6 +10764,8 @@ KB12H_EARLY_WATCH_MAX_LATE_MIN = 5   # a checkpoint missed by >5 min (bot restar
 # $32 still 5/5 years (2025 ~0), from $40 year 2025 turns negative -> $24 now, review for $32
 # after 20-30 live deals (KB12H_APLUS_REVIEW_*, e-mail only, Mas Budi's request). Reclaim
 # add-fund targets are unchanged (the first add simply has less to add for an Aktif deal).
+KB1D_ARM_MULT = 6.0        # KeltnerBreak-1D (see KB1D_* REMARK near thread_kb1d_scan)
+KB1D_MAX_HOLD_DAYS = 5
 KB12H_AKTIF_ATR_RANGE = (2.0, 4.0)
 KB12H_AKTIF_BASE_MULT = 3.0
 KB12H_MAX_HOLD_CANDLES = 10
@@ -10920,6 +10927,8 @@ def get_arm_pct(atr_pct: float, strategy: str = None) -> float:
     # AST-loaded backtest copies (strategy=None, constant not loaded) working.
     if strategy and strategy in KB12H_STRATS:
         return base * KB12H_ARM_MULT
+    if strategy == 'kb1d':
+        return base * KB1D_ARM_MULT   # 09/11/2026 KeltnerBreak-1D
     return base
 
 
@@ -10978,6 +10987,8 @@ def compute_deal_urgency(sym: str, d: dict):
         hold_limit_sec = TOPGAINERS_TIMEOUT_HOURS * 3600  # 19/10/2026 -- lihat REMARK di thread2_monitor()
     elif strat in KB12H_STRATS:
         hold_limit_sec = KB12H_MAX_HOLD_CANDLES * SECONDS_PER_CANDLE  # 08/11/2026 patch kb12h-aplus
+    elif strat == 'kb1d':
+        hold_limit_sec = KB1D_MAX_HOLD_DAYS * KB1D_SECONDS
     else:
         hold_limit_sec = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
     hours_to_timeout = max(0.0, (hold_limit_sec - (now - opened_ts)) / 3600) if opened_ts > 0 else None
@@ -11589,6 +11600,7 @@ BB_UPPER_TF_BY_STRATEGY = {
     'mombreak_1h': '1h',
     'hunting_4h': '4h',
     'topgainers_4h': '4h',  # 20/10/2026: ditambahkan sekalian saat celah get_live_atr_pct() ditutup
+    'kb1d': '1d',           # 09/11/2026 KeltnerBreak-1D (live ATR on the daily candle; BB arm-early is OFF for it)
 }
 
 LIVE_BBUPPER_CACHE_SECONDS = 300  # 5 menit -- TTL pola sama dgn LIVE_ATR_CACHE_SECONDS
@@ -12308,7 +12320,7 @@ HB_STRAT_LABEL = {
     'brkX2_12h_closed': 'KeltnerBreak-12h', 'brkX2_4h': 'brkX2-4h', 'trend_confirm_4h': 'TrenKonfirmasi-4h',
     'reversal': 'Reversal-8h', 'brkX2_crossema': 'CrossEMA-4h', 'hunting_4h': 'Hunting-4h',
     'akum_entry_a': 'Akumulasi-4h A', 'akum_entry_b': 'Akumulasi-4h B', 'mombreak_1h': 'MomentumBreak-1h',
-    'decouple_4h': 'Decouple-4h', 'rvolbreak_8h': 'RVolBreak-8h', 'dipbuy_universe': 'Dip-Buy Universe',
+    'decouple_4h': 'Decouple-4h', 'rvolbreak_8h': 'RVolBreak-8h', 'kb1d': 'KeltnerBreak-1D', 'dipbuy_universe': 'Dip-Buy Universe',
     'bbsnap_4h': 'BBSnap-4h', 'bbsnap_8h': 'BBSnap-8h', 'topgainers_4h': 'Top Gainers-4h',
 }
 _hb_daily_notes_date = [None]
@@ -14120,7 +14132,7 @@ def thread2_monitor():
         _bbupper_min_cushion = BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY.get(strat, 0)
         # 08/11/2026 patch 'kb12h-exit-fix': BB-Upper arm-early/tighten OFF for KeltnerBreak-12h
         # (would arm far below the new 4x threshold -- see KB12H_ARM_MULT REMARK).
-        _bbupper_touched = (strat != 'hunting_4h' and strat not in KB12H_STRATS
+        _bbupper_touched = (strat != 'hunting_4h' and strat not in KB12H_STRATS and strat != 'kb1d'
                              and live_bb_upper is not None and peak >= live_bb_upper
                              and prof_peak >= _bbupper_min_cushion)
         _bbupper_overshoot_pct = (peak / live_bb_upper - 1) * 100 if _bbupper_touched else 0.0
@@ -14721,6 +14733,9 @@ def thread2_monitor():
                                             f"< {AKUM_TP_MIN_PROFIT_PCT}% -- TP3 ditahan")
                 except Exception as _e:
                     log(f"[T2] {sym} akum TP check error: {_e}")
+        elif strat == 'kb1d':
+            hold_limit_sec = KB1D_MAX_HOLD_DAYS * KB1D_SECONDS
+            hold_label = f"batas {KB1D_MAX_HOLD_DAYS} hari (KeltnerBreak-1D)"
         elif strat in KB12H_STRATS:
             # 08/11/2026 patch 'kb12h-aplus': 10 x 12h (120h) instead of MAX_HOLD_DAYS (5)
             hold_limit_sec = KB12H_MAX_HOLD_CANDLES * SECONDS_PER_CANDLE
@@ -14764,6 +14779,7 @@ def thread2_monitor():
                 else BBSNAP_8H_MAX_HOLD_CANDLES if d.get('strategy') == 'bbsnap_8h'
                 else d.get('timeout_candles', AKUM_ENTRY_TIMEOUT) if d.get('strategy','') in ('akum_entry_a','akum_entry_b')
                 else KB12H_MAX_HOLD_CANDLES if d.get('strategy','brkX2') in KB12H_STRATS
+                else KB1D_MAX_HOLD_DAYS if d.get('strategy') == 'kb1d'
                 else MAX_HOLD_DAYS
             )
             hold_candle_now = int(elapsed_sec / candle_sec)
@@ -14885,7 +14901,7 @@ def thread2_monitor():
                 'brkX2_crossema': 'CrossEMA-4h', 'hunting_4h': 'Hunting-4h',
                 'akum_entry_a': 'Akumulasi-4h Entry A', 'akum_entry_b': 'Akumulasi-4h Entry B',
                 'trend_confirm_4h': 'TrenKonfirmasi-4h', 'mombreak_1h': 'MomentumBreak-1h',
-                'decouple_4h': 'Decouple-4h', 'rvolbreak_8h': 'RVolBreak-8h',
+                'decouple_4h': 'Decouple-4h', 'rvolbreak_8h': 'RVolBreak-8h', 'kb1d': 'KeltnerBreak-1D',
                 'rvolbreak_1h': 'RVOLBreak-1h', 'dipbuy_universe': 'Dip-Buy Universe',
                 'bbsnap_4h': 'BBSnap-4h', 'bbsnap_8h': 'BBSnap-8h', 'topgainers_4h': 'Top Gainers-4h',
             }
@@ -19865,7 +19881,7 @@ refreshRuleWatchAi();
       <tr id="row-{{ sym }}" data-performance="{{ d.get('performance_score', 0) }}" data-urgency="{{ d.get('urgency_sort', 3999) }}">
         <td class="sym {{ 'profit-pos' if d.get('upnl_usd',0) > 0 else 'profit-neg' }}">{{ sym.replace("USDT","/USDT") }}</td>
         <td style="white-space:nowrap">
-          {% set _sm = {"brkX2":"brkx2-12h","brkX2_closed":"KeltnerBreak-12h CC (arsip)","brkX2_intrabar":"KeltnerBreak-12h Intrabar (arsip)","brkX2_12h_closed":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h","decouple_4h":"Decouple-4h","dipbuy_universe":"Dip-Buy Universe","mombreak_1h":"MomentumBreak-1h","rvolbreak_8h":"RVolBreak-8h","rvolbreak_1h":"RVOLBreak-1h","hunting_4h":"Hunting-4h","akum_entry_a":"Akumulasi Entry A","akum_entry_b":"Akumulasi Entry B","bbsnap_4h":"BBSnap-4h","bbsnap_8h":"BBSnap-8h"} %}
+          {% set _sm = {"brkX2":"brkx2-12h","brkX2_closed":"KeltnerBreak-12h CC (arsip)","brkX2_intrabar":"KeltnerBreak-12h Intrabar (arsip)","brkX2_12h_closed":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h","decouple_4h":"Decouple-4h","dipbuy_universe":"Dip-Buy Universe","mombreak_1h":"MomentumBreak-1h","rvolbreak_8h":"RVolBreak-8h","kb1d":"KeltnerBreak-1D","rvolbreak_1h":"RVOLBreak-1h","hunting_4h":"Hunting-4h","akum_entry_a":"Akumulasi Entry A","akum_entry_b":"Akumulasi Entry B","bbsnap_4h":"BBSnap-4h","bbsnap_8h":"BBSnap-8h"} %}
           <div>{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</div>
           <div style="font-size:9px;color:var(--muted)">{{ d.get("opened_at","")[:16] if d.get("opened_at") else "-" }}</div>
         </td>
@@ -20655,6 +20671,7 @@ var SC_LABELS = {
     decouple_4h: 'Decouple-4h',
     rvolbreak_1h: 'RVOLBreak-1h',
     rvolbreak_8h: 'RVolBreak-8h',
+    kb1d: 'KeltnerBreak-1D',
     dipbuy_universe: 'Dip-Buy Universe',
     bbsnap_4h: 'BBSnap-4h',
     bbsnap_8h: 'BBSnap-8h',
@@ -21628,7 +21645,7 @@ function ctShortDt(t) {
 
 function renderClosedTradesRows() {
     var rows = closedTradesRows.slice();
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var searchBox = document.getElementById('ct-filter-search');
     var searchTerm = searchBox ? searchBox.value.trim().toUpperCase() : '';
     if (searchTerm) {
@@ -21775,7 +21792,7 @@ function renderDealCandleSVG(candles, openMs, closeMs, basePrice, avgPrice, exit
 function openDealChartModal(i) {
     var r = (window._ctFilteredRows || [])[i];
     if (!r || !r.symbol) return;
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var modal = document.getElementById('deal-chart-modal');
     var titleEl = document.getElementById('deal-chart-title');
     var legendEl = document.getElementById('deal-chart-legend');
@@ -21849,7 +21866,7 @@ function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
     if (!el) return;
     if (!rows.length) { el.innerHTML = ''; return; }
-    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     // 10/10/2026 (permintaan Mas Budi): KeltnerBreak-12h digabung BALIK jadi SATU kartu lagi (balik
     // seperti sebelum 09/10/2026) -- raw strategy value 'brkX2' (legacy, sebelum split 1-hari),
     // 'brkX2_closed'/'brkX2_intrabar' (era split), DAN 'brkX2_12h_closed' (key baru skrg) SEMUA
@@ -21910,7 +21927,7 @@ function renderCtEquityCurve(rows) {
 }
 
 // ── Size-Cut per Strategi (20/10/2026, permintaan Mas Budi) ──────────────────────
-var SC_STRAT_MAP = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+var SC_STRAT_MAP = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
 var SC_CAT_COLOR = {volatil:'#2a78d6', ekstrem:'#1baf7a', st_turun:'#eb6834', lainnya:'#898781'};
 // Klasifikasi Profit (20/10/2026, permintaan Mas Budi): skala diverging rugi->impas->untung,
 // dipetakan dari token --red/--green dashboard yg sudah ada (bukan palet kategori baru) --
@@ -22123,7 +22140,7 @@ function renderSizecutCards(byStrategy) {
 function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var headers = ['Pair','Strategi','Opened','Entry','Closed','Exit','RSI@Open','ATR%@Open','ATR Tier','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
@@ -26502,6 +26519,128 @@ def _paper_test_scan_rvolbreak8h():
             continue
 
 
+# ── KeltnerBreak-1D (strategy key 'kb1d') -- 09/11/2026, approved by Mas Budi: "YA" live $8 ─────────
+# Replacement research for TrenKonfirmasi-4h (whose 1-minute retest showed no edge). 14 candidates were
+# screened with the exit that works for KB12h; the winner was a Keltner breakout on the DAILY candle.
+# Entry (once per closed 1D candle, ~07:00 WIB): close > Keltner upper of the previous candle
+# (EMA20 + 2 x ATR10) while the previous close was <= its own upper (fresh breakout), ATR14% < 7
+# (no Ekstrem tier), and BTCUSDT Supertrend(10,3) of the last closed 1D candle is UP.
+# Exit (thread2_monitor generic path): hard stop = tier base x 1.1 (HARD_STOP_MULT default), trailing
+# arms at KB1D_ARM_MULT (6x) the tier threshold (get_arm_pct), progressive trailing, BB-Upper arm-early
+# OFF, no AI on open/close (pure rules, like the backtest), timeout KB1D_MAX_HOLD_DAYS (5 days).
+# 1-minute confirmation (1,694 deals 2022-2026): +1.36%/deal, TRAIN +1.50 / TEST +1.21, all 5 years
+# positive (2022 +1.19, 2023 +0.77, 2024 +1.01, 2025 +1.88, 2026 +1.87), win rate ~50%.
+# Scripts: scratchpad newstrat/ (screen.py, keltner1d.py, k1d_1m.py).
+KB1D_ENABLED = True
+KB1D_SCAN_INTERVAL = 300
+KB1D_SECONDS = 86400
+# Start as "today's candle already evaluated": after a mid-day restart the first scan waits for the NEXT
+# daily close (07:00 WIB) instead of entering hours late on this morning's signal.
+_kb1d_last_candle = [(int(time.time()) // KB1D_SECONDS) * KB1D_SECONDS * 1000]
+
+
+def thread_kb1d_scan() -> None:
+    if not KB1D_ENABLED or not is_strategy_enabled('kb1d'):
+        return
+    now_ms = int(time.time() * 1000)
+    candle_open_ms = (now_ms // (KB1D_SECONDS * 1000)) * (KB1D_SECONDS * 1000)   # current (forming) 1D candle
+    if _kb1d_last_candle[0] == candle_open_ms:
+        return                                   # this day's closed candle already evaluated
+    if now_ms - candle_open_ms < 120_000:
+        return                                   # give Binance 2 minutes to finalise the daily close
+    if is_daily_loss_limit_breached():
+        log("[T_KB1D] Scan di-skip -- batas rugi harian tersulut")
+        return
+    max_deals = int(load_strategy_config().get('kb1d', {}).get('max_deals', 3) or 3)
+    _kb1d_last_candle[0] = candle_open_ms
+    btc_down = kb12h_ekstrem_st1d_down('BTCUSDT')
+    if btc_down is not False:
+        log(f"[T_KB1D] BTC Supertrend 1D {'turun' if btc_down else 'tidak terbaca'} -- tidak buka deal hari ini")
+        return
+    n_active = deal_count_by_strategy('kb1d')
+    if n_active >= max_deals:
+        log(f"[T_KB1D] slot penuh ({n_active}/{max_deals})")
+        return
+    try:
+        pairs = get_usdt_spot_pairs()
+        volmap = {}
+        for t in (get_ticker_24h() or []):
+            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
+            except Exception: pass
+        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD and p not in SYMBOL_BLACKLIST]
+    except Exception as e:
+        log(f"WARN [T_KB1D] gagal ambil universe: {e}")
+        return
+    with active_deals_lock:
+        existing = set(active_deals.keys())
+    cands = []
+    for sym in universe:
+        if sym in existing: continue
+        if is_cooldown_enabled('kb1d') and cooldown_remaining(sym) > 0: continue
+        if sizing_fail_remaining(sym) > 0: continue
+        try:
+            df = get_ohlcv(sym, interval='1d', limit=80)
+            if df is None: continue
+            if df['ct'].iloc[-1] >= now_ms:
+                df = df.iloc[:-1]
+            if len(df) < 60: continue
+            c, h, l = df['close'].astype(float), df['high'].astype(float), df['low'].astype(float)
+            kc = ta.ema(c, length=20) + 2.0 * ta.atr(h, l, c, length=10)
+            atrp = float((ta.atr(h, l, c, length=14) / c * 100).iloc[-1])
+            if any(pd.isna(x) for x in (kc.iloc[-2], kc.iloc[-3], atrp)):
+                continue
+            if not (c.iloc[-1] > kc.iloc[-2] and c.iloc[-2] <= kc.iloc[-3]):
+                continue
+            if atrp >= EKSTREM_ATR_PCT:
+                log(f"[T_KB1D] {sym} breakout tapi tier Ekstrem (ATR {atrp:.2f}%) -- dilewati")
+                continue
+            ext = (c.iloc[-1] / kc.iloc[-2] - 1) * 100
+            cands.append((sym, float(c.iloc[-1]), atrp, ext))
+        except Exception as e:
+            log(f"  [T_KB1D] error {sym}: {e}")
+    log(f"[T_KB1D] candle 1D {now_wib().strftime('%d/%m')}: {len(cands)} breakout lolos (universe {len(universe)})")
+    cands.sort(key=lambda x: x[3])               # smallest overshoot above the band first
+    for sym, signal_price, atrp, ext in cands:
+        if deal_count_by_strategy('kb1d') >= max_deals:
+            break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='kb1d', atr_pct=atrp)
+        if not ok: continue
+        try:
+            tk = _binance_get("/api/v3/ticker/price", {"symbol": sym})
+            fill_price = float(tk["price"]) if tk else signal_price
+        except Exception:
+            fill_price = signal_price
+        add_to_active_deals(sym, {
+            "strategy": "kb1d", "entry_price": fill_price, "signal_price": signal_price, "atr_pct": atrp,
+            "target_usd": target_usd, "add_usd": add_usd, "opened_ts": time.time(),
+            "opened_candle_ts": candle_open_ms, "tf": "1d",
+        })
+        slip = (fill_price / signal_price - 1) * 100 if signal_price > 0 else 0
+        csv_log_open({
+            'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'), 'symbol': to_display_pair(sym),
+            'signal_price': f"{_fmt_price(signal_price)}", 'entry_price': f"{_fmt_price(fill_price)}",
+            'slip_pct': f"{slip:+.2f}", 'atr_pct': f"{atrp:.2f}", 'base_usd': target_usd, 'strategy': 'kb1d', 'rsi_open': '',
+        })
+        send_telegram(
+            f"KeltnerBreak-1D | OPEN LONG\n{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Pair  : {to_display_pair(sym)}\nHarga entry: {_fmt_price(fill_price)} (sinyal 1D {_fmt_price(signal_price)}, slip {slip:+.2f}%)\n"
+            f"ATR%  : {atrp:.2f} - {hard_stop_pct(atrp, 'kb1d')[0]} | tembus Keltner +{ext:.2f}%\n"
+            f"Modal: ${target_usd:.0f} | exit: trailing aktif di {get_arm_pct(atrp, 'kb1d'):.1f}%, tahan maks {KB1D_MAX_HOLD_DAYS} hari",
+            parse_mode=None)
+        log(f"[T_KB1D] OPEN {sym} @ {fill_price:.8g} (sinyal {signal_price:.8g}, ATR%={atrp:.2f}, ext {ext:+.2f}%)")
+
+
+def run_thread_kb1d() -> None:
+    while True:
+        try:
+            thread_kb1d_scan()
+        except Exception as e:
+            log(f"WARN T_KB1D error: {e}")
+        time.sleep(KB1D_SCAN_INTERVAL)
+
+
 def run_thread_rvolbreak8h() -> None:
     """Thread T_RVOLBreak8h: scan RVolBreak-8h tiap RVOLBREAK_8H_SCAN_INTERVAL detik."""
     while True:
@@ -30492,6 +30631,8 @@ def run_web_dashboard():
                         _hold_limit_sec_d = (dd.get("timeout_candles", AKUM_ENTRY_TIMEOUT) or AKUM_ENTRY_TIMEOUT) * STRAT4H_SECONDS
                     elif _strat_d in KB12H_STRATS:
                         _hold_limit_sec_d = KB12H_MAX_HOLD_CANDLES * SECONDS_PER_CANDLE  # 08/11/2026 kb12h-aplus
+                    elif _strat_d == 'kb1d':
+                        _hold_limit_sec_d = KB1D_MAX_HOLD_DAYS * KB1D_SECONDS
                     else:
                         _hold_limit_sec_d = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
                     _candle_sec_d = _candle_seconds_for_strategy(_strat_d)
@@ -36866,6 +37007,10 @@ if __name__ == '__main__':
     if RVOLBREAK_8H_ENABLED:
         t_rv = threading.Thread(target=run_thread_rvolbreak8h, daemon=True, name="T-RVolBreak8h")
         threads.append(t_rv)
+        n_threads += 1
+    if KB1D_ENABLED:
+        t_kb1d = threading.Thread(target=run_thread_kb1d, daemon=True, name="T-KB1D")
+        threads.append(t_kb1d)
         n_threads += 1
     # 18/10/2026: T-PaperTest selalu jalan (tidak digembok ENABLED flag spt yg lain) -- isinya
     # cuma jalan efektif kalau ada strategi dgn status paper & belum capai PAPER_TEST_TARGET.
