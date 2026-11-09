@@ -1624,7 +1624,12 @@ def _binance_data_soft_paused() -> float:
 # 6000 bobot/menit per IP (bukan 1200). Diperketat 0.1 -> 0.3 (~3,3 request/detik). Konsekuensi yg disadari: scan
 # semua strategi jadi SEDIKIT lebih lambat (nunggu giliran lebih lama) -- trade-off yg diterima
 # demi berhenti dari siklus ban berulang. PERLU DIPANTAU lagi setelah deploy ini.
-BINANCE_MIN_REQUEST_INTERVAL_SEC = 0.3
+# 09/11/2026 patch 'binance-throttle-relax' (Mas Budi: "YUK"): 0.3 -> 0.1. The 0.3 s gate (and the 0.6 s
+# WS backfill staggers) were set while Binance traffic left from Railway's SHARED IPs, already near the
+# limit because of other tenants. Since 08/11 Binance calls go through our own droplet IP
+# (BINANCE_PROXY_URL) and the bot alone uses ~170-330 of 6000 weight/min. 0.1 s = max ~600 req/min
+# (~1,200 weight, ~20% of the limit). The 429 brake, 418 handling and the 80% soft pause stay as safety nets.
+BINANCE_MIN_REQUEST_INTERVAL_SEC = 0.1
 _binance_rate_gate_lock = threading.Lock()
 _binance_rate_gate_last_ts = 0.0
 
@@ -9740,7 +9745,7 @@ def get_ohlcv(symbol: str, interval=TIMEFRAME, limit=120):
 # TIDAK disentuh (dipakai Reversal-8h dkk dgn interval lain).
 KB12H_WS_BACKFILL_LIMIT           = 120  # satu2nya limit yg dipakai T1/T1c/T1c-E
 KB12H_WS_GLOBAL_STALE_SEC         = 120
-KB12H_WS_BACKFILL_STAGGER_SEC     = 0.6
+KB12H_WS_BACKFILL_STAGGER_SEC     = 0.2
 KB12H_WS_BACKFILL_START_DELAY_SEC = 90   # digeser dari BX4H (60s) biar backfill 2 fitur WS ini tidak numpuk bareng
 
 kb12h_ws_lock = threading.Lock()
@@ -9878,7 +9883,7 @@ def run_thread_kb12h_klines_ws() -> None:
 # SAMA PERSIS get_ohlcv() generik (ot/vol/qav/nt/tbbav/tbqav), bukan get_ohlcv_4h().
 WS8H_BACKFILL_LIMIT           = 120  # cukup utk BBSnap-8h (120) & RVolBreak-8h (80), limit terbesar menang
 WS8H_GLOBAL_STALE_SEC         = 120
-WS8H_BACKFILL_STAGGER_SEC     = 0.6
+WS8H_BACKFILL_STAGGER_SEC     = 0.2
 WS8H_BACKFILL_START_DELAY_SEC = 120  # digeser dari BX4H (60s)/KB12H (90s) biar backfill 3 fitur WS ini tidak numpuk bareng
 
 ws8h_lock = threading.Lock()
@@ -10019,7 +10024,7 @@ def run_thread_ws8h_klines_ws() -> None:
 MB1H_WS_UNIVERSE_SIZE         = 150
 MB1H_WS_BACKFILL_LIMIT        = 60
 MB1H_WS_GLOBAL_STALE_SEC      = 120
-MB1H_WS_BACKFILL_STAGGER_SEC  = 0.6
+MB1H_WS_BACKFILL_STAGGER_SEC  = 0.2
 MB1H_WS_BACKFILL_START_DELAY_SEC = 150  # digeser dari BX4H(60s)/KB12H(90s)/WS8H(120s)
 
 mb1h_ws_lock = threading.Lock()
@@ -11755,7 +11760,7 @@ def get_ohlcv_4h(symbol: str, limit: int = 300):
 # thread1d_scan_4h() tidak pernah menerima data kosong/salah karena desain ini.
 BX4H_WS_BACKFILL_LIMIT       = 500   # samakan dgn limit terbesar yg dipakai brkX2-4h (filter pair baru <500 candle)
 BX4H_WS_GLOBAL_STALE_SEC     = 120   # kalau >2 menit TANPA pesan WS sama sekali (simbol manapun) -> anggap koneksi mati, fallback REST semua
-BX4H_WS_BACKFILL_STAGGER_SEC = 0.6   # jarak antar REST call saat backfill awal, hindari membanjiri Binance
+BX4H_WS_BACKFILL_STAGGER_SEC = 0.2   # jarak antar REST call saat backfill awal, hindari membanjiri Binance
 BX4H_WS_BACKFILL_START_DELAY_SEC = 60  # tunda mulai backfill stlh startup -- 03/11/2026: backfill yg langsung
 # tembak di detik-0 KETEMU ban 418 baru (deploy 7326f10, 16:56 WIB) krn numpuk sama proses startup bot lain
 # (sync saldo, exchangeInfo, ticker) yg juga pakai REST Binance -- delay ini beri jarak, sama pola dgn
