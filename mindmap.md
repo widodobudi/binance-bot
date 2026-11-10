@@ -7,10 +7,10 @@
 
 ## Strategi & indikator
 ### LIVE
-- TrenKonfirmasi-4h
-  - ATR ≥ median, harga ≥ EMA20, RVol ≥ 1, RSI < 75
-  - Add fund reclaim $8 → +$32 → +$32
-  - Live: 203 deal, 155W/48L, +130%
+- TrenKonfirmasi-4h (v2 sejak 10/11)
+  - Tembus Keltner 4h, RSI 4h < 65, RVol < 3, Supertrend 1D koin & BTC naik, tolak Ekstrem
+  - $8 per deal, tanpa add fund, tanpa AI; trailing 6x, tahan maks 20 candle 4h
+  - Versi lama (s/d 09/11): 203 deal, 155W/48L, +130%; uji 1 menit -0,14%/deal
 - KeltnerBreak-12h
   - Tembus Keltner (EMA20 + 2×ATR10), intrabar 5–75%
   - Gerbang BTC 1D hijau + volume 3D
@@ -162,7 +162,17 @@
 - Uji 1 menit 783 deal, trailing 4x / tahan 15 candle: +0,46%/deal (vs -0,14 sekarang), TRAIN/TEST per coin +0,37 / +0,57, 4/5 tahun (2025 -1,37)
 - Status: usulan ganti isi TC4h, tunggu izin → Mas Budi minta cari lebih besar
 - Ronde 2 (16.698 breakout, 27 saringan, kombinasi 1-3, TRAIN/TEST per coin, sim 1 jam): RSI<65 + RVol<3 + coin ST1D naik, trailing 6x/15 candle: +1,14%, +1,08/+1,21, 5/5 tahun
-- Status: konfirmasi 1 menit berjalan
+- Konfirmasi 1 menit (10/11): RSI<65 + RVol<3 + coin ST1D naik, trailing 6x, tahan 20 candle: +1,35%/deal (1 jam +1,32), TRAIN/TEST per coin +1,28 / +1,42, 5/5 tahun
+- Semua varian inti (RSI<65 + coin ST1D naik) positif 5/5 tahun di uji 1 menit
+- Status: DISETUJUI 10/11 ("boleh") → dipasang sbg patch tc4h-v2
+### tc4h-v2 (tag patch-tc4h-v2, 10/11)
+- Isi TrenKonfirmasi-4h diganti desain ronde 2: entry sekali per tutup candle 4h (+2 menit)
+- Syarat: tembus Keltner 4h segar, RSI14 4h < 65, RVol < 3, ATR14% < 7, Supertrend 1D koin naik, BTC Supertrend 1D naik
+- Exit: hard stop tier ×1,1 (dulu ×1,5), trailing aktif 6x ambang, tanpa arm-dini BB Upper, tanpa grace HTF, tanpa AI, tahan maks 20 candle 4h (dulu 15)
+- Modal $8 flat, tanpa add fund; maks 3 deal; email review di deal ke-20
+- Uji 1 menit: +1,35%/deal, TRAIN/TEST per coin +1,28 / +1,42, 5/5 tahun
+- Balik ke versi lama: TC4H_V2_ENABLED = False
+- Status: deploy 10/11 siang
 ### kb1d-keltnerbreak-1d (4363bd7, tag patch-kb1d-keltnerbreak-1d)
 - 09/11: strategi BARU KeltnerBreak-1D live $8, maks 3 deal, tanpa AI
 - Entry tiap tutup candle 1D (07:00 WIB): tembus Keltner, ATR<7%, BTC Supertrend 1D naik

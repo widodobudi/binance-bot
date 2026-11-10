@@ -253,7 +253,7 @@ HARD_STOP_MULT_BY_STRATEGY = {
     # (lebih sering kena hard-stop, tiap kejadian lebih dangkal). Gerbang BTC HTF (12H/1D, semua
     # varian) juga diuji sama persis (3x cross-check) -- TIDAK membantu, konsisten dgn catatan lama
     # 10/10/2026, jadi TIDAK dipasang.
-    'trend_confirm_4h': 1.5,   # 20/09/2026: 1.1 -> 1.5 + cap 10.8% (backtest 42.133 sinyal 2022-2026, lihat di bawah)
+    'trend_confirm_4h': 1.1,   # 10/11/2026 tc4h-v2: 1.5 -> 1.1 (v2 backtest uses tier base x1.1); was 20/09/2026: 1.1 -> 1.5 + cap 10.8%
     # 10/10/2026 (permintaan Mas Budi, backtest cache_1h 175 pair 2022-2026): ketiganya pola sama
     # -- K makin tinggi makin untung (avg per-trade naik, hard-stop rate turun), K=1.3 titik
     # seimbang sebelum worst-case per-trade mulai memberat cepat. Decouple-4h avg +0.347%->+0.368%,
@@ -695,7 +695,22 @@ TRENDCONFIRM_MAX_DEALS       = 3        # mulai konservatif -- frekuensi sinyal 
                                           # 26/09/2026: JANGAN naikkan (dashboard "Max Deals" override
                                           # jg TIDAK boleh dinaikkan) tanpa data riil add-fund-on-breakout
                                           # dulu -- lihat REMARK lengkap di GLOBAL_MAX_ACTIVE_DEALS (~baris 299).
-TRENDCONFIRM_MAX_HOLD_CANDLES= 15        # timeout 15 candle 4h = 2.5 hari, sama spt brkX2-4h/hunting
+# ── Patch 'tc4h-v2' (10/11/2026, Mas Budi: "rombak ... silakan", then "boleh") ─────────────────────
+# The old TrenKonfirmasi-4h had no edge in its 1-minute retest (-0.14%/deal). New design found in a search of
+# 16,698 Keltner-4h breakouts (27 filters, combos of 1-3, TRAIN/TEST split by COIN) and confirmed on 1-minute
+# candles (842 deals 2022-2026): +1.35%/deal, coin TRAIN +1.28 / TEST +1.42, all 5 years positive
+# (2022 +1.15, 2023 +2.56, 2024 +0.19, 2025 +1.56, 2026 +1.24); every variant of the core rule was 5/5 years.
+# Entry (each closed 4h candle, thread_trendconfirm_scan_v2): fresh close above the previous 4h Keltner upper
+# (EMA20 + 2 x ATR10), RSI14(4h) < 65, RVol(4h, vs MA20) < 3, coin Supertrend(10,3) 1D up, ATR14%(4h) < 7,
+# BTC Supertrend 1D up. No AI (pure rules like the backtest). Exit: hard stop tier x1.1, trailing arms at 6x
+# the tier threshold, progressive trailing, no BB-Upper arm-early, no HTF trailing grace, timeout 20 x 4h.
+# $8 per deal, no add-fund. The old scan (thread_trendconfirm_scan) is kept; TC4H_V2_ENABLED=False reverts.
+# Scripts: scratchpad newstrat/ (k4h_feat.py, k4h_search.py, k4h2_1m.py).
+TC4H_V2_ENABLED   = True
+TC4H_V2_ARM_MULT  = 6.0
+TC4H_V2_RSI_MAX   = 65.0
+TC4H_V2_RVOL_MAX  = 3.0
+TRENDCONFIRM_MAX_HOLD_CANDLES= 20 if TC4H_V2_ENABLED else 15   # v2: 20 x 4h (was 15 = 2.5 hari)
 # 26/09/2026 (permintaan Mas Budi, kasus nyata XPL/PIXEL/PROM): add-fund reaktif KHUSUS
 # TrenKonfirmasi-4h -- deal yang SEMPAT profit, retrace (dip), lalu profit balik lagi ke
 # puncak sebelum-dip ("breakout") ditambah modal SEKALI (dobel posisi), murni rule-based
@@ -2239,6 +2254,8 @@ def is_ai_call_open_enabled(strategy: str) -> bool:
     Beda dari filter numerik lain di bot ini, keputusan AI tidak bisa di-backtest/di-sweep --
     default ON (29/08/2026, maksimalkan pemakaian kredit Anthropic yang jarang kepakai),
     matikan per-strategi lewat Strategy Control kalau mau."""
+    if strategy == 'trend_confirm_4h' and globals().get('TC4H_V2_ENABLED'):
+        return False   # 10/11/2026 tc4h-v2: pure rules, no AI
     cfg = load_strategy_config()
     return cfg.get(strategy, {}).get("ai_call_open", True)
 
@@ -2248,6 +2265,8 @@ def is_ai_call_close_enabled(strategy: str) -> bool:
     'ai_call' (get_deal_override(sym, 'ai_call', ...)) yang menggerbangi 3 keputusan AI
     sekaligus: ai_decision_armed, ai_decision_near_timeout, ai_decision_close -- toggle
     per-deal di Monitor TETAP bisa override manual utk 1 deal spesifik."""
+    if strategy == 'trend_confirm_4h' and globals().get('TC4H_V2_ENABLED'):
+        return False   # 10/11/2026 tc4h-v2: pure rules, no AI (like the 1-minute backtest)
     cfg = load_strategy_config()
     return cfg.get(strategy, {}).get("ai_call_close", True)
 
@@ -9621,6 +9640,9 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     elif strategy == 'kb1d':   # 09/11/2026 KeltnerBreak-1D: flat base_usd ($8), no add-fund
         target  = float(_cfg_base if _cfg_base else 8.0)
         add_usd = 0
+    elif strategy == 'trend_confirm_4h' and TC4H_V2_ENABLED:   # 10/11/2026 tc4h-v2: flat $8, no add-fund
+        target  = float(_cfg_base if _cfg_base else 8.0)
+        add_usd = 0
     # brkX2_4h di Binance direct: pakai base_usd dari Strategy Control, KECUALI tier
     # conviction (ATR%+Volume tinggi bersamaan di candle sinyal, lihat BRKX2_4H_CONVICTION_*)
     elif strategy == 'brkX2_4h' and USE_BINANCE_DIRECT:
@@ -11014,7 +11036,7 @@ def get_arm_pct(atr_pct: float, strategy: str = None) -> float:
     malah turun di TRAIN) -- jadi perubahan ini SENGAJA cuma utk trend_confirm_4h, strategi
     lain TIDAK disentuh (parameter strategy=None = perilaku lama, tidak berubah).
     """
-    if strategy == 'trend_confirm_4h' and atr_pct >= EKSTREM_ATR_PCT:
+    if strategy == 'trend_confirm_4h' and atr_pct >= EKSTREM_ATR_PCT and not globals().get('TC4H_V2_ENABLED'):
         return 1.75   # setengah dari 3.5% baseline Ekstrem -- patch 'tc4h-ekstrem-arm-dini'
     if atr_pct < 1.0:   base = 1.0    # Tenang
     elif atr_pct < 2.0: base = 1.5    # Normal
@@ -11027,6 +11049,8 @@ def get_arm_pct(atr_pct: float, strategy: str = None) -> float:
         return base * KB12H_ARM_MULT
     if strategy == 'kb1d':
         return base * KB1D_ARM_MULT   # 09/11/2026 KeltnerBreak-1D
+    if strategy == 'trend_confirm_4h' and globals().get('TC4H_V2_ENABLED'):
+        return base * TC4H_V2_ARM_MULT   # 10/11/2026 tc4h-v2
     return base
 
 
@@ -14231,6 +14255,7 @@ def thread2_monitor():
         # 08/11/2026 patch 'kb12h-exit-fix': BB-Upper arm-early/tighten OFF for KeltnerBreak-12h
         # (would arm far below the new 4x threshold -- see KB12H_ARM_MULT REMARK).
         _bbupper_touched = (strat != 'hunting_4h' and strat not in KB12H_STRATS and strat != 'kb1d'
+                             and not (strat == 'trend_confirm_4h' and TC4H_V2_ENABLED)
                              and live_bb_upper is not None and peak >= live_bb_upper
                              and prof_peak >= _bbupper_min_cushion)
         _bbupper_overshoot_pct = (peak / live_bb_upper - 1) * 100 if _bbupper_touched else 0.0
@@ -14611,6 +14636,9 @@ def thread2_monitor():
                         reason = f"AI decision: rank Top Gainers merosot (#{_rk_open} → #{_rk_now})"
             if not do_close:
                 _hs_label, _hs_base, _hs_pct = mombreak_hard_stop_pct() if strat == 'mombreak_1h' else hard_stop_pct(atrp, strat)
+                if strat == 'trend_confirm_4h' and not d.get('tc4h_v2'):
+                    # 10/11/2026 tc4h-v2: TC4h deals opened BEFORE v2 keep their old stop (x1.5, cap 10.8%)
+                    _hs_pct = round(min(_hs_base * 1.5, HARD_STOP_CAP_PCT_BY_STRATEGY.get('trend_confirm_4h') or 999), 4)
                 _be_trig = BE_TRIGGER_BY_STRATEGY.get(strat, 0)
                 _be_active = (_be_trig > 0 and entry > 0 and peak >= entry * (1 + _be_trig / 100))
                 if _be_active:
@@ -14635,7 +14663,8 @@ def thread2_monitor():
                 trail_reason = f"trailing (turun ke {_fmt_price(price)} dari puncak {_fmt_price(peak)}, dev {tdist}%)"
                 trail_grace_started = float(d.get('trail_htf_grace_started_at', 0) or 0)
                 trail_grace_age = time.time() - trail_grace_started if trail_grace_started > 0 else 0
-                grace_strategy = strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'reversal', 'trend_confirm_4h')
+                grace_strategy = strat in ('brkX2', 'brkX2_closed', 'brkX2_intrabar', 'brkX2_12h_closed', 'brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'reversal') \
+                    or (strat == 'trend_confirm_4h' and not TC4H_V2_ENABLED)   # 10/11/2026 tc4h-v2: no HTF grace
                 if (grace_strategy and prof_from_entry > TRAIL_GRACE_MIN_PROFIT_PCT
                         and trail_grace_age < TRAIL_HTF_GRACE_SECONDS
                         and trailing_htf_is_healthy(sym)):
@@ -17335,9 +17364,189 @@ def thread_trendconfirm_scan():
         n_active += 1
         if n_active >= TRENDCONFIRM_MAX_DEALS: break
 
+# Start as "this 4h candle already evaluated": after a restart the first v2 scan waits for the NEXT 4h close
+# instead of entering late on a candle that closed hours ago (same idea as _kb1d_last_candle).
+_tc4h_v2_last_candle = [(int(time.time()) // STRAT4H_SECONDS) * STRAT4H_SECONDS * 1000]
+TC4H_V2_SINCE_WIB = "2026-11-10 12:30:00"   # review e-mail counts only TC4h deals opened from this deploy on
+TC4H_V2_REVIEW_AT = (20,)
+TC4H_V2_REVIEW_FLAG_FILE = os.path.join(DATA_DIR, "tc4h_v2_review_sent.json")
+
+
+def thread_trendconfirm_scan_v2() -> None:
+    """TrenKonfirmasi-4h v2 (patch 'tc4h-v2', see the constants block near TRENDCONFIRM_*). Evaluated once per
+    CLOSED 4h candle (>= 2 minutes after the close), pure rules, no AI."""
+    if not TRENDCONFIRM_ENABLED or not is_strategy_enabled('trend_confirm_4h'):
+        return
+    now_ms = int(time.time() * 1000)
+    sec4h_ms = STRAT4H_SECONDS * 1000
+    candle_open_ms = (now_ms // sec4h_ms) * sec4h_ms        # forming candle; the one before it just closed
+    if _tc4h_v2_last_candle[0] == candle_open_ms or now_ms - candle_open_ms < 120_000:
+        return
+    if is_daily_loss_limit_breached():
+        log("[T_TC4H_V2] Scan di-skip -- batas rugi harian tersulut")
+        return
+    _tc4h_v2_last_candle[0] = candle_open_ms
+    btc_down = kb12h_ekstrem_st1d_down('BTCUSDT')
+    if btc_down is not False:
+        log(f"[T_TC4H_V2] BTC Supertrend 1D {'turun' if btc_down else 'tidak terbaca'} -- tidak buka deal candle ini")
+        return
+    n_active = deal_count_by_strategy('trend_confirm_4h')
+    if n_active >= TRENDCONFIRM_MAX_DEALS:
+        log(f"[T_TC4H_V2] slot penuh ({n_active}/{TRENDCONFIRM_MAX_DEALS})")
+        return
+    ticker = get_ticker_24h()
+    if not ticker:
+        return
+    with active_deals_lock:
+        existing = set(active_deals.keys())
+    cands, n_scan, n_brk = [], 0, 0
+    for t in ticker:
+        sym = t.get("symbol", "")
+        if not sym.endswith("USDT") or sym in existing or sym in SYMBOL_BLACKLIST or is_bstock_symbol(sym):
+            continue
+        try:
+            if float(t.get("quoteVolume", 0) or 0) < TRENDCONFIRM_MIN_VOL_USD:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if is_cooldown_enabled('trend_confirm_4h') and cooldown_remaining(sym) > 0: continue
+        if sizing_fail_remaining(sym) > 0: continue
+        try:
+            n_scan += 1
+            df = get_ohlcv_4h_bx4h_ws(sym, limit=120)
+            if df is None or len(df) < 62: continue
+            if int(df['ct'].iloc[-1]) >= now_ms:          # drop the forming candle
+                df = df.iloc[:-1]
+            if len(df) < 60 or int(df['ts'].iloc[-1]) != candle_open_ms - sec4h_ms:
+                continue                                  # stale data: last closed candle is not the one that just closed
+            c, h, l = df['close'].astype(float), df['high'].astype(float), df['low'].astype(float)
+            v = df['vol'].astype(float)
+            kc = ta.ema(c, length=20) + 2.0 * ta.atr(h, l, c, length=10)
+            if any(pd.isna(x) for x in (kc.iloc[-2], kc.iloc[-3])):
+                continue
+            if not (c.iloc[-1] > kc.iloc[-2] and c.iloc[-2] <= kc.iloc[-3]):
+                continue
+            n_brk += 1
+            atrp = float((ta.atr(h, l, c, length=14) / c * 100).iloc[-1])
+            rsi = float(ta.rsi(c, length=14).iloc[-1])
+            vm = float(v.rolling(20).mean().iloc[-1])
+            rvol = float(v.iloc[-1]) / vm if vm > 0 else float('nan')
+            ext = (c.iloc[-1] / kc.iloc[-2] - 1) * 100
+            why = []
+            if pd.isna(atrp) or atrp >= EKSTREM_ATR_PCT: why.append(f"ATR {atrp:.2f}% (Ekstrem)")
+            if pd.isna(rsi) or rsi >= TC4H_V2_RSI_MAX: why.append(f"RSI {rsi:.1f}")
+            if pd.isna(rvol) or rvol >= TC4H_V2_RVOL_MAX: why.append(f"RVol {rvol:.2f}x")
+            if not why:
+                st_down = kb12h_ekstrem_st1d_down(sym)
+                if st_down is not False:
+                    why.append("Supertrend 1D koin " + ("turun" if st_down else "tidak terbaca"))
+            if why:
+                log(f"[T_TC4H_V2] {sym} tembus Keltner 4h tapi ditolak: {', '.join(why)}")
+                continue
+            cands.append((sym, float(c.iloc[-1]), atrp, rsi, rvol, ext))
+        except Exception as e:
+            log(f"  [T_TC4H_V2] error {sym}: {e}")
+    log(f"[T_TC4H_V2] candle 4h {now_wib().strftime('%d/%m %H:%M')}: {n_brk} tembus Keltner, {len(cands)} lolos semua syarat (scan {n_scan} koin)")
+    cands.sort(key=lambda x: x[5])                   # smallest overshoot above the band first
+    for sym, signal_price, atrp, rsi, rvol, ext in cands:
+        n_active = deal_count_by_strategy('trend_confirm_4h')
+        if n_active >= TRENDCONFIRM_MAX_DEALS:
+            break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='trend_confirm_4h', atr_pct=atrp)
+        if not ok: continue
+        try:
+            entry_price = get_price_now(sym)
+            if entry_price <= 0: entry_price = signal_price
+        except Exception:
+            entry_price = signal_price
+        slip = (entry_price / signal_price - 1) * 100 if signal_price > 0 else 0.0
+        add_to_active_deals(sym, {
+            "strategy": "trend_confirm_4h", "entry_price": entry_price, "peak": entry_price,
+            "signal_price": signal_price, "atr_pct": atrp, "score": 1, "opened_ts": time.time(),
+            "opened_candle_ts": int(candle_open_ms), "trailing_armed": False,
+            "opened_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "target_usd": target_usd, "add_usd": 0,
+            "tf": TRENDCONFIRM_TIMEFRAME, "rsi_open": rsi, "tc4h_v2": True,
+        })
+        _trendconfirm_last_candle_ts[sym] = candle_open_ms
+        send_telegram(
+            f"TrenKonfirmasi-4h (v2) | OPEN LONG\n{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Pair  : {to_display_pair(sym)}\nHarga entry: {_fmt_price(entry_price)} (sinyal 4h {_fmt_price(signal_price)}, slip {slip:+.2f}%)\n"
+            f"ATR%  : {atrp:.2f} - {hard_stop_pct(atrp, 'trend_confirm_4h')[0]} | tembus Keltner +{ext:.2f}%\n"
+            f"RSI 4h: {rsi:.1f} | RVol: {rvol:.2f}x | Supertrend 1D koin & BTC naik\n"
+            f"Modal: ${target_usd:.0f} | exit: trailing aktif di {get_arm_pct(atrp, 'trend_confirm_4h'):.1f}%, "
+            f"tahan maks {TRENDCONFIRM_MAX_HOLD_CANDLES} candle 4h\nSlot terpakai: {n_active + 1}/{TRENDCONFIRM_MAX_DEALS}",
+            parse_mode=None)
+        csv_log_open({
+            'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'), 'symbol': to_display_pair(sym),
+            'signal_price': f"{_fmt_price(signal_price)}", 'entry_price': f"{_fmt_price(entry_price)}",
+            'slip_pct': f"{slip:+.2f}", 'atr_pct': f"{atrp:.2f}", 'trail_dist_pct': f"{trailing_dist(atrp)}",
+            'base_usd': target_usd, 'score': 1, 'strategy': 'trend_confirm_4h', 'rsi_open': f"{rsi:.1f}",
+        })
+        log_oac('OPEN', sym, 'TrenKonfirmasi-4h v2', {
+            'entry_price': _fmt_price(entry_price), 'slip_pct': f"{slip:+.2f}%", 'atr_pct': f"{atrp:.2f}%",
+            'rsi': f"{rsi:.1f}", 'rvol': f"{rvol:.2f}x", 'ext_kc': f"{ext:+.2f}%",
+        })
+        log(f"[T_TC4H_V2] OPEN {sym} @ {entry_price:.8g} (sinyal {signal_price:.8g}, ATR%={atrp:.2f}, RSI {rsi:.1f}, RVol {rvol:.2f})")
+
+
+def check_tc4h_v2_review():
+    """E-mail Mas Budi once when 20 TC4h v2 deals (opened since TC4H_V2_SINCE_WIB) have closed:
+    win rate, average %, $-weighted %, total $, verdict vs the 1-minute backtest (+1.35%/deal)."""
+    try:
+        sent = {}
+        if os.path.exists(TC4H_V2_REVIEW_FLAG_FILE):
+            with open(TC4H_V2_REVIEW_FLAG_FILE) as f:
+                sent = json.load(f) or {}
+        if all(str(n) in sent for n in TC4H_V2_REVIEW_AT) or not os.path.exists(TRADES_CSV):
+            return
+        rows = []
+        with open(TRADES_CSV, newline='', encoding='utf-8') as f:
+            for r in csv.DictReader(f):
+                if (r.get('status') == 'CLOSED' and r.get('strategy') == 'trend_confirm_4h'
+                        and (r.get('open_time_wib') or '') >= TC4H_V2_SINCE_WIB):
+                    try:
+                        rows.append((float(r.get('profit_pct') or 0), float(r.get('base_usd') or 0) or 8.0))
+                    except ValueError:
+                        continue
+        n = len(rows)
+        due = [c for c in TC4H_V2_REVIEW_AT if n >= c and str(c) not in sent]
+        if not due:
+            return
+        wins = sum(1 for p, _ in rows if p > 0)
+        avg = sum(p for p, _ in rows) / n
+        usd = sum(u for _, u in rows)
+        pnl = sum(p / 100 * u for p, u in rows)
+        ok = avg > 0 and pnl > 0
+        verdict = ("SESUAI arah backtest -- TrenKonfirmasi-4h v2 layak diteruskan." if ok else
+                   "BELUM SESUAI -- rata-rata masih rugi; pertimbangkan tunggu 20 deal lagi atau matikan (minta Claude cek).")
+        body = (f"Review TrenKonfirmasi-4h versi baru (v2) -- {n} deal tutup sejak {TC4H_V2_SINCE_WIB} WIB.\n\n"
+                f"Menang: {wins}/{n} ({wins / n * 100:.0f}%)  (backtest ~52%)\n"
+                f"Rata-rata per deal: {avg:+.2f}%  (backtest 1 menit: +1,35%)\n"
+                f"Untung per $ (tertimbang modal): {(pnl / usd * 100 if usd else 0):+.2f}%\n"
+                f"Total untung/rugi kira2: ${pnl:+.2f}\n\nKesimpulan: {verdict}\n\n"
+                f"Catatan: 20 deal masih sampel kecil; di backtest ada bulan-bulan rugi yang normal.")
+        send_email_open_long(f"[Bot] Review TrenKonfirmasi-4h v2 {n} deal: {'SESUAI' if ok else 'BELUM SESUAI'}", body)
+        for d_ in due:
+            sent[str(d_)] = {"at_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "n": n, "avg": round(avg, 3), "ok": ok}
+        with open(TC4H_V2_REVIEW_FLAG_FILE, 'w') as f:
+            json.dump(sent, f)
+    except Exception as e:
+        log(f"WARN check_tc4h_v2_review: {e}")
+
+
 def run_thread_trendconfirm():
-    """Thread T_TRENDCONFIRM: scan TrenKonfirmasi-4h tiap TRENDCONFIRM_SCAN_INTERVAL detik."""
+    """Thread T_TRENDCONFIRM: scan TrenKonfirmasi-4h tiap TRENDCONFIRM_SCAN_INTERVAL detik
+    (v2 when TC4H_V2_ENABLED: checked every 60 s, acts once per closed 4h candle)."""
     while True:
+        if TC4H_V2_ENABLED:
+            try:
+                thread_trendconfirm_scan_v2()
+            except Exception as e:
+                log(f"WARN T_TC4H_V2 error: {e}")
+            time.sleep(60)
+            continue
         try:
             thread_trendconfirm_scan()
         except Exception as e:
@@ -18825,6 +19034,7 @@ def run_thread_orphan_reclaim():
         try:
             check_orphan_combine_checkin_reminder()
             check_kb12h_aplus_review()
+            check_tc4h_v2_review()
             check_binance_proxy_health_email()
             with cancelled_deal_price_lock:
                 snapshot = dict(cancelled_deal_price)
