@@ -165,14 +165,14 @@
 - Konfirmasi 1 menit (10/11): RSI<65 + RVol<3 + coin ST1D naik, trailing 6x, tahan 20 candle: +1,35%/deal (1 jam +1,32), TRAIN/TEST per coin +1,28 / +1,42, 5/5 tahun
 - Semua varian inti (RSI<65 + coin ST1D naik) positif 5/5 tahun di uji 1 menit
 - Status: DISETUJUI 10/11 ("boleh") → dipasang sbg patch tc4h-v2
-### tc4h-v2 (tag patch-tc4h-v2, 10/11)
+### tc4h-v2 (5db2720, tag patch-tc4h-v2, 10/11)
 - Isi TrenKonfirmasi-4h diganti desain ronde 2: entry sekali per tutup candle 4h (+2 menit)
 - Syarat: tembus Keltner 4h segar, RSI14 4h < 65, RVol < 3, ATR14% < 7, Supertrend 1D koin naik, BTC Supertrend 1D naik
 - Exit: hard stop tier ×1,1 (dulu ×1,5), trailing aktif 6x ambang, tanpa arm-dini BB Upper, tanpa grace HTF, tanpa AI, tahan maks 20 candle 4h (dulu 15)
 - Modal $8 flat, tanpa add fund; maks 3 deal; email review di deal ke-20
 - Uji 1 menit: +1,35%/deal, TRAIN/TEST per coin +1,28 / +1,42, 5/5 tahun
 - Balik ke versi lama: TC4H_V2_ENABLED = False
-- Status: deploy 10/11 siang
+- Status: deploy 10/11 ~14:15 WIB; email review hitung deal sejak 14:15
 ### kb1d-keltnerbreak-1d (4363bd7, tag patch-kb1d-keltnerbreak-1d)
 - 09/11: strategi BARU KeltnerBreak-1D live $8, maks 3 deal, tanpa AI
 - Entry tiap tutup candle 1D (07:00 WIB): tembus Keltner, ATR<7%, BTC Supertrend 1D naik

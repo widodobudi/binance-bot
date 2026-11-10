@@ -17367,7 +17367,7 @@ def thread_trendconfirm_scan():
 # Start as "this 4h candle already evaluated": after a restart the first v2 scan waits for the NEXT 4h close
 # instead of entering late on a candle that closed hours ago (same idea as _kb1d_last_candle).
 _tc4h_v2_last_candle = [(int(time.time()) // STRAT4H_SECONDS) * STRAT4H_SECONDS * 1000]
-TC4H_V2_SINCE_WIB = "2026-11-10 12:30:00"   # review e-mail counts only TC4h deals opened from this deploy on
+TC4H_V2_SINCE_WIB = "2026-11-10 14:15:00"   # review e-mail counts only TC4h deals opened from this deploy on
 TC4H_V2_REVIEW_AT = (20,)
 TC4H_V2_REVIEW_FLAG_FILE = os.path.join(DATA_DIR, "tc4h_v2_review_sent.json")
 
