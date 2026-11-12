@@ -367,6 +367,12 @@ HARD_STOP_CAP_PCT_BY_STRATEGY = {
 # cap10.8% bekerja sesuai rencana, bukan penyebab performa di bawah harapan. TC_HS_REVIEW_TARGET
 # (below) TIDAK diubah -- counter sudah "notified", tidak akan nge-prompt ulang keputusan yg sama.
 TC_HS_DECISION = "KEEP (24/09/2026): K1.5/cap10.8% dipertahankan, review konklusif berdasarkan 22 deal riil."
+# Patch 'hard-stop-sell-now' (12/11/2026, Mas Budi: "BOLEH"): the per-deal "Hold, jgn jual" checkbox now defaults
+# to OFF -- a hard stop (or a losing timeout) SELLS right away. Backtest of 531 TC4h hard-stop events 2022-2026
+# (1-minute replay + 30 days of 1h candles after): sell now -8.58% vs hold + 5% safety floor -9.33% (7 days) /
+# -9.23% (30 days); holding won only 24% of the time and the floor was hit in 90%. Ticking the checkbox on a deal
+# in Monitor still holds that one deal. Revert: HOLD_NO_SELL_DEFAULT = True. Script: scratchpad tc4h_1m/hns_bt.py.
+HOLD_NO_SELL_DEFAULT = False
 HOLD_NO_SELL_WARN_RATIO = 0.85    # checkbox "hold, jangan jual" muncul di 85% dari ambang hard-stop
                                    # tier deal itu (bukan pas 100%) -- kasih ruang waktu react sebelum
                                    # hard-stop beneran kesulut (disepakati 27/08/2026)
@@ -15044,7 +15050,7 @@ def thread2_monitor():
             strat_label = _CLOSE_STRAT_LABEL.get(strat, strat)
             # Hold-no-sell: kalau ini hard-stop, ATAU timeout ("batas N candle tercapai") sementara
             # deal lagi RUGI (semua strategi -- 30/08/2026, permintaan user), DAN checkbox "hold,
-            # jangan jual" aktif (default True) untuk deal ini -> SKIP jual, koin tetap di wallet.
+            # jangan jual" aktif (default HOLD_NO_SELL_DEFAULT, False sejak 12/11/2026) untuk deal ini -> SKIP jual, koin tetap di wallet.
             # Cooldown 96 jam berlaku ke symbol ini lintas semua strategi. Timeout yg closing
             # UNTUNG tetap dijual normal seperti biasa.
             # 05/09/2026 (permintaan Mas Budi, sesudah insiden HBAR/TLM/dll): kasus hold_no_sell
@@ -15056,7 +15062,7 @@ def thread2_monitor():
             # keluar dari active_deals. Sekarang SELALU dicatat; baris hold_no_sell tetap bisa
             # dibedakan lewat penanda "[HOLD: koin tidak dijual, cooldown 96j]" di exit_reason.
             _hold_no_sell = (hard_stop_triggered or (timeout_triggered and prof_from_entry < 0)) \
-                             and get_deal_override(sym, 'hold_no_sell', True)
+                             and get_deal_override(sym, 'hold_no_sell', HOLD_NO_SELL_DEFAULT)
             if _hold_no_sell:
                 reason += " [HOLD: koin tidak dijual, cooldown 96j]"
             _close_info = {}   # diisi close_deal_maybe_partial() kalau jual sebagian (sisa -> Earn)
@@ -20248,7 +20254,7 @@ refreshRuleWatchAi();
               <input type="hidden" name="sym" value="{{ sym }}">
               <input type="hidden" name="key" value="hold_no_sell">
               <label style="display:flex;align-items:center;gap:3px;cursor:{{ 'pointer' if _hns_active else 'not-allowed' }}">
-                <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("hold_no_sell",True) else "" }} {{ "" if _hns_active else "disabled" }} style="width:14px;height:14px;cursor:inherit;flex-shrink:0">
+                <input type="checkbox" name="value" onchange="this.form.submit()" {{ "checked" if overrides.get(sym,{}).get("hold_no_sell",False) else "" }} {{ "" if _hns_active else "disabled" }} style="width:14px;height:14px;cursor:inherit;flex-shrink:0">
                 <span style="font-size:8px;color:var(--muted);white-space:nowrap">Hold, jgn jual</span>
               </label>
             </form>

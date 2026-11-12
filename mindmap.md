@@ -171,7 +171,11 @@
 ### Backtest "hold dulu" sesudah hard stop (12/11)
 - 531 kejadian hard stop TC4h 2022-2026 (uji 1 menit + 1 jam sesudahnya): jual langsung -8,58% vs hold+pagar -5%: 7 hari -9,33%, 30 hari -9,23%
 - Hold menang cuma 24% kejadian; pagar -5% kena di 90% kejadian; hold sampai balik modal -8,52% (setara jual langsung)
-- Kesimpulan: hold dulu TIDAK menolong, rata-rata sedikit merugikan; usulan: jual langsung saat hard stop (tunggu izin)
+- Kesimpulan: hold dulu TIDAK menolong, rata-rata sedikit merugikan
+### hard-stop-sell-now (12/11, Mas Budi: "BOLEH")
+- Kena hard stop / timeout rugi = LANGSUNG dijual, semua strategi (checkbox "Hold, jgn jual" default mati; centang per deal di Monitor tetap bisa)
+- Balik: HOLD_NO_SELL_DEFAULT = True
+- Status: deploy 12/11
 ### telegram-no-raw-bold-tags (12/11)
 - 4 notif Telegram (Pagar Darurat Hold-No-Sell, Convert Aset, Jual ke USDT, Add Manual Tersinkron) tampil "<b>...</b>" mentah; tag dibuang
 - Status: deploy 12/11
