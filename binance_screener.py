@@ -2450,7 +2450,7 @@ def execute_hold_no_sell_safety_floor_close(symbol: str, hns: dict) -> dict:
             hold_no_sell_price[symbol].pop('hold_mark_price', None)
     save_hold_no_sell_price()
     send_telegram(
-        f"\U0001F6D1 <b>Pagar Darurat Hold-No-Sell</b> -- {to_display_pair(symbol)} DIJUAL OTOMATIS\n"
+        f"\U0001F6D1 Pagar Darurat Hold-No-Sell -- {to_display_pair(symbol)} DIJUAL OTOMATIS\n"
         f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
         f"Strategi: {strategy} (sudah hold_no_sell, lalu turun lagi >= {HOLD_NO_SELL_SAFETY_FLOOR_PCT:g}% dari harga saat hold_no_sell mulai)\n"
         f"Harga saat hold_no_sell mulai: {_fmt_price(hold_mark_price)} -> Harga jual sekarang: {_fmt_price(exit_price)} (turun {drop_pct:.2f}% lagi)\n"
@@ -6519,7 +6519,7 @@ def execute_convert(source_asset: str, target_symbol: str) -> dict:
                          f"@{sell['price_avg']:.6f} (${proceeds:.2f}), beli {buy['qty']:.6f} "
                          f"@{buy['price_avg']:.6f}. target_recover={target_recover} "
                          f"resistance={resistance} target_final={target_final}")
-        send_telegram(f"🔄 <b>Convert Aset</b>\n{source_asset} → {target_asset}\n"
+        send_telegram(f"🔄 Convert Aset\n{source_asset} → {target_asset}\n"
                        f"Jual: {sell['qty']:.6f} {source_asset} @ {_fmt_price(sell['price_avg'])} (${proceeds:.2f})\n"
                        f"Beli: {buy['qty']:.6f} {target_asset} @ {_fmt_price(buy['price_avg'])}\n"
                        f"Target jual baru: {_fmt_price(target_final) if target_final else '-'}")
@@ -6586,7 +6586,7 @@ def sell_to_usdt(symbol: str, qty=None) -> dict:
         f"(${proceeds:.2f}), sisa saldo {remaining_qty:.8f}")
     log_ai_decision(f"[SELL-USDT] {asset}: jual {sell['qty']:.6f} @ {sell['price_avg']:.6f} "
                      f"(${proceeds:.2f})")
-    send_telegram(f"💰 <b>Jual ke USDT</b>\n{asset} → USDT\n"
+    send_telegram(f"💰 Jual ke USDT\n{asset} → USDT\n"
                    f"Jual: {sell['qty']:.6f} {asset} @ {_fmt_price(sell['price_avg'])}\n"
                    f"Proceeds: ${proceeds:.2f}")
     result.update({"ok": True, "qty_sold": sell["qty"], "price_avg": sell["price_avg"],
@@ -6904,7 +6904,7 @@ def auto_sync_manual_buy(sym: str, asset: str, qty_wallet: float, qty_coin_old: 
     log(f"[AUTO-SYNC-MANUAL] {sym}: qty {qty_coin_old:.4f}->{new_qty:.4f}, avg {old_entry:.6g}->{avg_cost:.6g}, "
         f"modal ${old_total:.2f}->${new_total:.2f} (terdeteksi add manual di luar bot)")
     send_telegram(
-        f"\U0001F501 <b>Add Manual Tersinkron Otomatis</b> -- {to_display_pair(sym)}\n"
+        f"\U0001F501 Add Manual Tersinkron Otomatis -- {to_display_pair(sym)}\n"
         f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
         f"Terdeteksi beli manual di Binance (di luar jalur bot) -- qty & harga average disamakan (sumber harga: {src_note}).\n"
         f"Qty: {qty_coin_old:.4f} -> {new_qty:.4f} {asset}\n"

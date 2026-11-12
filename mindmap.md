@@ -165,6 +165,9 @@
 - Konfirmasi 1 menit (10/11): RSI<65 + RVol<3 + coin ST1D naik, trailing 6x, tahan 20 candle: +1,35%/deal (1 jam +1,32), TRAIN/TEST per coin +1,28 / +1,42, 5/5 tahun
 - Semua varian inti (RSI<65 + coin ST1D naik) positif 5/5 tahun di uji 1 menit
 - Status: DISETUJUI 10/11 ("boleh") → dipasang sbg patch tc4h-v2
+### telegram-no-raw-bold-tags (12/11)
+- 4 notif Telegram (Pagar Darurat Hold-No-Sell, Convert Aset, Jual ke USDT, Add Manual Tersinkron) tampil "<b>...</b>" mentah; tag dibuang
+- Status: deploy 12/11
 ### tc4h-v2 (5db2720, tag patch-tc4h-v2, 10/11)
 - Isi TrenKonfirmasi-4h diganti desain ronde 2: entry sekali per tutup candle 4h (+2 menit)
 - Syarat: tembus Keltner 4h segar, RSI14 4h < 65, RVol < 3, ATR14% < 7, Supertrend 1D koin naik, BTC Supertrend 1D naik
