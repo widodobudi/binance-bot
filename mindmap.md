@@ -165,6 +165,13 @@
 - Konfirmasi 1 menit (10/11): RSI<65 + RVol<3 + coin ST1D naik, trailing 6x, tahan 20 candle: +1,35%/deal (1 jam +1,32), TRAIN/TEST per coin +1,28 / +1,42, 5/5 tahun
 - Semua varian inti (RSI<65 + coin ST1D naik) positif 5/5 tahun di uji 1 menit
 - Status: DISETUJUI 10/11 ("boleh") → dipasang sbg patch tc4h-v2
+### hold-floor-stop-when-empty (12/11)
+- Pagar darurat hold_no_sell berhenti memantau koin yang saldonya sudah 0 (DASH: WARN gagal jual tiap menit)
+- Status: deploy 12/11
+### Backtest "hold dulu" sesudah hard stop (12/11)
+- 531 kejadian hard stop TC4h 2022-2026 (uji 1 menit + 1 jam sesudahnya): jual langsung -8,58% vs hold+pagar -5%: 7 hari -9,33%, 30 hari -9,23%
+- Hold menang cuma 24% kejadian; pagar -5% kena di 90% kejadian; hold sampai balik modal -8,52% (setara jual langsung)
+- Kesimpulan: hold dulu TIDAK menolong, rata-rata sedikit merugikan; usulan: jual langsung saat hard stop (tunggu izin)
 ### telegram-no-raw-bold-tags (12/11)
 - 4 notif Telegram (Pagar Darurat Hold-No-Sell, Convert Aset, Jual ke USDT, Add Manual Tersinkron) tampil "<b>...</b>" mentah; tag dibuang
 - Status: deploy 12/11

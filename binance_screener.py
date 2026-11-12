@@ -2488,6 +2488,15 @@ def run_thread_hold_no_sell_safety_floor():
                     _result = execute_hold_no_sell_safety_floor_close(sym, hns)
                     if not _result.get('ok'):
                         log(f"WARN [HOLD-SAFETY-FLOOR] {sym} gagal jual: {_result.get('error')}")
+                        if ('tidak ada / habis' in str(_result.get('error', ''))
+                                and binance_get_asset_qty_total(_asset) == 0.0):   # 0.0 exactly; -1 = API error, keep watching
+                            # 12/11/2026: coins already gone (sold outside the bot) -- stop watching instead of
+                            # retrying every minute forever (DASHUSDT spammed this WARN 60x/hour).
+                            with hold_no_sell_price_lock:
+                                if sym in hold_no_sell_price:
+                                    hold_no_sell_price[sym].pop('hold_mark_price', None)
+                            save_hold_no_sell_price()
+                            log(f"[HOLD-SAFETY-FLOOR] {sym} saldo sudah kosong -- berhenti dipantau pagar darurat")
         except Exception as e:
             log(f"WARN [HOLD-SAFETY-FLOOR] loop error: {e}")
         time.sleep(HOLD_NO_SELL_SAFETY_FLOOR_SCAN_INTERVAL)
