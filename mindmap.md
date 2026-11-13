@@ -165,6 +165,13 @@
 - Konfirmasi 1 menit (10/11): RSI<65 + RVol<3 + coin ST1D naik, trailing 6x, tahan 20 candle: +1,35%/deal (1 jam +1,32), TRAIN/TEST per coin +1,28 / +1,42, 5/5 tahun
 - Semua varian inti (RSI<65 + coin ST1D naik) positif 5/5 tahun di uji 1 menit
 - Status: DISETUJUI 10/11 ("boleh") → dipasang sbg patch tc4h-v2
+### pb4h-pantulan-panik (14/11, Mas Budi: "ya" live $6)
+- Strategi BARU PantulanPanik-4h (key panic_bounce_4h): jalan HANYA saat BTC Supertrend 1D turun
+- Entry tutup candle 4h: BTC turun >=10% 7 hari, koin turun >=10% 24 jam, RSI 4h sebelumnya <25, candle hijau tutup kembali di atas BB bawah, ATR<7
+- Exit: hard stop x1,1, trailing 4x, tahan maks 15 candle 4h, tanpa AI; $6, maks 3 deal
+- Uji 1 menit 385 deal: +4,69%/deal, WR 74%, TRAIN +4,28 / TEST +5,14, 5/5 tahun; breakout saat BTC turun semua rugi
+- Sim dompet (+3 strategi, 1,5%/max20): +10,5%/thn turun 10,7% -> +13,5%/thn turun 7,8%
+- Status: deploy 14/11
 ### base6-and-pct-sizing (14/11, Mas Budi: "diturunkan ke $6" + "Boleh")
 - Tahap 1 (LIVE): modal KB12h / KB1D / TC4h v2 $8 -> $6 (KB12h Aktif $18); sim dompet $60: turun terdalam -31,7% -> -26,1%
 - Tahap 2 (MATI, nyalakan stlh dana masuk 15/12): modal = 1,5% saldo (min $6), max 20 deal per strategi, batas gabungan dilonggarkan

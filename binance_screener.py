@@ -1930,6 +1930,8 @@ STRATEGY_CONFIG_DEFAULTS = {
     # murah risikonya per entry.
     "topgainers_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 6, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     # 09/11/2026 KeltnerBreak-1D (see KB1D_* REMARK): pure rules like its backtest -> no AI open/close.
+    # 14/11/2026 PantulanPanik-4h (see PB4H_* REMARK near thread_pb4h_scan): pure rules, no AI.
+    "panic_bounce_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 6, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 3, "close_sell_pct": 100},
     "kb1d": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 6, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
 }
 # 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
@@ -2148,7 +2150,7 @@ PCT_SIZING_ENABLED   = False
 PCT_SIZING_FRACTION  = 0.015
 PCT_SIZING_MIN_USD   = 6.0
 PCT_SIZING_MAX_DEALS = 20
-PCT_SIZING_STRATS    = ('brkX2_12h_closed', 'kb1d', 'trend_confirm_4h')
+PCT_SIZING_STRATS    = ('brkX2_12h_closed', 'kb1d', 'trend_confirm_4h', 'panic_bounce_4h')
 BASE6_STRATS         = ('brkX2_12h_closed', 'kb1d', 'trend_confirm_4h')
 _wallet_equity_cache = {"ts": 0.0, "value": 0.0}
 
@@ -9731,6 +9733,9 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     elif strategy == 'kb1d':   # 09/11/2026 KeltnerBreak-1D: flat base_usd ($8), no add-fund
         target  = float(_cfg_base if _cfg_base else 8.0)
         add_usd = 0
+    elif strategy == 'panic_bounce_4h':   # 14/11/2026 PantulanPanik-4h: flat base_usd ($6), no add-fund
+        target  = float(_cfg_base if _cfg_base else 6.0)
+        add_usd = 0
     elif strategy == 'trend_confirm_4h' and TC4H_V2_ENABLED:   # 10/11/2026 tc4h-v2: flat $8, no add-fund
         target  = float(_cfg_base if _cfg_base else 8.0)
         add_usd = 0
@@ -10934,6 +10939,8 @@ KB12H_EARLY_WATCH_MAX_LATE_MIN = 5   # a checkpoint missed by >5 min (bot restar
 # after 20-30 live deals (KB12H_APLUS_REVIEW_*, e-mail only, Mas Budi's request). Reclaim
 # add-fund targets are unchanged (the first add simply has less to add for an Aktif deal).
 KB1D_ARM_MULT = 6.0        # KeltnerBreak-1D (see KB1D_* REMARK near thread_kb1d_scan)
+PB4H_ARM_MULT = 4.0        # PantulanPanik-4h (see PB4H_* REMARK near thread_pb4h_scan)
+PB4H_MAX_HOLD_CANDLES = 15 # x 4h
 KB1D_MAX_HOLD_DAYS = 5
 KB12H_AKTIF_ATR_RANGE = (2.0, 4.0)
 KB12H_AKTIF_BASE_MULT = 3.0
@@ -11140,6 +11147,8 @@ def get_arm_pct(atr_pct: float, strategy: str = None) -> float:
         return base * KB12H_ARM_MULT
     if strategy == 'kb1d':
         return base * KB1D_ARM_MULT   # 09/11/2026 KeltnerBreak-1D
+    if strategy == 'panic_bounce_4h':
+        return base * PB4H_ARM_MULT   # 14/11/2026 PantulanPanik-4h
     if strategy == 'trend_confirm_4h' and globals().get('TC4H_V2_ENABLED'):
         return base * TC4H_V2_ARM_MULT   # 10/11/2026 tc4h-v2
     return base
@@ -11202,6 +11211,8 @@ def compute_deal_urgency(sym: str, d: dict):
         hold_limit_sec = KB12H_MAX_HOLD_CANDLES * SECONDS_PER_CANDLE  # 08/11/2026 patch kb12h-aplus
     elif strat == 'kb1d':
         hold_limit_sec = KB1D_MAX_HOLD_DAYS * KB1D_SECONDS
+    elif strat == 'panic_bounce_4h':
+        hold_limit_sec = PB4H_MAX_HOLD_CANDLES * STRAT4H_SECONDS
     else:
         hold_limit_sec = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
     hours_to_timeout = max(0.0, (hold_limit_sec - (now - opened_ts)) / 3600) if opened_ts > 0 else None
@@ -11813,6 +11824,7 @@ BB_UPPER_TF_BY_STRATEGY = {
     'mombreak_1h': '1h',
     'hunting_4h': '4h',
     'topgainers_4h': '4h',  # 20/10/2026: ditambahkan sekalian saat celah get_live_atr_pct() ditutup
+    'panic_bounce_4h': '4h',   # 14/11/2026 PantulanPanik-4h (BB arm-early OFF)
     'kb1d': '1d',           # 09/11/2026 KeltnerBreak-1D (live ATR on the daily candle; BB arm-early is OFF for it)
 }
 
@@ -12537,7 +12549,7 @@ HB_STRAT_LABEL = {
     'brkX2_12h_closed': 'KeltnerBreak-12h', 'brkX2_4h': 'brkX2-4h', 'trend_confirm_4h': 'TrenKonfirmasi-4h',
     'reversal': 'Reversal-8h', 'brkX2_crossema': 'CrossEMA-4h', 'hunting_4h': 'Hunting-4h',
     'akum_entry_a': 'Akumulasi-4h A', 'akum_entry_b': 'Akumulasi-4h B', 'mombreak_1h': 'MomentumBreak-1h',
-    'decouple_4h': 'Decouple-4h', 'rvolbreak_8h': 'RVolBreak-8h', 'kb1d': 'KeltnerBreak-1D', 'dipbuy_universe': 'Dip-Buy Universe',
+    'decouple_4h': 'Decouple-4h', 'rvolbreak_8h': 'RVolBreak-8h', 'kb1d': 'KeltnerBreak-1D', 'panic_bounce_4h': 'PantulanPanik-4h', 'dipbuy_universe': 'Dip-Buy Universe',
     'bbsnap_4h': 'BBSnap-4h', 'bbsnap_8h': 'BBSnap-8h', 'topgainers_4h': 'Top Gainers-4h',
 }
 _hb_daily_notes_date = [None]
@@ -14349,7 +14361,7 @@ def thread2_monitor():
         _bbupper_min_cushion = BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY.get(strat, 0)
         # 08/11/2026 patch 'kb12h-exit-fix': BB-Upper arm-early/tighten OFF for KeltnerBreak-12h
         # (would arm far below the new 4x threshold -- see KB12H_ARM_MULT REMARK).
-        _bbupper_touched = (strat != 'hunting_4h' and strat not in KB12H_STRATS and strat != 'kb1d'
+        _bbupper_touched = (strat != 'hunting_4h' and strat not in KB12H_STRATS and strat not in ('kb1d', 'panic_bounce_4h')
                              and not (strat == 'trend_confirm_4h' and TC4H_V2_ENABLED)
                              and live_bb_upper is not None and peak >= live_bb_upper
                              and prof_peak >= _bbupper_min_cushion)
@@ -14958,6 +14970,9 @@ def thread2_monitor():
         elif strat == 'kb1d':
             hold_limit_sec = KB1D_MAX_HOLD_DAYS * KB1D_SECONDS
             hold_label = f"batas {KB1D_MAX_HOLD_DAYS} hari (KeltnerBreak-1D)"
+        elif strat == 'panic_bounce_4h':
+            hold_limit_sec = PB4H_MAX_HOLD_CANDLES * STRAT4H_SECONDS
+            hold_label = f"batas {PB4H_MAX_HOLD_CANDLES} candle 4h (PantulanPanik-4h)"
         elif strat in KB12H_STRATS:
             # 08/11/2026 patch 'kb12h-aplus': 10 x 12h (120h) instead of MAX_HOLD_DAYS (5)
             hold_limit_sec = KB12H_MAX_HOLD_CANDLES * SECONDS_PER_CANDLE
@@ -15002,6 +15017,7 @@ def thread2_monitor():
                 else d.get('timeout_candles', AKUM_ENTRY_TIMEOUT) if d.get('strategy','') in ('akum_entry_a','akum_entry_b')
                 else KB12H_MAX_HOLD_CANDLES if d.get('strategy','brkX2') in KB12H_STRATS
                 else KB1D_MAX_HOLD_DAYS if d.get('strategy') == 'kb1d'
+                else PB4H_MAX_HOLD_CANDLES if d.get('strategy') == 'panic_bounce_4h'
                 else MAX_HOLD_DAYS
             )
             hold_candle_now = int(elapsed_sec / candle_sec)
@@ -15123,7 +15139,7 @@ def thread2_monitor():
                 'brkX2_crossema': 'CrossEMA-4h', 'hunting_4h': 'Hunting-4h',
                 'akum_entry_a': 'Akumulasi-4h Entry A', 'akum_entry_b': 'Akumulasi-4h Entry B',
                 'trend_confirm_4h': 'TrenKonfirmasi-4h', 'mombreak_1h': 'MomentumBreak-1h',
-                'decouple_4h': 'Decouple-4h', 'rvolbreak_8h': 'RVolBreak-8h', 'kb1d': 'KeltnerBreak-1D',
+                'decouple_4h': 'Decouple-4h', 'rvolbreak_8h': 'RVolBreak-8h', 'kb1d': 'KeltnerBreak-1D', 'panic_bounce_4h': 'PantulanPanik-4h',
                 'rvolbreak_1h': 'RVOLBreak-1h', 'dipbuy_universe': 'Dip-Buy Universe',
                 'bbsnap_4h': 'BBSnap-4h', 'bbsnap_8h': 'BBSnap-8h', 'topgainers_4h': 'Top Gainers-4h',
             }
@@ -20284,7 +20300,7 @@ refreshRuleWatchAi();
       <tr id="row-{{ sym }}" data-performance="{{ d.get('performance_score', 0) }}" data-urgency="{{ d.get('urgency_sort', 3999) }}">
         <td class="sym {{ 'profit-pos' if d.get('upnl_usd',0) > 0 else 'profit-neg' }}">{{ sym.replace("USDT","/USDT") }}</td>
         <td style="white-space:nowrap">
-          {% set _sm = {"brkX2":"brkx2-12h","brkX2_closed":"KeltnerBreak-12h CC (arsip)","brkX2_intrabar":"KeltnerBreak-12h Intrabar (arsip)","brkX2_12h_closed":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h","decouple_4h":"Decouple-4h","dipbuy_universe":"Dip-Buy Universe","mombreak_1h":"MomentumBreak-1h","rvolbreak_8h":"RVolBreak-8h","kb1d":"KeltnerBreak-1D","rvolbreak_1h":"RVOLBreak-1h","hunting_4h":"Hunting-4h","akum_entry_a":"Akumulasi Entry A","akum_entry_b":"Akumulasi Entry B","bbsnap_4h":"BBSnap-4h","bbsnap_8h":"BBSnap-8h"} %}
+          {% set _sm = {"brkX2":"brkx2-12h","brkX2_closed":"KeltnerBreak-12h CC (arsip)","brkX2_intrabar":"KeltnerBreak-12h Intrabar (arsip)","brkX2_12h_closed":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h","decouple_4h":"Decouple-4h","dipbuy_universe":"Dip-Buy Universe","mombreak_1h":"MomentumBreak-1h","rvolbreak_8h":"RVolBreak-8h","kb1d":"KeltnerBreak-1D","panic_bounce_4h":"PantulanPanik-4h","rvolbreak_1h":"RVOLBreak-1h","hunting_4h":"Hunting-4h","akum_entry_a":"Akumulasi Entry A","akum_entry_b":"Akumulasi Entry B","bbsnap_4h":"BBSnap-4h","bbsnap_8h":"BBSnap-8h"} %}
           <div>{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</div>
           <div style="font-size:9px;color:var(--muted)">{{ d.get("opened_at","")[:16] if d.get("opened_at") else "-" }}</div>
         </td>
@@ -21074,7 +21090,7 @@ var SC_LABELS = {
     decouple_4h: 'Decouple-4h',
     rvolbreak_1h: 'RVOLBreak-1h',
     rvolbreak_8h: 'RVolBreak-8h',
-    kb1d: 'KeltnerBreak-1D',
+    kb1d: 'KeltnerBreak-1D', panic_bounce_4h: 'PantulanPanik-4h',
     dipbuy_universe: 'Dip-Buy Universe',
     bbsnap_4h: 'BBSnap-4h',
     bbsnap_8h: 'BBSnap-8h',
@@ -22048,7 +22064,7 @@ function ctShortDt(t) {
 
 function renderClosedTradesRows() {
     var rows = closedTradesRows.slice();
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var searchBox = document.getElementById('ct-filter-search');
     var searchTerm = searchBox ? searchBox.value.trim().toUpperCase() : '';
     if (searchTerm) {
@@ -22195,7 +22211,7 @@ function renderDealCandleSVG(candles, openMs, closeMs, basePrice, avgPrice, exit
 function openDealChartModal(i) {
     var r = (window._ctFilteredRows || [])[i];
     if (!r || !r.symbol) return;
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var modal = document.getElementById('deal-chart-modal');
     var titleEl = document.getElementById('deal-chart-title');
     var legendEl = document.getElementById('deal-chart-legend');
@@ -22269,7 +22285,7 @@ function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
     if (!el) return;
     if (!rows.length) { el.innerHTML = ''; return; }
-    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     // 10/10/2026 (permintaan Mas Budi): KeltnerBreak-12h digabung BALIK jadi SATU kartu lagi (balik
     // seperti sebelum 09/10/2026) -- raw strategy value 'brkX2' (legacy, sebelum split 1-hari),
     // 'brkX2_closed'/'brkX2_intrabar' (era split), DAN 'brkX2_12h_closed' (key baru skrg) SEMUA
@@ -22330,7 +22346,7 @@ function renderCtEquityCurve(rows) {
 }
 
 // ── Size-Cut per Strategi (20/10/2026, permintaan Mas Budi) ──────────────────────
-var SC_STRAT_MAP = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+var SC_STRAT_MAP = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
 var SC_CAT_COLOR = {volatil:'#2a78d6', ekstrem:'#1baf7a', st_turun:'#eb6834', lainnya:'#898781'};
 // Klasifikasi Profit (20/10/2026, permintaan Mas Budi): skala diverging rugi->impas->untung,
 // dipetakan dari token --red/--green dashboard yg sudah ada (bukan palet kategori baru) --
@@ -22543,7 +22559,7 @@ function renderSizecutCards(byStrategy) {
 function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var headers = ['Pair','Strategi','Opened','Entry','Closed','Exit','RSI@Open','ATR%@Open','ATR Tier','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
@@ -27035,6 +27051,156 @@ def thread_kb1d_scan() -> None:
             f"Modal: ${target_usd:.0f} | exit: trailing aktif di {get_arm_pct(atrp, 'kb1d'):.1f}%, tahan maks {KB1D_MAX_HOLD_DAYS} hari",
             parse_mode=None)
         log(f"[T_KB1D] OPEN {sym} @ {fill_price:.8g} (sinyal {signal_price:.8g}, ATR%={atrp:.2f}, ext {ext:+.2f}%)")
+
+
+# ── PantulanPanik-4h (strategy key 'panic_bounce_4h') -- 14/11/2026, Mas Budi: "MAU" (live $6) ──────────────────
+# Built for the periods when the 3 main strategies are idle (BTC Supertrend 1D DOWN). In those periods every
+# breakout design LOSES (Keltner 4h/1D, Donchian, strength vs BTC); a panic bounce wins. Entry (each closed 4h
+# candle): BTC Supertrend(10,3) 1D DOWN, BTC 4h close down >= 10% over 7 days (42 x 4h), coin down >= 10% over 24h
+# (6 x 4h), RSI14(4h) of the PREVIOUS candle < 25, the candle closes green back above the Bollinger(20,2) lower band
+# (previous close was at/below it), ATR14%(4h) < 7. Exit: hard stop tier x1.1, trailing arms at 4x the tier
+# threshold, progressive trailing, no BB-Upper arm-early, no AI, timeout 15 x 4h. $6 flat, no add-fund.
+# 1-minute test (385 deals 2022-2026): +4.69%/deal, WR 74%, coin TRAIN +4.28 / TEST +5.14, every year positive
+# (+1.72/+2.85/+7.01/+4.48/+5.28); worst deal -10.1% (hard stop). Wider set (no coin-24h filter, 821 deals) +2.26%,
+# 5/5 years. One-wallet sim with the 3 main strategies (1.5%/max 20): +10.5%/yr DD 10.7% -> +13.5%/yr DD 7.8%.
+# Signals cluster in crashes (up to 59 per candle): slots (max_deals) cap the exposure.
+# Scripts: scratchpad newstrat/screen_down.py, down_feat.py, down_1m.py.
+PB4H_ENABLED = True
+PB4H_RSI_PREV_MAX = 25.0
+PB4H_BTC7D_MAX_PCT = -10.0
+PB4H_COIN24H_MAX_PCT = -10.0
+_pb4h_last_candle = [(int(time.time()) // STRAT4H_SECONDS) * STRAT4H_SECONDS * 1000]
+
+
+def _closed_4h(sym: str, now_ms: int, limit: int = 80):
+    df = get_ohlcv_4h_bx4h_ws(sym, limit=limit)
+    if df is None or len(df) < 30:
+        return None
+    if int(df['ct'].iloc[-1]) >= now_ms:
+        df = df.iloc[:-1]
+    return df
+
+
+def thread_pb4h_scan() -> None:
+    if not PB4H_ENABLED or not is_strategy_enabled('panic_bounce_4h'):
+        return
+    now_ms = int(time.time() * 1000)
+    sec4h_ms = STRAT4H_SECONDS * 1000
+    candle_open_ms = (now_ms // sec4h_ms) * sec4h_ms
+    if _pb4h_last_candle[0] == candle_open_ms or now_ms - candle_open_ms < 120_000:
+        return
+    if is_daily_loss_limit_breached():
+        log("[T_PB4H] Scan di-skip -- batas rugi harian tersulut")
+        return
+    _pb4h_last_candle[0] = candle_open_ms
+    btc_down = kb12h_ekstrem_st1d_down('BTCUSDT')
+    if btc_down is not True:
+        log(f"[T_PB4H] BTC Supertrend 1D {'naik' if btc_down is False else 'tidak terbaca'} -- strategi ini hanya jalan saat BTC turun")
+        return
+    b = _closed_4h('BTCUSDT', now_ms)
+    if b is None or len(b) < 44 or int(b['ts'].iloc[-1]) != candle_open_ms - sec4h_ms:
+        log("[T_PB4H] data 4h BTC tidak lengkap -- lewati candle ini")
+        return
+    bc = b['close'].astype(float)
+    btc7d = (bc.iloc[-1] / bc.iloc[-43] - 1) * 100
+    if btc7d > PB4H_BTC7D_MAX_PCT:
+        log(f"[T_PB4H] BTC 7 hari {btc7d:+.2f}% (belum panik, syarat <= {PB4H_BTC7D_MAX_PCT:g}%) -- tidak buka deal")
+        return
+    max_deals = int(load_strategy_config().get('panic_bounce_4h', {}).get('max_deals', 3) or 3)
+    if PCT_SIZING_ENABLED:
+        max_deals = max(max_deals, PCT_SIZING_MAX_DEALS)
+    if deal_count_by_strategy('panic_bounce_4h') >= max_deals:
+        log(f"[T_PB4H] slot penuh ({deal_count_by_strategy('panic_bounce_4h')}/{max_deals})")
+        return
+    ticker = get_ticker_24h()
+    if not ticker:
+        return
+    with active_deals_lock:
+        existing = set(active_deals.keys())
+    cands, n_scan = [], 0
+    for t in ticker:
+        sym = t.get("symbol", "")
+        if not sym.endswith("USDT") or sym == 'BTCUSDT' or sym in existing or sym in SYMBOL_BLACKLIST or is_bstock_symbol(sym):
+            continue
+        try:
+            if float(t.get("quoteVolume", 0) or 0) < TRENDCONFIRM_MIN_VOL_USD:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if is_cooldown_enabled('panic_bounce_4h') and cooldown_remaining(sym) > 0: continue
+        if sizing_fail_remaining(sym) > 0: continue
+        try:
+            n_scan += 1
+            df = _closed_4h(sym, now_ms)
+            if df is None or len(df) < 30 or int(df['ts'].iloc[-1]) != candle_open_ms - sec4h_ms:
+                continue
+            c, h, l, o = (df[k].astype(float) for k in ('close', 'high', 'low', 'open'))
+            if not (c.iloc[-1] > o.iloc[-1]):
+                continue
+            ret24 = (c.iloc[-1] / c.iloc[-7] - 1) * 100
+            if ret24 > PB4H_COIN24H_MAX_PCT:
+                continue
+            bbl = c.rolling(20).mean() - 2 * c.rolling(20).std()
+            if not (c.iloc[-1] > bbl.iloc[-1] and c.iloc[-2] <= bbl.iloc[-2]):
+                continue
+            rsi = ta.rsi(c, length=14)
+            if pd.isna(rsi.iloc[-2]) or rsi.iloc[-2] >= PB4H_RSI_PREV_MAX:
+                continue
+            atrp = float((ta.atr(h, l, c, length=14) / c * 100).iloc[-1])
+            if pd.isna(atrp) or atrp >= EKSTREM_ATR_PCT:
+                log(f"[T_PB4H] {sym} pantulan tapi tier Ekstrem (ATR {atrp:.2f}%) -- dilewati")
+                continue
+            cands.append((sym, float(c.iloc[-1]), atrp, float(rsi.iloc[-2]), ret24))
+        except Exception as e:
+            log(f"  [T_PB4H] error {sym}: {e}")
+    log(f"[T_PB4H] candle 4h {now_wib().strftime('%d/%m %H:%M')}: BTC 7h {btc7d:+.2f}%, {len(cands)} pantulan lolos (scan {n_scan} koin)")
+    cands.sort(key=lambda x: x[3])                 # most oversold first
+    for sym, signal_price, atrp, rsi_prev, ret24 in cands:
+        n_active = deal_count_by_strategy('panic_bounce_4h')
+        if n_active >= max_deals:
+            break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='panic_bounce_4h', atr_pct=atrp)
+        if not ok: continue
+        try:
+            entry_price = get_price_now(sym)
+            if entry_price <= 0: entry_price = signal_price
+        except Exception:
+            entry_price = signal_price
+        slip = (entry_price / signal_price - 1) * 100 if signal_price > 0 else 0.0
+        add_to_active_deals(sym, {
+            "strategy": "panic_bounce_4h", "entry_price": entry_price, "peak": entry_price, "signal_price": signal_price,
+            "atr_pct": atrp, "score": 1, "opened_ts": time.time(), "opened_candle_ts": int(candle_open_ms),
+            "trailing_armed": False, "opened_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "target_usd": target_usd,
+            "add_usd": 0, "tf": "4h", "rsi_open": rsi_prev,
+        })
+        send_telegram(
+            f"PantulanPanik-4h | OPEN LONG\n{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Pair  : {to_display_pair(sym)}\nHarga entry: {_fmt_price(entry_price)} (sinyal 4h {_fmt_price(signal_price)}, slip {slip:+.2f}%)\n"
+            f"Koin 24 jam: {ret24:+.2f}% | RSI 4h sebelumnya: {rsi_prev:.1f} | BTC 7 hari: {btc7d:+.2f}%\n"
+            f"ATR%  : {atrp:.2f} - {hard_stop_pct(atrp, 'panic_bounce_4h')[0]}\n"
+            f"Modal: ${target_usd:.0f} | exit: trailing aktif di {get_arm_pct(atrp, 'panic_bounce_4h'):.1f}%, tahan maks {PB4H_MAX_HOLD_CANDLES} candle 4h\n"
+            f"Slot terpakai: {n_active + 1}/{max_deals}",
+            parse_mode=None)
+        csv_log_open({
+            'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'), 'symbol': to_display_pair(sym),
+            'signal_price': f"{_fmt_price(signal_price)}", 'entry_price': f"{_fmt_price(entry_price)}",
+            'slip_pct': f"{slip:+.2f}", 'atr_pct': f"{atrp:.2f}", 'trail_dist_pct': f"{trailing_dist(atrp)}",
+            'base_usd': target_usd, 'score': 1, 'strategy': 'panic_bounce_4h', 'rsi_open': f"{rsi_prev:.1f}",
+        })
+        log_oac('OPEN', sym, 'PantulanPanik-4h', {'entry_price': _fmt_price(entry_price), 'ret24': f"{ret24:+.2f}%",
+                                                  'rsi_prev': f"{rsi_prev:.1f}", 'btc7d': f"{btc7d:+.2f}%", 'atr_pct': f"{atrp:.2f}%"})
+        log(f"[T_PB4H] OPEN {sym} @ {entry_price:.8g} (sinyal {signal_price:.8g}, 24j {ret24:+.2f}%, RSI prev {rsi_prev:.1f}, ATR {atrp:.2f})")
+
+
+def run_thread_pb4h() -> None:
+    while True:
+        try:
+            thread_pb4h_scan()
+        except Exception as e:
+            log(f"WARN T_PB4H error: {e}")
+        time.sleep(60)
 
 
 def run_thread_kb1d() -> None:
@@ -37424,6 +37590,8 @@ if __name__ == '__main__':
         threads.append(t_rv)
         n_threads += 1
     if KB1D_ENABLED:
+        t_pb4h = threading.Thread(target=run_thread_pb4h, daemon=True, name="T-PB4H")   # 14/11/2026 PantulanPanik-4h
+        t_pb4h.start()
         t_kb1d = threading.Thread(target=run_thread_kb1d, daemon=True, name="T-KB1D")
         threads.append(t_kb1d)
         n_threads += 1
