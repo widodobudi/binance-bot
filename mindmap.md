@@ -165,6 +165,11 @@
 - Konfirmasi 1 menit (10/11): RSI<65 + RVol<3 + coin ST1D naik, trailing 6x, tahan 20 candle: +1,35%/deal (1 jam +1,32), TRAIN/TEST per coin +1,28 / +1,42, 5/5 tahun
 - Semua varian inti (RSI<65 + coin ST1D naik) positif 5/5 tahun di uji 1 menit
 - Status: DISETUJUI 10/11 ("boleh") → dipasang sbg patch tc4h-v2
+### Simulasi satu dompet / ukuran modal (13/11, riset)
+- 3 strategi live (KB12h, KB1D, TC4h v2), uji 1 menit 2022-2026, modal per deal = % saldo
+- Kunci: MAX DEALS, bukan besar modal; slot 3 cuma dapat ~+0,4%/deal (sinyal bergerombol)
+- Usulan: 2% saldo per deal (KB12h Aktif 3x) + max 12-20 per strategi: ~11,5-12,3%/thn, turun terdalam ~27%, TRAIN=TEST
+- Status: belum dipasang, tunggu dana masuk + izin
 ### hold-floor-stop-when-empty (12/11)
 - Pagar darurat hold_no_sell berhenti memantau koin yang saldonya sudah 0 (DASH: WARN gagal jual tiap menit)
 - Status: deploy 12/11
