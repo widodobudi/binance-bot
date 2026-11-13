@@ -21928,6 +21928,8 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="bbsnap_4h" onchange="onCtStratCheckChange()">BBSnap-4h</label>
         <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="bbsnap_8h" onchange="onCtStratCheckChange()">BBSnap-8h</label>
         <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="topgainers_4h" onchange="onCtStratCheckChange()">Top Gainers-4h</label>
+<label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="kb1d" onchange="onCtStratCheckChange()">KeltnerBreak-1D</label>
+<label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="panic_bounce_4h" onchange="onCtStratCheckChange()">PantulanPanik-4h</label>
         <label style="display:flex;align-items:center;gap:6px;padding:4px 2px 2px;font-size:11px;cursor:pointer;margin-top:4px;border-top:1px solid var(--border)"><input type="checkbox" id="ct-strat-exclude-hardstop" onchange="onCtStratCheckChange()" style="margin-top:4px">Exclude hardstop volatilitas</label>
       </div>
     </div>
@@ -22642,7 +22644,8 @@ var CT_STRAT_LABELS = {
   hunting_4h: 'Hunting-4h', brkX2_crossema: 'CrossEMA-4h', akumulasi: 'Akumulasi-4h',
   trend_confirm_4h: 'TrenKonfirmasi-4h', mombreak_1h: 'MomentumBreak-1h', decouple_4h: 'Decouple-4h',
   rvolbreak_1h: 'RVOLBreak-1h', rvolbreak_8h: 'RVolBreak-8h', dipbuy_universe: 'Dip-Buy Universe',
-  bbsnap_4h: 'BBSnap-4h', bbsnap_8h: 'BBSnap-8h', topgainers_4h: 'Top Gainers-4h'
+  bbsnap_4h: 'BBSnap-4h', bbsnap_8h: 'BBSnap-8h', topgainers_4h: 'Top Gainers-4h',
+  kb1d: 'KeltnerBreak-1D', panic_bounce_4h: 'PantulanPanik-4h'
 };
 function toggleCtStratMenu() {
   var m = document.getElementById('ct-filter-strat-menu');
@@ -34309,6 +34312,8 @@ def run_web_dashboard():
                 ("bbsnap_4h", "BBSnap-4h"),
                 ("bbsnap_8h", "BBSnap-8h"),
                 ("topgainers_4h", "Top Gainers-4h"),
+                ("kb1d", "KeltnerBreak-1D"),               # 14/11/2026: was missing since 09/11
+                ("panic_bounce_4h", "PantulanPanik-4h"),   # 14/11/2026 new strategy
             ]
             # 26/09/2026 (permintaan Mas Budi): "kecepatan closing" PROFIT POSITIF -- tier
             # adaptif hari/minggu/bulan (lihat strategy_recent_close_stats()) + interval rata2
