@@ -1832,7 +1832,7 @@ STRATEGY_CONFIG_DEFAULTS = {
     # base_usd 60->8 (25/10/2026, patch 'smallstart-reclaim-addfund'): modal awal SEKARANG
     # SELALU kecil ($8, dekat batas minimum Binance), ditambah ke $60 (SMALLSTART_FULL_TARGET_USD)
     # HANYA kalau harga reclaim EMA20 setelah sempat drop -- lihat REMARK lengkap di konstanta itu.
-    "brkX2_12h_closed":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
+    "brkX2_12h_closed":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 6, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
     "brkX2":         {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 60, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     "reversal":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 30, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     "brkX2_4h":      {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0,    "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 5, "close_sell_pct": 100},
@@ -1852,7 +1852,7 @@ STRATEGY_CONFIG_DEFAULTS = {
     "hunting_4h":    {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 25, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100},
     # base_usd 30->8 (25/10/2026, patch 'smallstart-reclaim-addfund') -- sama pola persis spt
     # brkX2_12h_closed di atas, target add-fund $30 (SMALLSTART_FULL_TARGET_USD).
-    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
+    "trend_confirm_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 6, "add_usd": None, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
     # mombreak_1h: 'btc_gate_elapsed_pct' -- satu2nya strategi yg rumus Gate0-nya punya parameter
     # elapsed-time (tunggu candle 3m BTCUSDT closed sampai sekian % sebelum gendut-check dianggap
     # valid). Default 100 (candle HARUS closed penuh) -- SATU2NYA nilai yg terbukti backtest
@@ -1930,7 +1930,7 @@ STRATEGY_CONFIG_DEFAULTS = {
     # murah risikonya per entry.
     "topgainers_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 6, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
     # 09/11/2026 KeltnerBreak-1D (see KB1D_* REMARK): pure rules like its backtest -> no AI open/close.
-    "kb1d": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 8, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
+    "kb1d": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 6, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
 }
 # 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
 # default TRUE di semua strategi (kecuali mombreak_1h, sama seperti ai_call_open -- desain rule-based
@@ -2126,8 +2126,83 @@ def sync_max_deals_globals():
             f"4h={STRAT4H_MAX_DEALS} crossema={STRAT_CROSSEMA_MAX_DEALS} "
             f"hunting={HUNTING_MAX_DEALS} akum={AKUM_ENTRY_MAX_DEALS} trendconfirm={TRENDCONFIRM_MAX_DEALS} "
             f"mombreak={MOMBREAK_MAX_DEALS}")
+        if globals().get('PCT_SIZING_ENABLED'):   # 14/11/2026 base6-and-pct-sizing stage 2
+            MAX_DEALS_BRKX2_CLOSED = max(MAX_DEALS_BRKX2_CLOSED, PCT_SIZING_MAX_DEALS)
+            TRENDCONFIRM_MAX_DEALS = max(TRENDCONFIRM_MAX_DEALS, PCT_SIZING_MAX_DEALS)
+            log(f"   [PCT-SIZING] aktif: max deals KB12h/TC4h/KB1D = {PCT_SIZING_MAX_DEALS}")
     except Exception as e:
         log(f"WARN sync_max_deals_globals: {e}")
+
+# ── Patch 'base6-and-pct-sizing' (14/11/2026, Mas Budi: "diturunkan ke $6" + "Boleh") ─────────────────────
+# One-wallet simulation 13/11/2026 (KB12h + KB1D + TC4h v2, live exit rules, 1-minute data 2022-2026; scratchpad
+# portfolio/final.py): the lever is MAX DEALS, not the size per deal. Signals come in clusters (up to 78 per candle
+# in rallies); with 3 slots per strategy the deals actually taken averaged only ~+0.4% vs +1.24% uncapped.
+#  - $8 / max 3 on a ~$60 wallet: realized drawdown -31.7% (2025 -35%) -> above Mas Budi's -26% limit.
+#  - Stage 1 (LIVE now): base $6 for the 3 strategies (drawdown -26.1% in the same sim; $6 not $5 because a losing
+#    $5 deal falls under Binance's $5 NOTIONAL minimum and cannot be sold).
+#  - Stage 2 (OFF until the deposit planned for 15/12/2026): base = 1.5% of the wallet (cash + open deals at cost),
+#    floor $6, KB12h Aktif tier still x3, max 20 deals per strategy, and the combined deal/exposure caps widened so
+#    they do not block those slots. Sim at $410: +10.5%/yr, drawdown -10.7% (worst case -19.5%), all 5 years positive,
+#    coin TRAIN +40 / TEST +41. Turn on with PCT_SIZING_ENABLED = True (needs a wallet >= ~$400).
+PCT_SIZING_ENABLED   = False
+PCT_SIZING_FRACTION  = 0.015
+PCT_SIZING_MIN_USD   = 6.0
+PCT_SIZING_MAX_DEALS = 20
+PCT_SIZING_STRATS    = ('brkX2_12h_closed', 'kb1d', 'trend_confirm_4h')
+BASE6_STRATS         = ('brkX2_12h_closed', 'kb1d', 'trend_confirm_4h')
+_wallet_equity_cache = {"ts": 0.0, "value": 0.0}
+
+
+def wallet_equity_usd() -> float:
+    """USDT (free + locked) in the trading wallet + all active deals at cost. Cached 2 minutes; 0.0 on failure."""
+    now = time.time()
+    if now - _wallet_equity_cache["ts"] < 120 and _wallet_equity_cache["value"] > 0:
+        return _wallet_equity_cache["value"]
+    try:
+        free, locked = get_usdt_balance()
+        with active_deals_lock:
+            deals = [dict(d) for d in active_deals.values()]
+        total = float(free) + float(locked) + sum(estimate_deal_total_usd(d) for d in deals)
+        if total > 0:
+            _wallet_equity_cache.update(ts=now, value=total)
+        return total
+    except Exception as e:
+        log(f"WARN wallet_equity_usd: {e}")
+        return 0.0
+
+
+def pct_sizing_base_usd(strategy: str, cfg_base: float) -> float:
+    """Stage 2 base for the 3 main strategies: max($6, 1.5% of the wallet); cfg_base when off or on failure."""
+    if not PCT_SIZING_ENABLED or strategy not in PCT_SIZING_STRATS:
+        return cfg_base
+    eq = wallet_equity_usd()
+    if eq <= 0:
+        return cfg_base
+    return round(max(PCT_SIZING_MIN_USD, PCT_SIZING_FRACTION * eq), 2)
+
+
+def migrate_base_usd_6_once():
+    """Stage 1: set base_usd = 6 once in the saved Strategy Control config for the 3 main strategies (later edits in
+    the dashboard are kept -- the flag key stops this from running again)."""
+    try:
+        saved = {}
+        if os.path.exists(STRATEGY_CONFIG_FILE):
+            with open(STRATEGY_CONFIG_FILE) as f:
+                saved = json.load(f) or {}
+        if saved.get("_migr_base6_20261114"):
+            return
+        for k in BASE6_STRATS:
+            cur = dict(saved.get(k, {}))
+            old = cur.get("base_usd")
+            cur["base_usd"] = 6
+            saved[k] = cur
+            log(f"   [BASE6] {k}: base_usd {old} -> 6")
+        saved["_migr_base6_20261114"] = time.time()
+        with open(STRATEGY_CONFIG_FILE, "w") as f:
+            json.dump(saved, f, indent=2)
+    except Exception as e:
+        log(f"WARN migrate_base_usd_6_once: {e}")
+
 
 def total_max_deals_all_strategies() -> int:
     """Jumlah semua slot maks lintas strategi -- dipakai murni buat DISPLAY (ganti
@@ -9543,6 +9618,7 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
         return False, BASE_ORDER_VOLUME, 0
     # Guard: base_usd dari Strategy Control (override konstanta)
     _cfg_base = get_strategy_base_usd(strategy)
+    _cfg_base = pct_sizing_base_usd(strategy, _cfg_base)   # 14/11/2026 stage 2 (no-op while PCT_SIZING_ENABLED is False)
     # Guard: batas GABUNGAN lintas semua strategi (jumlah deal & $ eksposur, 19/09/2026)
     _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=_cfg_base)
     if not _glob_ok:
@@ -12211,10 +12287,14 @@ def global_deal_limits_ok(planned_usd: float = 0.0) -> tuple:
     pas mepet lalu langsung kelewat begitu deal ini kebuka. Return (ok: bool, reason: str)."""
     n = active_deal_count()
     deal_cap = global_max_active_deals()
+    if PCT_SIZING_ENABLED:   # 14/11/2026 stage 2: room for 20 slots x 3 strategies
+        deal_cap = max(deal_cap, PCT_SIZING_MAX_DEALS * len(PCT_SIZING_STRATS) + 10)
     if n >= deal_cap:
         return False, f"batas jumlah deal gabungan tercapai ({n}/{deal_cap})"
     exposure = total_active_exposure_usd()
     exposure_cap = global_max_exposure_usd()
+    if PCT_SIZING_ENABLED:   # 14/11/2026 stage 2: the whole wallet may be in deals (sim max ~100%)
+        exposure_cap = max(exposure_cap, wallet_equity_usd())
     if exposure + planned_usd > exposure_cap:
         return False, (f"batas eksposur $ gabungan tercapai (terpakai ${exposure:.0f} + "
                         f"rencana ${planned_usd:.0f} > ${exposure_cap:.0f})")
@@ -26875,6 +26955,8 @@ def thread_kb1d_scan() -> None:
         log("[T_KB1D] Scan di-skip -- batas rugi harian tersulut")
         return
     max_deals = int(load_strategy_config().get('kb1d', {}).get('max_deals', 3) or 3)
+    if PCT_SIZING_ENABLED:
+        max_deals = max(max_deals, PCT_SIZING_MAX_DEALS)   # 14/11/2026 stage 2
     _kb1d_last_candle[0] = candle_open_ms
     btc_down = kb12h_ekstrem_st1d_down('BTCUSDT')
     if btc_down is not False:
@@ -37272,6 +37354,7 @@ if __name__ == '__main__':
     threading.Thread(target=reset_shadow_keltnerbreak_closed_once, daemon=True).start()   # 03/10/2026: arsip 3 closed lama shadow keltnerbreak_12h, reset ke 0/20
     mcap_refresh_async(force=True)   # 20/09/2026: siapkan cache peringkat CoinGecko sebelum OPEN pertama
     threading.Thread(target=earn_selfcheck, daemon=True).start()   # 20/09/2026: cek read-only akses Simple Earn
+    migrate_base_usd_6_once()   # 14/11/2026 base6-and-pct-sizing stage 1
     sync_max_deals_globals()
     load_paper_test_state()
     load_scan_blockers()

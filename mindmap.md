@@ -165,6 +165,10 @@
 - Konfirmasi 1 menit (10/11): RSI<65 + RVol<3 + coin ST1D naik, trailing 6x, tahan 20 candle: +1,35%/deal (1 jam +1,32), TRAIN/TEST per coin +1,28 / +1,42, 5/5 tahun
 - Semua varian inti (RSI<65 + coin ST1D naik) positif 5/5 tahun di uji 1 menit
 - Status: DISETUJUI 10/11 ("boleh") → dipasang sbg patch tc4h-v2
+### base6-and-pct-sizing (14/11, Mas Budi: "diturunkan ke $6" + "Boleh")
+- Tahap 1 (LIVE): modal KB12h / KB1D / TC4h v2 $8 -> $6 (KB12h Aktif $18); sim dompet $60: turun terdalam -31,7% -> -26,1%
+- Tahap 2 (MATI, nyalakan stlh dana masuk 15/12): modal = 1,5% saldo (min $6), max 20 deal per strategi, batas gabungan dilonggarkan
+- Nyalakan: PCT_SIZING_ENABLED = True
 ### Simulasi satu dompet / ukuran modal (13/11, riset)
 - 3 strategi live (KB12h, KB1D, TC4h v2), uji 1 menit 2022-2026, modal per deal = % saldo
 - Kunci: MAX DEALS, bukan besar modal; slot 3 cuma dapat ~+0,4%/deal (sinyal bergerombol)
