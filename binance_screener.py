@@ -6785,36 +6785,224 @@ def redeem_earn_flexible(product_id: str, amount: float = None, redeem_all: bool
 
 
 def ensure_spot_usdt(min_needed: float, wait_seconds: int = 12) -> bool:
-    """Pastikan saldo Spot USDT free >= min_needed. Kalau kurang, coba redeem otomatis
-    dari Simple Earn Flexible sejumlah selisihnya (+buffer kecil utk fee/slippage).
-    Return True kalau saldo sudah/berhasil dicukupkan, False kalau tetap kurang."""
+    """Pastikan saldo Spot USDT (Sub Account, akun trading) free >= min_needed. Kalau kurang, tarik balik USDT MILIK
+    BOT yang diparkir di Earn Master (patch 'idle-usdt-earn', lihat REMARK IDLE_EARN_*) -- redeem + transfer
+    Master->Sub. 14/11/2026: jalur lama (redeem SEMUA posisi Earn USDT di Master) DICABUT: sejak trading pindah ke
+    Sub Account (22/09/2026) dana redeem mendarat di Spot MASTER, tidak pernah sampai ke Sub, dan yang ter-redeem
+    adalah USDT pribadi Mas Budi. Return True kalau saldo sudah/berhasil dicukupkan, False kalau tetap kurang."""
     free, _locked = get_usdt_balance()
     if free >= min_needed:
         return True
-    shortfall = min_needed - free
-    positions = get_earn_flexible_usdt_positions()
-    earn_total = sum(p["totalAmount"] for p in positions)
-    if earn_total <= 0:
-        log(f"[EARN] Saldo Spot USDT kurang (${free:.2f} < ${min_needed:.2f}) dan tidak ada dana di Earn Flexible.")
+    moved = idle_earn_refill(min_needed - free)
+    if moved <= 0:
+        log(f"[EARN] Saldo Spot USDT kurang (${free:.2f} < ${min_needed:.2f}) dan tidak ada USDT bot di Earn Master.")
         return False
-    log(f"[EARN] Saldo Spot USDT kurang (${free:.2f} < ${min_needed:.2f}), coba redeem ${shortfall:.2f} dari Earn Flexible (tersedia ${earn_total:.2f})")
-    remaining = shortfall * 1.02  # buffer 2% jaga-jaga fee/pembulatan
-    for p in positions:
-        if remaining <= 0:
-            break
-        take = min(p["totalAmount"], remaining)
-        redeem_all_this = take >= p["totalAmount"]
-        if redeem_earn_flexible(p["productId"], amount=take, redeem_all=redeem_all_this):
-            remaining -= take
-    # Tunggu dana settle ke Spot (redeem flexible FAST biasanya instant, tapi kasih jeda)
     for _ in range(wait_seconds):
         time.sleep(1)
         free, _locked = get_usdt_balance()
         if free >= min_needed:
-            log(f"[EARN] Redeem berhasil, saldo Spot USDT sekarang ${free:.2f}")
+            log(f"[EARN] Tarik dari Earn berhasil, saldo Spot USDT sekarang ${free:.2f}")
             return True
-    log(f"WARN [EARN] Setelah redeem, saldo Spot USDT masih ${free:.2f} < ${min_needed:.2f}")
+    log(f"WARN [EARN] Setelah tarik dari Earn, saldo Spot USDT masih ${free:.2f} < ${min_needed:.2f}")
     return False
+
+
+
+# ── Patch 'idle-usdt-earn' (14/11/2026, Mas Budi: "MAU" + enabled "Permits Universal Transfer" on railway-binance) ──
+# Wallet sim 13/11: on average only ~7% of the trading wallet sits in deals; the rest is idle USDT on the Sub Account.
+# Earn stays on the MASTER account only (Mas Budi's decision 22/09/2026), so the flow is:
+#   sweep : Sub spot USDT above the cash buffer -> Sub->Master transfer -> subscribe Master Simple Earn Flexible USDT
+#   refill: Sub cash below half the buffer (or an open lacks USDT) -> redeem Master Earn (ONLY what the bot put there,
+#           tracked in idle_earn.json) -> Master->Sub universal transfer.
+# Mas Budi's own Master Earn USDT is never touched: every redeem is capped at the bot's ledger amount.
+# Buffer = max($30, 25% of wallet equity). Moves smaller than $10 are skipped. Checked every 5 minutes.
+# Turn off with IDLE_EARN_ENABLED = False (then refill still returns the bot's money when an open needs it).
+IDLE_EARN_ENABLED = False          # stage A: deploy with the self-check only; switched on after the check passes
+IDLE_EARN_BUFFER_MIN_USD = 30.0
+IDLE_EARN_BUFFER_FRAC = 0.25
+IDLE_EARN_MIN_MOVE_USD = 10.0
+IDLE_EARN_INTERVAL_SEC = 300
+IDLE_EARN_FILE = os.path.join(DATA_DIR, "idle_earn.json")
+_idle_earn_lock = threading.Lock()
+_sub_email_cache = [None]
+
+
+def _idle_earn_load() -> dict:
+    d = _earn_json_load(IDLE_EARN_FILE, {}) if os.path.exists(IDLE_EARN_FILE) else {}
+    d.setdefault("bot_in_earn", 0.0)
+    d.setdefault("log", [])
+    return d
+
+
+def _idle_earn_save(d: dict, event: str = None):
+    if event:
+        d["log"] = (d.get("log", []) + [f"{now_wib().strftime('%Y-%m-%d %H:%M')} {event}"])[-60:]
+    _earn_json_save(IDLE_EARN_FILE, d)
+
+
+def _master_spot_usdt() -> float:
+    try:
+        data = _binance_earn_request("GET", "/api/v3/account", {})
+        for b in data.get("balances", []):
+            if b.get("asset") == "USDT":
+                return float(b.get("free", 0) or 0)
+    except Exception as e:
+        log(f"WARN [IDLE-EARN] saldo Master: {e}")
+        return -1.0
+    return 0.0
+
+
+def _bot_sub_email():
+    if _sub_email_cache[0]:
+        return _sub_email_cache[0]
+    env = os.environ.get("BINANCE_SUB_EMAIL", "").strip()
+    if env:
+        _sub_email_cache[0] = env
+        return env
+    try:
+        data = _binance_earn_request("GET", "/sapi/v1/sub-account/list", {})
+        subs = [s.get("email") for s in (data.get("subAccounts", []) if isinstance(data, dict) else []) if s.get("email")]
+        if len(subs) == 1:
+            _sub_email_cache[0] = subs[0]
+            return subs[0]
+        log(f"WARN [IDLE-EARN] {len(subs)} sub account ditemukan -- set env BINANCE_SUB_EMAIL supaya tidak salah tujuan")
+    except Exception as e:
+        log(f"WARN [IDLE-EARN] daftar sub account: {e}")
+    return None
+
+
+def binance_transfer_master_to_sub(asset: str, amount: float) -> bool:
+    """Master -> bot Sub Account (spot to spot), with the MASTER key (needs 'Permits Universal Transfer')."""
+    email = _bot_sub_email()
+    amt = int(amount * 100) / 100.0
+    if not email or amt <= 0:
+        return False
+    try:
+        data = _binance_earn_request("POST", "/sapi/v1/sub-account/universalTransfer",
+                                     {"toEmail": email, "fromAccountType": "SPOT", "toAccountType": "SPOT",
+                                      "asset": asset, "amount": f"{amt:.2f}"})
+        log(f"[IDLE-EARN] Transfer Master->Sub {amt} {asset} -> {data}")
+        return True
+    except Exception as e:
+        log(f"WARN [IDLE-EARN] transfer Master->Sub {amt} {asset}: {e}")
+        return False
+
+
+def idle_earn_buffer_usd() -> float:
+    return max(IDLE_EARN_BUFFER_MIN_USD, IDLE_EARN_BUFFER_FRAC * wallet_equity_usd())
+
+
+def idle_earn_selfcheck():
+    """Read-only check logged at startup: Master key permissions + bot Sub email + Earn product."""
+    try:
+        r = _binance_earn_request("GET", "/sapi/v1/account/apiRestrictions", {})
+        email = _bot_sub_email()
+        prod = get_earn_flexible_product("USDT")
+        d = _idle_earn_load()
+        log(f"[IDLE-EARN] selfcheck: universalTransfer={r.get('permitsUniversalTransfer')} "
+            f"subEmail={'ada' if email else 'TIDAK ADA'} produk USDT={prod} bot_in_earn=${d['bot_in_earn']:.2f} "
+            f"aktif={IDLE_EARN_ENABLED}")
+        return bool(r.get('permitsUniversalTransfer')) and bool(email) and bool(prod)
+    except Exception as e:
+        log(f"WARN [IDLE-EARN] selfcheck: {e}")
+        return False
+
+
+def idle_earn_refill(need_usd: float = 0.0) -> float:
+    """Bring the bot's own USDT back from Master Earn to the Sub spot wallet. Returns the amount moved (0 if none)."""
+    with _idle_earn_lock:
+        d = _idle_earn_load()
+        owned = float(d.get("bot_in_earn", 0) or 0)
+        if owned < 1.0:
+            return 0.0
+        free, _ = get_usdt_balance()
+        target = max(float(need_usd), idle_earn_buffer_usd() - free)
+        amount = int(min(owned, max(target, 0.0) * 1.02) * 100) / 100.0   # 2 decimals, same as the transfer
+        if amount < 1.0:
+            return 0.0
+        positions = get_earn_flexible_usdt_positions()
+        if not positions:
+            log("WARN [IDLE-EARN] refill: tidak ada posisi Earn USDT di Master")
+            return 0.0
+        before = _master_spot_usdt()
+        left = amount
+        for p in positions:
+            if left <= 0:
+                break
+            take = int(min(p["totalAmount"], left) * 100) / 100.0
+            if take > 0 and redeem_earn_flexible(p["productId"], amount=take):
+                left -= take
+        redeemed = round(amount - left, 2)
+        if redeemed <= 0:
+            return 0.0
+        for _ in range(30):
+            time.sleep(1)
+            if _master_spot_usdt() >= before + redeemed * 0.99:
+                break
+        if not binance_transfer_master_to_sub("USDT", redeemed):
+            send_telegram(f"[Earn USDT] Redeem ${redeemed:.2f} berhasil tapi transfer Master->Sub GAGAL -- dana ada di Spot Master. "
+                          f"Bot coba lagi 5 menit lagi.", parse_mode=None)
+            d["pending_master_spot"] = round(float(d.get("pending_master_spot", 0) or 0) + redeemed, 2)
+            d["bot_in_earn"] = round(owned - redeemed, 2)
+            _idle_earn_save(d, f"redeem {redeemed} ok, transfer GAGAL (pending)")
+            return 0.0
+        d["bot_in_earn"] = round(owned - redeemed, 2)
+        _idle_earn_save(d, f"refill {redeemed} -> Sub")
+        log(f"[IDLE-EARN] refill ${redeemed:.2f} Master Earn -> Sub (sisa bot di Earn ${d['bot_in_earn']:.2f})")
+        return redeemed
+
+
+def idle_earn_sweep():
+    """Move Sub spot USDT above the buffer into Master Earn Flexible."""
+    with _idle_earn_lock:
+        d = _idle_earn_load()
+        pending = float(d.get("pending_master_spot", 0) or 0)
+        if pending >= 1.0:   # retry a refill whose Master->Sub transfer failed earlier
+            if binance_transfer_master_to_sub("USDT", pending):
+                d["pending_master_spot"] = 0.0
+                _idle_earn_save(d, f"pending {pending} -> Sub ok")
+            return
+        free, _ = get_usdt_balance()
+        excess = int((free - idle_earn_buffer_usd()) * 100) / 100.0
+        if excess < IDLE_EARN_MIN_MOVE_USD:
+            return
+        prod = get_earn_flexible_product("USDT")
+        if not prod or excess < float(prod.get("min", 0) or 0):
+            return
+        before = _master_spot_usdt()
+        if before < 0 or not binance_transfer_sub_to_master("USDT", excess):
+            return
+        for _ in range(15):
+            time.sleep(1)
+            if _master_spot_usdt() >= before + excess * 0.99:
+                break
+        if _earn_subscribe(prod["productId"], excess):
+            d["bot_in_earn"] = round(float(d.get("bot_in_earn", 0) or 0) + excess, 2)
+            _idle_earn_save(d, f"sweep {excess} -> Earn (APR {prod.get('apr', 0) * 100:.2f}%)")
+            log(f"[IDLE-EARN] sweep ${excess:.2f} Sub -> Master Earn (APR {prod.get('apr', 0) * 100:.2f}%), "
+                f"total bot di Earn ${d['bot_in_earn']:.2f}")
+        else:
+            ok_back = binance_transfer_master_to_sub("USDT", excess)
+            _idle_earn_save(d, f"sweep {excess}: subscribe GAGAL, kembali ke Sub={'ok' if ok_back else 'GAGAL'}")
+            if not ok_back:
+                d["pending_master_spot"] = excess
+                _idle_earn_save(d)
+
+
+def run_thread_idle_earn():
+    ok = idle_earn_selfcheck()
+    while True:
+        try:
+            if IDLE_EARN_ENABLED and ok:
+                free, _ = get_usdt_balance()
+                buf = idle_earn_buffer_usd()
+                if free < buf * 0.5:
+                    idle_earn_refill()
+                else:
+                    idle_earn_sweep()
+        except Exception as e:
+            log(f"WARN [IDLE-EARN] loop: {e}")
+        time.sleep(IDLE_EARN_INTERVAL_SEC)
 
 
 _last_balance_log_ts = 0.0
@@ -37597,6 +37785,7 @@ if __name__ == '__main__':
     if KB1D_ENABLED:
         t_pb4h = threading.Thread(target=run_thread_pb4h, daemon=True, name="T-PB4H")   # 14/11/2026 PantulanPanik-4h
         t_pb4h.start()
+        threading.Thread(target=run_thread_idle_earn, daemon=True, name="T-IdleEarn").start()   # 14/11/2026 idle-usdt-earn
         t_kb1d = threading.Thread(target=run_thread_kb1d, daemon=True, name="T-KB1D")
         threads.append(t_kb1d)
         n_threads += 1
