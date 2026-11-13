@@ -168,7 +168,9 @@
 ### Simulasi satu dompet / ukuran modal (13/11, riset)
 - 3 strategi live (KB12h, KB1D, TC4h v2), uji 1 menit 2022-2026, modal per deal = % saldo
 - Kunci: MAX DEALS, bukan besar modal; slot 3 cuma dapat ~+0,4%/deal (sinyal bergerombol)
-- Usulan: 2% saldo per deal (KB12h Aktif 3x) + max 12-20 per strategi: ~11,5-12,3%/thn, turun terdalam ~27%, TRAIN=TEST
+- Ralat (bug hitung turun terdalam): 2%/max12-20 turun ~12-14% (terburuk 19-23%); 1,5%/max20 +10,5%/thn, turun 10,7% (terburuk 19,5%), 5/5 tahun positif
+- Batas total dana di deal (cap 40-60%) tidak sepadan
+- Usulan: 1,5% saldo per deal (KB12h Aktif 3x) + max 20 per strategi (butuh saldo >= $333)
 - Status: belum dipasang, tunggu dana masuk + izin
 ### hold-floor-stop-when-empty (12/11)
 - Pagar darurat hold_no_sell berhenti memantau koin yang saldonya sudah 0 (DASH: WARN gagal jual tiap menit)
