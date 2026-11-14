@@ -169,7 +169,8 @@
 - USDT Sub di atas cadangan (maks($30, 25% saldo)) -> pindah ke Master -> Earn Flexible USDT; cadangan < separuh / open kurang dana -> redeem + transfer Master->Sub
 - Hanya uang milik bot yang ditarik (catatan idle_earn.json); Earn pribadi Mas Budi di Master tidak disentuh
 - Jalur lama ensure_spot_usdt (redeem Earn Master yg tidak pernah sampai ke Sub) dicabut
-- Tahap A: cek izin dulu (IDLE_EARN_ENABLED False), lalu dinyalakan
+- Tahap A: cek izin dulu (IDLE_EARN_ENABLED False)
+- 14/11 pagi: 2 Sub Account di Master -> BINANCE_SUB_EMAIL diisi (Sub bot), cek saldo tujuan harus cocok; DINYALAKAN ("SAYA PERBOLEHKAN"); APR USDT 3,06%
 ### pb4h-pantulan-panik (14/11, Mas Budi: "ya" live $6)
 - Strategi BARU PantulanPanik-4h (key panic_bounce_4h): jalan HANYA saat BTC Supertrend 1D turun
 - Entry tutup candle 4h: BTC turun >=10% 7 hari, koin turun >=10% 24 jam, RSI 4h sebelumnya <25, candle hijau tutup kembali di atas BB bawah, ATR<7

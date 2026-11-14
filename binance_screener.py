@@ -6817,7 +6817,7 @@ def ensure_spot_usdt(min_needed: float, wait_seconds: int = 12) -> bool:
 # Mas Budi's own Master Earn USDT is never touched: every redeem is capped at the bot's ledger amount.
 # Buffer = max($30, 25% of wallet equity). Moves smaller than $10 are skipped. Checked every 5 minutes.
 # Turn off with IDLE_EARN_ENABLED = False (then refill still returns the bot's money when an open needs it).
-IDLE_EARN_ENABLED = False          # stage A: deploy with the self-check only; switched on after the check passes
+IDLE_EARN_ENABLED = True           # 14/11/2026 Mas Budi: "SAYA PERBOLEHKAN" (after BINANCE_SUB_EMAIL was set)
 IDLE_EARN_BUFFER_MIN_USD = 30.0
 IDLE_EARN_BUFFER_FRAC = 0.25
 IDLE_EARN_MIN_MOVE_USD = 10.0
@@ -6899,10 +6899,21 @@ def idle_earn_selfcheck():
         email = _bot_sub_email()
         prod = get_earn_flexible_product("USDT")
         d = _idle_earn_load()
+        # The target Sub must be THE trading Sub: its USDT seen from Master must equal the trading key's own balance.
+        same = False
+        if email:
+            try:
+                a = _binance_earn_request("GET", "/sapi/v3/sub-account/assets", {"email": email})
+                sub_usdt = sum(float(b.get("free", 0) or 0) for b in a.get("balances", []) if b.get("asset") == "USDT")
+                own_usdt, _ = get_usdt_balance()
+                same = abs(sub_usdt - own_usdt) < 0.05
+                log(f"[IDLE-EARN] cek tujuan: USDT Sub via Master ${sub_usdt:.2f} vs key trading ${own_usdt:.2f} -> {'COCOK' if same else 'TIDAK COCOK'}")
+            except Exception as e:
+                log(f"WARN [IDLE-EARN] cek tujuan Sub: {e}")
         log(f"[IDLE-EARN] selfcheck: universalTransfer={r.get('permitsUniversalTransfer')} "
             f"subEmail={'ada' if email else 'TIDAK ADA'} produk USDT={prod} bot_in_earn=${d['bot_in_earn']:.2f} "
             f"aktif={IDLE_EARN_ENABLED}")
-        return bool(r.get('permitsUniversalTransfer')) and bool(email) and bool(prod)
+        return bool(r.get('permitsUniversalTransfer')) and bool(email) and bool(prod) and same
     except Exception as e:
         log(f"WARN [IDLE-EARN] selfcheck: {e}")
         return False
