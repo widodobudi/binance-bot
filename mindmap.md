@@ -183,6 +183,11 @@
 - Uji 1 menit: 553 deal +3,95%/deal WR 72%, TRAIN +3,59 / TEST +4,35, 5/5 tahun (−10%: 385 deal +4,69%)
 - Koin turun hanya −5..−8% rata-rata −0,14% -> jangan dilonggarkan lagi tanpa data baru
 - Status: deploy 14/11
+### scan-retry-btc-data (14/11, Mas Budi: "Boleh")
+- Kasus 14/11 15:00: Binance HTTP 500 -> data 4h BTC belum lengkap -> scan PantulanPanik-4h melewati SELURUH candle
+- Sekarang: data BTC gagal/belum lengkap -> coba lagi tiap 1 menit, maks 20 menit setelah candle tutup (PB4H & KB1D)
+- KB1D loop 300s -> 60s; hasil Supertrend 1D yang gagal tidak di-cache. Aturan entry tidak berubah
+- Status: deploy 14/11
 ### nearmiss-kb1d-pb4h (c65e244, 14/11, Mas Budi: "kenapa gak ditaruh di sini")
 - KeltnerBreak-1D & PantulanPanik-4h kini ada di: tab Kandidat Terdekat, Scan Blockers, dropdown Manual Scan (+ detail syarat per koin), panel status gerbang BTC (Strategy Control), heartbeat Telegram
 - Status gerbang TrenKonfirmasi-4h diperbarui ke v2 (BTC Supertrend 1D naik)

@@ -11272,8 +11272,9 @@ def kb12h_ekstrem_st1d_down(symbol: str):
                 down = int(st[col].iloc[-1]) == -1
     except Exception as e:
         log(f"WARN [KB12H-ST1D] {symbol} gagal hitung Supertrend 1D: {e}")
-    with _live_supertrend_cache_lock:
-        _live_supertrend_cache[key] = (now, down)
+    if down is not None:   # 14/11/2026 'scan-retry-btc-data': do not cache a failed read, so a retry 1 min later refetches
+        with _live_supertrend_cache_lock:
+            _live_supertrend_cache[key] = (now, down)
     return down
 
 
@@ -27180,7 +27181,7 @@ KB1D_ENABLED = True
 # TEST +1.87, every year positive (+1.63/+1.62/+1.76/+1.18/+2.53). One-wallet sim 1.5%/max 20 incl. PantulanPanik-4h:
 # +13.5%/yr DD -7.7% (worst -15.8%) -> +14.3%/yr DD -7.6% (worst -14.9%). Script: scratchpad portfolio/dd_kb1d.py.
 KB1D_EXT_MAX_PCT = 3.0
-KB1D_SCAN_INTERVAL = 300
+KB1D_SCAN_INTERVAL = 60    # 14/11/2026 'scan-retry-btc-data': was 300; 60 s so a failed BTC read is retried each minute (the scan itself is a no-op once the day's candle is done)
 KB1D_SECONDS = 86400
 # Start as "today's candle already evaluated": after a mid-day restart the first scan waits for the NEXT
 # daily close (07:00 WIB) instead of entering hours late on this morning's signal.
@@ -27202,8 +27203,13 @@ def thread_kb1d_scan() -> None:
     max_deals = int(load_strategy_config().get('kb1d', {}).get('max_deals', 3) or 3)
     if PCT_SIZING_ENABLED:
         max_deals = max(max_deals, PCT_SIZING_MAX_DEALS)   # 14/11/2026 stage 2
+    _prev_kb1d_candle = _kb1d_last_candle[0]
     _kb1d_last_candle[0] = candle_open_ms
     btc_down = kb12h_ekstrem_st1d_down('BTCUSDT')
+    if btc_down is None and now_ms - candle_open_ms < SCAN_RETRY_WINDOW_MS:   # 'scan-retry-btc-data'
+        _kb1d_last_candle[0] = _prev_kb1d_candle
+        log("[T_KB1D] BTC Supertrend 1D tidak terbaca -- coba lagi 1 menit lagi")
+        return
     if btc_down is not False:
         log(f"[T_KB1D] BTC Supertrend 1D {'turun' if btc_down else 'tidak terbaca'} -- tidak buka deal hari ini")
         _scan_status_text['KeltnerBreak-1D'] = f"{now_wib().strftime('%d/%m %H:%M')} -- BTC Supertrend 1D {'turun' if btc_down else 'tidak terbaca'}, strategi diam"
@@ -27318,6 +27324,10 @@ PB4H_BTC7D_MAX_PCT = -10.0
 # TEST +4.35, 5/5 years (+1.42/+3.17/+5.58/+5.10/+4.24). The extra (-10,-8] band alone: 168 deals +2.24%.
 # Coins down only -5..-8% averaged -0.14% (no edge) -- do not loosen further without new data.
 PB4H_COIN24H_MAX_PCT = -8.0
+# 14/11/2026 'scan-retry-btc-data' (Mas Budi: "Boleh"): on 14/11 15:00 a Binance HTTP 500 left the BTC 4h data
+# incomplete and the whole candle was skipped. Now, when BTC data cannot be read, the scan is retried every minute
+# for up to SCAN_RETRY_WINDOW_MS after the candle closes (entry rules unchanged). Same for KeltnerBreak-1D.
+SCAN_RETRY_WINDOW_MS = 20 * 60_000
 _pb4h_last_candle = [(int(time.time()) // STRAT4H_SECONDS) * STRAT4H_SECONDS * 1000]
 
 
@@ -27341,8 +27351,13 @@ def thread_pb4h_scan() -> None:
     if is_daily_loss_limit_breached():
         log("[T_PB4H] Scan di-skip -- batas rugi harian tersulut")
         return
+    _prev_pb4h_candle = _pb4h_last_candle[0]
     _pb4h_last_candle[0] = candle_open_ms
     btc_down = kb12h_ekstrem_st1d_down('BTCUSDT')
+    if btc_down is None and now_ms - candle_open_ms < SCAN_RETRY_WINDOW_MS:
+        _pb4h_last_candle[0] = _prev_pb4h_candle
+        log("[T_PB4H] BTC Supertrend 1D tidak terbaca -- coba lagi 1 menit lagi")
+        return
     if btc_down is not True:
         log(f"[T_PB4H] BTC Supertrend 1D {'naik' if btc_down is False else 'tidak terbaca'} -- strategi ini hanya jalan saat BTC turun")
         _scan_status_text['PantulanPanik-4h'] = f"{now_wib().strftime('%d/%m %H:%M')} -- BTC Supertrend 1D {'naik' if btc_down is False else 'tidak terbaca'}, strategi diam"
@@ -27351,7 +27366,11 @@ def thread_pb4h_scan() -> None:
         return
     b = _closed_4h('BTCUSDT', now_ms)
     if b is None or len(b) < 44 or int(b['ts'].iloc[-1]) != candle_open_ms - sec4h_ms:
-        log("[T_PB4H] data 4h BTC tidak lengkap -- lewati candle ini")
+        if now_ms - candle_open_ms < SCAN_RETRY_WINDOW_MS:
+            _pb4h_last_candle[0] = _prev_pb4h_candle
+            log("[T_PB4H] data 4h BTC belum lengkap -- coba lagi 1 menit lagi")
+        else:
+            log("[T_PB4H] data 4h BTC tidak lengkap sampai 20 menit -- lewati candle ini")
         return
     bc = b['close'].astype(float)
     btc7d = (bc.iloc[-1] / bc.iloc[-43] - 1) * 100
