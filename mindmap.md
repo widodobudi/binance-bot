@@ -183,7 +183,7 @@
 - Uji 1 menit: 553 deal +3,95%/deal WR 72%, TRAIN +3,59 / TEST +4,35, 5/5 tahun (−10%: 385 deal +4,69%)
 - Koin turun hanya −5..−8% rata-rata −0,14% -> jangan dilonggarkan lagi tanpa data baru
 - Status: deploy 14/11
-### scan-retry-btc-data (14/11, Mas Budi: "Boleh")
+### scan-retry-btc-data (fc4bc0b, 14/11, Mas Budi: "Boleh")
 - Kasus 14/11 15:00: Binance HTTP 500 -> data 4h BTC belum lengkap -> scan PantulanPanik-4h melewati SELURUH candle
 - Sekarang: data BTC gagal/belum lengkap -> coba lagi tiap 1 menit, maks 20 menit setelah candle tutup (PB4H & KB1D)
 - KB1D loop 300s -> 60s; hasil Supertrend 1D yang gagal tidak di-cache. Aturan entry tidak berubah
