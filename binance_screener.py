@@ -27153,6 +27153,11 @@ def _paper_test_scan_rvolbreak8h():
 # positive (2022 +1.19, 2023 +0.77, 2024 +1.01, 2025 +1.88, 2026 +1.87), win rate ~50%.
 # Scripts: scratchpad newstrat/ (screen.py, keltner1d.py, k1d_1m.py).
 KB1D_ENABLED = True
+# 14/11/2026 'kb1d-ext3' (Mas Budi: "YA"): skip a breakout whose close is already >= 3% above the previous Keltner
+# upper (same rule KB12h uses). 1-minute test: +1.36%/deal WR 50% (1,694) -> +1.83% WR 54% (1,053), TRAIN +1.79 /
+# TEST +1.87, every year positive (+1.63/+1.62/+1.76/+1.18/+2.53). One-wallet sim 1.5%/max 20 incl. PantulanPanik-4h:
+# +13.5%/yr DD -7.7% (worst -15.8%) -> +14.3%/yr DD -7.6% (worst -14.9%). Script: scratchpad portfolio/dd_kb1d.py.
+KB1D_EXT_MAX_PCT = 3.0
 KB1D_SCAN_INTERVAL = 300
 KB1D_SECONDS = 86400
 # Start as "today's candle already evaluated": after a mid-day restart the first scan waits for the NEXT
@@ -27218,6 +27223,9 @@ def thread_kb1d_scan() -> None:
                 log(f"[T_KB1D] {sym} breakout tapi tier Ekstrem (ATR {atrp:.2f}%) -- dilewati")
                 continue
             ext = (c.iloc[-1] / kc.iloc[-2] - 1) * 100
+            if ext >= KB1D_EXT_MAX_PCT:
+                log(f"[T_KB1D] {sym} breakout tapi sudah {ext:.2f}% di atas Keltner (maks {KB1D_EXT_MAX_PCT:g}%) -- dilewati")
+                continue
             cands.append((sym, float(c.iloc[-1]), atrp, ext))
         except Exception as e:
             log(f"  [T_KB1D] error {sym}: {e}")

@@ -183,6 +183,13 @@
 - Uji 1 menit: 553 deal +3,95%/deal WR 72%, TRAIN +3,59 / TEST +4,35, 5/5 tahun (−10%: 385 deal +4,69%)
 - Koin turun hanya −5..−8% rata-rata −0,14% -> jangan dilonggarkan lagi tanpa data baru
 - Status: deploy 14/11
+### kb1d-ext3 (14/11, Mas Budi: "YA")
+- KB1D: lewati breakout yang close-nya sudah >=3% di atas Keltner atas (aturan sama dgn KB12h)
+- Uji 1 menit per deal: +1,36% WR 50% -> +1,83% WR 54%, TRAIN +1,79 / TEST +1,87, 5/5 tahun
+- Sim dompet 1,5%/max20 + PantulanPanik-4h: +13,5%/thn turun -7,7% (terburuk -15,8%) -> +14,3%/thn -7,6% (terburuk -14,9%)
+- Diuji tapi TIDAK layak: rem modal saat dompet turun, stop deal baru saat turun 6-10%, batas deal baru per 4 jam/hari
+- Tahap 2 (15/12): Mas Budi pilih 1,5% + maks 20 deal (bukan 2%, bukan maks 15)
+- Status: deploy 14/11
 ### base6-and-pct-sizing (14/11, Mas Budi: "diturunkan ke $6" + "Boleh")
 - Tahap 1 (LIVE): modal KB12h / KB1D / TC4h v2 $8 -> $6 (KB12h Aktif $18); sim dompet $60: turun terdalam -31,7% -> -26,1%
 - Tahap 2 (MATI, nyalakan stlh dana masuk 15/12): modal = 1,5% saldo (min $6), max 20 deal per strategi, batas gabungan dilonggarkan
