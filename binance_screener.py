@@ -27270,7 +27270,11 @@ def thread_kb1d_scan() -> None:
 PB4H_ENABLED = True
 PB4H_RSI_PREV_MAX = 25.0
 PB4H_BTC7D_MAX_PCT = -10.0
-PB4H_COIN24H_MAX_PCT = -10.0
+# 14/11/2026 'pb4h-coin24h-8' (Mas Budi chose "<= -8%" for more deals): coin 24h filter -10% -> -8%. 1-minute test,
+# BTC-down + BTC 7d <= -10%, ATR < 7: -10% = 385 deals +4.69% WR 74%; -8% = 553 deals +3.95% WR 72%, TRAIN +3.59 /
+# TEST +4.35, 5/5 years (+1.42/+3.17/+5.58/+5.10/+4.24). The extra (-10,-8] band alone: 168 deals +2.24%.
+# Coins down only -5..-8% averaged -0.14% (no edge) -- do not loosen further without new data.
+PB4H_COIN24H_MAX_PCT = -8.0
 _pb4h_last_candle = [(int(time.time()) // STRAT4H_SECONDS) * STRAT4H_SECONDS * 1000]
 
 

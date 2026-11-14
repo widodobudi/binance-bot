@@ -178,6 +178,11 @@
 - Uji 1 menit 385 deal: +4,69%/deal, WR 74%, TRAIN +4,28 / TEST +5,14, 5/5 tahun; breakout saat BTC turun semua rugi
 - Sim dompet (+3 strategi, 1,5%/max20): +10,5%/thn turun 10,7% -> +13,5%/thn turun 7,8%
 - Status: deploy 14/11
+### pb4h-coin24h-8 (14/11, Mas Budi: "≤ −8%")
+- Syarat koin turun 24 jam PantulanPanik-4h: −10% -> −8% (deal lebih sering)
+- Uji 1 menit: 553 deal +3,95%/deal WR 72%, TRAIN +3,59 / TEST +4,35, 5/5 tahun (−10%: 385 deal +4,69%)
+- Koin turun hanya −5..−8% rata-rata −0,14% -> jangan dilonggarkan lagi tanpa data baru
+- Status: deploy 14/11
 ### base6-and-pct-sizing (14/11, Mas Budi: "diturunkan ke $6" + "Boleh")
 - Tahap 1 (LIVE): modal KB12h / KB1D / TC4h v2 $8 -> $6 (KB12h Aktif $18); sim dompet $60: turun terdalam -31,7% -> -26,1%
 - Tahap 2 (MATI, nyalakan stlh dana masuk 15/12): modal = 1,5% saldo (min $6), max 20 deal per strategi, batas gabungan dilonggarkan
