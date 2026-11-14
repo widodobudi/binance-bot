@@ -186,6 +186,7 @@
 ### nearmiss-kb1d-pb4h (c65e244, 14/11, Mas Budi: "kenapa gak ditaruh di sini")
 - KeltnerBreak-1D & PantulanPanik-4h kini ada di: tab Kandidat Terdekat, Scan Blockers, dropdown Manual Scan (+ detail syarat per koin), panel status gerbang BTC (Strategy Control), heartbeat Telegram
 - Status gerbang TrenKonfirmasi-4h diperbarui ke v2 (BTC Supertrend 1D naik)
+- Analisis > Size Cut: kartu keterangan KB1D & PantulanPanik-4h "0 deal size-cut" (modal flat, Ekstrem ditolak)
 - Pelajaran: patch menus-kb1d-pb4h (14/11) cuma 3 tempat -- strategi baru WAJIB dicek di SEMUA daftar strategi
 - Status: deploy 14/11
 ### kb1d-ext3 (20f7ce3, 14/11, Mas Budi: "YA")

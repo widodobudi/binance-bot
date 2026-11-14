@@ -22730,7 +22730,16 @@ function renderSizecutCards(byStrategy) {
   var el = document.getElementById('sc-cards');
   if (!el) return;
   var keys = Object.keys(byStrategy).sort();
-  if (!keys.length) { el.innerHTML = '<span style="color:var(--muted);font-size:11px">Tidak ada event size-cut pada periode ini.</span>'; return; }
+  // 14/11/2026 'nearmiss-kb1d-pb4h' (Mas Budi: "di sini gimana"): KeltnerBreak-1D & PantulanPanik-4h never
+  // size-cut (flat modal, Ekstrem tier is rejected at entry), so they have no event -- show a note card instead
+  // of leaving them silently absent.
+  var noCutCards = [['kb1d','KeltnerBreak-1D'],['panic_bounce_4h','PantulanPanik-4h']].filter(function(x){ return !byStrategy[x[0]]; }).map(function(x){
+    return '<div style="border:1px dashed var(--border);border-radius:6px;padding:10px">'+
+      '<div style="font-size:12px;font-weight:600;margin-bottom:6px">'+x[1]+' <span style="color:var(--muted);font-weight:400">(0 deal size-cut)</span></div>'+
+      '<div style="color:var(--muted);font-size:10.5px">Strategi ini tidak pernah memotong modal: modal per deal tetap (flat), dan koin tier Ekstrem (ATR &ge; 7%) langsung ditolak saat entry, bukan dikecilkan.</div>'+
+      '</div>';
+  }).join('');
+  if (!keys.length) { el.innerHTML = '<span style="color:var(--muted);font-size:11px">Tidak ada event size-cut pada periode ini.</span>' + noCutCards; return; }
   el.innerHTML = keys.map(function(key){
     var node = byStrategy[key];
     var label = SC_STRAT_MAP[key] || key;
@@ -22767,7 +22776,7 @@ function renderSizecutCards(byStrategy) {
       '<thead><tr style="color:var(--muted);text-align:left"><th style="padding:3px 6px">Waktu</th><th style="padding:3px 6px">Coin</th><th style="padding:3px 6px">Kategori</th><th style="padding:3px 6px;text-align:right">Potongan</th><th style="padding:3px 6px;text-align:right">Modal</th><th style="padding:3px 6px">Alasan</th></tr></thead>'+
       '<tbody>'+rows+'</tbody></table></div></details>'+
       '</div>';
-  }).join('');
+  }).join('') + noCutCards;
 }
 
 function exportCtCsv() {
