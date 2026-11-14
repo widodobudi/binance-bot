@@ -183,7 +183,7 @@
 - Uji 1 menit: 553 deal +3,95%/deal WR 72%, TRAIN +3,59 / TEST +4,35, 5/5 tahun (−10%: 385 deal +4,69%)
 - Koin turun hanya −5..−8% rata-rata −0,14% -> jangan dilonggarkan lagi tanpa data baru
 - Status: deploy 14/11
-### kb1d-ext3 (14/11, Mas Budi: "YA")
+### kb1d-ext3 (20f7ce3, 14/11, Mas Budi: "YA")
 - KB1D: lewati breakout yang close-nya sudah >=3% di atas Keltner atas (aturan sama dgn KB12h)
 - Uji 1 menit per deal: +1,36% WR 50% -> +1,83% WR 54%, TRAIN +1,79 / TEST +1,87, 5/5 tahun
 - Sim dompet 1,5%/max20 + PantulanPanik-4h: +13,5%/thn turun -7,7% (terburuk -15,8%) -> +14,3%/thn -7,6% (terburuk -14,9%)
