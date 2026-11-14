@@ -27188,15 +27188,18 @@ KB1D_SECONDS = 86400
 _kb1d_last_candle = [(int(time.time()) // KB1D_SECONDS) * KB1D_SECONDS * 1000]
 
 
-def thread_kb1d_scan() -> None:
+def thread_kb1d_scan(dry_run: bool = False) -> None:
+    """dry_run: see thread_pb4h_scan() -- real scan on the last closed 1D candle, no order, candle not marked done."""
     if not KB1D_ENABLED or not is_strategy_enabled('kb1d'):
         return
     now_ms = int(time.time() * 1000)
     candle_open_ms = (now_ms // (KB1D_SECONDS * 1000)) * (KB1D_SECONDS * 1000)   # current (forming) 1D candle
-    if _kb1d_last_candle[0] == candle_open_ms:
+    if _kb1d_last_candle[0] == candle_open_ms and not dry_run:
         return                                   # this day's closed candle already evaluated
-    if now_ms - candle_open_ms < 120_000:
+    if now_ms - candle_open_ms < 120_000 and not dry_run:
         return                                   # give Binance 2 minutes to finalise the daily close
+    if dry_run:
+        log("[T_KB1D] UJI (dry-run, TANPA order): jalankan scan asli utk candle 1D yang tutup 07:00 WIB tadi")
     if is_daily_loss_limit_breached():
         log("[T_KB1D] Scan di-skip -- batas rugi harian tersulut")
         return
@@ -27204,7 +27207,8 @@ def thread_kb1d_scan() -> None:
     if PCT_SIZING_ENABLED:
         max_deals = max(max_deals, PCT_SIZING_MAX_DEALS)   # 14/11/2026 stage 2
     _prev_kb1d_candle = _kb1d_last_candle[0]
-    _kb1d_last_candle[0] = candle_open_ms
+    if not dry_run:
+        _kb1d_last_candle[0] = candle_open_ms
     btc_down = kb12h_ekstrem_st1d_down('BTCUSDT')
     if btc_down is None and now_ms - candle_open_ms < SCAN_RETRY_WINDOW_MS:   # 'scan-retry-btc-data'
         _kb1d_last_candle[0] = _prev_kb1d_candle
@@ -27272,6 +27276,11 @@ def thread_kb1d_scan() -> None:
     update_dashboard_near_miss("KeltnerBreak-1D", [(3, x[0], [], 3) for x in cands] + [x[:4] for x in near_kb[:30]])
     _scan_status_text['KeltnerBreak-1D'] = f"{now_wib().strftime('%d/%m %H:%M')} -- {len(cands)} breakout lolos dari {len(universe)} koin"
     cands.sort(key=lambda x: x[3])               # smallest overshoot above the band first
+    if dry_run:
+        log(f"[T_KB1D] UJI selesai: scan jalan normal, {len(cands)} breakout lolos ({', '.join(x[0] for x in cands) or '-'}), "
+            f"terdekat: {'; '.join(f'{x[1]} {x[4]:.2f}%' for x in near_kb[:5]) or '-'} -- TIDAK ada order (mode uji)")
+        _scan_status_text['KeltnerBreak-1D'] += " (uji tanpa order setelah restart)"
+        return
     for sym, signal_price, atrp, ext in cands:
         if deal_count_by_strategy('kb1d') >= max_deals:
             break
@@ -27340,19 +27349,26 @@ def _closed_4h(sym: str, now_ms: int, limit: int = 80):
     return df
 
 
-def thread_pb4h_scan() -> None:
+def thread_pb4h_scan(dry_run: bool = False) -> None:
+    """dry_run (14/11/2026 'scan-dryrun-on-start', Mas Budi: "pastikan script bekerja"): run the REAL scan on the
+    last closed 4h candle right after a restart, publish the dashboard data and log the result, but stop before
+    the order loop -- never opens a deal and does not mark the candle as done."""
     if not PB4H_ENABLED or not is_strategy_enabled('panic_bounce_4h'):
         return
     now_ms = int(time.time() * 1000)
     sec4h_ms = STRAT4H_SECONDS * 1000
     candle_open_ms = (now_ms // sec4h_ms) * sec4h_ms
-    if _pb4h_last_candle[0] == candle_open_ms or now_ms - candle_open_ms < 120_000:
+    if not dry_run and (_pb4h_last_candle[0] == candle_open_ms or now_ms - candle_open_ms < 120_000):
         return
+    if dry_run:
+        log(f"[T_PB4H] UJI (dry-run, TANPA order): jalankan scan asli utk candle 4h yang tutup {now_wib().strftime('%d/%m')} "
+            f"{datetime.fromtimestamp(candle_open_ms / 1000, tz=timezone.utc).astimezone(timezone(timedelta(hours=7))).strftime('%H:%M')} WIB")
     if is_daily_loss_limit_breached():
         log("[T_PB4H] Scan di-skip -- batas rugi harian tersulut")
         return
     _prev_pb4h_candle = _pb4h_last_candle[0]
-    _pb4h_last_candle[0] = candle_open_ms
+    if not dry_run:
+        _pb4h_last_candle[0] = candle_open_ms
     btc_down = kb12h_ekstrem_st1d_down('BTCUSDT')
     if btc_down is None and now_ms - candle_open_ms < SCAN_RETRY_WINDOW_MS:
         _pb4h_last_candle[0] = _prev_pb4h_candle
@@ -27383,7 +27399,7 @@ def thread_pb4h_scan() -> None:
     max_deals = int(load_strategy_config().get('panic_bounce_4h', {}).get('max_deals', 3) or 3)
     if PCT_SIZING_ENABLED:
         max_deals = max(max_deals, PCT_SIZING_MAX_DEALS)
-    if deal_count_by_strategy('panic_bounce_4h') >= max_deals:
+    if deal_count_by_strategy('panic_bounce_4h') >= max_deals and not dry_run:
         log(f"[T_PB4H] slot penuh ({deal_count_by_strategy('panic_bounce_4h')}/{max_deals})")
         return
     ticker = get_ticker_24h()
@@ -27446,6 +27462,12 @@ def thread_pb4h_scan() -> None:
     _scan_status_text['PantulanPanik-4h'] = (f"{now_wib().strftime('%d/%m %H:%M')} -- BTC 7 hari {btc7d:+.2f}% (lolos), "
                                             f"{len(cands)} pantulan lolos dari {n_scan} koin")
     cands.sort(key=lambda x: x[3])                 # most oversold first
+    if dry_run:
+        log(f"[T_PB4H] UJI selesai: scan jalan normal, {len(cands)} lolos 5/5 "
+            f"({', '.join(x[0] for x in cands) or '-'}), hampir lolos: "
+            f"{'; '.join(f'{x[1]} {x[0]}/5' for x in near_pb[:5]) or '-'} -- TIDAK ada order (mode uji)")
+        _scan_status_text['PantulanPanik-4h'] += " (uji tanpa order setelah restart)"
+        return
     for sym, signal_price, atrp, rsi_prev, ret24 in cands:
         n_active = deal_count_by_strategy('panic_bounce_4h')
         if n_active >= max_deals:
@@ -27486,6 +27508,11 @@ def thread_pb4h_scan() -> None:
 
 
 def run_thread_pb4h() -> None:
+    time.sleep(90)
+    try:
+        thread_pb4h_scan(dry_run=True)   # 'scan-dryrun-on-start'
+    except Exception as e:
+        log(f"WARN T_PB4H UJI error: {e}")
     while True:
         try:
             thread_pb4h_scan()
@@ -27495,6 +27522,11 @@ def run_thread_pb4h() -> None:
 
 
 def run_thread_kb1d() -> None:
+    time.sleep(120)
+    try:
+        thread_kb1d_scan(dry_run=True)   # 'scan-dryrun-on-start'
+    except Exception as e:
+        log(f"WARN T_KB1D UJI error: {e}")
     while True:
         try:
             thread_kb1d_scan()
