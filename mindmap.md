@@ -192,6 +192,10 @@
 - Bug: coba-ulang hanya jalan saat kas Sub tinggi; sekarang tiap 5 menit + sebelum refill, maks jumlah pending & saldo Spot Master
 - Selfcheck mencatat izin key Master (enableInternalTransfer, ipRestrict) utk cari sebab -1002
 - Status: deploy 15/11
+### stage2-cap-display (3dc3440, 15/11, Mas Budi: "mau")
+- Strategy Control: catatan angka batas gabungan yg BERLAKU (tahap 2: 20 x 4 strategi + 10 = 90 deal, eksposur = saldo wallet)
+- Gerbang open pakai helper yg sama (effective_global_deal_cap / effective_global_exposure_cap); perilaku tidak berubah
+- Status: deploy 15/11
 ### scan-retry-btc-data (fc4bc0b, 14/11, Mas Budi: "Boleh")
 - Kasus 14/11 15:00: Binance HTTP 500 -> data 4h BTC belum lengkap -> scan PantulanPanik-4h melewati SELURUH candle
 - Sekarang: data BTC gagal/belum lengkap -> coba lagi tiap 1 menit, maks 20 menit setelah candle tutup (PB4H & KB1D)
