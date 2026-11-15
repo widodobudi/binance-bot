@@ -3084,6 +3084,12 @@ def get_daily_loss_status() -> dict:
             "limit_usd": limit_usd, "breached": breached,
             "global_max_exposure_usd": global_max_exposure_usd(),
             "global_max_active_deals": global_max_active_deals(),
+            "effective_max_exposure_usd": effective_global_exposure_cap(),
+            "effective_max_active_deals": effective_global_deal_cap(),
+            "pct_sizing_enabled": bool(PCT_SIZING_ENABLED),
+            "pct_sizing_info": (f"tahap 2 belum aktif -- nanti otomatis: max deal gabungan "
+                                f"{PCT_SIZING_MAX_DEALS * len(PCT_SIZING_STRATS) + 10} "
+                                f"({PCT_SIZING_MAX_DEALS} x {len(PCT_SIZING_STRATS)} strategi + 10), eksposur = saldo wallet"),
             "transfer_profit_to_master_enabled": is_transfer_profit_to_master_enabled(),
             "master_usdt_balance": get_master_usdt_balance()}
 
@@ -12531,21 +12537,34 @@ def total_active_exposure_usd() -> float:
         deals = list(active_deals.values())
     return sum(estimate_deal_total_usd(d) for d in deals)
 
+# 15/11/2026 'stage2-cap-display' (Mas Budi: "mau"): the stage-2 widening of the combined caps now lives in these two
+# helpers so the open gate and the Strategy Control panel show the SAME numbers (the panel used to keep showing the
+# saved 7 deals / $140 even after stage 2 raised them). Behaviour of the gate is unchanged.
+def effective_global_deal_cap() -> int:
+    cap = global_max_active_deals()
+    if PCT_SIZING_ENABLED:   # 14/11/2026 stage 2: 20 slots x the PCT_SIZING_STRATS + 10 spare
+        cap = max(cap, PCT_SIZING_MAX_DEALS * len(PCT_SIZING_STRATS) + 10)
+    return cap
+
+
+def effective_global_exposure_cap() -> float:
+    cap = global_max_exposure_usd()
+    if PCT_SIZING_ENABLED:   # 14/11/2026 stage 2: the whole wallet may be in deals (sim max ~100%)
+        cap = max(cap, wallet_equity_usd())
+    return cap
+
+
 def global_deal_limits_ok(planned_usd: float = 0.0) -> tuple:
     """Cek batas GABUNGAN lintas SEMUA strategi (jumlah deal & total $ eksposur) SEBELUM
     open baru -- lapisan TAMBAHAN di atas slot per-strategi yang sudah ada (deal_count_by_strategy).
     planned_usd = perkiraan modal deal yang mau dibuka, ikut dihitung supaya tidak baru lolos
     pas mepet lalu langsung kelewat begitu deal ini kebuka. Return (ok: bool, reason: str)."""
     n = active_deal_count()
-    deal_cap = global_max_active_deals()
-    if PCT_SIZING_ENABLED:   # 14/11/2026 stage 2: room for 20 slots x 3 strategies
-        deal_cap = max(deal_cap, PCT_SIZING_MAX_DEALS * len(PCT_SIZING_STRATS) + 10)
+    deal_cap = effective_global_deal_cap()
     if n >= deal_cap:
         return False, f"batas jumlah deal gabungan tercapai ({n}/{deal_cap})"
     exposure = total_active_exposure_usd()
-    exposure_cap = global_max_exposure_usd()
-    if PCT_SIZING_ENABLED:   # 14/11/2026 stage 2: the whole wallet may be in deals (sim max ~100%)
-        exposure_cap = max(exposure_cap, wallet_equity_usd())
+    exposure_cap = effective_global_exposure_cap()
     if exposure + planned_usd > exposure_cap:
         return False, (f"batas eksposur $ gabungan tercapai (terpakai ${exposure:.0f} + "
                         f"rencana ${planned_usd:.0f} > ${exposure_cap:.0f})")
@@ -20159,6 +20178,7 @@ function confirmRule(parsed) {
         </label>
         <button type="button" onclick="event.stopPropagation();saveGlobalMaxActiveDeals()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">SAVE</button>
         <span id="dll-active-cap-status" style="color:var(--muted)"></span>
+        <span id="dll-stage2-note" style="color:var(--muted);flex-basis:100%;font-size:10.5px"></span>
     </div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border);font-size:11px">
         <label style="display:flex;align-items:center;gap:6px;color:var(--muted)" title="Kalau aktif: tiap deal close UNTUNG di strategi apa pun (Sub Account) otomatis mentransfer bagian untungnya saja (bukan modal) ke Master Account. Kalau dimatikan: profit tetap sebagai USDT biasa di Sub Account, tidak ada transfer sama sekali -- sama seperti sebelum fitur ini ada.">
@@ -21698,6 +21718,15 @@ function loadDailyLossLimit() {
         if (expCap && d.global_max_exposure_usd !== undefined) expCap.textContent = '$' + d.global_max_exposure_usd.toFixed(0);
         var dealCapInput = document.getElementById('dll-active-cap-input');
         if (dealCapInput && document.activeElement !== dealCapInput && d.global_max_active_deals !== undefined) dealCapInput.value = d.global_max_active_deals;
+        var s2note = document.getElementById('dll-stage2-note');
+        if (s2note && d.effective_max_active_deals !== undefined) {
+            if (d.pct_sizing_enabled) {
+                s2note.innerHTML = '<b style="color:var(--accent)">Tahap 2 AKTIF</b> -- yang BERLAKU sekarang: max deal gabungan <b style="color:var(--text)">' + d.effective_max_active_deals +
+                    '</b>, batas eksposur <b style="color:var(--text)">$' + d.effective_max_exposure_usd.toFixed(0) + '</b> (= saldo wallet). Isian di atas hanya dipakai kalau lebih besar.';
+            } else {
+                s2note.textContent = 'Berlaku sekarang: ' + d.effective_max_active_deals + ' deal / $' + d.effective_max_exposure_usd.toFixed(0) + '. ' + (d.pct_sizing_info || '');
+            }
+        }
         var transferCb = document.getElementById('dll-transfer-profit-enabled');
         if (transferCb && document.activeElement !== transferCb && d.transfer_profit_to_master_enabled !== undefined) transferCb.checked = d.transfer_profit_to_master_enabled;
         var masterBal = document.getElementById('dll-master-usdt-balance');
