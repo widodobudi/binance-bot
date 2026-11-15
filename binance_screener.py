@@ -27575,6 +27575,85 @@ def thread_pb4h_scan(dry_run: bool = False) -> None:
         log(f"[T_PB4H] OPEN {sym} @ {entry_price:.8g} (sinyal {signal_price:.8g}, 24j {ret24:+.2f}%, RSI prev {rsi_prev:.1f}, ATR {atrp:.2f})")
 
 
+# ── Patch 'pb4h-swing-addfund' (15/11/2026, Mas Budi: "Khusus PantulanPanik-4h, Add fund, strength 1, garis muncul +
+# candle hijau") ────────────────────────────────────────────────────────────────────────────────────────────────────
+# Add fund 1x the deal's base, ONCE per PantulanPanik-4h deal, when the Swing support line (TradingView "Swing" pivot low,
+# left strength 4, right strength 1) has appeared at/after the entry and a closed 4h candle is GREEN and closes above
+# that support. Checked once per newly closed 4h candle, within PB4H_SWING_ADD_MAX_H hours of the entry. Live add-fund
+# behaviour (execute_add_fund): weighted average, trailing re-armed from zero, hard stop from the new average.
+# 1-minute test, 553 deals 2022-2026 (scratchpad newstrat/pb4h_swing_str.py): $/deal +0.237 -> +0.378 (+59%),
+# TRAIN +0.215 -> +0.331, TEST +0.261 -> +0.431, worst deal -$0.61 -> -$1.22. The line appears AT entry in ~54% of deals.
+# Mas Budi (15/11): weigh the real chart too, not only the backtest -- so a line that appeared before this patch was live
+# (UNI/WIF/HOME 15/11 11:00) still counts: the add happens on the next green 4h close above the support.
+PB4H_SWING_ADD_ENABLED = True
+PB4H_SWING_LEFT = 4
+PB4H_SWING_RIGHT = 1
+PB4H_SWING_ADD_MAX_H = 56
+
+
+def pb4h_swing_addfund_check() -> None:
+    if not PB4H_SWING_ADD_ENABLED:
+        return
+    now_ms = int(time.time() * 1000)
+    sec4h_ms = STRAT4H_SECONDS * 1000
+    with active_deals_lock:
+        deals = {s: dict(d) for s, d in active_deals.items()
+                 if d.get('strategy') == 'panic_bounce_4h' and not d.get('swing_add_done')}
+    for sym, d in deals.items():
+        t_entry = int(d.get('opened_candle_ts') or 0)
+        if t_entry <= 0:
+            continue
+        if now_ms - t_entry > PB4H_SWING_ADD_MAX_H * 3600_000:
+            with active_deals_lock:
+                if sym in active_deals:
+                    active_deals[sym]['swing_add_done'] = 'lewat 56 jam, garis support + candle hijau tidak terjadi'
+            save_active_deals()
+            log(f"[PB4H-SWING] {sym}: lewat {PB4H_SWING_ADD_MAX_H} jam tanpa add fund -- berhenti dicek")
+            continue
+        df = _closed_4h(sym, now_ms, limit=40)
+        if df is None or len(df) < PB4H_SWING_LEFT + 3:
+            continue
+        k_last = len(df) - 1
+        last_open = int(df['ts'].iloc[k_last])
+        if int(d.get('swing_last_candle') or 0) == last_open:
+            continue                                    # this closed candle was already evaluated
+        with active_deals_lock:
+            if sym in active_deals:
+                active_deals[sym]['swing_last_candle'] = last_open
+        lo = df['low'].astype(float).values
+        ts = df['ts'].astype('int64').values
+        e = int(np.searchsorted(ts, t_entry - sec4h_ms))   # signal candle (closes at the entry)
+        if e >= len(ts) or int(ts[e]) != t_entry - sec4h_ms:
+            log(f"[PB4H-SWING] {sym}: candle sinyal entry tidak ada di data 4h -- lewati")
+            continue
+        sup = None
+        for j in range(max(PB4H_SWING_LEFT, e - PB4H_SWING_RIGHT), k_last - PB4H_SWING_RIGHT + 1):
+            if lo[j] < lo[j - PB4H_SWING_LEFT:j].min() and lo[j] < lo[j + 1:j + PB4H_SWING_RIGHT + 1].min():
+                if int(ts[j + PB4H_SWING_RIGHT]) + sec4h_ms >= t_entry:
+                    sup = float(lo[j]); break
+        if sup is None:
+            continue
+        o_last, c_last = float(df['open'].iloc[k_last]), float(df['close'].iloc[k_last])
+        price = get_price_now(sym)
+        if not (c_last > o_last and c_last > sup and price > sup):
+            log(f"[PB4H-SWING] {sym}: garis support {sup:.8g} ada, candle 4h terakhir "
+                f"{'merah' if c_last <= o_last else 'hijau'} (C {c_last:.8g}), harga {price:.8g} -- tunggu candle berikut")
+            continue
+        if is_daily_loss_limit_breached():
+            log(f"[PB4H-SWING] {sym}: batas rugi harian tersulut -- add fund ditunda")
+            continue
+        add_usd = round(float(d.get('target_usd') or 6.0), 2)
+        res = execute_add_fund(sym, add_usd)
+        with active_deals_lock:
+            if sym in active_deals:
+                active_deals[sym]['swing_add_done'] = (f"add ${add_usd} @ {price:.8g}, support {sup:.8g}" if res.get('ok')
+                                                       else f"GAGAL: {res.get('error')}")
+        save_active_deals()
+        log(f"[PB4H-SWING] {sym}: support {sup:.8g}, candle hijau C {c_last:.8g} -> add fund ${add_usd}: {res}")
+        if not res.get('ok'):
+            send_telegram(f"PantulanPanik-4h | ADD FUND GAGAL\n{to_display_pair(sym)}: {res.get('error')}", parse_mode=None)
+
+
 def run_thread_pb4h() -> None:
     time.sleep(90)
     try:
@@ -27586,6 +27665,10 @@ def run_thread_pb4h() -> None:
             thread_pb4h_scan()
         except Exception as e:
             log(f"WARN T_PB4H error: {e}")
+        try:
+            pb4h_swing_addfund_check()   # 'pb4h-swing-addfund'
+        except Exception as e:
+            log(f"WARN T_PB4H swing add-fund error: {e}")
         time.sleep(60)
 
 
