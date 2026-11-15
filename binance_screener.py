@@ -6910,6 +6910,9 @@ def idle_earn_selfcheck():
                 log(f"[IDLE-EARN] cek tujuan: USDT Sub via Master ${sub_usdt:.2f} vs key trading ${own_usdt:.2f} -> {'COCOK' if same else 'TIDAK COCOK'}")
             except Exception as e:
                 log(f"WARN [IDLE-EARN] cek tujuan Sub: {e}")
+        log(f"[IDLE-EARN] izin key Master: permitsUniversalTransfer={r.get('permitsUniversalTransfer')} "
+            f"enableInternalTransfer={r.get('enableInternalTransfer')} ipRestrict={r.get('ipRestrict')} "
+            f"enableReading={r.get('enableReading')} pending_master_spot=${float(d.get('pending_master_spot', 0) or 0):.2f}")
         log(f"[IDLE-EARN] selfcheck: universalTransfer={r.get('permitsUniversalTransfer')} "
             f"subEmail={'ada' if email else 'TIDAK ADA'} produk USDT={prod} bot_in_earn=${d['bot_in_earn']:.2f} "
             f"aktif={IDLE_EARN_ENABLED}")
@@ -6919,10 +6922,45 @@ def idle_earn_selfcheck():
         return False
 
 
+# Patch 'earn-pending-retry' (15/11/2026, Mas Budi: "MAU DAN HARUS"): a refill whose Master->Sub transfer failed
+# left the money in Master Spot ("pending_master_spot") and the retry only lived inside idle_earn_sweep(), which runs
+# only while Sub cash is high -- so with Sub cash low (the exact case that triggered the refill) it never retried.
+# Now the retry runs first on EVERY 5-minute cycle and before every refill, capped at the bot's pending amount and
+# at what is actually free in Master Spot (Mas Budi's own Master money is never moved).
+def _idle_earn_retry_pending(d: dict) -> bool:
+    """Returns True when nothing is pending anymore. Caller must hold _idle_earn_lock."""
+    pending = round(float(d.get("pending_master_spot", 0) or 0), 2)
+    if pending < 1.0:
+        return True
+    master_free = _master_spot_usdt()
+    if master_free < 0:
+        return False
+    amt = int(min(pending, master_free) * 100) / 100.0
+    if amt < 1.0:
+        log(f"WARN [IDLE-EARN] pending ${pending:.2f} tapi Spot Master cuma ${master_free:.2f} -- tidak ditransfer")
+        return False
+    if not binance_transfer_master_to_sub("USDT", amt):
+        d["pending_fail_count"] = int(d.get("pending_fail_count", 0) or 0) + 1
+        _idle_earn_save(d)
+        return False
+    d["pending_master_spot"] = round(pending - amt, 2)
+    fails = int(d.get("pending_fail_count", 0) or 0)
+    d["pending_fail_count"] = 0
+    _idle_earn_save(d, f"pending {amt} -> Sub ok (setelah {fails} gagal)")
+    log(f"[IDLE-EARN] pending ${amt:.2f} Master Spot -> Sub BERHASIL (setelah {fails}x gagal)")
+    try:
+        send_telegram(f"[Earn USDT] Transfer tertunda ${amt:.2f} Master -> Sub BERHASIL (setelah {fails}x coba ulang).",
+                      parse_mode=None)
+    except Exception:
+        pass
+    return d["pending_master_spot"] < 1.0
+
+
 def idle_earn_refill(need_usd: float = 0.0) -> float:
     """Bring the bot's own USDT back from Master Earn to the Sub spot wallet. Returns the amount moved (0 if none)."""
     with _idle_earn_lock:
         d = _idle_earn_load()
+        _idle_earn_retry_pending(d)
         owned = float(d.get("bot_in_earn", 0) or 0)
         if owned < 1.0:
             return 0.0
@@ -6967,11 +7005,7 @@ def idle_earn_sweep():
     """Move Sub spot USDT above the buffer into Master Earn Flexible."""
     with _idle_earn_lock:
         d = _idle_earn_load()
-        pending = float(d.get("pending_master_spot", 0) or 0)
-        if pending >= 1.0:   # retry a refill whose Master->Sub transfer failed earlier
-            if binance_transfer_master_to_sub("USDT", pending):
-                d["pending_master_spot"] = 0.0
-                _idle_earn_save(d, f"pending {pending} -> Sub ok")
+        if not _idle_earn_retry_pending(d):   # never sweep more into Master while bot money is stuck there
             return
         free, _ = get_usdt_balance()
         excess = int((free - idle_earn_buffer_usd()) * 100) / 100.0
@@ -7003,6 +7037,11 @@ def idle_earn_sweep():
 def run_thread_idle_earn():
     ok = idle_earn_selfcheck()
     while True:
+        try:
+            with _idle_earn_lock:
+                _idle_earn_retry_pending(_idle_earn_load())
+        except Exception as e:
+            log(f"WARN [IDLE-EARN] retry pending: {e}")
         try:
             if IDLE_EARN_ENABLED and ok:
                 free, _ = get_usdt_balance()
