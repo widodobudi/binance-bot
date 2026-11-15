@@ -187,6 +187,11 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
+### earn-pending-retry (52279a0, 15/11, Mas Budi: "MAU DAN HARUS")
+- 15/11 11:05/11:10 redeem Earn $18.32+$8.46 ok, transfer Master->Sub ditolak Binance (-1002) -> $26.78 tertahan di Spot Master
+- Bug: coba-ulang hanya jalan saat kas Sub tinggi; sekarang tiap 5 menit + sebelum refill, maks jumlah pending & saldo Spot Master
+- Selfcheck mencatat izin key Master (enableInternalTransfer, ipRestrict) utk cari sebab -1002
+- Status: deploy 15/11
 ### scan-retry-btc-data (fc4bc0b, 14/11, Mas Budi: "Boleh")
 - Kasus 14/11 15:00: Binance HTTP 500 -> data 4h BTC belum lengkap -> scan PantulanPanik-4h melewati SELURUH candle
 - Sekarang: data BTC gagal/belum lengkap -> coba lagi tiap 1 menit, maks 20 menit setelah candle tutup (PB4H & KB1D)
