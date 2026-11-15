@@ -192,7 +192,7 @@
 - Bug: coba-ulang hanya jalan saat kas Sub tinggi; sekarang tiap 5 menit + sebelum refill, maks jumlah pending & saldo Spot Master
 - Selfcheck mencatat izin key Master (enableInternalTransfer, ipRestrict) utk cari sebab -1002
 - Status: deploy 15/11
-### pb4h-swing-addfund (PENDING, 15/11, Mas Budi: "Khusus PantulanPanik-4h, Add fund, strength 1, garis muncul + candle hijau")
+### pb4h-swing-addfund (05ab90c, 15/11, Mas Budi: "Khusus PantulanPanik-4h, Add fund, strength 1, garis muncul + candle hijau")
 - PantulanPanik-4h: add fund 1x base, SEKALI per deal, saat garis support Swing (pivot low kiri 4 / kanan 1) muncul sejak entry + candle 4h tutup HIJAU di atas support, maks 56 jam
 - Dicek tiap candle 4h tutup (thread T_PB4H); add lewat execute_add_fund (avg baru, trailing reset, hard stop dari avg)
 - Backtest 553 deal 1m: $/deal +0.237 -> +0.378, TRAIN +0.215 -> +0.331, TEST +0.261 -> +0.431, terburuk -$0.61 -> -$1.22
