@@ -4096,6 +4096,73 @@ def strategy_recent_close_stats() -> dict:
     return result
 
 
+# ── Patch 'kb12h-perf-rules-now' (17/11/2026, Mas Budi chose "B") ───────────────────────────────────────────────
+# The Performance panel row "KeltnerBreak-12h" counted all 100 closed deals (69W/31L, -30.76%), most of them opened
+# under OLD rules. 21 of the 23 LIVE-phase losses are already fixed (Ekstrem blocked, BTC Supertrend 1D up, BTC 1D
+# candle green, RSI 12h < 65, price < 3% above Keltner -- patch kb12h-quality-filters 09/11 17:57 WIB; add-fund
+# peak bug 789eab3). Mas Budi's choice B: count only deals the CURRENT rules would still open -- wins AND losses
+# alike, so the number is not flattered. Each of the 85 LIVE-phase deals was re-checked on Binance klines at its
+# open time (scratchpad kb12h_live/): 10 pass, 70 blocked, 5 have no open time (cannot be checked; kept, except DASH
+# = add-fund bug). The 15 pre-LIVE deals (FWDTEST_BRKX2_PHASE_OFFSET, hidden from Closed Trades too) are dropped.
+# Deals opened after the 09/11 patch are counted automatically.
+KB12H_PERF_RULES_SINCE_WIB = "2026-11-09 17:57:00"
+KB12H_PERF_RULES_KEEP = {
+    ('XLM/USDT', '2026-09-18 15:48'), ('RENDER/USDT', '2026-09-07 00:27'), ('JUP/USDT', '2026-09-01 19:02'),
+    ('AR/USDT', '2026-09-01 19:01'), ('LDO/USDT', '2026-08-27 19:01'), ('WLD/USDT', '2026-08-27 19:01'),
+    ('GRAM/USDT', '2026-08-24 07:01'), ('ICP/USDT', '2026-08-24 19:02'), ('ASTER/USDT', '2026-08-24 07:01'),
+    ('ONDO/USDT', '2026-08-21 07:02'),
+    ('ZEN/USDT', 'c:2026-09-06 12:14'), ('1000CAT/USDT', 'c:2026-09-05 21:31'), ('ARB/USDT', 'c:2026-09-04 01:34'),
+    ('TRX/USDT', 'c:2026-08-27 19:00'),
+}
+
+
+def kb12h_perf_rules_now() -> dict:
+    """KeltnerBreak-12h closed deals the current entry rules would still open (see REMARK above): n/win/loss/total_pct
+    plus the closing-speed fields of strategy_recent_close_stats() computed on the same rows."""
+    out = {'n': 0, 'win': 0, 'loss': 0, 'total_pct': 0.0, 'rate': 0.0, 'rate_unit': None, 'interval_days': None,
+           'last_win_close_wib': None, 'last_win_symbol': None}
+    try:
+        with trades_csv_lock:
+            with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                rows = list(csv.DictReader(f))
+    except Exception as e:
+        log(f"   [CSV] kb12h_perf_rules_now: {e}")
+        return out
+    now = now_wib(); counts = {w: 0 for w, _, _ in STRATEGY_CLOSE_FREQ_TIERS}; last = None
+    for r in rows:
+        if r.get('status') != 'CLOSED' or (r.get('strategy') or 'brkX2') not in KB12H_STRATS:
+            continue
+        ot = (r.get('open_time_wib') or '').strip()
+        key = (r.get('symbol') or '', ot[:16] or 'c:' + (r.get('close_time_wib') or '')[:16])
+        if key not in KB12H_PERF_RULES_KEEP and not (ot and ot >= KB12H_PERF_RULES_SINCE_WIB):
+            continue
+        try:
+            p = float(r.get('profit_pct', '') or 0)
+        except (ValueError, TypeError):
+            continue
+        out['n'] += 1; out['total_pct'] += p
+        if p <= 0:
+            out['loss'] += 1
+            continue
+        out['win'] += 1
+        try:
+            ct = datetime.strptime((r.get('close_time_wib') or '').strip(), '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            continue
+        for w, _, _ in STRATEGY_CLOSE_FREQ_TIERS:
+            if ct >= now - timedelta(days=w):
+                counts[w] += 1
+        if last is None or ct > last[0]:
+            last = (ct, r.get('symbol'))
+    for w, unit, per in STRATEGY_CLOSE_FREQ_TIERS:
+        if counts[w] > 0:
+            out.update(rate=round(counts[w] / (w / per), 2), rate_unit=unit, interval_days=round(w / counts[w], 3))
+            break
+    if last:
+        out['last_win_close_wib'] = last[0].strftime('%Y-%m-%d %H:%M:%S'); out['last_win_symbol'] = last[1]
+    return out
+
+
 def _phase_entry(label, p, target=None):
     """Helper internal utk strategy_phase_breakdown() -- 1 baris fase jadi dict seragam."""
     if p is None:
@@ -34894,6 +34961,9 @@ def run_web_dashboard():
                     p = {"n": 0, "win": 0, "loss": 0, "total_pct": 0.0}
                 r = recent.get(key, {"rate": 0.0, "rate_unit": None, "interval_days": None,
                                      "last_win_close_wib": None, "last_win_symbol": None})
+                if key == "brkX2_12h_closed":   # 17/11/2026 'kb12h-perf-rules-now' (Mas Budi: "B")
+                    p = r = kb12h_perf_rules_now()
+                    label = "KeltnerBreak-12h (aturan sekarang)"
                 rows.append({"key": key, "label": label, "n": p["n"], "win": p["win"],
                              "loss": p["loss"], "total_pct": round(p["total_pct"], 2),
                              "close_rate": r["rate"], "close_rate_unit": r["rate_unit"],

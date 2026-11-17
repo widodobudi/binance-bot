@@ -187,6 +187,11 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
+### kb12h-perf-rules-now (PENDING, 17/11, Mas Budi: "B")
+- Panel Performance: baris KeltnerBreak-12h kini hanya menghitung deal yg MASIH akan dibuka aturan sekarang (untung & rugi sama2)
+- 85 deal LIVE dicek ulang (kline Binance saat open): 10 lolos, 70 terblokir, 5 tanpa jam open (dipertahankan kecuali DASH = bug add fund); 15 deal pra-LIVE dibuang
+- Deal yg dibuka sejak patch kb12h-quality-filters (09/11 17:57) otomatis ikut. Lama 69W/31L -30,76% -> baru 12W/2L
+- Status: deploy 17/11
 ### earn-pending-retry (52279a0, 15/11, Mas Budi: "MAU DAN HARUS")
 - 15/11 11:05/11:10 redeem Earn $18.32+$8.46 ok, transfer Master->Sub ditolak Binance (-1002) -> $26.78 tertahan di Spot Master
 - Bug: coba-ulang hanya jalan saat kas Sub tinggi; sekarang tiap 5 menit + sebelum refill, maks jumlah pending & saldo Spot Master
