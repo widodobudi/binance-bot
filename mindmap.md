@@ -187,6 +187,11 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
+### rvolbreak8h-purge (PENDING, 18/11, Mas Budi: "buang sama sekali tak ada bekas apapun" + riwayat "(b) dihapus permanen")
+- Kode RVolBreak-8h DIBUANG total (443 baris): scan live, paper test, gerbang BTC, add-fund reclaim, sizing, hard-stop cap, timeout, near-miss, manual scan, Strategy Control, panel gerbang BTC, Performance, filter Closed Trades, Shadow/Paper panel, thread T-RVolBreak8h
+- Migrasi sekali jalan purge_rvolbreak8h_20261118: baris trade strategy=rvolbreak_8h DIHAPUS PERMANEN dari trades_forwardtest.csv (ikut tab PAJAK & salinan Drive), key dihapus dari strategy_config.json & paper_test.json
+- Yang tersisa hanya catatan riwayat di komentar kode (tidak tampil di dashboard)
+- Status: deploy 18/11
 ### dashboard-light-theme (bb210a1, 18/11, Mas Budi: "adakan juga dong selain dark theme")
 - Tombol "Terang/Gelap" di header dashboard; pilihan tersimpan di browser (localStorage), default tetap gelap
 - 18/11 revisi: palet terang terlalu silau -> abu-abu redup (bg #c9ccd1, kartu #d8dadd, teks #262b33), tanpa putih murni

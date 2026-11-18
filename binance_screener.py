@@ -259,7 +259,6 @@ HARD_STOP_MULT_BY_STRATEGY = {
     # seimbang sebelum worst-case per-trade mulai memberat cepat. Decouple-4h avg +0.347%->+0.368%,
     # RVOLBreak-1h +0.766%->+0.796%, Dip-Buy Universe +3.127%->+3.443% (semua di K=1.1 vs K=1.3).
     'decouple_4h': 1.3, 'rvolbreak_1h': 1.3, 'dipbuy_universe': 1.3,   # rvolbreak_1h: LEGACY, lihat REMARK RVOLBREAK_8H_* -- hanya utk posisi lama yg masih terbuka
-    'rvolbreak_8h': 1.3,   # 12/10/2026: sama K dgn versi 1h yg digantikan (dipakai jg sbg asumsi K konstan di rvolbreak_tf_sweep.py)
     # 16/10/2026 (permintaan Mas Budi): BBSnap K-sweep (177 pair 2022-2026, 2x cross-check identik)
     # -- bbsnap_4h: K nyaris tidak berpengaruh, 1.1 (default HARD_STOP_MULT) sudah titik terbaik,
     # TIDAK perlu override di sini. bbsnap_8h: K=0.6 total profit +4.7% vs K=1.1, rugi terburuk
@@ -354,7 +353,6 @@ BE_EXIT_BUFFER_PCT_BY_STRATEGY = {'brkX2_4h': 0.1, 'trend_confirm_4h': 0.99,
 HARD_STOP_CAP_PCT_BY_STRATEGY = {
     'trend_confirm_4h': 10.8,
     'decouple_4h': 12.0,
-    'rvolbreak_8h': 12.0,
     'dipbuy_universe': 10.8,
 }
 # 24/09/2026 -- REVIEW SELESAI, KEPUTUSAN: TETAP K1.5/cap10.8%, TIDAK rollback ke K1.1 (permintaan
@@ -860,27 +858,6 @@ DECOUPLE_RECLAIM_ADDFUND_RVOL_MIN  = 1.0  # RVol(20) minimum di candle cross-up 
 # sepasti 2 strategi lain, tapi wilayah 2-4% mengalahkan 5% konsisten di kedua split.
 DECOUPLE_RECLAIM_ADDFUND_GAP_CAP_PCT = 3.0
 
-# 17/10/2026 (patch "rvolbreak8h-addfund-reclaim", follow-up SAMA HARI, permintaan eksplisit
-# Mas Budi: blok SENDIRI khusus RVolBreak-8h, bukan digabung dgn Decouple-4h/TrenKonfirmasi-4h
-# walau pola deteksinya sama persis get_live_ema20_reclaim_signal()): RVolBreak-8h ditambah
-# mekanisme add-fund -- strategi ini SEBELUMNYA TANPA add-fund sama sekali (sama spt
-# Decouple-4h sblm patch ini). Backtest 2 tahap: (1) grid sempit N=1-5/RVol=1,0-3,0x --
-# sinyal PALING BERSIH dari semua strategi yg diuji (trade kalah konsisten jadi menang),
-# tapi n<=44 (terpicu <=1% dari 4.480 kandidat) -- terlalu kecil utk dipastikan; (2) grid
-# dilebarkan N=1-20/RVol=0,6-2,0x (84 kombinasi) atas permintaan Mas Budi "coba lagi dgn
-# data lebih banyak" -- HASIL: dari SEMUA 84 kombinasi, TIDAK ADA SATU PUN yang lebih buruk
-# dari baseline (beda dari Decouple-4h yg py zona bahaya di RVol tinggi) -- selalu sama atau
-# lebih baik. Sel terbaik N=20/RVol=0,6x: WR 84,1% (vs baseline 83,8%), avg +5,305% (vs
-# +5,257%), total +23.766 (vs +23.552), terpicu 114/4.480 (2,55%, naik dari <=44 di grid
-# sempit). Grid-nya MONOTON (makin longgar makin membantu, belum pernah berbalik turun) --
-# kemungkinan ambang optimal sebenarnya ADA DI LUAR grid yg diuji (N>20/RVol<0,6x belum
-# dicoba), tapi N=20/RVol=0,6x dipilih sbg titik aman yg sudah terbukti, bukan ekstrapolasi.
-# Sampel (n=114 pada sel terbaik) tetap jauh lebih kecil drpd Decouple-4h (n=1.441) krn pool
-# kandidat RVolBreak-8h sendiri cuma 4.480 (keterbatasan data historis, bukan bug) -- risiko
-# dinilai rendah krn TIDAK ADA sel yang merugikan di seluruh grid yg diuji, bukan krn sampel
-# besar.
-RVOLBREAK8H_RECLAIM_ADDFUND_N_CANDLES = 20   # maks jarak candle (TF native strategi) antara cross-down EMA20 dan cross-up (reclaim)
-RVOLBREAK8H_RECLAIM_ADDFUND_RVOL_MIN  = 0.6  # RVol(20) minimum di candle cross-up (reclaim)
 TRENDCONFIRM_SCAN_INTERVAL   = 600       # 23/09/2026 (audit biaya AI 22/09 + sweep window 23/09,
                                           # permintaan Mas Budi): naik dari 180 -- sebelumnya scan 24 jam
                                           # nonstop, terbukti jadi penyumbang panggilan AI TERBESAR
@@ -1881,21 +1858,6 @@ STRATEGY_CONFIG_DEFAULTS = {
     # baris ini TETAP (bukan dihapus) krn posisi lama yg masih terbuka saat deploy ini masih baca
     # close_sell_pct/cooldown_enabled dari sini sampai closed.
     "rvolbreak_1h":  {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
-    # 12/10/2026 (permintaan Mas Budi): pengganti langsung rvolbreak_1h (lihat REMARK RVOLBREAK_8H_*
-    # di sekitar baris 18095) -- langsung LIVE tanpa fase shadow krn formula & exit sudah
-    # tervalidasi penuh lewat sweep timeframe (rvolbreak_tf_sweep.py).
-    # 18/10/2026 (permintaan Mas Budi): sama spt mombreak_1h di atas -- ditarik balik ke PAPER
-    # TEST, target 15 deal closed via _paper_test_scan_rvolbreak8h() sebelum dipertimbangkan
-    # balik live lagi.
-    # 26/10/2026 (patch "decouple-rvolbreak8h-smallstart-reclaim"): base_usd 50->8, same backtest-
-    # confirmed smallstart+reclaim treatment as Decouple-4h above (TEST avg +3.159%->+3.328%,
-    # ~15% of baseline capital) -- see SMALLSTART_FULL_TARGET_USD. Paper-test target unchanged.
-    # 30/10/2026 (patch "rvolbreak8h-btc-gate0-or"): btc_gate_enabled ditambahkan -- backtest
-    # khusus strategi ini (142 pair, 2023-2026, mekanik Donchian24+RVOL asli) nunjukkin OR
-    # (12H ATAU 1D hijau) avg/trade +3.15%->+3.25%, tapi TRAIN turun (+3.53%->+3.29%) sementara
-    # TEST naik (+2.88%->+3.22%) -- bukti CAMPURAN, bukan konsisten spt KB12h/TC4h. Dipasang
-    # atas keputusan eksplisit Mas Budi (30/10/2026) meski buktinya belum sekuat strategi lain.
-    "rvolbreak_8h":  {"strategy_enabled": False, "sizing_enabled": True, "base_usd": 8, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100, "btc_gate_enabled": True},
     # 09/10/2026 (Tahap 3/4): dipbuy_universe naik dari shadow ke live, lulus target 50/50 (43W/7L,
     # +85.5%) -- exit DIGANTI ke trailing (lihat REMARK DIPBUY_UNIVERSE_* di sekitar baris 16424).
     "dipbuy_universe": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 50, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": True, "ai_call_close": True, "max_deals": 2, "close_sell_pct": 100},
@@ -2097,6 +2059,35 @@ def apply_one_time_config_migrations():
                                "old": old_dll2, "new": 18.0}
             changed = True
             log(f"[MIGRASI] daily_loss_limit_usd: {old_dll2} -> 18.0 (sekali jalan, {dll_key2})")
+        # 18/11/2026 'rvolbreak8h-purge' (Mas Budi: "buang sama sekali tak ada bekas apapun" + chose
+        # (b) "dihapus permanen" for its trade history, after being told the PAJAK tab reads the same file):
+        # the strategy code is gone; this PERMANENTLY drops its rows from trades_forwardtest.csv (synced to
+        # Drive on the next sync) and its keys from strategy_config.json / paper_test.json. Runs once.
+        rv_key = "purge_rvolbreak8h_20261118"
+        if rv_key not in done:
+            n_rows = 0
+            if os.path.exists(TRADES_CSV):
+                with trades_csv_lock:
+                    with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                        rd = csv.DictReader(f); fields = rd.fieldnames; rows = list(rd)
+                    keep = [r for r in rows if (r.get('strategy') or '') != 'rvolbreak_8h']
+                    n_rows = len(rows) - len(keep)
+                    if n_rows and fields:
+                        with open(TRADES_CSV, 'w', newline='', encoding='utf-8') as f:
+                            w = csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(keep)
+            for path in (STRATEGY_CONFIG_FILE, os.path.join(DATA_DIR, "paper_test.json")):
+                try:
+                    if os.path.exists(path):
+                        with open(path, encoding='utf-8') as f:
+                            js = json.load(f)
+                        if isinstance(js, dict) and js.pop('rvolbreak_8h', None) is not None:
+                            with open(path, 'w', encoding='utf-8') as f:
+                                json.dump(js, f, indent=2, default=str)
+                except Exception as e:
+                    log(f"WARN [MIGRASI] {rv_key} {path}: {e}")
+            done[rv_key] = {"applied_wib": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "csv_rows_deleted": n_rows}
+            changed = True
+            log(f"[MIGRASI] RVolBreak-8h dihapus permanen: {n_rows} baris trade dihapus dari CSV + config/paper-test ({rv_key})")
         if changed:
             with open(CONFIG_MIGRATIONS_FILE, "w") as f:
                 json.dump(done, f, indent=2)
@@ -2216,7 +2207,7 @@ def total_max_deals_all_strategies() -> int:
 # 28-29/09/2026 (permintaan Mas Budi): strategi yang di-PAUSE dan SEMUA deal-nya disembunyikan dari tampilan dashboard default
 # (Closed Trades + kartu Performance per Strategi). Data tetap ada di CSV / counter fase / batas rugi harian; tampil lagi kalau
 # strategi dipilih eksplisit di filter Closed Trades atau ?show_paused=1. Satu sumber kebenaran utk kedua endpoint.
-PAUSED_HIDDEN_STRATEGIES = ('brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h', 'rvolbreak_1h', 'mombreak_1h', 'rvolbreak_8h', 'bbsnap_4h', 'decouple_4h', 'topgainers_4h')
+PAUSED_HIDDEN_STRATEGIES = ('brkX2_crossema', 'reversal', 'akum_entry_a', 'akum_entry_b', 'hunting_4h', 'rvolbreak_1h', 'mombreak_1h', 'bbsnap_4h', 'decouple_4h', 'topgainers_4h')
 # 27/10/2026 (permintaan Mas Budi, "setuju dan hilangkan semua closed deals dan strateginya
 # pada semua menu"): topgainers_4h TERMINATE -- lihat REMARK lengkap di TOPGAINERS_ENABLED.
 # 26/10/2026 (permintaan Mas Budi, "TERMINATE DAN DELETE SAJA closed deals nya, biar kita maju
@@ -4275,15 +4266,6 @@ def strategy_phase_breakdown() -> dict:
         ]
     except Exception as e:
         log(f"   [PHASE] gagal hitung rvolbreak_1h: {e}")
-    try:
-        # 12/10/2026: rvolbreak_8h pengganti rvolbreak_1h (diterminate) -- baris terpisah,
-        # bukan digabung, krn histori closed-deal beda formula/timeframe entry (lihat REMARK
-        # RVOLBREAK_8H_* di sekitar baris 18095).
-        out['rvolbreak_8h'] = [
-            _phase_entry('LIVE', csv_progress('rvolbreak_8h')),
-        ]
-    except Exception as e:
-        log(f"   [PHASE] gagal hitung rvolbreak_8h: {e}")
     try:
         out['dipbuy_universe'] = [
             _phase_entry('LIVE', csv_progress('dipbuy_universe')),
@@ -9448,9 +9430,6 @@ EKSTREM_SUPERTREND_SIZING = {
     # Ekstrem (35,2/38,1->35%) -- konsisten dgn alasan lama (entry drop>=15% 1 candle hampir
     # selalu overlap ATR tinggi, beda tipis antar tier wajar). ST 37,0/39,5->37%.
     'dipbuy_universe':   (0.38, 0.35, 0.37, 'size_cut'),
-    # RVolBreak-8h (+ key legacy rvolbreak_1h, formula sama): Volatil 30,5/31,9->30%, Ekstrem
-    # 37,9/35,8->36%; ST (netral, di bawah baseline 31,7/32,1%) 21,5/20,3->20%.
-    'rvolbreak_8h':      (0.30, 0.36, 0.20, 'size_cut'),
     'rvolbreak_1h':      (0.30, 0.36, 0.20, 'size_cut'),
     # CrossEMA-4h: Volatil 30,6/26,9->27%, Ekstrem 30,5/29,2->29%; ST 'na' -- WAJIB di entry
     # (st_dir mult=2,5 ==-1), n=100% identik baseline, tidak relevan sbg pembeda terpisah.
@@ -9653,7 +9632,6 @@ SMALLSTART_FULL_TARGET_USD = {
     # /api/strategy_config 26/10/2026 sebelum patch ini ditulis). rvolbreak_8h tidak ada
     # override (live == code-default), jadi 50.
     'decouple_4h':      40.0,   # 01/11/2026: 20->40, lihat REMARK "addfund-target-increase" di atas
-    'rvolbreak_8h':     50.0,
 }
 
 # ── Patch "kb12h-reclaim-sensitivity-boost" (29/10/2026) ────────────────────────────────
@@ -10026,9 +10004,6 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     # add-fund" sama persis RVOLBreak-1h/Decouple-4h/Dip-Buy Universe). Diperbaiki dgn pola
     # SAMA PERSIS decouple_4h/rvolbreak_1h/dipbuy_universe di atas -- base_usd TETAP dari
     # Strategy Control, TANPA add-fund.
-    elif strategy == 'rvolbreak_8h':
-        target  = float(_cfg_base if _cfg_base else 50.0)
-        add_usd = 0
     elif strategy in ('bbsnap_4h', 'bbsnap_8h'):
         target  = float(_cfg_base if _cfg_base else 10.0)
         add_usd = 0
@@ -11856,27 +11831,6 @@ def trendconfirm4h_btc_gate_ok() -> bool:
         return True  # fail-open
     return b12h and b1d
 
-# 30/10/2026 (patch "rvolbreak8h-btc-gate0-or", permintaan Mas Budi): RVolBreak-8h sebelumnya
-# TIDAK PUNYA gerbang BTC sama sekali -- backtest Gate0 10/10/2026 cuma menguji RVolBreak-1h
-# (versi lama, terminated), bukan versi 8h yg sekarang live. Backtest terpisah 30/10/2026
-# (142 pair vol>=$1M, candle 8h 2023-2026, 2151 sinyal mekanis Donchian24+RVOL>=3.0, exit
-# hard-stop/trailing/timeout ASLI dari kode produksi, lapis AI confirmation SENGAJA dilewati)
-# nguji 2 varian: AND (12H DAN 1D) retain 41.8% sinyal, OR (12H ATAU 1D) retain 85.8% sinyal.
-# OR dipilih: WR 77.6%->78.5%, avg/trade +3.15%->+3.25% -- TAPI TRAIN turun (+3.53%->+3.29%)
-# sementara TEST naik (+2.88%->+3.22%), bukti CAMPURAN (beda dari KB12h/TC4h yg konsisten
-# di TRAIN+TEST). Dipasang atas keputusan eksplisit Mas Budi meski belum sekuat strategi lain.
-def rvolbreak8h_btc_gate_ok() -> bool:
-    """Syarat: BTCUSDT HTF 12H DAN 1D, cukup SALAH SATU candle tertutup terakhir hijau (OR,
-    sama pola persis decouple4h_btc_gate_ok() -- lihat REMARK 'rvolbreak8h-btc-gate0-or' di atas
-    utk angka backtest & alasan OR dipilih)."""
-    if not is_btc_gate_enabled('rvolbreak_8h'):
-        return True
-    b12h = btc_htf_closed_bullish('12h')
-    b1d = btc_htf_closed_bullish('1d')
-    if b12h is None and b1d is None:
-        return True  # fail-open, dua2nya gagal
-    return bool(b12h) or bool(b1d)
-
 MOMBREAK_BTC_GATE_GENDUT_PCT = 0.10  # FIXED (bukan field dashboard), satu2nya nilai terbukti backtest
 
 def mombreak_btc_gate_ok() -> bool:
@@ -11956,7 +11910,7 @@ def _btc_gate_live_detail(kind: str) -> str:
         return '?' if b is None else ('HIJAU' if b else 'MERAH')
     if kind == 'keltner12h':
         return f"1D: {_lbl(btc_htf_closed_bullish('1d'))} | 3D: {_lbl(btc_htf_closed_bullish('3d'))}"
-    if kind in ('decouple4h', 'trendconfirm4h', 'rvolbreak8h'):
+    if kind in ('decouple4h', 'trendconfirm4h'):
         return f"12H: {_lbl(btc_htf_closed_bullish('12h'))} | 1D: {_lbl(btc_htf_closed_bullish('1d'))}"
     if kind == 'mombreak':
         try:
@@ -12131,7 +12085,7 @@ BB_UPPER_TF_BY_STRATEGY = {
     'brkX2_4h': '4h', 'brkX2_crossema': '4h',
     'trend_confirm_4h': '4h', 'decouple_4h': '4h', 'dipbuy_universe': '4h',
     'bbsnap_4h': '4h', 'bbsnap_8h': '8h',
-    'rvolbreak_8h': '8h', 'rvolbreak_1h': '1h',
+    'rvolbreak_1h': '1h',
     'reversal': REVERSAL_TIMEFRAME,
     'mombreak_1h': '1h',
     'hunting_4h': '4h',
@@ -12874,7 +12828,7 @@ HB_STRAT_LABEL = {
     'brkX2_12h_closed': 'KeltnerBreak-12h', 'brkX2_4h': 'brkX2-4h', 'trend_confirm_4h': 'TrenKonfirmasi-4h',
     'reversal': 'Reversal-8h', 'brkX2_crossema': 'CrossEMA-4h', 'hunting_4h': 'Hunting-4h',
     'akum_entry_a': 'Akumulasi-4h A', 'akum_entry_b': 'Akumulasi-4h B', 'mombreak_1h': 'MomentumBreak-1h',
-    'decouple_4h': 'Decouple-4h', 'rvolbreak_8h': 'RVolBreak-8h', 'kb1d': 'KeltnerBreak-1D', 'panic_bounce_4h': 'PantulanPanik-4h', 'dipbuy_universe': 'Dip-Buy Universe',
+    'decouple_4h': 'Decouple-4h', 'kb1d': 'KeltnerBreak-1D', 'panic_bounce_4h': 'PantulanPanik-4h', 'dipbuy_universe': 'Dip-Buy Universe',
     'bbsnap_4h': 'BBSnap-4h', 'bbsnap_8h': 'BBSnap-8h', 'topgainers_4h': 'Top Gainers-4h',
 }
 _hb_daily_notes_date = [None]
@@ -14608,67 +14562,6 @@ def thread2_monitor():
                             log(f"WARN [T2] {sym} reclaim-addfund gagal: {_dc_result.get('error')}")
                         continue   # entry/peak lokal sudah basi setelah add-fund -- lanjut siklus berikutnya
 
-        # Patch "rvolbreak8h-addfund-reclaim" (17/10/2026, permintaan Mas Budi -- blok SENDIRI,
-        # bukan digabung dgn blok Decouple-4h/TrenKonfirmasi-4h di atas walau pola deteksinya
-        # sama persis get_live_ema20_reclaim_signal()): add-fund "EMA20 reclaim + RVol" khusus
-        # RVolBreak-8h. Lihat REMARK lengkap angka backtest di
-        # RVOLBREAK8H_RECLAIM_ADDFUND_N_CANDLES (~baris 719) -- N=20/RVol>=0,6x dipilih krn
-        # TIDAK ADA satu pun sel di grid 84-kombinasi yang merugikan (beda dari Decouple-4h yg
-        # py zona bahaya RVol tinggi). RVolBreak-8h SEBELUMNYA tanpa add-fund sama sekali --
-        # ini mekanisme BARU, bukan pengganti apa pun. Underwater (price<entry) WAJIB dicek
-        # sebelum cek pola, sama alasan spt 2 blok di atas. Fire-once via reclaim_addfund_used
-        # (field sama, nama generik, aman dipakai lintas strategi -- cuma flag per-deal).
-        if strat == 'rvolbreak_8h' and not d.get('reclaim_addfund_used', False) and price < entry:
-            _rv_signal = get_live_ema20_reclaim_signal(
-                sym, strat, RVOLBREAK8H_RECLAIM_ADDFUND_N_CANDLES, RVOLBREAK8H_RECLAIM_ADDFUND_RVOL_MIN)
-            if _rv_signal:
-                if not get_deal_override(sym, 'auto_add_fund', True):
-                    log(f"[T2] {sym} reclaim-addfund: TERPICU tapi auto_add_fund=OFF (toggle 'Auto Avg Down') -- di-skip, tidak dicoba ulang")
-                    with active_deals_lock:
-                        if sym in active_deals:
-                            active_deals[sym]['reclaim_addfund_used'] = True
-                else:
-                    # 26/10/2026 (patch "decouple-rvolbreak8h-smallstart-reclaim"): JUMLAH tambahan
-                    # diubah dari "dobel modal awal" jadi "sampai modal normal penuh"
-                    # (SMALLSTART_FULL_TARGET_USD) -- trigger/syarat reclaim-nya TIDAK disentuh.
-                    # Pola identik dgn TrenKonfirmasi-4h/Decouple-4h di atas.
-                    # 06/11/2026 (patch "reclaim-addfund-current-modal-fix", lihat REMARK lengkap
-                    # di estimate_deal_total_usd() / blok TrenKonfirmasi-4h di atas): target_usd
-                    # tidak pernah terupdate stlh add-fund -- pakai estimate_deal_total_usd().
-                    _rv_current_modal = estimate_deal_total_usd(d) or get_strategy_base_usd('rvolbreak_8h')
-                    _rv_modal = round(max(0.0, SMALLSTART_FULL_TARGET_USD.get('rvolbreak_8h', 50.0) - _rv_current_modal), 2)
-                    if _rv_modal <= 0:
-                        log(f"[T2] {sym} reclaim-addfund TERPICU tapi modal (${_rv_current_modal:.0f}) sudah >= target normal -- tidak ada yg perlu ditambah")
-                        with active_deals_lock:
-                            if sym in active_deals:
-                                active_deals[sym]['reclaim_addfund_used'] = True
-                        continue
-                    _glob_ok, _glob_reason = global_deal_limits_ok(planned_usd=_rv_modal)
-                    if not _glob_ok:
-                        log(f"[T2] {sym} reclaim-addfund: TERPICU tapi kapasitas gabungan penuh ({_glob_reason}) -- di-skip, tidak dicoba ulang")
-                        with active_deals_lock:
-                            if sym in active_deals:
-                                active_deals[sym]['reclaim_addfund_used'] = True
-                    else:
-                        log(f"[T2] {sym} reclaim-addfund TERPICU: EMA20 reclaim (<={RVOLBREAK8H_RECLAIM_ADDFUND_N_CANDLES} candle) "
-                            f"+ RVol>={RVOLBREAK8H_RECLAIM_ADDFUND_RVOL_MIN:g}x -- tambah modal ${_rv_modal:.0f} (modal ${_rv_current_modal:.0f} -> target ${SMALLSTART_FULL_TARGET_USD.get('rvolbreak_8h', 50.0):.0f})")
-                        _rv_result = execute_add_fund(sym, _rv_modal)
-                        with active_deals_lock:
-                            if sym in active_deals:
-                                active_deals[sym]['reclaim_addfund_used'] = True
-                        if _rv_result.get('ok'):
-                            send_telegram(
-                                f"📈 Reclaim Add-Fund (RVolBreak-8h)\n"
-                                f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-                                f"Pair    : {to_display_pair(sym)}\n"
-                                f"Pola    : EMA20 cross-down lalu cross-up (reclaim) + RVol\n"
-                                f"Modal ditambah: ${_rv_modal:.0f} @ {_fmt_price(_rv_result.get('price',0))}",
-                                parse_mode=None
-                            )
-                        else:
-                            log(f"WARN [T2] {sym} reclaim-addfund gagal: {_rv_result.get('error')}")
-                        continue   # entry/peak lokal sudah basi setelah add-fund -- lanjut siklus berikutnya
-
         # Idea #5 (17/10/2026): BB Upper live, dipakai utk arm-dini + perketat trailing di bawah.
         # TIDAK berlaku utk hunting_4h (TERMINATED, keputusan Mas Budi -- lihat REMARK BBUPPER_TIGHT_TIERS).
         live_bb_upper = get_live_bb_upper(sym, strat)
@@ -15173,9 +15066,6 @@ def thread2_monitor():
             # masih terbuka saat deploy; hapus setelah posisi itu closed (lihat REMARK RVOLBREAK_8H_*).
             hold_limit_sec = RVOLBREAK_1H_MAX_HOLD_CANDLES * STRAT1H_SECONDS
             hold_label = f"batas {RVOLBREAK_1H_MAX_HOLD_CANDLES} candle 1h (rvolbreak)"
-        elif d.get('strategy','brkX2') == 'rvolbreak_8h':
-            hold_limit_sec = RVOLBREAK_8H_MAX_HOLD_CANDLES * RVOLBREAK_8H_SECONDS
-            hold_label = f"batas {RVOLBREAK_8H_MAX_HOLD_CANDLES} candle 8h (rvolbreak)"
         elif d.get('strategy','brkX2') == 'dipbuy_universe':
             hold_limit_sec = DIPBUY_UNIVERSE_MAX_HOLD_CANDLES * STRAT4H_SECONDS
             hold_label = f"batas {DIPBUY_UNIVERSE_MAX_HOLD_CANDLES} candle 4h (dipbuy)"
@@ -15339,7 +15229,6 @@ def thread2_monitor():
                 else TRENDCONFIRM_MAX_HOLD_CANDLES if d.get('strategy') == 'trend_confirm_4h'
                 else DECOUPLE_4H_MAX_HOLD_CANDLES if d.get('strategy') == 'decouple_4h'
                 else RVOLBREAK_1H_MAX_HOLD_CANDLES if d.get('strategy') == 'rvolbreak_1h'
-                else RVOLBREAK_8H_MAX_HOLD_CANDLES if d.get('strategy') == 'rvolbreak_8h'
                 else DIPBUY_UNIVERSE_MAX_HOLD_CANDLES if d.get('strategy') == 'dipbuy_universe'
                 else BBSNAP_4H_MAX_HOLD_CANDLES if d.get('strategy') == 'bbsnap_4h'
                 else BBSNAP_8H_MAX_HOLD_CANDLES if d.get('strategy') == 'bbsnap_8h'
@@ -15468,7 +15357,7 @@ def thread2_monitor():
                 'brkX2_crossema': 'CrossEMA-4h', 'hunting_4h': 'Hunting-4h',
                 'akum_entry_a': 'Akumulasi-4h Entry A', 'akum_entry_b': 'Akumulasi-4h Entry B',
                 'trend_confirm_4h': 'TrenKonfirmasi-4h', 'mombreak_1h': 'MomentumBreak-1h',
-                'decouple_4h': 'Decouple-4h', 'rvolbreak_8h': 'RVolBreak-8h', 'kb1d': 'KeltnerBreak-1D', 'panic_bounce_4h': 'PantulanPanik-4h',
+                'decouple_4h': 'Decouple-4h', 'kb1d': 'KeltnerBreak-1D', 'panic_bounce_4h': 'PantulanPanik-4h',
                 'rvolbreak_1h': 'RVOLBreak-1h', 'dipbuy_universe': 'Dip-Buy Universe',
                 'bbsnap_4h': 'BBSnap-4h', 'bbsnap_8h': 'BBSnap-8h', 'topgainers_4h': 'Top Gainers-4h',
             }
@@ -18732,7 +18621,6 @@ _dashboard_state = {
         "KeltnerBreak-1D": [],     # 14/11/2026 'nearmiss-kb1d-pb4h'
         "PantulanPanik-4h": [],    # 14/11/2026 'nearmiss-kb1d-pb4h'
         "Decouple-4h": [],
-        "RVolBreak-8h": [],
         "Dip-Buy Universe": [],
         "MomentumBreak-1h": [],
         "BBSnap-4h": [],
@@ -18904,7 +18792,7 @@ def _paper_test_scan_rvoltrend1d():
 PAPER_TEST_TARGET = 15
 PAPER_TEST_MAX_HOLD_HOURS = 48
 PAPER_TEST_FILE = os.path.join(DATA_DIR, "paper_test.json")
-PAPER_TEST_LABELS = {"mombreak_1h": "MomentumBreak-1h", "rvolbreak_8h": "RVolBreak-8h",
+PAPER_TEST_LABELS = {"mombreak_1h": "MomentumBreak-1h",
                       "bbsnap_4h": "BBSnap-4h", "decouple_4h": "Decouple-4h",
                       "rvoltrend_1d": "RVolTrend-1d"}
 # 25/10/2026: BBSnap-4h ditarik ke paper juga. 26/10/2026 (permintaan Mas Budi): Decouple-4h
@@ -18912,7 +18800,6 @@ PAPER_TEST_LABELS = {"mombreak_1h": "MomentumBreak-1h", "rvolbreak_8h": "RVolBre
 # dianalisis bareng keduanya setelah 15-15 terkumpul apakah layak live.
 _paper_test_lock = threading.Lock()
 _paper_test_state = {"mombreak_1h": {"open": [], "closed": []},
-                      "rvolbreak_8h": {"open": [], "closed": []},
                       "bbsnap_4h": {"open": [], "closed": []},
                       "decouple_4h": {"open": [], "closed": []},
                       "rvoltrend_1d": {"open": [], "closed": []}}
@@ -19086,11 +18973,10 @@ def run_thread_paper_test() -> None:
     while True:
         try:
             _paper_test_scan_mombreak()
-            _paper_test_scan_rvolbreak8h()
             _paper_test_scan_bbsnap4h()
             _paper_test_scan_decouple4h()
             _paper_test_scan_rvoltrend1d()
-            for strat in ("mombreak_1h", "rvolbreak_8h", "bbsnap_4h", "decouple_4h", "rvoltrend_1d"):
+            for strat in ("mombreak_1h", "bbsnap_4h", "decouple_4h", "rvoltrend_1d"):
                 paper_test_check_exits(strat)
         except Exception as e:
             log(f"WARN T-PaperTest: {e}")
@@ -19929,7 +19815,7 @@ def get_deal_override(sym: str, key: str, default: bool = True) -> bool:
     return load_deal_overrides().get(sym, {}).get(key, default)
 
 # ── Inline JS untuk dashboard (ASCII-only, served via /dash.js) ──────────────
-_DASH_JS = 'var _refreshTimer=null;\nvar _curStrat=\'KeltnerBreak-12h\';\n// 16/10/2026 (permintaan Mas Budi): auto-refresh 30 detik (reload seluruh halaman) DIHAPUS --\n// diganti tombol Refresh manual per-bagian (lihat refreshFragment() di bawah + refreshPerfChart/\n// loadStrategyConfig/loadAutoSellConfig yg sudah ada). startRefresh() sengaja dibiarkan ada TAPI\n// no-op (bukan dihapus total) krn pauseRefresh()/resumeRefresh() masih dipanggil di banyak tempat\n// lain (edit/close/addfund/scan dkk) sbg guard sebelum-sesudah AJAX -- dengan _refreshTimer selalu\n// null, keduanya otomatis jadi no-op aman, tidak perlu ubah satu-satu titik panggilnya.\nfunction startRefresh(){}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){return false;}\nvar _activeDealsAutoRefreshPaused=false;\nfunction pauseRefresh(){stopRefresh();_activeDealsAutoRefreshPaused=true;}\nfunction resumeRefresh(){_activeDealsAutoRefreshPaused=false;}\nfunction onPauseRefreshToggle(checked){}\nfunction togglePauseRefresh(checked){}\n// 03/11/2026 (permintaan Mas Budi): Active Deals auto-refresh TERBATAS -- beda dari full-page\n// 30-detik yg DIHAPUS 16/10/2026 (permintaan dia jg) krn ganggu -- ini cuma fragment tabel\n// Active Deals (reuse refreshFragment(), AJAX innerHTML, BUKAN reload halaman), interval 3\n// menit (dipilih Mas Budi sendiri, lebih longgar dari 30/60s yg saya tawarkan -- masih hati-\n// hati soal beban Binance, lihat REMARK \'polling dashboard jadi sumber TERBESAR 429\' dekat\n// PIVOT_RESISTANCE_CACHE_TTL_SEC). Skip siklus kalau _activeDealsAutoRefreshPaused true --\n// guard yg SAMA dipakai editEntry/rowAddFund/rowCloseDeal/dkk (pauseRefresh/resumeRefresh di\n// sekeliling AJAX masing2), jadi otomatis ikut lindungi timer ini juga tanpa ubah titik lain.\nsetInterval(function(){\n  if(_activeDealsAutoRefreshPaused)return;\n  if(!document.getElementById(\'active-deals-content\'))return;\n  refreshFragment(\'/fragment/active_deals\',\'active-deals-content\');\n}, 180000);\nfunction refreshFragment(url,domId){\n  var el=document.getElementById(domId);\n  if(!el)return;\n  var old=el.style.opacity;el.style.opacity=\'0.5\';\n  fetch(url).then(function(r){return r.text();}).then(function(html){\n    el.innerHTML=html;el.style.opacity=old||\'1\';\n  }).catch(function(e){el.style.opacity=old||\'1\';alert(\'Gagal refresh: \'+e);});\n}\n\nfunction refreshDealRow(sym){\n  var row=document.getElementById(\'row-\'+sym);\n  if(!row)return;\n  var btn=document.getElementById(\'rrbtn-\'+sym);\n  var oldText=btn?btn.textContent:null;\n  if(btn){btn.disabled=true;btn.textContent=\'...\';}\n  row.style.opacity=\'0.5\';\n  fetch(\'/fragment/active_deal_row?sym=\'+encodeURIComponent(sym)).then(function(r){return r.text();}).then(function(html){\n    var tmp=document.createElement(\'tbody\');\n    tmp.innerHTML=html;\n    var newRow=tmp.querySelector(\'tr\');\n    if(newRow){row.replaceWith(newRow);}else{row.style.opacity=\'1\';}\n  }).catch(function(e){\n    row.style.opacity=\'1\';\n    if(btn){btn.disabled=false;btn.textContent=oldText;}\n    alert(\'Gagal refresh deal: \'+e);\n  });\n}\n\n// Definisi secondary per strategi\nvar STRAT_SECONDARY={\n  \'KeltnerBreak-12h\':[],  // 25/10/2026 (patch \'manual-scan-keltner-sync\'): formula LAMA (7 checkbox) diganti 1 syarat tunggal (breakout Keltner) sejak 03/10/2026, tool ini kelewat -- sekarang kosong (sama pola \'MomentumBreak-1h\'), lihat primary-status\n  \'brkX2-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'rsi\',label:\'RSI<60\'},{key:\'stoch\',label:\'Stoch%K<80\'},\n    {key:\'htf\',label:\'12h candle bullish\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ]\n};\n\nfunction onStratSelect(strat){\n  _curStrat=strat;\n  // Update dropdown kandidat\n  var opts=document.querySelectorAll(\'.nm-opt\');\n  var count=0;\n  opts.forEach(function(o){\n    var show=o.getAttribute(\'data-strat\')===strat;\n    o.style.display=show?\'\':\'none\';\n    if(show)count++;\n  });\n  document.getElementById(\'nm-count\').textContent=\'(\'+count+\' kandidat dari scan terakhir)\';\n  // Reset pair select\n  var sel=document.getElementById(\'pair-select\');if(sel)sel.value=\'\';\n  // Reset panel\n  var panel=document.getElementById(\'pair-detail\');if(panel)panel.style.display=\'none\';\n  // Update secondary grid\n  renderSecondaryGrid(strat);\n  // Reset primary status\n  var ps=document.getElementById(\'primary-status\');\n  if(ps)ps.innerHTML=\'<span style="color:var(--muted)">-- pilih pair untuk lihat nilai aktual --</span>\';\n}\n\nfunction renderSecondaryGrid(strat){\n  var grid=document.getElementById(\'secondary-grid\');\n  if(!grid)return;\n  var defs=STRAT_SECONDARY[strat]||[];\n  grid.innerHTML=defs.map(function(d){\n    return \'<div class="sec-item" data-key="\'+d.key+\'"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px"><input type="checkbox" class="sec-cb" data-key="\'+d.key+\'" checked style="cursor:pointer"><span class="sec-label">\'+d.label+\'</span><span class="sec-actual" style="color:var(--muted)">--</span><span class="sec-status">--</span></label></div>\';\n  }).join(\'\');\n  // Re-attach event listeners\n  grid.querySelectorAll(\'.sec-cb\').forEach(function(cb){\n    cb.addEventListener(\'change\',function(){\n      fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});\n    });\n  });\n}\n\ndocument.addEventListener(\'DOMContentLoaded\',function(){\n  startRefresh();\n  onStratSelect(\'KeltnerBreak-12h\');\n  restoreActiveDealsSort();\n  loadBtcGateStatus();\n});\n\nfunction miniCandlesSvg(candles){\n  var w=54,h=20;\n  if(!candles||!candles.length)return \'\';\n  var lo=Math.min.apply(null,candles.map(function(c){return c.l;}));\n  var hi=Math.max.apply(null,candles.map(function(c){return c.h;}));\n  if(hi<=lo)hi=lo+1e-9;\n  var n=candles.length,cw=w/n;\n  function y(v){return h-(v-lo)/(hi-lo)*h;}\n  var bars=candles.map(function(c,i){\n    var x=i*cw+cw/2,up=c.c>=c.o,color=up?\'var(--green)\':\'var(--red)\';\n    var yTop=y(Math.max(c.o,c.c)),yBot=y(Math.min(c.o,c.c));\n    if(yBot-yTop<1)yBot=yTop+1;\n    var bw=Math.max(2,cw*0.6);\n    return \'<line x1="\'+x+\'" y1="\'+y(c.h)+\'" x2="\'+x+\'" y2="\'+y(c.l)+\'" stroke="\'+color+\'" stroke-width="1"/><rect x="\'+(x-bw/2)+\'" y="\'+yTop+\'" width="\'+bw+\'" height="\'+(yBot-yTop)+\'" fill="\'+color+\'"/>\';\n  }).join(\'\');\n  return \'<svg width="\'+w+\'" height="\'+h+\'" style="vertical-align:middle">\'+bars+\'</svg>\';\n}\n\nvar BTC_GATE_STATUS_ORDER=[\'brkX2\',\'brkX2_12h_closed\',\'brkX2_4h\',\'decouple_4h\',\'dipbuy_universe\',\'mombreak_1h\',\'rvolbreak_8h\',\'trend_confirm_4h\',\'kb1d\',\'panic_bounce_4h\'];\nfunction loadBtcGateStatus(){\n  var el=document.getElementById(\'btc-gate-status-badges\');\n  if(!el)return;\n  fetch(\'/api/btc_gate_status\').then(function(r){return r.json();}).then(function(d){\n    var html=BTC_GATE_STATUS_ORDER.filter(function(k){return d[k];}).map(function(k){\n      var s=d[k];\n      var color=s.status===\'ok\'?\'var(--green)\':(s.status===\'blocked\'?\'var(--red)\':\'var(--green)\');\n      var text=s.status===\'ok\'?\'LOLOS\':(s.status===\'blocked\'?\'TERBLOKIR\':\'TIDAK DIBERLAKUKAN\');\n      var tip=(s.syarat||\'\').replace(/"/g,\'&quot;\');\n      var detailLine=s.live_detail?(\'<div style="font-size:9px;color:var(--muted);margin-top:1px">\'+s.live_detail+\'</div>\'):\'\';\n      var chartsLine=\'\';\n      if(s.candles){\n        chartsLine=\'<div style="display:flex;gap:10px;align-items:center;margin-top:2px">\'+Object.keys(s.candles).map(function(tfKey){\n          return \'<span style="font-size:8px;color:var(--muted);display:inline-flex;align-items:center;gap:2px">\'+tfKey+\' \'+miniCandlesSvg(s.candles[tfKey])+\'</span>\';\n        }).join(\'\')+\'</div>\';\n      }\n      return \'<span style="margin-right:14px;white-space:nowrap;display:inline-block;vertical-align:top" title="\'+tip+\'"><b>\'+s.label+\':</b> <span style="color:\'+color+\'">\'+text+\'</span>\'+detailLine+chartsLine+\'</span>\';\n    }).join(\'\');\n    el.innerHTML=html;\n  }).catch(function(e){el.textContent=\'Error: \'+e;});\n}\n\nfunction onPairSelect(sym){\n  var panel=document.getElementById(\'pair-detail\');\n  if(!sym){panel.style.display=\'none\';return;}\n  panel.style.display=\'block\';\n  panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';\n  pauseRefresh();\n  fetch(\'/api/strategy_detail?sym=\'+encodeURIComponent(sym)+\'&strat=\'+encodeURIComponent(_curStrat))\n    .then(function(r){return r.json();})\n    .then(function(d){\n      resumeRefresh();\n      if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}\n      // Update primary\n      var ps=document.getElementById(\'primary-status\');\n      ps.innerHTML=d.primary.map(function(p){return badge(p.ok,p.label+\' (\'+p.actual+\')\');}).join(\' \');\n      // Update secondary\n      d.secondary.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n      // Panel ringkasan\n      var allP=d.primary_ok;\n      panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | \'+\n        d.primary.map(function(p){return (p.ok?\'<span style="color:var(--green)">\':\'<span style="color:var(--red)">\') + p.label+\': \'+p.actual+\'</span>\';}).join(\' | \')+\n        \' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');\n    })\n    .catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});\n}\n\nfunction updateSec(key,actual,ok){\n  document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){\n    var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');\n    if(a)a.textContent=\'(skrg \'+actual+\')\';\n    if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';\n  });\n}\n\nfunction doManualScan(){\n  var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');\n  btn.disabled=true;btn.textContent=\'Scanning...\';\n  st.textContent=\'Sedang scan semua pair... (30-60 detik)\';\n  pauseRefresh();\n  fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){\n    btn.disabled=false;btn.textContent=\'Scan Sekarang\';\n    st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';\n    renderResults(data.pairs);resumeRefresh();\n  }).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});\n}\n\nfunction promptOpenLong(){\n  var sel=document.getElementById(\'pair-select\');\n  var sym=sel?sel.value:\'\';\n  if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}\n  var ss=document.getElementById(\'strat-select\');var strat=ss?ss.value:\'KeltnerBreak-12h\';\n  if(!confirm(\'Open Long [\'+strat+\']: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;\n  execOpenLong(sym,strat);\n}\n\nfunction execOpenLong(sym,strat){\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'strat\',strat||\"KeltnerBreak-12h\");\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Membuka deal \'+sym+\'...\';\n  pauseRefresh();\n  fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){\n    resumeRefresh();\n    var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);\n    if(st)st.textContent=msg;alert(msg);\n  }).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction renderResults(pairs){\n  var el=document.getElementById(\'scan-results\');\n  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];\n  if(sample){\n    document.getElementById(\'primary-status\').innerHTML=\n      sample.secondaries?sample.secondaries.map(function(s){return badge(s.ok,s.key+\':\'+s.actual);}).join(\' \'):\'\';\n    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n  }\n  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);\n  if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos syarat primary.</div>\';return;}\n  var rows=cands.map(function(p){\n    var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');\n    var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';\n    var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';\n    return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';\n  }).join(\'\');\n  el.innerHTML=\'<table><thead><tr><th>Pair</th><th>isArmed</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';\n}\n\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){\n  if(v===undefined||v===null)return \'?\';\n  if(v>=1000)return v.toFixed(0);\n  if(v>=1)return v.toFixed(4);\n  if(v>=0.01)return v.toFixed(6);\n  if(v>=0.0001)return v.toFixed(8);\n  // harga sangat kecil seperti SHIB: pakai fixed decimal\n  var s=v.toFixed(10);\n  // hapus trailing zeros berlebihan tapi sisakan min 2 significant digits\n  return parseFloat(s).toPrecision(4);\n}\nfunction doOpenLong(sym){execOpenLong(sym);}\n\nfunction _setCookie(k,v){document.cookie=k+\'=\'+v+\';path=/;max-age=2592000\';}\n\nfunction _getCookie(k){var m=document.cookie.match(\'(^|;) ?\'+k+\'=([^;]*)(;|$)\');return m?m[2]:null;}\n\nfunction toggleCard(header){var card=header.parentElement;var name=\'c_\'+(card.querySelector(\'h2\').textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));card.classList.toggle(\'collapsed\');var collapsed=card.classList.contains(\'collapsed\');_setCookie(name,collapsed?\'1\':\'0\');}\n\nfunction restoreCards(){document.querySelectorAll(\'.card\').forEach(function(card){var h=card.querySelector(\'h2\');if(!h)return;var name=\'c_\'+(h.textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));if(_getCookie(name)===\'1\')card.classList.add(\'collapsed\');});}\n\nfunction editEntry(sym,curVal){\n  var v=prompt(\'Edit entry price untuk \'+sym.replace(\'USDT\',\'/USDT\')+\':\\n(harga aktual dari 3Commas)\',curVal);\n  if(v===null)return;\n  v=parseFloat(v);\n  if(isNaN(v)||v<=0){alert(\'Nilai tidak valid\');return;}\n  if(!confirm(\'Set entry \'+sym.replace(\'USDT\',\'/USDT\')+\' = \'+v+\'?\'))return;\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'field\',\'entry_price\');fd.append(\'value\',v);\n  pauseRefresh();\n  fetch(\'/edit_deal\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var el=document.getElementById(\'ep-\'+sym);\n        if(el)el.textContent=v;\n        alert(\'Entry \'+sym.replace(\'USDT\',\'/USDT\')+\' diupdate ke \'+v);\n      } else {\n        alert(\'Gagal: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction confirmCancelDeal(form, sym) {\n  var input = form.querySelector(\'input[name="pct"]\');\n  var pct = (input && input.value) ? parseFloat(input.value) : 100;\n  if (isNaN(pct) || pct <= 0 || pct > 100) { alert(\'Persentase cancel harus 1-100.\'); return false; }\n  var pair = sym.replace(\'USDT\',\'/USDT\');\n  var msg = pct >= 100\n    ? (\'Cancel deal \' + pair + \' SELURUHNYA?\\n\\nBot berhenti kelola pair ini (auto add fund/TP/close berhenti). Koin yang sudah dibeli TETAP di wallet, TIDAK dijual.\')\n    : (\'Cancel \' + pct + \'% dari deal \' + pair + \'?\\n\\nSisa \' + (100 - pct) + \'% TETAP jadi deal aktif (TP/trailing/close jalan normal). Bagian yang di-cancel berhenti dikelola bot, koin TETAP di wallet, TIDAK dijual.\');\n  return confirm(msg);\n}\n\nfunction rowCloseDeal(sym){\n  if(!confirm(\'CLOSE DEAL \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan jual posisi ini sekarang juga di Binance.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_close\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Close \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! Price=\'+data.price+\' Profit=\'+data.profit_pct+\'%\');\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Close GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction rowAddFund(sym){\n  var amtEl=document.getElementById(\'addfund-amt-\'+sym);\n  var amount=amtEl?amtEl.value.trim():\'\';\n  if(!confirm(\'ADD FUND untuk \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nNominal: \'+(amount||\'otomatis sesuai sizing saat open\')+\'\\nAverage price akan diupdate otomatis.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);if(amount)fd.append(\'amount\',amount);\n  fetch(\'/manual_addfund\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! +$\'+data.add_usd+\' @ \'+data.price+\' | Avg=\'+data.avg_price);\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\n\nfunction openAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  if(!modal||!body)return;\n  modal.style.display=\'flex\';\n  body.innerHTML=\'Memuat...\';\n  pauseRefresh();\n  var targets=[];\n  document.querySelectorAll(\'#active-deals-body tr\').forEach(function(tr){\n    var symTd=tr.querySelector(\'td.sym\');\n    if(!symTd)return;\n    var sym=symTd.textContent.replace(\'/USDT\',\'USDT\').trim();\n    var tds=tr.querySelectorAll(\'td\');\n    var strat=tds[1]?tds[1].textContent.trim():\'\';\n    targets.push({sym:sym, label:symTd.textContent.trim()+\' (\'+strat+\')\'});\n  });\n  fetch(\'/api/addfund_source_assets\').then(function(r){return r.json();}).then(function(d){\n    if(!d.ok){body.innerHTML=\'<div style="color:var(--red)">Error: \'+(d.error||\'gagal memuat aset\')+\'</div>\';return;}\n    if(targets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada Active Deal untuk ditambah fund.</div>\';return;}\n    if(d.assets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada aset nganggur senilai >= $5 yang bisa dijual (semua aset di wallet sudah jadi Active Deal, atau nilainya di bawah $5).</div>\';return;}\n    var targetOpts=targets.map(function(t){return \'<option value="\'+t.sym+\'">\'+t.label+\'</option>\';}).join(\'\');\n    var sourceOpts=d.assets.map(function(a){return \'<option value="\'+a.asset+\'" data-free="\'+a.free+\'" data-value="\'+a.value_usdt+\'">\'+a.asset+\' (\'+a.free+\', \\u2248$\'+a.value_usdt.toFixed(2)+\')</option>\';}).join(\'\');\n    body.innerHTML=\n      \'<label style="display:block;margin-bottom:8px">Add fund ke deal:<br>\'+\n      \'<select id="afa-target" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+targetOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:8px">Sumber aset (dijual buat dapat USDT):<br>\'+\n      \'<select id="afa-source" onchange="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+sourceOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:10px">Jual berapa % dari saldo (default 100%):<br>\'+\n      \'<input type="number" id="afa-pct" min="1" max="100" value="100" oninput="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)"></label>\'+\n      \'<div style="margin:4px 0 10px;padding:8px;border:1px solid var(--border);border-radius:6px">\'+\n      \'<div style="font-weight:600;color:var(--text);margin-bottom:6px">SYARAT (opsional)</div>\'+\n      \'<label style="display:block;margin-bottom:4px;cursor:pointer"><input type="checkbox" class="afa-cond" value="macd_hist_4h_turn"> MACD Histogram (4h) merah -&gt; merah muda, atau merah muda -&gt; hijau</label>\'+\n      \'<label style="display:block;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="afa-cond" value="stoch_4h_k_above_d"> Stoch (4h) %K &gt; %D</label>\'+\n      \'<div style="font-size:10px;color:var(--muted)">Kalau ada yang dicentang: TIDAK langsung jalan. Bot cek tiap akhir 30 menit; eksekusi setelah SEMUA syarat benar 5x berturut-turut (hitungan ulang dari 0 tiap candle 4h baru). Batal sendiri kalau deal tutup, aset habis, atau lewat 7 hari.</div>\'+\n      \'</div>\'+\n      \'<div id="afa-estimate" style="margin-bottom:12px;color:var(--accent)"></div>\'+\n      \'<button type="button" onclick="submitAddFundFromAsset()" style="background:#7c5cff;color:#fff;border:none;border-radius:4px;padding:6px 14px;font-size:11px;cursor:pointer;font-weight:600;font-family:var(--font)">Eksekusi</button>\'+\n      \'<div id="afa-cond-list" style="margin-top:12px"></div>\';\n    updateAddFundAssetEstimate();\n    loadAddFundCondList();\n  }).catch(function(e){resumeRefresh();body.innerHTML=\'<div style="color:var(--red)">Error: \'+e+\'</div>\';});\n}\n\nfunction updateAddFundAssetEstimate(){\n  var sel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  var est=document.getElementById(\'afa-estimate\');\n  if(!sel||!pctEl||!est||!sel.options.length)return;\n  var opt=sel.options[sel.selectedIndex];\n  var value=parseFloat(opt.dataset.value)||0;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  var estimate=value*(pct/100);\n  est.textContent=\'\\u2248 jual \'+pct+\'% \'+opt.value+\' \\u2248 $\'+estimate.toFixed(2)+\' akan ditambahkan ke deal target\';\n}\n\nfunction submitAddFundFromAsset(){\n  var targetSel=document.getElementById(\'afa-target\');\n  var sourceSel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  if(!targetSel||!sourceSel||!pctEl)return;\n  var target=targetSel.value;\n  var source=sourceSel.value;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  var conds=[];\n  document.querySelectorAll(\'.afa-cond:checked\').forEach(function(cb){conds.push(cb.value);});\n  if(conds.length){\n    if(!confirm(\'Simpan sebagai ANTREAN BERSYARAT?\\n\\nJual \'+pct+\'% \'+source+\' lalu add fund ke \'+target.replace(\'USDT\',\'/USDT\')+\' HANYA setelah semua syarat yang dicentang benar 5x berturut-turut (dicek tiap akhir 30 menit).\'))return;\n    fetch(\'/api/addfund_conditional\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({source_asset:source,target_symbol:target,pct:pct,conditions:conds})})\n      .then(function(r){return r.json();})\n      .then(function(d){if(d.ok){alert(\'Antrean bersyarat DISIMPAN. Bot akan eksekusi otomatis begitu syarat terpenuhi.\');loadAddFundCondList();}else{alert(\'GAGAL: \'+d.error);}})\n      .catch(function(e){alert(\'Error: \'+e);});\n    return;\n  }\n  if(!confirm(\'Jual \'+pct+\'% saldo \'+source+\' lalu tambahkan hasilnya (USDT) ke deal \'+target.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan eksekusi order JUAL market sungguhan di Binance, lalu BELI tambahan ke \'+target.replace(\'USDT\',\'/USDT\')+\'.\'))return;\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  body.innerHTML=\'Memproses...\';\n  pauseRefresh();\n  fetch(\'/api/addfund_from_asset\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({source_asset:source,target_symbol:target,pct:pct})})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'BERHASIL! Jual \'+data.sold_qty+\' \'+source+\' -> $\'+data.proceeds_usdt.toFixed(2)+\' ditambahkan ke \'+data.target_symbol.replace(\'USDT\',\'/USDT\')+\' (avg baru \'+data.avg_price+\')\');\n        closeAddFundAssetModal();\n        setTimeout(function(){window.location.reload();},1000);\n      } else {\n        alert(\'GAGAL: \'+data.error);\n        body.innerHTML=\'<div style="color:var(--red)">Gagal: \'+data.error+\'</div><button type="button" onclick="openAddFundAssetModal()" style="margin-top:10px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 10px;font-size:11px;cursor:pointer;font-family:var(--font)">Coba lagi</button>\';\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction _afcEsc(s){return String(s==null?\'\':s).replace(/&/g,\'&amp;\').replace(/</g,\'&lt;\').replace(/>/g,\'&gt;\');}\n\nfunction loadAddFundCondList(){\n  var box=document.getElementById(\'afa-cond-list\');\n  if(!box)return;\n  fetch(\'/api/addfund_conditional\').then(function(r){return r.json();}).then(function(d){\n    if(!d.ok||!d.pending.length){box.innerHTML=\'\';return;}\n    box.innerHTML=\'<div style="font-weight:600;color:var(--text);margin-bottom:4px">Antrean bersyarat aktif</div>\'+d.pending.map(function(o){\n      var ex=(o.explain||[]).map(function(t){return \'<div style="font-size:10px;margin-top:2px;color:var(--text)">\'+_afcEsc(t)+\'</div>\';}).join(\'\');\n      return \'<div style="border:1px solid var(--border);border-radius:4px;padding:6px;margin-bottom:6px">\'+\'<div style="font-weight:600">\'+o.pct+\'% \'+_afcEsc(o.source_asset)+\' -&gt; \'+_afcEsc(o.target_symbol.replace(\'USDT\',\'/USDT\'))+\' &middot; dibuat \'+_afcEsc(o.created_at)+\'</div>\'+ex+\'<div style="margin-top:6px;text-align:right"><button type="button" data-id="\'+o.id+\'" onclick="cancelAddFundCond(this.dataset.id)" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:var(--font)">Batal</button></div></div>\';\n    }).join(\'\');\n  }).catch(function(){box.innerHTML=\'\';});\n}\n\nfunction cancelAddFundCond(id){\n  if(!confirm(\'Batalkan antrean bersyarat ini?\'))return;\n  fetch(\'/api/addfund_conditional/cancel\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({id:id})})\n    .then(function(r){return r.json();})\n    .then(function(d){if(!d.ok)alert(\'GAGAL: \'+d.error);loadAddFundCondList();});\n}\n\nfunction closeAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  if(modal)modal.style.display=\'none\';\n  resumeRefresh();\n}\n\nfunction sortActiveDeals(mode){\n  _setCookie(\'active_deals_sort\',mode);\n  applyActiveDealsSort(mode);\n}\nfunction applyActiveDealsSort(mode){\n  var tbody=document.getElementById(\'active-deals-body\');\n  if(!tbody)return;\n  var rows=Array.prototype.slice.call(tbody.querySelectorAll(\'tr\'));\n  if(mode===\'performance\'){\n    rows.sort(function(a,b){return parseFloat(b.getAttribute(\'data-performance\'))-parseFloat(a.getAttribute(\'data-performance\'));});\n  } else if(mode===\'urgency\'){\n    rows.sort(function(a,b){return parseFloat(a.getAttribute(\'data-urgency\'))-parseFloat(b.getAttribute(\'data-urgency\'));});\n  } else {\n    return;\n  }\n  rows.forEach(function(row){tbody.appendChild(row);});\n}\nfunction restoreActiveDealsSort(){\n  var saved=_getCookie(\'active_deals_sort\')||\'default\';\n  var sel=document.getElementById(\'active-deals-sort\');\n  if(sel)sel.value=saved;\n  applyActiveDealsSort(saved);\n}\n'
+_DASH_JS = 'var _refreshTimer=null;\nvar _curStrat=\'KeltnerBreak-12h\';\n// 16/10/2026 (permintaan Mas Budi): auto-refresh 30 detik (reload seluruh halaman) DIHAPUS --\n// diganti tombol Refresh manual per-bagian (lihat refreshFragment() di bawah + refreshPerfChart/\n// loadStrategyConfig/loadAutoSellConfig yg sudah ada). startRefresh() sengaja dibiarkan ada TAPI\n// no-op (bukan dihapus total) krn pauseRefresh()/resumeRefresh() masih dipanggil di banyak tempat\n// lain (edit/close/addfund/scan dkk) sbg guard sebelum-sesudah AJAX -- dengan _refreshTimer selalu\n// null, keduanya otomatis jadi no-op aman, tidak perlu ubah satu-satu titik panggilnya.\nfunction startRefresh(){}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){return false;}\nvar _activeDealsAutoRefreshPaused=false;\nfunction pauseRefresh(){stopRefresh();_activeDealsAutoRefreshPaused=true;}\nfunction resumeRefresh(){_activeDealsAutoRefreshPaused=false;}\nfunction onPauseRefreshToggle(checked){}\nfunction togglePauseRefresh(checked){}\n// 03/11/2026 (permintaan Mas Budi): Active Deals auto-refresh TERBATAS -- beda dari full-page\n// 30-detik yg DIHAPUS 16/10/2026 (permintaan dia jg) krn ganggu -- ini cuma fragment tabel\n// Active Deals (reuse refreshFragment(), AJAX innerHTML, BUKAN reload halaman), interval 3\n// menit (dipilih Mas Budi sendiri, lebih longgar dari 30/60s yg saya tawarkan -- masih hati-\n// hati soal beban Binance, lihat REMARK \'polling dashboard jadi sumber TERBESAR 429\' dekat\n// PIVOT_RESISTANCE_CACHE_TTL_SEC). Skip siklus kalau _activeDealsAutoRefreshPaused true --\n// guard yg SAMA dipakai editEntry/rowAddFund/rowCloseDeal/dkk (pauseRefresh/resumeRefresh di\n// sekeliling AJAX masing2), jadi otomatis ikut lindungi timer ini juga tanpa ubah titik lain.\nsetInterval(function(){\n  if(_activeDealsAutoRefreshPaused)return;\n  if(!document.getElementById(\'active-deals-content\'))return;\n  refreshFragment(\'/fragment/active_deals\',\'active-deals-content\');\n}, 180000);\nfunction refreshFragment(url,domId){\n  var el=document.getElementById(domId);\n  if(!el)return;\n  var old=el.style.opacity;el.style.opacity=\'0.5\';\n  fetch(url).then(function(r){return r.text();}).then(function(html){\n    el.innerHTML=html;el.style.opacity=old||\'1\';\n  }).catch(function(e){el.style.opacity=old||\'1\';alert(\'Gagal refresh: \'+e);});\n}\n\nfunction refreshDealRow(sym){\n  var row=document.getElementById(\'row-\'+sym);\n  if(!row)return;\n  var btn=document.getElementById(\'rrbtn-\'+sym);\n  var oldText=btn?btn.textContent:null;\n  if(btn){btn.disabled=true;btn.textContent=\'...\';}\n  row.style.opacity=\'0.5\';\n  fetch(\'/fragment/active_deal_row?sym=\'+encodeURIComponent(sym)).then(function(r){return r.text();}).then(function(html){\n    var tmp=document.createElement(\'tbody\');\n    tmp.innerHTML=html;\n    var newRow=tmp.querySelector(\'tr\');\n    if(newRow){row.replaceWith(newRow);}else{row.style.opacity=\'1\';}\n  }).catch(function(e){\n    row.style.opacity=\'1\';\n    if(btn){btn.disabled=false;btn.textContent=oldText;}\n    alert(\'Gagal refresh deal: \'+e);\n  });\n}\n\n// Definisi secondary per strategi\nvar STRAT_SECONDARY={\n  \'KeltnerBreak-12h\':[],  // 25/10/2026 (patch \'manual-scan-keltner-sync\'): formula LAMA (7 checkbox) diganti 1 syarat tunggal (breakout Keltner) sejak 03/10/2026, tool ini kelewat -- sekarang kosong (sama pola \'MomentumBreak-1h\'), lihat primary-status\n  \'brkX2-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'rsi\',label:\'RSI<60\'},{key:\'stoch\',label:\'Stoch%K<80\'},\n    {key:\'htf\',label:\'12h candle bullish\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ]\n};\n\nfunction onStratSelect(strat){\n  _curStrat=strat;\n  // Update dropdown kandidat\n  var opts=document.querySelectorAll(\'.nm-opt\');\n  var count=0;\n  opts.forEach(function(o){\n    var show=o.getAttribute(\'data-strat\')===strat;\n    o.style.display=show?\'\':\'none\';\n    if(show)count++;\n  });\n  document.getElementById(\'nm-count\').textContent=\'(\'+count+\' kandidat dari scan terakhir)\';\n  // Reset pair select\n  var sel=document.getElementById(\'pair-select\');if(sel)sel.value=\'\';\n  // Reset panel\n  var panel=document.getElementById(\'pair-detail\');if(panel)panel.style.display=\'none\';\n  // Update secondary grid\n  renderSecondaryGrid(strat);\n  // Reset primary status\n  var ps=document.getElementById(\'primary-status\');\n  if(ps)ps.innerHTML=\'<span style="color:var(--muted)">-- pilih pair untuk lihat nilai aktual --</span>\';\n}\n\nfunction renderSecondaryGrid(strat){\n  var grid=document.getElementById(\'secondary-grid\');\n  if(!grid)return;\n  var defs=STRAT_SECONDARY[strat]||[];\n  grid.innerHTML=defs.map(function(d){\n    return \'<div class="sec-item" data-key="\'+d.key+\'"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px"><input type="checkbox" class="sec-cb" data-key="\'+d.key+\'" checked style="cursor:pointer"><span class="sec-label">\'+d.label+\'</span><span class="sec-actual" style="color:var(--muted)">--</span><span class="sec-status">--</span></label></div>\';\n  }).join(\'\');\n  // Re-attach event listeners\n  grid.querySelectorAll(\'.sec-cb\').forEach(function(cb){\n    cb.addEventListener(\'change\',function(){\n      fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});\n    });\n  });\n}\n\ndocument.addEventListener(\'DOMContentLoaded\',function(){\n  startRefresh();\n  onStratSelect(\'KeltnerBreak-12h\');\n  restoreActiveDealsSort();\n  loadBtcGateStatus();\n});\n\nfunction miniCandlesSvg(candles){\n  var w=54,h=20;\n  if(!candles||!candles.length)return \'\';\n  var lo=Math.min.apply(null,candles.map(function(c){return c.l;}));\n  var hi=Math.max.apply(null,candles.map(function(c){return c.h;}));\n  if(hi<=lo)hi=lo+1e-9;\n  var n=candles.length,cw=w/n;\n  function y(v){return h-(v-lo)/(hi-lo)*h;}\n  var bars=candles.map(function(c,i){\n    var x=i*cw+cw/2,up=c.c>=c.o,color=up?\'var(--green)\':\'var(--red)\';\n    var yTop=y(Math.max(c.o,c.c)),yBot=y(Math.min(c.o,c.c));\n    if(yBot-yTop<1)yBot=yTop+1;\n    var bw=Math.max(2,cw*0.6);\n    return \'<line x1="\'+x+\'" y1="\'+y(c.h)+\'" x2="\'+x+\'" y2="\'+y(c.l)+\'" stroke="\'+color+\'" stroke-width="1"/><rect x="\'+(x-bw/2)+\'" y="\'+yTop+\'" width="\'+bw+\'" height="\'+(yBot-yTop)+\'" fill="\'+color+\'"/>\';\n  }).join(\'\');\n  return \'<svg width="\'+w+\'" height="\'+h+\'" style="vertical-align:middle">\'+bars+\'</svg>\';\n}\n\nvar BTC_GATE_STATUS_ORDER=[\'brkX2\',\'brkX2_12h_closed\',\'brkX2_4h\',\'decouple_4h\',\'dipbuy_universe\',\'mombreak_1h\',\'trend_confirm_4h\',\'kb1d\',\'panic_bounce_4h\'];\nfunction loadBtcGateStatus(){\n  var el=document.getElementById(\'btc-gate-status-badges\');\n  if(!el)return;\n  fetch(\'/api/btc_gate_status\').then(function(r){return r.json();}).then(function(d){\n    var html=BTC_GATE_STATUS_ORDER.filter(function(k){return d[k];}).map(function(k){\n      var s=d[k];\n      var color=s.status===\'ok\'?\'var(--green)\':(s.status===\'blocked\'?\'var(--red)\':\'var(--green)\');\n      var text=s.status===\'ok\'?\'LOLOS\':(s.status===\'blocked\'?\'TERBLOKIR\':\'TIDAK DIBERLAKUKAN\');\n      var tip=(s.syarat||\'\').replace(/"/g,\'&quot;\');\n      var detailLine=s.live_detail?(\'<div style="font-size:9px;color:var(--muted);margin-top:1px">\'+s.live_detail+\'</div>\'):\'\';\n      var chartsLine=\'\';\n      if(s.candles){\n        chartsLine=\'<div style="display:flex;gap:10px;align-items:center;margin-top:2px">\'+Object.keys(s.candles).map(function(tfKey){\n          return \'<span style="font-size:8px;color:var(--muted);display:inline-flex;align-items:center;gap:2px">\'+tfKey+\' \'+miniCandlesSvg(s.candles[tfKey])+\'</span>\';\n        }).join(\'\')+\'</div>\';\n      }\n      return \'<span style="margin-right:14px;white-space:nowrap;display:inline-block;vertical-align:top" title="\'+tip+\'"><b>\'+s.label+\':</b> <span style="color:\'+color+\'">\'+text+\'</span>\'+detailLine+chartsLine+\'</span>\';\n    }).join(\'\');\n    el.innerHTML=html;\n  }).catch(function(e){el.textContent=\'Error: \'+e;});\n}\n\nfunction onPairSelect(sym){\n  var panel=document.getElementById(\'pair-detail\');\n  if(!sym){panel.style.display=\'none\';return;}\n  panel.style.display=\'block\';\n  panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';\n  pauseRefresh();\n  fetch(\'/api/strategy_detail?sym=\'+encodeURIComponent(sym)+\'&strat=\'+encodeURIComponent(_curStrat))\n    .then(function(r){return r.json();})\n    .then(function(d){\n      resumeRefresh();\n      if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}\n      // Update primary\n      var ps=document.getElementById(\'primary-status\');\n      ps.innerHTML=d.primary.map(function(p){return badge(p.ok,p.label+\' (\'+p.actual+\')\');}).join(\' \');\n      // Update secondary\n      d.secondary.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n      // Panel ringkasan\n      var allP=d.primary_ok;\n      panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | \'+\n        d.primary.map(function(p){return (p.ok?\'<span style="color:var(--green)">\':\'<span style="color:var(--red)">\') + p.label+\': \'+p.actual+\'</span>\';}).join(\' | \')+\n        \' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');\n    })\n    .catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});\n}\n\nfunction updateSec(key,actual,ok){\n  document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){\n    var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');\n    if(a)a.textContent=\'(skrg \'+actual+\')\';\n    if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';\n  });\n}\n\nfunction doManualScan(){\n  var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');\n  btn.disabled=true;btn.textContent=\'Scanning...\';\n  st.textContent=\'Sedang scan semua pair... (30-60 detik)\';\n  pauseRefresh();\n  fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){\n    btn.disabled=false;btn.textContent=\'Scan Sekarang\';\n    st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';\n    renderResults(data.pairs);resumeRefresh();\n  }).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});\n}\n\nfunction promptOpenLong(){\n  var sel=document.getElementById(\'pair-select\');\n  var sym=sel?sel.value:\'\';\n  if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}\n  var ss=document.getElementById(\'strat-select\');var strat=ss?ss.value:\'KeltnerBreak-12h\';\n  if(!confirm(\'Open Long [\'+strat+\']: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;\n  execOpenLong(sym,strat);\n}\n\nfunction execOpenLong(sym,strat){\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'strat\',strat||\"KeltnerBreak-12h\");\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Membuka deal \'+sym+\'...\';\n  pauseRefresh();\n  fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){\n    resumeRefresh();\n    var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);\n    if(st)st.textContent=msg;alert(msg);\n  }).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction renderResults(pairs){\n  var el=document.getElementById(\'scan-results\');\n  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];\n  if(sample){\n    document.getElementById(\'primary-status\').innerHTML=\n      sample.secondaries?sample.secondaries.map(function(s){return badge(s.ok,s.key+\':\'+s.actual);}).join(\' \'):\'\';\n    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n  }\n  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);\n  if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos syarat primary.</div>\';return;}\n  var rows=cands.map(function(p){\n    var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');\n    var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';\n    var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';\n    return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';\n  }).join(\'\');\n  el.innerHTML=\'<table><thead><tr><th>Pair</th><th>isArmed</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';\n}\n\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){\n  if(v===undefined||v===null)return \'?\';\n  if(v>=1000)return v.toFixed(0);\n  if(v>=1)return v.toFixed(4);\n  if(v>=0.01)return v.toFixed(6);\n  if(v>=0.0001)return v.toFixed(8);\n  // harga sangat kecil seperti SHIB: pakai fixed decimal\n  var s=v.toFixed(10);\n  // hapus trailing zeros berlebihan tapi sisakan min 2 significant digits\n  return parseFloat(s).toPrecision(4);\n}\nfunction doOpenLong(sym){execOpenLong(sym);}\n\nfunction _setCookie(k,v){document.cookie=k+\'=\'+v+\';path=/;max-age=2592000\';}\n\nfunction _getCookie(k){var m=document.cookie.match(\'(^|;) ?\'+k+\'=([^;]*)(;|$)\');return m?m[2]:null;}\n\nfunction toggleCard(header){var card=header.parentElement;var name=\'c_\'+(card.querySelector(\'h2\').textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));card.classList.toggle(\'collapsed\');var collapsed=card.classList.contains(\'collapsed\');_setCookie(name,collapsed?\'1\':\'0\');}\n\nfunction restoreCards(){document.querySelectorAll(\'.card\').forEach(function(card){var h=card.querySelector(\'h2\');if(!h)return;var name=\'c_\'+(h.textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));if(_getCookie(name)===\'1\')card.classList.add(\'collapsed\');});}\n\nfunction editEntry(sym,curVal){\n  var v=prompt(\'Edit entry price untuk \'+sym.replace(\'USDT\',\'/USDT\')+\':\\n(harga aktual dari 3Commas)\',curVal);\n  if(v===null)return;\n  v=parseFloat(v);\n  if(isNaN(v)||v<=0){alert(\'Nilai tidak valid\');return;}\n  if(!confirm(\'Set entry \'+sym.replace(\'USDT\',\'/USDT\')+\' = \'+v+\'?\'))return;\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'field\',\'entry_price\');fd.append(\'value\',v);\n  pauseRefresh();\n  fetch(\'/edit_deal\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var el=document.getElementById(\'ep-\'+sym);\n        if(el)el.textContent=v;\n        alert(\'Entry \'+sym.replace(\'USDT\',\'/USDT\')+\' diupdate ke \'+v);\n      } else {\n        alert(\'Gagal: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction confirmCancelDeal(form, sym) {\n  var input = form.querySelector(\'input[name="pct"]\');\n  var pct = (input && input.value) ? parseFloat(input.value) : 100;\n  if (isNaN(pct) || pct <= 0 || pct > 100) { alert(\'Persentase cancel harus 1-100.\'); return false; }\n  var pair = sym.replace(\'USDT\',\'/USDT\');\n  var msg = pct >= 100\n    ? (\'Cancel deal \' + pair + \' SELURUHNYA?\\n\\nBot berhenti kelola pair ini (auto add fund/TP/close berhenti). Koin yang sudah dibeli TETAP di wallet, TIDAK dijual.\')\n    : (\'Cancel \' + pct + \'% dari deal \' + pair + \'?\\n\\nSisa \' + (100 - pct) + \'% TETAP jadi deal aktif (TP/trailing/close jalan normal). Bagian yang di-cancel berhenti dikelola bot, koin TETAP di wallet, TIDAK dijual.\');\n  return confirm(msg);\n}\n\nfunction rowCloseDeal(sym){\n  if(!confirm(\'CLOSE DEAL \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan jual posisi ini sekarang juga di Binance.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_close\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Close \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! Price=\'+data.price+\' Profit=\'+data.profit_pct+\'%\');\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Close GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction rowAddFund(sym){\n  var amtEl=document.getElementById(\'addfund-amt-\'+sym);\n  var amount=amtEl?amtEl.value.trim():\'\';\n  if(!confirm(\'ADD FUND untuk \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nNominal: \'+(amount||\'otomatis sesuai sizing saat open\')+\'\\nAverage price akan diupdate otomatis.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);if(amount)fd.append(\'amount\',amount);\n  fetch(\'/manual_addfund\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! +$\'+data.add_usd+\' @ \'+data.price+\' | Avg=\'+data.avg_price);\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\n\nfunction openAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  if(!modal||!body)return;\n  modal.style.display=\'flex\';\n  body.innerHTML=\'Memuat...\';\n  pauseRefresh();\n  var targets=[];\n  document.querySelectorAll(\'#active-deals-body tr\').forEach(function(tr){\n    var symTd=tr.querySelector(\'td.sym\');\n    if(!symTd)return;\n    var sym=symTd.textContent.replace(\'/USDT\',\'USDT\').trim();\n    var tds=tr.querySelectorAll(\'td\');\n    var strat=tds[1]?tds[1].textContent.trim():\'\';\n    targets.push({sym:sym, label:symTd.textContent.trim()+\' (\'+strat+\')\'});\n  });\n  fetch(\'/api/addfund_source_assets\').then(function(r){return r.json();}).then(function(d){\n    if(!d.ok){body.innerHTML=\'<div style="color:var(--red)">Error: \'+(d.error||\'gagal memuat aset\')+\'</div>\';return;}\n    if(targets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada Active Deal untuk ditambah fund.</div>\';return;}\n    if(d.assets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada aset nganggur senilai >= $5 yang bisa dijual (semua aset di wallet sudah jadi Active Deal, atau nilainya di bawah $5).</div>\';return;}\n    var targetOpts=targets.map(function(t){return \'<option value="\'+t.sym+\'">\'+t.label+\'</option>\';}).join(\'\');\n    var sourceOpts=d.assets.map(function(a){return \'<option value="\'+a.asset+\'" data-free="\'+a.free+\'" data-value="\'+a.value_usdt+\'">\'+a.asset+\' (\'+a.free+\', \\u2248$\'+a.value_usdt.toFixed(2)+\')</option>\';}).join(\'\');\n    body.innerHTML=\n      \'<label style="display:block;margin-bottom:8px">Add fund ke deal:<br>\'+\n      \'<select id="afa-target" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+targetOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:8px">Sumber aset (dijual buat dapat USDT):<br>\'+\n      \'<select id="afa-source" onchange="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+sourceOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:10px">Jual berapa % dari saldo (default 100%):<br>\'+\n      \'<input type="number" id="afa-pct" min="1" max="100" value="100" oninput="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)"></label>\'+\n      \'<div style="margin:4px 0 10px;padding:8px;border:1px solid var(--border);border-radius:6px">\'+\n      \'<div style="font-weight:600;color:var(--text);margin-bottom:6px">SYARAT (opsional)</div>\'+\n      \'<label style="display:block;margin-bottom:4px;cursor:pointer"><input type="checkbox" class="afa-cond" value="macd_hist_4h_turn"> MACD Histogram (4h) merah -&gt; merah muda, atau merah muda -&gt; hijau</label>\'+\n      \'<label style="display:block;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="afa-cond" value="stoch_4h_k_above_d"> Stoch (4h) %K &gt; %D</label>\'+\n      \'<div style="font-size:10px;color:var(--muted)">Kalau ada yang dicentang: TIDAK langsung jalan. Bot cek tiap akhir 30 menit; eksekusi setelah SEMUA syarat benar 5x berturut-turut (hitungan ulang dari 0 tiap candle 4h baru). Batal sendiri kalau deal tutup, aset habis, atau lewat 7 hari.</div>\'+\n      \'</div>\'+\n      \'<div id="afa-estimate" style="margin-bottom:12px;color:var(--accent)"></div>\'+\n      \'<button type="button" onclick="submitAddFundFromAsset()" style="background:#7c5cff;color:#fff;border:none;border-radius:4px;padding:6px 14px;font-size:11px;cursor:pointer;font-weight:600;font-family:var(--font)">Eksekusi</button>\'+\n      \'<div id="afa-cond-list" style="margin-top:12px"></div>\';\n    updateAddFundAssetEstimate();\n    loadAddFundCondList();\n  }).catch(function(e){resumeRefresh();body.innerHTML=\'<div style="color:var(--red)">Error: \'+e+\'</div>\';});\n}\n\nfunction updateAddFundAssetEstimate(){\n  var sel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  var est=document.getElementById(\'afa-estimate\');\n  if(!sel||!pctEl||!est||!sel.options.length)return;\n  var opt=sel.options[sel.selectedIndex];\n  var value=parseFloat(opt.dataset.value)||0;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  var estimate=value*(pct/100);\n  est.textContent=\'\\u2248 jual \'+pct+\'% \'+opt.value+\' \\u2248 $\'+estimate.toFixed(2)+\' akan ditambahkan ke deal target\';\n}\n\nfunction submitAddFundFromAsset(){\n  var targetSel=document.getElementById(\'afa-target\');\n  var sourceSel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  if(!targetSel||!sourceSel||!pctEl)return;\n  var target=targetSel.value;\n  var source=sourceSel.value;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  var conds=[];\n  document.querySelectorAll(\'.afa-cond:checked\').forEach(function(cb){conds.push(cb.value);});\n  if(conds.length){\n    if(!confirm(\'Simpan sebagai ANTREAN BERSYARAT?\\n\\nJual \'+pct+\'% \'+source+\' lalu add fund ke \'+target.replace(\'USDT\',\'/USDT\')+\' HANYA setelah semua syarat yang dicentang benar 5x berturut-turut (dicek tiap akhir 30 menit).\'))return;\n    fetch(\'/api/addfund_conditional\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({source_asset:source,target_symbol:target,pct:pct,conditions:conds})})\n      .then(function(r){return r.json();})\n      .then(function(d){if(d.ok){alert(\'Antrean bersyarat DISIMPAN. Bot akan eksekusi otomatis begitu syarat terpenuhi.\');loadAddFundCondList();}else{alert(\'GAGAL: \'+d.error);}})\n      .catch(function(e){alert(\'Error: \'+e);});\n    return;\n  }\n  if(!confirm(\'Jual \'+pct+\'% saldo \'+source+\' lalu tambahkan hasilnya (USDT) ke deal \'+target.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan eksekusi order JUAL market sungguhan di Binance, lalu BELI tambahan ke \'+target.replace(\'USDT\',\'/USDT\')+\'.\'))return;\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  body.innerHTML=\'Memproses...\';\n  pauseRefresh();\n  fetch(\'/api/addfund_from_asset\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({source_asset:source,target_symbol:target,pct:pct})})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'BERHASIL! Jual \'+data.sold_qty+\' \'+source+\' -> $\'+data.proceeds_usdt.toFixed(2)+\' ditambahkan ke \'+data.target_symbol.replace(\'USDT\',\'/USDT\')+\' (avg baru \'+data.avg_price+\')\');\n        closeAddFundAssetModal();\n        setTimeout(function(){window.location.reload();},1000);\n      } else {\n        alert(\'GAGAL: \'+data.error);\n        body.innerHTML=\'<div style="color:var(--red)">Gagal: \'+data.error+\'</div><button type="button" onclick="openAddFundAssetModal()" style="margin-top:10px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 10px;font-size:11px;cursor:pointer;font-family:var(--font)">Coba lagi</button>\';\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction _afcEsc(s){return String(s==null?\'\':s).replace(/&/g,\'&amp;\').replace(/</g,\'&lt;\').replace(/>/g,\'&gt;\');}\n\nfunction loadAddFundCondList(){\n  var box=document.getElementById(\'afa-cond-list\');\n  if(!box)return;\n  fetch(\'/api/addfund_conditional\').then(function(r){return r.json();}).then(function(d){\n    if(!d.ok||!d.pending.length){box.innerHTML=\'\';return;}\n    box.innerHTML=\'<div style="font-weight:600;color:var(--text);margin-bottom:4px">Antrean bersyarat aktif</div>\'+d.pending.map(function(o){\n      var ex=(o.explain||[]).map(function(t){return \'<div style="font-size:10px;margin-top:2px;color:var(--text)">\'+_afcEsc(t)+\'</div>\';}).join(\'\');\n      return \'<div style="border:1px solid var(--border);border-radius:4px;padding:6px;margin-bottom:6px">\'+\'<div style="font-weight:600">\'+o.pct+\'% \'+_afcEsc(o.source_asset)+\' -&gt; \'+_afcEsc(o.target_symbol.replace(\'USDT\',\'/USDT\'))+\' &middot; dibuat \'+_afcEsc(o.created_at)+\'</div>\'+ex+\'<div style="margin-top:6px;text-align:right"><button type="button" data-id="\'+o.id+\'" onclick="cancelAddFundCond(this.dataset.id)" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:var(--font)">Batal</button></div></div>\';\n    }).join(\'\');\n  }).catch(function(){box.innerHTML=\'\';});\n}\n\nfunction cancelAddFundCond(id){\n  if(!confirm(\'Batalkan antrean bersyarat ini?\'))return;\n  fetch(\'/api/addfund_conditional/cancel\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({id:id})})\n    .then(function(r){return r.json();})\n    .then(function(d){if(!d.ok)alert(\'GAGAL: \'+d.error);loadAddFundCondList();});\n}\n\nfunction closeAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  if(modal)modal.style.display=\'none\';\n  resumeRefresh();\n}\n\nfunction sortActiveDeals(mode){\n  _setCookie(\'active_deals_sort\',mode);\n  applyActiveDealsSort(mode);\n}\nfunction applyActiveDealsSort(mode){\n  var tbody=document.getElementById(\'active-deals-body\');\n  if(!tbody)return;\n  var rows=Array.prototype.slice.call(tbody.querySelectorAll(\'tr\'));\n  if(mode===\'performance\'){\n    rows.sort(function(a,b){return parseFloat(b.getAttribute(\'data-performance\'))-parseFloat(a.getAttribute(\'data-performance\'));});\n  } else if(mode===\'urgency\'){\n    rows.sort(function(a,b){return parseFloat(a.getAttribute(\'data-urgency\'))-parseFloat(b.getAttribute(\'data-urgency\'));});\n  } else {\n    return;\n  }\n  rows.forEach(function(row){tbody.appendChild(row);});\n}\nfunction restoreActiveDealsSort(){\n  var saved=_getCookie(\'active_deals_sort\')||\'default\';\n  var sel=document.getElementById(\'active-deals-sort\');\n  if(sel)sel.value=saved;\n  applyActiveDealsSort(saved);\n}\n'
 
 def _fmt_price(v):
     """Format harga agar tidak pakai notasi scientific (e-06 dll)."""
@@ -20555,7 +20441,6 @@ var SHADOW_LABELS = {
   // PAPER_TEST_TARGET) -- ditambahkan di sini supaya progress-nya kelihatan di panel yg sama,
   // bukan cuma di log Railway/Telegram.
   'mombreak_1h': 'MomentumBreak-1h (paper)',
-  'rvolbreak_8h': 'RVolBreak-8h (paper)',
   // 25/10/2026: BBSnap-4h ditarik dari LIVE balik ke paper test (sama pola mombreak_1h/rvolbreak_8h).
   'bbsnap_4h': 'BBSnap-4h (paper)',
   // 26/10/2026: Decouple-4h JUGA ditarik ke paper test (target 15, sama spt RVolBreak-8h).
@@ -20651,7 +20536,7 @@ refreshRuleWatchAi();
       <tr id="row-{{ sym }}" data-performance="{{ d.get('performance_score', 0) }}" data-urgency="{{ d.get('urgency_sort', 3999) }}">
         <td class="sym {{ 'profit-pos' if d.get('upnl_usd',0) > 0 else 'profit-neg' }}">{{ sym.replace("USDT","/USDT") }}</td>
         <td style="white-space:nowrap">
-          {% set _sm = {"brkX2":"brkx2-12h","brkX2_closed":"KeltnerBreak-12h CC (arsip)","brkX2_intrabar":"KeltnerBreak-12h Intrabar (arsip)","brkX2_12h_closed":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h","decouple_4h":"Decouple-4h","dipbuy_universe":"Dip-Buy Universe","mombreak_1h":"MomentumBreak-1h","rvolbreak_8h":"RVolBreak-8h","kb1d":"KeltnerBreak-1D","panic_bounce_4h":"PantulanPanik-4h","rvolbreak_1h":"RVOLBreak-1h","hunting_4h":"Hunting-4h","akum_entry_a":"Akumulasi Entry A","akum_entry_b":"Akumulasi Entry B","bbsnap_4h":"BBSnap-4h","bbsnap_8h":"BBSnap-8h"} %}
+          {% set _sm = {"brkX2":"brkx2-12h","brkX2_closed":"KeltnerBreak-12h CC (arsip)","brkX2_intrabar":"KeltnerBreak-12h Intrabar (arsip)","brkX2_12h_closed":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h","decouple_4h":"Decouple-4h","dipbuy_universe":"Dip-Buy Universe","mombreak_1h":"MomentumBreak-1h","kb1d":"KeltnerBreak-1D","panic_bounce_4h":"PantulanPanik-4h","rvolbreak_1h":"RVOLBreak-1h","hunting_4h":"Hunting-4h","akum_entry_a":"Akumulasi Entry A","akum_entry_b":"Akumulasi Entry B","bbsnap_4h":"BBSnap-4h","bbsnap_8h":"BBSnap-8h"} %}
           <div>{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</div>
           <div style="font-size:9px;color:var(--muted)">{{ d.get("opened_at","")[:16] if d.get("opened_at") else "-" }}</div>
         </td>
@@ -20965,7 +20850,6 @@ refreshRuleWatchAi();
           <option value="KeltnerBreak-1D">KeltnerBreak-1D</option>
           <option value="PantulanPanik-4h">PantulanPanik-4h</option>
           <option value="Decouple-4h">Decouple-4h</option>
-          <option value="RVolBreak-8h">RVolBreak-8h</option>
           <option value="Dip-Buy Universe">Dip-Buy Universe</option>
           <option value="BBSnap-4h">BBSnap-4h</option>
           <option value="BBSnap-8h">BBSnap-8h</option>
@@ -20982,7 +20866,6 @@ refreshRuleWatchAi();
         "KeltnerBreak-1D": near_miss.get("KeltnerBreak-1D", []),
         "PantulanPanik-4h": near_miss.get("PantulanPanik-4h", []),
         "Decouple-4h": near_miss.get("Decouple-4h", []),
-        "RVolBreak-8h": near_miss.get("RVolBreak-8h", []),
         "Dip-Buy Universe": near_miss.get("Dip-Buy Universe", []),
         "BBSnap-4h": near_miss.get("BBSnap-4h", []),
         "BBSnap-8h": near_miss.get("BBSnap-8h", [])
@@ -21444,7 +21327,6 @@ var SC_LABELS = {
     mombreak_1h: 'MomentumBreak-1h',
     decouple_4h: 'Decouple-4h',
     rvolbreak_1h: 'RVOLBreak-1h',
-    rvolbreak_8h: 'RVolBreak-8h',
     kb1d: 'KeltnerBreak-1D', panic_bounce_4h: 'PantulanPanik-4h',
     dipbuy_universe: 'Dip-Buy Universe',
     bbsnap_4h: 'BBSnap-4h',
@@ -21513,14 +21395,13 @@ var SC_PAUSED_LOCKED = {brkX2_crossema: true};
 // SC_BTC_GATE_TOOLTIP_UNTESTED_SPECIFIC; sempat dicabut, dikembalikan sebentar krn izin
 // bersyarat belum terpenuhi, lalu dicabut lagi dgn izin final -- lihat REMARK
 // thread_trendconfirm_scan()).
-var SC_BTC_GATE_HELPED = {brkX2_12h_closed: true, mombreak_1h: true, rvolbreak_8h: true};
+var SC_BTC_GATE_HELPED = {brkX2_12h_closed: true, mombreak_1h: true};
 var SC_BTC_GATE_ELAPSED = {mombreak_1h: true};  // satu2nya yg rumusnya punya parameter elapsed %
 var SC_BTC_GATE_TOOLTIP = {
     brkX2_12h_closed: 'Syarat (sejak 31/10/2026): BTCUSDT pada HTF 1D SAJA, candle tertutup terakhir harus hijau (3D tidak dipakai lagi). Sempat AND (1D+3D wajib dua-duanya), lalu OR (cukup salah satu) sama hari, lalu dipilih FIXED 1D-saja atas keputusan Mas Budi -- backtest ulang metode train/test mingguan (2022-2026 penuh, sizing smallstart+reclaim): di data TEST, AND menang tipis soal persentase menang (82,9% vs 81,7%), tapi 1D-saja menang soal untung rata-rata/trade (+3,76% vs +3,69%); OR kalah dari keduanya di kedua ukuran.',
     decouple_4h: 'Syarat: BTCUSDT pada HTF 12H DAN 1D, cukup SALAH SATU candle tertutup terakhir hijau. Backtest 10/10/2026: dari 100 kesempatan, 74 tetap lolos; rata-rata profit/trade naik +0,05pp.',
     trend_confirm_4h: 'Syarat: BTCUSDT pada HTF 12H DAN 1D, candle tertutup terakhir keduanya harus hijau. Backtest 10/10/2026: dari 100 kesempatan, 39 tetap lolos; rata-rata profit/trade naik +0,14pp. Satu-satunya uji yang menunjukkan bukti untuk strategi ini.',
     mombreak_1h: 'Syarat: tunggu candle BTCUSDT 1 jam (TF strategi ini sendiri, diganti dari 3 menit 14/10/2026) closed sampai persentase di kolom sebelah, DAN BTC-nya harus naik minimal 0,10% di candle itu. Ambang 0,10% itu HASIL BACKTEST LAMA khusus candle 3 menit (dari 100 kesempatan, 36 tetap lolos; avg profit naik +0,06pp) -- BELUM diuji ulang utk candle 1 jam, dipertahankan sbg titik awal.',
-    rvolbreak_8h: 'Syarat: BTCUSDT pada HTF 12H DAN 1D, cukup SALAH SATU candle tertutup terakhir hijau. Backtest TERPISAH 30/10/2026 (142 pair, candle 8h, 2023-2026, 2151 sinyal mekanis): win-rate 77,6%->78,5%, rata-rata profit/trade +3,15%->+3,25%. TAPI buktinya CAMPURAN -- periode TRAIN (<=2024) justru TURUN (+3,53%->+3,29%), periode TEST (>=2025) BARU naik (+2,88%->+3,22%). Beda dari 4 strategi lain di atas yang konsisten di TRAIN+TEST -- dipasang atas keputusan eksplisit Mas Budi meski bukti belum sekuat yang lain.'
 };
 var SC_BTC_GATE_TOOLTIP_OFF_TESTED = {
     brkX2_4h: 'Sudah diuji 10/10/2026 (2x, sempat ketemu bug lookahead lalu diperbaiki) -- hasilnya TIDAK membantu, nyaris tidak ada beda / cenderung menurunkan hasil. Tidak direkomendasikan.',
@@ -22287,7 +22168,6 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
         <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="mombreak_1h" onchange="onCtStratCheckChange()">MomentumBreak-1h</label>
         <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="decouple_4h" onchange="onCtStratCheckChange()">Decouple-4h</label>
         <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="rvolbreak_1h" onchange="onCtStratCheckChange()">RVOLBreak-1h</label>
-        <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="rvolbreak_8h" onchange="onCtStratCheckChange()">RVolBreak-8h</label>
         <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="dipbuy_universe" onchange="onCtStratCheckChange()">Dip-Buy Universe</label>
         <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="bbsnap_4h" onchange="onCtStratCheckChange()">BBSnap-4h</label>
         <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="bbsnap_8h" onchange="onCtStratCheckChange()">BBSnap-8h</label>
@@ -22430,7 +22310,7 @@ function ctShortDt(t) {
 
 function renderClosedTradesRows() {
     var rows = closedTradesRows.slice();
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var searchBox = document.getElementById('ct-filter-search');
     var searchTerm = searchBox ? searchBox.value.trim().toUpperCase() : '';
     if (searchTerm) {
@@ -22577,7 +22457,7 @@ function renderDealCandleSVG(candles, openMs, closeMs, basePrice, avgPrice, exit
 function openDealChartModal(i) {
     var r = (window._ctFilteredRows || [])[i];
     if (!r || !r.symbol) return;
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var modal = document.getElementById('deal-chart-modal');
     var titleEl = document.getElementById('deal-chart-title');
     var legendEl = document.getElementById('deal-chart-legend');
@@ -22651,7 +22531,7 @@ function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
     if (!el) return;
     if (!rows.length) { el.innerHTML = ''; return; }
-    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     // 10/10/2026 (permintaan Mas Budi): KeltnerBreak-12h digabung BALIK jadi SATU kartu lagi (balik
     // seperti sebelum 09/10/2026) -- raw strategy value 'brkX2' (legacy, sebelum split 1-hari),
     // 'brkX2_closed'/'brkX2_intrabar' (era split), DAN 'brkX2_12h_closed' (key baru skrg) SEMUA
@@ -22712,7 +22592,7 @@ function renderCtEquityCurve(rows) {
 }
 
 // ── Size-Cut per Strategi (20/10/2026, permintaan Mas Budi) ──────────────────────
-var SC_STRAT_MAP = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+var SC_STRAT_MAP = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
 var SC_CAT_COLOR = {volatil:'#2a78d6', ekstrem:'#1baf7a', st_turun:'#eb6834', lainnya:'#898781'};
 // Klasifikasi Profit (20/10/2026, permintaan Mas Budi): skala diverging rugi->impas->untung,
 // dipetakan dari token --red/--green dashboard yg sudah ada (bukan palet kategori baru) --
@@ -22934,7 +22814,7 @@ function renderSizecutCards(byStrategy) {
 function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',rvolbreak_8h:'RVolBreak-8h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var headers = ['Pair','Strategi','Opened','Entry','Closed','Exit','RSI@Open','ATR%@Open','ATR Tier','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
@@ -23016,7 +22896,7 @@ var CT_STRAT_LABELS = {
   brkX2_12h_closed: 'KeltnerBreak-12h', brkX2_4h: 'brkX2-4h', reversal: 'Reversal-8h',
   hunting_4h: 'Hunting-4h', brkX2_crossema: 'CrossEMA-4h', akumulasi: 'Akumulasi-4h',
   trend_confirm_4h: 'TrenKonfirmasi-4h', mombreak_1h: 'MomentumBreak-1h', decouple_4h: 'Decouple-4h',
-  rvolbreak_1h: 'RVOLBreak-1h', rvolbreak_8h: 'RVolBreak-8h', dipbuy_universe: 'Dip-Buy Universe',
+  rvolbreak_1h: 'RVOLBreak-1h', dipbuy_universe: 'Dip-Buy Universe',
   bbsnap_4h: 'BBSnap-4h', bbsnap_8h: 'BBSnap-8h', topgainers_4h: 'Top Gainers-4h',
   kb1d: 'KeltnerBreak-1D', panic_bounce_4h: 'PantulanPanik-4h'
 };
@@ -25706,18 +25586,6 @@ RVOLBREAK_LOOKBACK = 24
 RVOLBREAK_RVOL_MIN = 3.0
 RVOLBREAK_1H_MAX_HOLD_CANDLES = SHADOW_RVOLBREAK_MAX_HOLD_CANDLES   # LEGACY -- lihat REMARK di atas
 
-# ── RVolBreak-8h LIVE (12/10/2026, permintaan Mas Budi -- pengganti langsung RVOLBreak-1h,
-# TANPA fase shadow/paper krn formula & exit sudah tervalidasi penuh lewat sweep TF di atas,
-# cuma timeframe sinyal yang berubah). Donchian breakout 24-candle 8h (~8 hari) + RVOL>=3.0,
-# formula & parameter IDENTIK dgn versi 1h (RVOLBREAK_LOOKBACK/RVOLBREAK_RVOL_MIN di atas),
-# cuma candle-nya 8h native Binance (bukan resample). Modal $50 tetap tanpa add-fund, 2 slot,
-# lewat AI konfirmasi -- sama pola persis versi 1h yang digantikan.
-RVOLBREAK_8H_SECONDS          = 28800
-RVOLBREAK_8H_ENABLED          = True
-RVOLBREAK_8H_SCAN_INTERVAL    = 300     # detik -- sama dgn versi 1h lama (exit monitoring tetap presisi walau candle 8h)
-RVOLBREAK_8H_MAX_DEALS        = 2
-RVOLBREAK_8H_MAX_HOLD_CANDLES = 24      # 24 candle 8h = 8 hari, sama persis dibacktest (rvolbreak_tf_sweep.py)
-
 # ── BBSnap-4h / BBSnap-8h LIVE (16/10/2026, permintaan Mas Budi -- LANGSUNG LIVE tanpa fase
 # shadow, sama preseden RVolBreak-8h di atas: formula sudah tervalidasi penuh lewat backtest
 # 177 pair 2022-2026, K-sweep 2x cross-check). Entry struktural: close balik DI ATAS BB Lower
@@ -25737,7 +25605,7 @@ BBSNAP_4H_MAX_DEALS        = 2
 BBSNAP_4H_MAX_HOLD_CANDLES = 30     # 30 candle 4h = 5 hari, sama persis dibacktest
 BBSNAP_4H_BBWIDTH_MIN      = 12.83  # kuartil-3 lebar BB saat breakdown, dari backtest 2022-2026
 BBSNAP_8H_ENABLED          = True
-BBSNAP_8H_SECONDS          = RVOLBREAK_8H_SECONDS   # 28800 = 8 jam, konstanta umum bukan milik rvolbreak
+BBSNAP_8H_SECONDS          = 28800   # 8 jam
 BBSNAP_8H_MAX_DEALS        = 2
 BBSNAP_8H_MAX_HOLD_CANDLES = 15     # 15 candle 8h = 5 hari, sama persis dibacktest
 BBSNAP_8H_BBWIDTH_MIN      = 18.41  # kuartil-3 lebar BB saat breakdown, dari backtest 2022-2026
@@ -25855,20 +25723,6 @@ def _shadow_keltnerbreak_check_exits(data: dict) -> None:
             pos['peak_price'] = peak; pos['armed'] = armed
             still_open.append(pos)
     data[combo]['open'] = still_open
-
-
-def _rvolbreak8h_compute(df):
-    """Indikator RVOL Breakout -- formula PERSIS rvolbreak_1h_sim.py/rvolbreak_tf_sweep.py,
-    dipakai sekarang oleh RVolBreak-8h LIVE (dulu nama fungsi ini _shadow_rvolbreak_compute,
-    dipakai versi 1h yang sudah diterminate 12/10/2026 -- formula TF-agnostic, cuma di-reuse
-    utk candle TF baru, lihat REMARK konstanta di atas)."""
-    import pandas_ta as _pta
-    c, h, l, v = df['close'], df['high'], df['low'], df['vol']
-    df['atr_pct'] = _pta.atr(h, l, c, length=14) / c * 100
-    df['donchian_high'] = h.rolling(RVOLBREAK_LOOKBACK).max().shift(1)
-    df['vol_ma20'] = v.rolling(20).mean()
-    df['rvol'] = v / df['vol_ma20']
-    return df
 
 
 def _shadow_rvolbreak_check_exits(data: dict) -> None:
@@ -26231,7 +26085,6 @@ BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY = {
     'topgainers_4h': 0.5,
     'decouple_4h': 0.5,
     'reversal': 0.5,
-    'rvolbreak_8h': 0.5,
     'brkX2_crossema': 0.5,
 }
 LIVE_RANK_4H = {}       # {symbol: pct_change_4h (float, dari field "P" stream)}
@@ -27095,225 +26948,6 @@ def _paper_test_scan_decouple4h():
             continue
 
 
-def thread_rvolbreak8h_scan() -> None:
-    """Scan sinyal RVolBreak-8h LIVE (12/10/2026, pengganti RVOLBreak-1h -- lihat REMARK
-    konstanta RVOLBREAK_8H_* di atas). Sinyal IDENTIK dgn versi 1h yg digantikan (close
-    candle 8h TERTUTUP menembus FRESH di atas Donchian high 24-candle DAN RVOL >=
-    RVOLBREAK_RVOL_MIN), cuma candle-nya 8h native Binance -- AI konfirmasi 2 babak lalu
-    open_deal_with_sizing() kirim order, sama pola persis versi sebelumnya."""
-    if not RVOLBREAK_8H_ENABLED: return
-    if not is_strategy_enabled('rvolbreak_8h'): return
-
-    if is_daily_loss_limit_breached():
-        log(f"[T_RVOLBREAK8H] Scan di-skip -- batas rugi harian tersulut")
-        return
-
-    n_active = deal_count_by_strategy('rvolbreak_8h')
-    if n_active >= RVOLBREAK_8H_MAX_DEALS: return
-
-    # Gate0 (30/10/2026, patch "rvolbreak8h-btc-gate0-or"): syarat BTCUSDT HTF 12H ATAU 1D
-    # hijau (minimal salah satu) -- lihat REMARK lengkap di rvolbreak8h_btc_gate_ok().
-    _rv_gate_ok = rvolbreak8h_btc_gate_ok()
-    _notify_btc_gate_transition('rvolbreak_8h', 'RVolBreak-8h', _rv_gate_ok, 'BTCUSDT HTF 12H ATAU 1D candle tertutup terakhir, minimal salah satu hijau')
-    if not _rv_gate_ok:
-        log(f"[T_RVOLBREAK8H] Gate0: syarat BTC (HTF 12H/1D) belum lolos, scan dibatalkan periode ini.")
-        return
-
-    try:
-        pairs = get_usdt_spot_pairs()
-        ticker = get_ticker_24h()
-        volmap = {}
-        for t in (ticker or []):
-            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
-            except Exception: pass
-        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
-                    and p not in SYMBOL_BLACKLIST]
-    except Exception as e:
-        log(f"WARN [T_RVOLBREAK8H] gagal ambil universe: {e}")
-        return
-
-    with active_deals_lock:
-        existing = set(active_deals.keys())
-
-    import pandas_ta as _pta_rv
-    candidates = []
-    near_miss_rv = []   # 14/10/2026: tab "Kandidat Terdekat"
-    for sym in universe:
-        if sym in existing: continue
-        if is_cooldown_enabled('rvolbreak_8h') and cooldown_remaining(sym) > 0: continue
-        if sizing_fail_remaining(sym) > 0: continue
-        try:
-            df = get_ohlcv_8h_ws(sym, limit=80)  # Fase 2c WS (05/11/2026)
-            if df is None or len(df) < 50: continue
-            if df['ct'].iloc[-1] >= int(time.time() * 1000):
-                df = df.iloc[:-1]
-            if len(df) < 46: continue
-            df = _rvolbreak8h_compute(df)
-            i = len(df) - 1
-            close_now = float(df['close'].iloc[i])
-            dh = df['donchian_high'].iloc[i]; rvol_now = df['rvol'].iloc[i]
-            atr_now = df['atr_pct'].iloc[i]
-            if any(pd.isna(x) for x in [dh, rvol_now, atr_now]) or atr_now <= 0:
-                continue
-            _rv_checks = [
-                (close_now > dh, f"belum breakout Donchian24 (close {close_now:.6g} <= {dh:.6g})"),
-                (rvol_now >= RVOLBREAK_RVOL_MIN, f"RVOL < {RVOLBREAK_RVOL_MIN:g}x ({rvol_now:.2f}x)"),
-            ]
-            _rv_n_pass = sum(1 for ok, _ in _rv_checks if ok)
-            if _rv_n_pass >= 1:
-                near_miss_rv.append((_rv_n_pass, sym, [m for ok, m in _rv_checks if not ok], len(_rv_checks)))
-            if not (close_now > dh and rvol_now >= RVOLBREAK_RVOL_MIN):
-                continue
-            # RSI(14) dicatat INFO-ONLY di rsi_open -- TIDAK dipakai utk open/add-fund/
-            # trailing/close rvolbreak_8h (sinyalnya murni Donchian breakout + RVOL), sama
-            # pola persis versi 1h yg digantikan.
-            _rsi_series = _pta_rv.rsi(df['close'], length=14)
-            rsi_now = float(_rsi_series.iloc[i]) if not pd.isna(_rsi_series.iloc[i]) else None
-            candidates.append((sym, close_now, float(atr_now), float(rvol_now), rsi_now))
-        except Exception as e:
-            log(f"  [T_RVOLBREAK8H] error {sym}: {e}")
-
-    log_near_miss("RVolBreak-8h", near_miss_rv, 2)
-    update_dashboard_near_miss("RVolBreak-8h", near_miss_rv)
-    if not candidates:
-        return
-    candidates.sort(key=lambda x: x[3], reverse=True)   # RVOL tertinggi dulu
-    log(f"[T_RVOLBREAK8H] {len(candidates)} kandidat. Buka deal terbaik (slot {n_active}/{RVOLBREAK_8H_MAX_DEALS})...")
-
-    # ============ BABAK 1: AI individual per-kandidat (notify=False) ============
-    held = {}
-    for sym, signal_price, atr_now, rvol_now, rsi_now in candidates:
-        with active_deals_lock:
-            if sym in active_deals: continue
-        if is_ai_call_open_enabled('rvolbreak_8h'):
-            _ai_ind = {'atr_pct': f"{atr_now:.2f}%", 'signal_price': _fmt_price(signal_price),
-                       'rvol': f"{rvol_now:.2f}x"}
-            if not ai_decision_open(sym, 'RVolBreak-8h', _ai_ind, deal_count_by_strategy('rvolbreak_8h'), notify=False):
-                log(f"[T_RVOLBREAK8H] {sym} babak-1 di-skip oleh AI individual")
-                continue
-        held[sym] = {'signal_price': signal_price, 'atr_now': atr_now, 'rvol_now': rvol_now, 'rsi_now': rsi_now}
-
-    if not held:
-        return
-
-    # ============ BABAK 2: AI bandingkan SEMUA yg lolos babak 1 sekaligus ============
-    log(f"[T_RVOLBREAK8H] Babak 1 selesai: {len(held)} lolos AI individual. Lanjut babak 2 (AI batch re-analysis)...")
-    log_ai_babak1('RVolBreak-8h', [to_display_pair(s) for s in held.keys()], AI_BATCH_MAX_APPROVE)
-    batch_input = [{'symbol': s, 'strategy': 'rvolbreak_8h', 'score': 1,
-                     'detail': {'atr_pct': v['atr_now'], 'rvol': v['rvol_now']}}
-                    for s, v in held.items()]
-    approved = ai_decision_batch_rank(
-        batch_input, strategy_label='RVolBreak-8h', max_approve=AI_BATCH_MAX_APPROVE,
-        criteria_note="Kriteria: besarnya RVOL (lonjakan volume), ATR%",
-    )
-
-    for sym in approved:
-        n_active = deal_count_by_strategy('rvolbreak_8h')
-        if n_active >= RVOLBREAK_8H_MAX_DEALS: break
-        with active_deals_lock:
-            if sym in active_deals: continue
-        v = held[sym]
-        signal_price = v['signal_price']; atr_now = v['atr_now']; rvol_now = v['rvol_now']; rsi_now = v['rsi_now']
-
-        # Tidak ada re-check level/harga sebelum beli di sini -- backtest yg divalidasi juga
-        # tidak punya pengecekan ini, dan harga eksekusi riil tetap dari fill order (fill_price
-        # di bawah), bukan signal_price yg sudah agak basi.
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='rvolbreak_8h', atr_pct=atr_now)
-        if not ok: continue
-
-        try:
-            ticker_now = _binance_get("/api/v3/ticker/price", {"symbol": sym})
-            fill_price = float(ticker_now["price"]) if ticker_now else signal_price
-        except Exception:
-            fill_price = signal_price
-
-        now_ms = int(time.time() * 1000)
-        candle_open_ms = (now_ms // (RVOLBREAK_8H_SECONDS * 1000)) * (RVOLBREAK_8H_SECONDS * 1000)
-        add_to_active_deals(sym, {
-            "strategy":          "rvolbreak_8h",
-            "entry_price":       fill_price,
-            "signal_price":      signal_price,
-            "atr_pct":           atr_now,
-            "target_usd":        target_usd,
-            "add_usd":           add_usd,
-            "opened_ts":         time.time(),
-            "opened_candle_ts":  candle_open_ms,
-            "tf":                "8h",
-        })
-        n_active += 1
-        slip_pct = (fill_price / signal_price - 1) * 100 if signal_price > 0 else 0
-        csv_log_open({
-            'open_time_wib':  now_wib().strftime('%Y-%m-%d %H:%M:%S'),
-            'symbol':         to_display_pair(sym),
-            'signal_price':   f"{_fmt_price(signal_price)}",
-            'entry_price':    f"{_fmt_price(fill_price)}",
-            'slip_pct':       f"{slip_pct:+.2f}",
-            'atr_pct':        f"{atr_now:.2f}",
-            'base_usd':       target_usd,
-            'strategy':       'rvolbreak_8h',
-            'rsi_open':       f"{rsi_now:.1f}" if rsi_now is not None else '',
-        })
-        send_telegram(
-            f"RVolBreak-8h | OPEN LONG\n"
-            f"{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
-            f"Pair  : {to_display_pair(sym)}\n"
-            f"Harga entry (pasar): {_fmt_price(fill_price)}\n"
-            f"Harga sinyal (8h): {_fmt_price(signal_price)}\n"
-            f"Selisih (slippage): {slip_pct:+.2f}%\n"
-            f"ATR%  : {atr_now:.2f}  |  RVOL: {rvol_now:.2f}x  -  {hard_stop_pct(atr_now, None)[0]}\n"
-            f"Modal: ${target_usd:.0f}" + (f" (+add ${add_usd:.0f} delay 15s)" if add_usd > 0 else ""),
-            parse_mode=None
-        )
-        log(f"[T_RVOLBREAK8H] OPEN {sym} @ {fill_price:.8g} (sinyal {signal_price:.8g}, ATR%={atr_now:.2f}, RVOL={rvol_now:.2f}x)")
-
-
-def _paper_test_scan_rvolbreak8h():
-    """18/10/2026: entry PAPER RVolBreak-8h -- replika PERSIS syarat live (Donchian24 breakout +
-    RVOL, lihat thread_rvolbreak8h_scan()), cuma _paper_test_open() dipanggil, bukan order asli."""
-    now_s = time.time()
-    if now_s - _paper_test_last_scan['rvolbreak_8h'] < PAPER_TEST_SCAN_INTERVAL['rvolbreak_8h']:
-        return
-    _paper_test_last_scan['rvolbreak_8h'] = now_s
-    with _paper_test_lock:
-        if len(_paper_test_state['rvolbreak_8h']['closed']) >= PAPER_TEST_TARGET:
-            return
-    try:
-        pairs = get_usdt_spot_pairs()
-        ticker = get_ticker_24h()
-        volmap = {}
-        for t in (ticker or []):
-            try: volmap[t['symbol']] = float(t.get('quoteVolume', 0))
-            except Exception: pass
-        universe = [p for p in pairs if volmap.get(p, 0) >= SHADOW_NEWSTRAT_MIN_VOL_USD
-                    and p not in SYMBOL_BLACKLIST]
-    except Exception as e:
-        log(f"WARN [PAPER-RVOLBREAK8H] gagal ambil universe: {e}")
-        return
-    with _paper_test_lock:
-        paper_open_syms = {p['sym'] for p in _paper_test_state['rvolbreak_8h']['open']}
-    for sym in universe:
-        if sym in paper_open_syms:
-            continue
-        try:
-            df = get_ohlcv_8h_ws(sym, limit=80)  # Fase 2c WS (05/11/2026)
-            if df is None or len(df) < 50: continue
-            if df['ct'].iloc[-1] >= int(time.time() * 1000):
-                df = df.iloc[:-1]
-            if len(df) < 46: continue
-            df = _rvolbreak8h_compute(df)
-            i = len(df) - 1
-            close_now = float(df['close'].iloc[i])
-            dh = df['donchian_high'].iloc[i]; rvol_now = df['rvol'].iloc[i]
-            atr_now = df['atr_pct'].iloc[i]
-            if any(pd.isna(x) for x in [dh, rvol_now, atr_now]) or atr_now <= 0:
-                continue
-            if not (close_now > dh and rvol_now >= RVOLBREAK_RVOL_MIN):
-                continue
-            _paper_test_open('rvolbreak_8h', sym, close_now, float(atr_now))
-        except Exception:
-            continue
-
-
 # ── KeltnerBreak-1D (strategy key 'kb1d') -- 09/11/2026, approved by Mas Budi: "YA" live $8 ─────────
 # Replacement research for TrenKonfirmasi-4h (whose 1-minute retest showed no edge). 14 candidates were
 # screened with the exit that works for KB12h; the winner was a Keltner breakout on the DAILY candle.
@@ -27767,16 +27401,6 @@ def run_thread_kb1d() -> None:
         except Exception as e:
             log(f"WARN T_KB1D error: {e}")
         time.sleep(KB1D_SCAN_INTERVAL)
-
-
-def run_thread_rvolbreak8h() -> None:
-    """Thread T_RVOLBreak8h: scan RVolBreak-8h tiap RVOLBREAK_8H_SCAN_INTERVAL detik."""
-    while True:
-        try:
-            thread_rvolbreak8h_scan()
-        except Exception as e:
-            log(f"WARN T_RVOLBREAK8H error: {e}")
-        time.sleep(RVOLBREAK_8H_SCAN_INTERVAL)
 
 
 _BBSNAP_TF_CONFIG = {
@@ -31223,7 +30847,6 @@ MOMBREAK_LIVE_TIMEOUT_CANDLES   = 15    # varian C ronde 1 (15 candle x 1h = 15 
 # TIDAK ada di peta ini (kalau ada nanti) tetap fallback ke PAPER_TEST_MAX_HOLD_HOURS lama.
 PAPER_TEST_MAX_HOLD_HOURS_BY_STRATEGY = {
     'mombreak_1h':  MOMBREAK_LIVE_TIMEOUT_CANDLES * 1,    # 15 candle x 1h = 15j
-    'rvolbreak_8h': RVOLBREAK_8H_MAX_HOLD_CANDLES * 8,    # 24 candle x 8h = 192j
     'decouple_4h':  DECOUPLE_4H_MAX_HOLD_CANDLES * 4,     # 20 candle x 4h = 80j
     'bbsnap_4h':    BBSNAP_4H_MAX_HOLD_CANDLES * 4,       # 30 candle x 4h = 120j
     'rvoltrend_1d': 180 * 24,   # 180 hari -- jaring pengaman TERAKHIR saja (dead-man's switch),
@@ -31523,9 +31146,9 @@ def thread_mombreak_scan():
         log(f"WARN [MOMBREAK] scan error: {e}")
 
 
-_paper_test_last_scan = {"mombreak_1h": 0, "rvolbreak_8h": 0, "bbsnap_4h": 0, "decouple_4h": 0,
+_paper_test_last_scan = {"mombreak_1h": 0, "bbsnap_4h": 0, "decouple_4h": 0,
                           "rvoltrend_1d": 0}
-PAPER_TEST_SCAN_INTERVAL = {"mombreak_1h": MOMBREAK_SCAN_INTERVAL, "rvolbreak_8h": 300,
+PAPER_TEST_SCAN_INTERVAL = {"mombreak_1h": MOMBREAK_SCAN_INTERVAL,
                              "bbsnap_4h": BBSNAP_SCAN_INTERVAL,
                              "decouple_4h": DECOUPLE_4H_SCAN_INTERVAL}  # sama interval scan live-nya
 
@@ -31896,10 +31519,6 @@ def run_web_dashboard():
                 "Decouple-4h": (
                     f"Scan sepanjang candle 4h, tidak dibatasi jendela waktu. Sinyal = selisih return "
                     f"20-candle vs BTC baru saja melewati ambang {DECOUPLE_REL_MIN_PCT:g}pp (crossing fresh)."
-                ),
-                "RVolBreak-8h": (
-                    f"Scan sepanjang candle 8h, tidak dibatasi jendela waktu. Sinyal = breakout Donchian "
-                    f"24-candle DAN RVOL >= {RVOLBREAK_RVOL_MIN:g}x."
                 ),
                 "Dip-Buy Universe": (
                     f"Scan sepanjang candle 4h, tidak dibatasi jendela waktu. Sinyal = turun "
@@ -32541,7 +32160,6 @@ def run_web_dashboard():
             # -- kalau sedang di-pause, status dipaksa "na" dgn keterangan jelas, BUKAN ditampilkan
             # seolah aktif. keltner12h/trend_confirm_4h TIDAK diberi cek ini -- keduanya memang live.
             _mombreak_live = is_strategy_enabled('mombreak_1h')
-            _rvolbreak8h_live = is_strategy_enabled('rvolbreak_8h')
             _btc_st1d_down = kb12h_ekstrem_st1d_down('BTCUSDT')
             return jsonify({
                 "brkX2": {
@@ -32578,14 +32196,6 @@ def run_web_dashboard():
                                else "(Strategi sedang di-pause -- gerbang ini tidak relevan dicek sampai diaktifkan lagi.)"),
                     "live_detail": _btc_gate_live_detail('mombreak') if _mombreak_live else None,
                     "candles": {"1H": _candles['1h']} if _mombreak_live else None,
-                },
-                "rvolbreak_8h": {
-                    "label": "RVolBreak-8h",
-                    "status": ("ok" if rvolbreak8h_btc_gate_ok() else "blocked") if _rvolbreak8h_live else "na",
-                    "syarat": ("BTCUSDT HTF 12H ATAU 1D candle tertutup terakhir, minimal salah satu hijau" if _rvolbreak8h_live
-                               else "(Strategi sedang di-pause -- gerbang ini tidak relevan dicek sampai diaktifkan lagi.)"),
-                    "live_detail": _btc_gate_live_detail('rvolbreak8h') if _rvolbreak8h_live else None,
-                    "candles": {"12H": _candles['12h'], "1D": _candles['1d']} if _rvolbreak8h_live else None,
                 },
                 "trend_confirm_4h": {
                     "label": "TrenKonfirmasi-4h",
@@ -33210,27 +32820,6 @@ def run_web_dashboard():
                         "primary_ok": all(p),
                     }))
 
-                elif strat == "RVolBreak-8h":
-                    import pandas_ta as _pta_rv2
-                    df = get_ohlcv(sym, interval="8h", limit=80)
-                    if df is None or len(df) < 50: return jsonify(_s({"error": "Data kurang"}))
-                    if df['ct'].iloc[-1] >= int(time.time()*1000): df = df.iloc[:-1]
-                    if len(df) < 46: return jsonify(_s({"error": "Data kurang"}))
-                    df = _rvolbreak8h_compute(df)
-                    i = len(df)-1
-                    close_now = float(df['close'].iloc[i])
-                    dh = df['donchian_high'].iloc[i]; rvol_now = df['rvol'].iloc[i]
-                    if pd.isna(dh) or pd.isna(rvol_now): return jsonify(_s({"error": "Indikator belum lengkap"}))
-                    p = [close_now>dh, float(rvol_now)>=RVOLBREAK_RVOL_MIN]
-                    return jsonify(_s({"strat": strat, "sym": sym,
-                        "primary": [
-                            {"label":"close > Donchian High24","ok":p[0],"actual":f"{close_now:.6g} vs {float(dh):.6g}"},
-                            {"label":f"RVOL >= {RVOLBREAK_RVOL_MIN:g}x","ok":p[1],"actual":f"{float(rvol_now):.2f}x"},
-                        ],
-                        "secondary": [],
-                        "primary_ok": all(p),
-                    }))
-
                 elif strat == "Dip-Buy Universe":
                     df = get_ohlcv_4h(sym, limit=40)
                     if df is None or len(df) < 20: return jsonify(_s({"error": "Data kurang"}))
@@ -33604,7 +33193,7 @@ def run_web_dashboard():
                 # dipbuy_universe TIDAK pakai RSI dlm sinyalnya sama sekali, tapi rsi_open tetap
                 # mau ditampilkan INFO-ONLY -- ditambahkan ke sini supaya baris yg open_time_wib-nya
                 # sudah benar (lihat /admin/backfill_decouple_open) ikut kebagian rekonstruksi RSI.
-                'decouple_4h': '4h', 'rvolbreak_1h': '1h', 'rvolbreak_8h': '8h', 'dipbuy_universe': '4h',
+                'decouple_4h': '4h', 'rvolbreak_1h': '1h', 'dipbuy_universe': '4h',
             }
             filled, skipped, errors = 0, 0, 0
             skip_reasons = {}
@@ -34950,7 +34539,6 @@ def run_web_dashboard():
                 # jadi 1 baris per strategi, bukan split spt KeltnerBreak-12h.
                 ("decouple_4h", "Decouple-4h"),
                 ("rvolbreak_1h", "RVOLBreak-1h"),
-                ("rvolbreak_8h", "RVolBreak-8h"),
                 ("dipbuy_universe", "Dip-Buy Universe"),
                 ("bbsnap_4h", "BBSnap-4h"),
                 ("bbsnap_8h", "BBSnap-8h"),
@@ -35618,7 +35206,7 @@ def run_web_dashboard():
             # endpoint/kartu baru.
             with _paper_test_lock:
                 paper_snap = {k: {"open": list(v["open"]), "closed": list(v["closed"])} for k, v in _paper_test_state.items()}
-            for key in ("mombreak_1h", "rvolbreak_8h", "bbsnap_4h", "decouple_4h", "rvoltrend_1d"):
+            for key in ("mombreak_1h", "bbsnap_4h", "decouple_4h", "rvoltrend_1d"):
                 closed = paper_snap[key]['closed']
                 n = len(closed)
                 wins = [c for c in closed if c['pct'] > 0]
@@ -38235,10 +37823,6 @@ if __name__ == '__main__':
     if DECOUPLE_4H_ENABLED:
         t_dc = threading.Thread(target=run_thread_decouple, daemon=True, name="T-Decouple")
         threads.append(t_dc)
-        n_threads += 1
-    if RVOLBREAK_8H_ENABLED:
-        t_rv = threading.Thread(target=run_thread_rvolbreak8h, daemon=True, name="T-RVolBreak8h")
-        threads.append(t_rv)
         n_threads += 1
     if KB1D_ENABLED:
         t_pb4h = threading.Thread(target=run_thread_pb4h, daemon=True, name="T-PB4H")   # 14/11/2026 PantulanPanik-4h
