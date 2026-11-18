@@ -187,7 +187,7 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
-### wyckoff-stage2 (PENDING, 18/11, Mas Budi: "MAU")
+### wyckoff-stage2 (d83158f, 18/11, Mas Budi: "MAU")
 - Wyckoff-Spring-4h masuk PCT_SIZING_STRATS: mulai tahap 2 (15/12) base 1,5% saldo (min $6), maks 20 deal; batas gabungan jadi 20 x 5 + 10 = 110
 - Sekarang (PCT_SIZING_ENABLED=False) tidak ada perubahan: tetap $6 flat, maks 3
 - Status: deploy 18/11
