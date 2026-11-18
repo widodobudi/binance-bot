@@ -187,7 +187,7 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
-### dashboard-light-theme (PENDING, 18/11, Mas Budi: "adakan juga dong selain dark theme")
+### dashboard-light-theme (bb210a1, 18/11, Mas Budi: "adakan juga dong selain dark theme")
 - Tombol "Terang/Gelap" di header dashboard; pilihan tersimpan di browser (localStorage), default tetap gelap
 - Tema terang = token warna :root diganti + override warna gelap yg ditulis langsung di beberapa input/baris
 - Ikut: baris KeltnerBreak-12h (aturan sekarang) tidak lagi menampilkan rincian fase lama (85 deal) saat di-expand
