@@ -187,6 +187,11 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
+### dashboard-light-theme (PENDING, 18/11, Mas Budi: "adakan juga dong selain dark theme")
+- Tombol "Terang/Gelap" di header dashboard; pilihan tersimpan di browser (localStorage), default tetap gelap
+- Tema terang = token warna :root diganti + override warna gelap yg ditulis langsung di beberapa input/baris
+- Ikut: baris KeltnerBreak-12h (aturan sekarang) tidak lagi menampilkan rincian fase lama (85 deal) saat di-expand
+- Status: deploy 18/11
 ### kb12h-perf-rules-now (4139456, 17/11, Mas Budi: "B")
 - Panel Performance: baris KeltnerBreak-12h kini hanya menghitung deal yg MASIH akan dibuka aturan sekarang (untung & rugi sama2)
 - 85 deal LIVE dicek ulang (kline Binance saat open): 10 lolos, 70 terblokir, 5 tanpa jam open (dipertahankan kecuali DASH = bug add fund); 15 deal pra-LIVE dibuang
