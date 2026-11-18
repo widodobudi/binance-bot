@@ -187,6 +187,10 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
+### wyckoff-stage2 (PENDING, 18/11, Mas Budi: "MAU")
+- Wyckoff-Spring-4h masuk PCT_SIZING_STRATS: mulai tahap 2 (15/12) base 1,5% saldo (min $6), maks 20 deal; batas gabungan jadi 20 x 5 + 10 = 110
+- Sekarang (PCT_SIZING_ENABLED=False) tidak ada perubahan: tetap $6 flat, maks 3
+- Status: deploy 18/11
 ### wyckoff-spring-4h (be1f695, 18/11, Mas Budi: "YA" + "tampilkan di menu-menu di mana mesti ditampilkan")
 - Strategi BARU Wyckoff-Spring-4h (key wyckoff_spring_4h), TF 4h, HANYA saat BTC Supertrend 1D turun; Akumulasi-4h lama tetap mati
 - Kotak sideways 60 candle 4h (10 hari ke BELAKANG, bukan ramalan) sesudah turun >=20%, tinggi <=30%; spring = low jebol <=3% di bawah support lalu hijau tutup di atasnya; entry = uji ulang <=6 candle (hijau, di atas support, low > low spring); ATR<7

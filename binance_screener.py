@@ -2146,7 +2146,8 @@ PCT_SIZING_ENABLED   = False
 PCT_SIZING_FRACTION  = 0.015
 PCT_SIZING_MIN_USD   = 6.0
 PCT_SIZING_MAX_DEALS = 20
-PCT_SIZING_STRATS    = ('brkX2_12h_closed', 'kb1d', 'trend_confirm_4h', 'panic_bounce_4h')
+# 18/11/2026 'wyckoff-stage2' (Mas Budi: "MAU"): Wyckoff-Spring-4h joins stage 2 too -> combined cap 20 x 5 + 10 = 110.
+PCT_SIZING_STRATS    = ('brkX2_12h_closed', 'kb1d', 'trend_confirm_4h', 'panic_bounce_4h', 'wyckoff_spring_4h')
 BASE6_STRATS         = ('brkX2_12h_closed', 'kb1d', 'trend_confirm_4h')
 _wallet_equity_cache = {"ts": 0.0, "value": 0.0}
 
