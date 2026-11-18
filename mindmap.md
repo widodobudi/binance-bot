@@ -187,6 +187,14 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
+### wyckoff-spring-4h (PENDING, 18/11, Mas Budi: "YA" + "tampilkan di menu-menu di mana mesti ditampilkan")
+- Strategi BARU Wyckoff-Spring-4h (key wyckoff_spring_4h), TF 4h, HANYA saat BTC Supertrend 1D turun; Akumulasi-4h lama tetap mati
+- Kotak sideways 60 candle 4h (10 hari ke BELAKANG, bukan ramalan) sesudah turun >=20%, tinggi <=30%; spring = low jebol <=3% di bawah support lalu hijau tutup di atasnya; entry = uji ulang <=6 candle (hijau, di atas support, low > low spring); ATR<7
+- $6 flat, maks 3 deal, tanpa AI; add fund 1x ($6) sekali kalau candle 4h hijau tutup >=2% di atas entry dlm 24 jam (wk_addfund_check); exit hard stop tier x1.1, trailing arm 6x, timeout 15x4h (60 jam); tanpa early exit
+- Uji 1 menit 325 deal: +1,61%/deal base, TRAIN +1,53 / TEST +1,69, 5/5 tahun; dgn add fund +$0,164/deal ($6), 1,81% per $ modal; acak -0,27%
+- Menu: Strategy Control, Performance, Closed Trades (filter), Kandidat Terdekat + deskripsi, Scan Blockers, Manual Scan (+detail syarat), panel gerbang BTC, heartbeat Telegram, size-cut card, label semua tabel; uji tanpa order tiap restart
+- Ikut: hitungan sisa waktu/candle PantulanPanik-4h & KeltnerBreak-1D yg salah (jatuh ke default 12h) diperbaiki
+- Status: deploy 18/11
 ### rvolbreak8h-purge (8fccc3f, 18/11, Mas Budi: "buang sama sekali tak ada bekas apapun" + riwayat "(b) dihapus permanen")
 - Kode RVolBreak-8h DIBUANG total (443 baris): scan live, paper test, gerbang BTC, add-fund reclaim, sizing, hard-stop cap, timeout, near-miss, manual scan, Strategy Control, panel gerbang BTC, Performance, filter Closed Trades, Shadow/Paper panel, thread T-RVolBreak8h
 - Migrasi sekali jalan purge_rvolbreak8h_20261118: baris trade strategy=rvolbreak_8h DIHAPUS PERMANEN dari trades_forwardtest.csv (ikut tab PAJAK & salinan Drive), key dihapus dari strategy_config.json & paper_test.json
