@@ -189,6 +189,7 @@
 - Status: deploy 14/11
 ### dashboard-light-theme (bb210a1, 18/11, Mas Budi: "adakan juga dong selain dark theme")
 - Tombol "Terang/Gelap" di header dashboard; pilihan tersimpan di browser (localStorage), default tetap gelap
+- 18/11 revisi: palet terang terlalu silau -> abu-abu redup (bg #c9ccd1, kartu #d8dadd, teks #262b33), tanpa putih murni
 - Tema terang = token warna :root diganti + override warna gelap yg ditulis langsung di beberapa input/baris
 - Ikut: baris KeltnerBreak-12h (aturan sekarang) tidak lagi menampilkan rincian fase lama (85 deal) saat di-expand
 - Status: deploy 18/11

@@ -19959,12 +19959,13 @@ var b=document.getElementById('theme-toggle-btn');if(b)b.textContent=l?'☾ Gela
   :root{--bg:#0f1117;--surface:#1a1d2e;--border:#2a2d3e;--accent:#4f9eff;--green:#00c896;--red:#ff4f6a;--yellow:#ffb84f;--text:#e2e8f0;--muted:#8892a4;--fg:var(--text);--font:'SF Mono','Fira Code',monospace;color-scheme:dark}
   /* 18/11/2026 'dashboard-light-theme' (Mas Budi: "adakan juga dong selain dark theme"): light palette via the same
      tokens + overrides for the few inline hard-coded dark colours. Toggle button in the header, saved in localStorage. */
-  :root[data-theme="light"]{--bg:#f3f5f9;--surface:#ffffff;--border:#d3d9e3;--accent:#1f6fd6;--green:#0a8f63;--red:#d33550;--yellow:#a8690f;--text:#1b2230;--muted:#5d6678;--fg:var(--text);color-scheme:light}
+  /* 18/11: first light palette (#f3f5f9/#ffffff) was too bright for long sessions (Mas Budi) -> muted grey-beige,
+     no pure white, softer text contrast. */
+  :root[data-theme="light"]{--bg:#c9ccd1;--surface:#d8dadd;--border:#b3b7be;--accent:#1d5fb3;--green:#0b7a55;--red:#b42a43;--yellow:#8a560a;--text:#262b33;--muted:#4f5663;--fg:var(--text);color-scheme:light}
   :root[data-theme="light"] td{border-bottom-color:var(--border)}
   :root[data-theme="light"] [style*="background:#0f1117"]{background:var(--bg)!important}
   :root[data-theme="light"] [style*="color:#e2e8f0"]{color:var(--text)!important}
-  :root[data-theme="light"] [style*="rgba(255,255,255,0.0"]{background:rgba(0,0,0,0.035)!important}
-  .theme-toggle{margin-left:auto;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;font-family:var(--font)}
+  :root[data-theme="light"] [style*="rgba(255,255,255,0.0"]{background:rgba(0,0,0,0.05)!important}  .theme-toggle{margin-left:auto;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;font-family:var(--font)}
   *{box-sizing:border-box;margin:0;padding:0}
     body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;overflow-x:hidden}
     .header{max-width:1800px;width:calc(100% - 40px);margin:0 auto;background:var(--surface);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;padding:12px 20px;display:flex;align-items:center;gap:16px}
