@@ -5927,6 +5927,27 @@ def _binance_earn_request(method: str, path: str, params: dict) -> dict:
     return _binance_trading_request(method, path, params, api_key=key, api_secret=secret)
 
 
+def sub_earn_readonly_test() -> None:
+    """20/11/2026 'sub-earn-readonly-test' (Mas Budi: "MAU"): READ-ONLY check whether the SUB account key
+    (BINANCE_TRADING_KEY) can use Simple Earn -- before deciding to move the bot's idle-USDT Earn from Master to Sub.
+    Only GET endpoints, never subscribes/redeems/transfers. Result goes to the log as [SUB-EARN-TEST]."""
+    for label, path, params in (("daftar produk Flexible USDT", "/sapi/v1/simple-earn/flexible/list", {"asset": "USDT", "size": 1}),
+                                ("posisi Flexible USDT di sub", "/sapi/v1/simple-earn/flexible/position", {"asset": "USDT", "size": 10}),
+                                ("izin API key sub", "/sapi/v1/account/apiRestrictions", {})):
+        try:
+            d = _binance_trading_request("GET", path, dict(params))
+            if path.endswith("apiRestrictions"):
+                d = {k: d.get(k) for k in ("enableReading", "enableSpotAndMarginTrading", "permitsUniversalTransfer",
+                                           "enableInternalTransfer", "ipRestrict", "enableWithdrawals")}
+            elif isinstance(d, dict) and "rows" in d:
+                d = {"total": d.get("total"), "rows": [{k: r.get(k) for k in ("asset", "latestAnnualPercentageRate", "totalAmount",
+                                                                                 "canPurchase", "canRedeem", "productId")}
+                                                         for r in (d.get("rows") or [])[:3]]}
+            log(f"[SUB-EARN-TEST] OK {label}: {str(d)[:400]}")
+        except Exception as e:
+            log(f"[SUB-EARN-TEST] GAGAL {label}: {str(e)[:300]}")
+
+
 def binance_transfer_sub_to_master(asset: str, amount: float) -> bool:
     """Transfer `asset` dari Sub Account (akun trading, BINANCE_TRADING_KEY) ke Master --
     jembatan supaya residual koin dari jual-sebagian (yg mendarat di Spot wallet Sub Account,
@@ -38143,6 +38164,8 @@ if __name__ == '__main__':
         if WK_ENABLED:
             threading.Thread(target=run_thread_wyckoff, daemon=True, name="T-WK").start()   # 18/11/2026 Wyckoff-Spring-4h
         threading.Thread(target=run_thread_idle_earn, daemon=True, name="T-IdleEarn").start()   # 14/11/2026 idle-usdt-earn
+        threading.Thread(target=lambda: (time.sleep(120), sub_earn_readonly_test()), daemon=True,
+                         name="T-SubEarnTest").start()   # 20/11/2026 read-only, once per restart
         t_kb1d = threading.Thread(target=run_thread_kb1d, daemon=True, name="T-KB1D")
         threads.append(t_kb1d)
         n_threads += 1
