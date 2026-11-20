@@ -187,7 +187,7 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
-### earn-on-sub (PENDING, 20/11, Mas Budi: "ya")
+### earn-on-sub (c604505, 20/11, Mas Budi: "ya")
 - Earn USDT nganggur bot PINDAH ke SUB akun: sweep = Spot sub di atas cadangan -> subscribe Earn sub; refill = redeem Earn sub -> Spot sub (tanpa transfer master)
 - Migrasi sekali: USDT bot yg tercatat di Earn master (idle_earn.json bot_in_earn) ditarik lewat jalur lama (redeem + master->sub), lalu di-Earn di sub; Telegram 1x
 - Sesudahnya Earn master TIDAK disentuh bot lagi; master hanya menerima transfer profit. Subscribe sub ditolak -> USDT tetap di Spot sub + Telegram 1x
