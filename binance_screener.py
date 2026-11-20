@@ -7038,8 +7038,17 @@ def _idle_earn_retry_pending(d: dict) -> bool:
     return d["pending_master_spot"] < 1.0
 
 
-def idle_earn_refill(need_usd: float = 0.0) -> float:
-    """Bring the bot's own USDT back from Master Earn to the Sub spot wallet. Returns the amount moved (0 if none)."""
+def idle_earn_refill(need_usd: float = 0.0, _master_only: bool = False) -> float:
+    """Bring the bot's own USDT back to the Sub spot wallet. Returns the amount moved (0 if none).
+    20/11/2026 'earn-on-sub': first from Sub Earn; the old Master path below is only used for whatever the bot still
+    has in Master Earn (one-time migration / leftovers)."""
+    if IDLE_EARN_ON_SUB and not _master_only:
+        got = sub_earn_refill(need_usd)
+        if got > 0 and (need_usd <= 0 or got >= need_usd * 0.99):
+            return got
+        if float(_idle_earn_load().get("bot_in_earn", 0) or 0) < 1.0:
+            return got
+        return got + idle_earn_refill(max(0.0, need_usd - got), _master_only=True)
     with _idle_earn_lock:
         d = _idle_earn_load()
         _idle_earn_retry_pending(d)
@@ -7116,8 +7125,114 @@ def idle_earn_sweep():
                 _idle_earn_save(d)
 
 
+# ── Patch 'earn-on-sub' (20/11/2026, Mas Budi: "ya") ────────────────────────────────────────────────────────────
+# Mas Budi reversed his 22/09 decision: the bot's idle-USDT Earn now lives on the SUB (trading) account, so the Master
+# only ever receives the profit transfers and nothing of the bot's Earn is mixed with it. Read-only test 20/11 15:09
+# ([SUB-EARN-TEST]): the Sub key sees Simple Earn Flexible USDT (canPurchase/canRedeem True) and has Spot & Margin
+# Trading permission. Flow now: sweep = Sub spot USDT above the buffer -> subscribe Sub Earn; refill = redeem Sub
+# Earn -> Sub spot (no transfers at all). One-time migration: the bot's ledger amount still in Master Earn
+# (idle_earn.json bot_in_earn) is pulled back with the old Master path (redeem + Master->Sub) and then swept into Sub
+# Earn. The Master Earn is never touched again afterwards. If a Sub subscribe is rejected the USDT simply stays in
+# Sub spot (Telegram once). IDLE_EARN_ON_SUB = False restores the old Master flow.
+IDLE_EARN_ON_SUB = True
+
+
+def _sub_earn_usdt_positions() -> list:
+    try:
+        data = _binance_trading_request("GET", "/sapi/v1/simple-earn/flexible/position", {"asset": "USDT", "size": 10})
+        return [{"productId": r["productId"], "totalAmount": float(r.get("totalAmount", 0) or 0)}
+                for r in (data.get("rows", []) if isinstance(data, dict) else [])
+                if r.get("productId") and float(r.get("totalAmount", 0) or 0) > 0]
+    except Exception as e:
+        log(f"WARN [EARN-SUB] posisi: {e}")
+        return []
+
+
+def _sub_earn_subscribe(product_id: str, amount: float) -> bool:
+    for dec in (8, 4):
+        amt = int(amount * (10 ** dec)) / float(10 ** dec)
+        if amt <= 0:
+            return False
+        try:
+            data = _binance_trading_request("POST", "/sapi/v1/simple-earn/flexible/subscribe",
+                                            {"productId": product_id, "amount": f"{amt:.{dec}f}", "sourceAccount": "SPOT"})
+            log(f"[EARN-SUB] Subscribe productId={product_id} amount={amt:.{dec}f} -> {data}")
+            if isinstance(data, dict) and data.get("success", True):
+                return True
+        except Exception as e:
+            log(f"WARN [EARN-SUB] subscribe {product_id} amount={amt:.{dec}f}: {e}")
+    return False
+
+
+def _sub_earn_redeem(product_id: str, amount: float) -> bool:
+    try:
+        data = _binance_trading_request("POST", "/sapi/v1/simple-earn/flexible/redeem",
+                                        {"productId": product_id, "type": "FAST", "amount": str(round(amount, 8))})
+        log(f"[EARN-SUB] Redeem productId={product_id} amount={amount} -> {data}")
+        return True
+    except Exception as e:
+        log(f"WARN [EARN-SUB] redeem {product_id} {amount}: {e}")
+        return False
+
+
+def sub_earn_refill(need_usd: float = 0.0) -> float:
+    """Redeem the bot's Sub Earn USDT back to Sub spot. Returns the amount redeemed (0 if none)."""
+    with _idle_earn_lock:
+        free, _ = get_usdt_balance()
+        target = max(float(need_usd), idle_earn_buffer_usd() - free)
+        if target < 1.0:
+            return 0.0
+        positions = _sub_earn_usdt_positions()
+        total = sum(p["totalAmount"] for p in positions)
+        amount = int(min(total, target * 1.02) * 100) / 100.0
+        if amount < 1.0:
+            return 0.0
+        left = amount
+        for p in positions:
+            if left <= 0:
+                break
+            take = int(min(p["totalAmount"], left) * 100) / 100.0
+            if take > 0 and _sub_earn_redeem(p["productId"], take):
+                left -= take
+        redeemed = round(amount - left, 2)
+        if redeemed <= 0:
+            return 0.0
+        for _ in range(20):
+            time.sleep(1)
+            if get_usdt_balance()[0] >= free + redeemed * 0.99:
+                break
+        d = _idle_earn_load()
+        _idle_earn_save(d, f"refill Sub Earn {redeemed} -> Sub spot")
+        log(f"[EARN-SUB] refill ${redeemed:.2f} Sub Earn -> Sub spot (sisa di Sub Earn ~${total - redeemed:.2f})")
+        return redeemed
+
+
+def sub_earn_sweep():
+    """Subscribe Sub spot USDT above the cash buffer into Sub Simple Earn Flexible."""
+    with _idle_earn_lock:
+        d = _idle_earn_load()
+        if float(d.get("bot_in_earn", 0) or 0) >= 1.0 or float(d.get("pending_master_spot", 0) or 0) >= 1.0:
+            return   # migration from Master not finished yet
+        free, _ = get_usdt_balance()
+        excess = int((free - idle_earn_buffer_usd()) * 100) / 100.0
+        if excess < IDLE_EARN_MIN_MOVE_USD:
+            return
+        prod = get_earn_flexible_product("USDT")
+        if not prod or excess < float(prod.get("min", 0) or 0):
+            return
+        if _sub_earn_subscribe(prod["productId"], excess):
+            _idle_earn_save(d, f"sweep {excess} -> Sub Earn (APR {prod.get('apr', 0) * 100:.2f}%)")
+            log(f"[EARN-SUB] sweep ${excess:.2f} Sub spot -> Sub Earn (APR {prod.get('apr', 0) * 100:.2f}%)")
+            d["sub_sub_fail_notified"] = False; _idle_earn_save(d)
+        elif not d.get("sub_sub_fail_notified"):
+            d["sub_sub_fail_notified"] = True; _idle_earn_save(d, f"sweep {excess}: subscribe Sub Earn DITOLAK")
+            send_telegram(f"[Earn USDT] Subscribe ${excess:.2f} ke Earn SUB akun ditolak Binance -- USDT tetap aman di Spot sub "
+                          f"(tanpa bunga). Bot coba lagi tiap 5 menit.", parse_mode=None)
+
+
 def run_thread_idle_earn():
     ok = idle_earn_selfcheck()
+    migr_notified = False
     while True:
         try:
             with _idle_earn_lock:
@@ -7125,7 +7240,22 @@ def run_thread_idle_earn():
         except Exception as e:
             log(f"WARN [IDLE-EARN] retry pending: {e}")
         try:
-            if IDLE_EARN_ENABLED and ok:
+            if IDLE_EARN_ON_SUB:
+                # one-time migration: bring the bot's ledger amount home from Master Earn, then it is swept into Sub Earn
+                owned = float(_idle_earn_load().get("bot_in_earn", 0) or 0)
+                if owned >= 1.0:
+                    moved = idle_earn_refill(owned, _master_only=True)
+                    if moved > 0 and not migr_notified:
+                        migr_notified = True
+                        send_telegram(f"[Earn USDT] Pindah Earn ke SUB akun: ${moved:.2f} USDT bot ditarik dari Earn master -> sub. "
+                                      f"Mulai sekarang Earn bot hanya di sub; Earn master tidak disentuh lagi.", parse_mode=None)
+                elif IDLE_EARN_ENABLED:
+                    free, _ = get_usdt_balance()
+                    if free < idle_earn_buffer_usd() * 0.5:
+                        sub_earn_refill()
+                    else:
+                        sub_earn_sweep()
+            elif IDLE_EARN_ENABLED and ok:
                 free, _ = get_usdt_balance()
                 buf = idle_earn_buffer_usd()
                 if free < buf * 0.5:
