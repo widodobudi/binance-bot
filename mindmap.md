@@ -187,6 +187,12 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
+### pb4h-htf-size (PENDING_HASH, 21/11, Mas Budi: "YA")
+- PantulanPanik-4h: sebelum open long cek kondisi 1D KOIN (candle 1D tutup): turun >=40% dlm 30 hari ATAU close >=20% di bawah EMA50 1D
+- Lolos -> modal x2 ($6 -> $12); tidak lolos -> tetap open, modal biasa ($6). Tag CSV entry_mode = htf_lolos / htf_tidak; Telegram OPEN tampilkan hasil cek
+- Performance: 2 baris tambahan "PantulanPanik-4h (lolos cek HTF 1D, modal x2)" & "(tidak lolos HTF, modal biasa)"
+- Dasar: backtest 1m 2022-2026, 691 deal: lolos 479 +3,93% WR 71%, tidak lolos 212 +1,76% WR 64%; $ +135 -> +248, Train/Test & 5/5 tahun lebih baik
+- Status: deploy 21/11
 ### earn-on-sub (c604505, 20/11, Mas Budi: "ya")
 - Earn USDT nganggur bot PINDAH ke SUB akun: sweep = Spot sub di atas cadangan -> subscribe Earn sub; refill = redeem Earn sub -> Spot sub (tanpa transfer master)
 - Migrasi sekali: USDT bot yg tercatat di Earn master (idle_earn.json bot_in_earn) ditarik lewat jalur lama (redeem + master->sub), lalu di-Earn di sub; Telegram 1x

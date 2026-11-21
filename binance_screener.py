@@ -4160,6 +4160,49 @@ def kb12h_perf_rules_now() -> dict:
     return out
 
 
+def pb4h_perf_htf(mode: str) -> dict:
+    """21/11/2026 'pb4h-htf-size': PantulanPanik-4h closed deals tagged entry_mode == mode ('htf_lolos' / 'htf_tidak'),
+    same fields as kb12h_perf_rules_now() for the Performance panel."""
+    out = {'n': 0, 'win': 0, 'loss': 0, 'total_pct': 0.0, 'rate': 0.0, 'rate_unit': None, 'interval_days': None,
+           'last_win_close_wib': None, 'last_win_symbol': None}
+    try:
+        with trades_csv_lock:
+            with open(TRADES_CSV, 'r', newline='', encoding='utf-8') as f:
+                rows = list(csv.DictReader(f))
+    except Exception as e:
+        log(f"   [CSV] pb4h_perf_htf: {e}")
+        return out
+    now = now_wib(); counts = {w: 0 for w, _, _ in STRATEGY_CLOSE_FREQ_TIERS}; last = None
+    for r in rows:
+        if r.get('status') != 'CLOSED' or r.get('strategy') != 'panic_bounce_4h' or (r.get('entry_mode') or '') != mode:
+            continue
+        try:
+            p = float(r.get('profit_pct', '') or 0)
+        except (ValueError, TypeError):
+            continue
+        out['n'] += 1; out['total_pct'] += p
+        if p <= 0:
+            out['loss'] += 1
+            continue
+        out['win'] += 1
+        try:
+            ct = datetime.strptime((r.get('close_time_wib') or '').strip(), '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            continue
+        for w, _, _ in STRATEGY_CLOSE_FREQ_TIERS:
+            if ct >= now - timedelta(days=w):
+                counts[w] += 1
+        if last is None or ct > last[0]:
+            last = (ct, r.get('symbol'))
+    for w, unit, per in STRATEGY_CLOSE_FREQ_TIERS:
+        if counts[w] > 0:
+            out.update(rate=round(counts[w] / (w / per), 2), rate_unit=unit, interval_days=round(w / counts[w], 3))
+            break
+    if last:
+        out['last_win_close_wib'] = last[0].strftime('%Y-%m-%d %H:%M:%S'); out['last_win_symbol'] = last[1]
+    return out
+
+
 def _phase_entry(label, p, target=None):
     """Helper internal utk strategy_phase_breakdown() -- 1 baris fase jadi dict seragam."""
     if p is None:
@@ -10030,7 +10073,8 @@ def ekstrem_supertrend_size_mult(symbol: str, strategy: str, atr_pct: float | No
     return best_mult, best_reason
 
 def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
-                          atr_pct: float | None = None, vol_ratio: float | None = None):
+                          atr_pct: float | None = None, vol_ratio: float | None = None,
+                          size_mult: float = 1.0):
     """Buka deal + simpan add_usd di active_deals untuk dikirim T2 setelah deal confirmed.
     atr_pct/vol_ratio: opsional, cuma dipakai brkX2_4h utk cek tier conviction (lihat
     BRKX2_4H_CONVICTION_* di atas) -- strategi lain mengabaikannya.
@@ -10179,6 +10223,9 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     elif strategy == 'panic_bounce_4h':   # 14/11/2026 PantulanPanik-4h: flat base_usd ($6), no add-fund
         target  = float(_cfg_base if _cfg_base else 6.0)
         add_usd = 0
+        if size_mult and size_mult != 1.0:   # 21/11/2026 'pb4h-htf-size': coin passes the 1D check -> base x2
+            target = round(target * size_mult, 2)
+            log(f"[SIZING] {symbol} PantulanPanik-4h lolos cek HTF 1D -> modal ${target:.2f} (x{size_mult:g}, patch pb4h-htf-size)")
     elif strategy == 'wyckoff_spring_4h':   # 18/11/2026 Wyckoff-Spring-4h: flat base_usd ($6); add fund via wk_addfund_check()
         target  = float(_cfg_base if _cfg_base else 6.0)
         add_usd = 0
@@ -27295,6 +27342,38 @@ PB4H_BTC7D_MAX_PCT = -10.0
 # TEST +4.35, 5/5 years (+1.42/+3.17/+5.58/+5.10/+4.24). The extra (-10,-8] band alone: 168 deals +2.24%.
 # Coins down only -5..-8% averaged -0.14% (no edge) -- do not loosen further without new data.
 PB4H_COIN24H_MAX_PCT = -8.0
+# 21/11/2026 'pb4h-htf-size' (Mas Budi: "YA"): before opening, check the COIN's own 1D condition (closed 1D candles only).
+# Passes (lolos) when the coin fell >= 40% over 30 days OR its 1D close is >= 20% below EMA50 1D -> base x2 ($6 -> $12);
+# otherwise the deal still opens at the normal base ($6). Every deal is tagged in the CSV column entry_mode
+# ('htf_lolos' / 'htf_tidak') so the Performance panel shows both groups separately.
+# 1-minute test 2022-2026, 691 deals (scratchpad newstrat/pb4h_htf.py, htf_or.py): lolos 479 deals +3.93%/deal WR 71%
+# (TRAIN +3.13 / TEST +4.94, 5/5 years); tidak lolos 212 deals +1.76% WR 64%. $6 flat = +$135; $12 lolos / $6 tidak =
+# +$248 (TRAIN +$114 / TEST +$134), every year above $6 flat (+4/+14/+103/+23/+104 vs +1/+12/+58/+14/+50).
+# A coin "uptrend in 1D" filter was rejected: only 19 of 691 deals, +0.65%.
+PB4H_HTF_SIZE_ENABLED = True
+PB4H_HTF_RET30_MAX_PCT = -40.0
+PB4H_HTF_EMA50_MAX_PCT = -20.0
+PB4H_HTF_SIZE_MULT = 2.0
+
+
+def pb4h_htf_check(sym: str, now_ms: int) -> tuple:
+    """Return (lolos, ret30_pct, ema50_pct) from the coin's CLOSED 1D candles. Data missing -> (False, None, None)."""
+    try:
+        df = get_ohlcv(sym, interval='1d', limit=300)
+        if df is None or len(df) < 2:
+            return False, None, None
+        if int(df['ct'].iloc[-1]) >= now_ms:
+            df = df.iloc[:-1]
+        c = df['close'].astype(float)
+        ret30 = float((c.iloc[-1] / c.iloc[-31] - 1) * 100) if len(c) >= 31 else None
+        ema = ta.ema(c, length=50) if len(c) >= 50 else None
+        ema50 = float((c.iloc[-1] / ema.iloc[-1] - 1) * 100) if ema is not None and not pd.isna(ema.iloc[-1]) else None
+        lolos = ((ret30 is not None and ret30 <= PB4H_HTF_RET30_MAX_PCT)
+                 or (ema50 is not None and ema50 <= PB4H_HTF_EMA50_MAX_PCT))
+        return lolos, ret30, ema50
+    except Exception as e:
+        log(f"  [T_PB4H] cek HTF {sym} gagal: {e}")
+        return False, None, None
 # 14/11/2026 'scan-retry-btc-data' (Mas Budi: "Boleh"): on 14/11 15:00 a Binance HTTP 500 left the BTC 4h data
 # incomplete and the whole candle was skipped. Now, when BTC data cannot be read, the scan is retried every minute
 # for up to SCAN_RETRY_WINDOW_MS after the candle closes (entry rules unchanged). Same for KeltnerBreak-1D.
@@ -27436,7 +27515,12 @@ def thread_pb4h_scan(dry_run: bool = False) -> None:
             break
         with active_deals_lock:
             if sym in active_deals: continue
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='panic_bounce_4h', atr_pct=atrp)
+        htf_ok, htf_r30, htf_e50 = pb4h_htf_check(sym, now_ms) if PB4H_HTF_SIZE_ENABLED else (False, None, None)
+        htf_txt = (f"HTF 1D: turun 30 hari {'-' if htf_r30 is None else f'{htf_r30:+.1f}%'}, "
+                   f"vs EMA50 {'-' if htf_e50 is None else f'{htf_e50:+.1f}%'} -> "
+                   f"{'LOLOS (modal x' + format(PB4H_HTF_SIZE_MULT, 'g') + ')' if htf_ok else 'tidak lolos (modal biasa)'}")
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='panic_bounce_4h', atr_pct=atrp,
+                                                        size_mult=PB4H_HTF_SIZE_MULT if htf_ok else 1.0)
         if not ok: continue
         try:
             entry_price = get_price_now(sym)
@@ -27448,12 +27532,13 @@ def thread_pb4h_scan(dry_run: bool = False) -> None:
             "strategy": "panic_bounce_4h", "entry_price": entry_price, "peak": entry_price, "signal_price": signal_price,
             "atr_pct": atrp, "score": 1, "opened_ts": time.time(), "opened_candle_ts": int(candle_open_ms),
             "trailing_armed": False, "opened_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "target_usd": target_usd,
-            "add_usd": 0, "tf": "4h", "rsi_open": rsi_prev,
+            "add_usd": 0, "tf": "4h", "rsi_open": rsi_prev, "htf_lolos": bool(htf_ok),
         })
         send_telegram(
             f"PantulanPanik-4h | OPEN LONG\n{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
             f"Pair  : {to_display_pair(sym)}\nHarga entry: {_fmt_price(entry_price)} (sinyal 4h {_fmt_price(signal_price)}, slip {slip:+.2f}%)\n"
             f"Koin 24 jam: {ret24:+.2f}% | RSI 4h sebelumnya: {rsi_prev:.1f} | BTC 7 hari: {btc7d:+.2f}%\n"
+            f"{htf_txt}\n"
             f"ATR%  : {atrp:.2f} - {hard_stop_pct(atrp, 'panic_bounce_4h')[0]}\n"
             f"Modal: ${target_usd:.0f} | exit: trailing aktif di {get_arm_pct(atrp, 'panic_bounce_4h'):.1f}%, tahan maks {PB4H_MAX_HOLD_CANDLES} candle 4h\n"
             f"Slot terpakai: {n_active + 1}/{max_deals}",
@@ -27463,10 +27548,12 @@ def thread_pb4h_scan(dry_run: bool = False) -> None:
             'signal_price': f"{_fmt_price(signal_price)}", 'entry_price': f"{_fmt_price(entry_price)}",
             'slip_pct': f"{slip:+.2f}", 'atr_pct': f"{atrp:.2f}", 'trail_dist_pct': f"{trailing_dist(atrp)}",
             'base_usd': target_usd, 'score': 1, 'strategy': 'panic_bounce_4h', 'rsi_open': f"{rsi_prev:.1f}",
+            'entry_mode': 'htf_lolos' if htf_ok else 'htf_tidak',
         })
         log_oac('OPEN', sym, 'PantulanPanik-4h', {'entry_price': _fmt_price(entry_price), 'ret24': f"{ret24:+.2f}%",
                                                   'rsi_prev': f"{rsi_prev:.1f}", 'btc7d': f"{btc7d:+.2f}%", 'atr_pct': f"{atrp:.2f}%"})
-        log(f"[T_PB4H] OPEN {sym} @ {entry_price:.8g} (sinyal {signal_price:.8g}, 24j {ret24:+.2f}%, RSI prev {rsi_prev:.1f}, ATR {atrp:.2f})")
+        log(f"[T_PB4H] OPEN {sym} @ {entry_price:.8g} (sinyal {signal_price:.8g}, 24j {ret24:+.2f}%, RSI prev {rsi_prev:.1f}, ATR {atrp:.2f}) "
+            f"modal ${target_usd:.2f} | {htf_txt}")
 
 
 # ── Patch 'pb4h-swing-addfund' (15/11/2026, Mas Budi: "Khusus PantulanPanik-4h, Add fund, strength 1, garis muncul +
@@ -35039,6 +35126,14 @@ def run_web_dashboard():
                              "last_win_close_wib": r["last_win_close_wib"],
                              "last_win_symbol": r.get("last_win_symbol"),
                              "phases": [] if key == "brkX2_12h_closed" else phases.get(key, [])})
+                if key == "panic_bounce_4h" and PB4H_HTF_SIZE_ENABLED:   # 21/11/2026 'pb4h-htf-size'
+                    for mode, sub in (("htf_lolos", "lolos cek HTF 1D, modal x2"), ("htf_tidak", "tidak lolos HTF, modal biasa")):
+                        q = pb4h_perf_htf(mode)
+                        rows.append({"key": f"panic_bounce_4h_{mode}", "label": f"PantulanPanik-4h ({sub})", "n": q["n"],
+                                     "win": q["win"], "loss": q["loss"], "total_pct": round(q["total_pct"], 2),
+                                     "close_rate": q["rate"], "close_rate_unit": q["rate_unit"],
+                                     "close_interval_days": q["interval_days"], "last_win_close_wib": q["last_win_close_wib"],
+                                     "last_win_symbol": q.get("last_win_symbol"), "phases": []})
             rows.sort(key=lambda r: (r["win"] / r["n"]) if r["n"] > 0 else -1, reverse=True)
             return jsonify({"strategies": rows, "hidden_paused": hidden_paused_labels})
 
