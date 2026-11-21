@@ -14376,6 +14376,10 @@ def thread2_monitor():
         check_auto_sell_crossing()
     except Exception as error:
         log(f"WARN [AUTO-SELL] monitor error: {error}")
+    try:
+        crowd_bounce_update()
+    except Exception as error:
+        log(f"WARN [CROWD] {error}")
     with active_deals_lock:
         syms = list(active_deals.keys())
     try:
@@ -15026,6 +15030,7 @@ def thread2_monitor():
         do_close=False; reason=""; hard_stop_triggered=False; trail_stop_triggered=False; timeout_triggered=False
         btc_dump_exit_triggered=False
         _be_forced_close=False   # 06/10/2026: penutupan impas brkX2-4h (lewati gerbang AI close)
+        _crowd_forced_close=False   # 21/11/2026 crowd-bounce-close (lewati gerbang AI close)
         # TP custom: tutup otomatis begitu U/PnL bersih (net -0.2% fee) sudah >= target $ per deal
         # (default $1.00 kalau belum diisi manual). Pakai estimate_deal_total_usd()
         # (qty_coin * entry_price aktual) supaya modal yang dipakai cek TP sama persis dengan
@@ -15480,6 +15485,11 @@ def thread2_monitor():
                         do_close = True
                         reason   = f"AI decision: close menjelang timeout ({hold_candle_now}/{max_candle} candle)"
 
+        # 21/11/2026 crowd-bounce-close: deal yg ditandai saat >= 4 deal minus >= 3% bersamaan -> close begitu harga >= +1% dari entry
+        if not do_close and CROWD_BOUNCE_ENABLED and d.get('crowd_flag') and entry > 0 and price >= entry * (1 + CROWD_BOUNCE_TARGET_PCT / 100):
+            do_close = True; _crowd_forced_close = True
+            reason = (f"Rem banyak-deal-minus: harga kembali +{(price / entry - 1) * 100:.2f}% dari entry "
+                      f"(ditandai saat >= {CROWD_BOUNCE_MIN_DEALS} deal minus >= {CROWD_BOUNCE_DOWN_PCT:.0f}% bersamaan)")
         # simpan peak/armed/last_price
         with active_deals_lock:
             if sym in active_deals:
@@ -15520,7 +15530,7 @@ def thread2_monitor():
             # notifikasi Telegram + boros API call AI utk keputusan yg pada dasarnya sama
             # berulang-ulang. Generik lintas SEMUA strategi (bukan cuma trend_confirm_4h),
             # krn ini bug pemborosan, bukan pilihan desain per-strategi.
-            if not _ai_override_bypassed and not _tier_forced_close and not _be_forced_close and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
+            if not _ai_override_bypassed and not _tier_forced_close and not _be_forced_close and not _crowd_forced_close and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
                 _close_ai_hold_until = float(d.get('close_ai_hold_until', 0) or 0)
                 if time.time() < _close_ai_hold_until:
                     log(f"[T2] {sym} CLOSE di-hold (cooldown AI {(_close_ai_hold_until - time.time())/60:.1f} menit lagi, reason: {reason})")
@@ -27669,6 +27679,58 @@ WK_ADD_WINDOW_H = 24
 WK_HTF_SIZE_ENABLED = True
 WK_HTF_EMA20_MAX_PCT = -10.0
 WK_HTF_SIZE_MULT = 2.0
+
+# 21/11/2026 'crowd-bounce-close' (Mas Budi: "(b1)"): when >= 4 open deals (all strategies) are >= 3% below their entry
+# price at the same time (checked once per hour, on the first T2 cycle of each new hour), those deals get flagged; a
+# flagged deal is closed as soon as its price gets back to >= +1% above entry (AI close gate is skipped). The flag stays
+# until the deal closes. Stage-2 wallet sim 2022-2026 (scratchpad portfolio/crowd.py, #7): +20.9%/yr, MDD -8.2%
+# (vs +23.0% / -11.5% without), worst -17.2% (vs -19.3%), TRAIN +81% / TEST +102% (vs +87% / +122%), 5/5 years positive.
+# Ide 1 (stop new trend deals when 2-3 deals are down) had no effect in the same sim -- not used.
+CROWD_BOUNCE_ENABLED = True
+CROWD_BOUNCE_MIN_DEALS = 4
+CROWD_BOUNCE_DOWN_PCT = 3.0
+CROWD_BOUNCE_TARGET_PCT = 1.0
+_crowd_last_hour = [None]
+
+
+def crowd_bounce_update():
+    """Once per WIB hour: if >= CROWD_BOUNCE_MIN_DEALS open deals are <= -CROWD_BOUNCE_DOWN_PCT (price vs entry, no fee),
+    flag them ('crowd_flag'); thread2_monitor closes a flagged deal when price >= entry * (1 + target)."""
+    if not CROWD_BOUNCE_ENABLED:
+        return
+    hour_key = now_wib().strftime('%Y-%m-%d %H')
+    if _crowd_last_hour[0] == hour_key:
+        return
+    _crowd_last_hour[0] = hour_key
+    try:
+        with active_deals_lock:
+            snap = {k: dict(v) for k, v in active_deals.items()}
+        down = []
+        for sym, d in snap.items():
+            entry = float(d.get('entry_price', 0) or 0); price = float(d.get('last_price', 0) or 0)
+            if entry > 0 and price > 0:
+                pct = (price / entry - 1) * 100
+                if pct <= -CROWD_BOUNCE_DOWN_PCT:
+                    down.append((sym, pct))
+        if len(down) < CROWD_BOUNCE_MIN_DEALS:
+            log(f"[CROWD] {len(down)} deal minus >= {CROWD_BOUNCE_DOWN_PCT:.0f}% (perlu {CROWD_BOUNCE_MIN_DEALS}) -- tidak ada penandaan")
+            return
+        new = []
+        with active_deals_lock:
+            for sym, pct in down:
+                if sym in active_deals and not active_deals[sym].get('crowd_flag'):
+                    active_deals[sym]['crowd_flag'] = True
+                    active_deals[sym]['crowd_flag_ts'] = time.time()
+                    new.append((sym, pct))
+        save_active_deals()
+        txt = ", ".join(f"{to_display_pair(s)} {p:+.1f}%" for s, p in sorted(down, key=lambda x: x[1]))
+        log(f"[CROWD] {len(down)} deal minus >= {CROWD_BOUNCE_DOWN_PCT:.0f}% bersamaan: {txt} | baru ditandai {len(new)}")
+        if new:
+            send_telegram(f"\u26a0\ufe0f Rem banyak-deal-minus: {len(down)} deal sedang minus >= {CROWD_BOUNCE_DOWN_PCT:.0f}% bersamaan\n"
+                          f"{txt}\n"
+                          f"Deal yang ditandai akan di-close begitu harganya kembali >= +{CROWD_BOUNCE_TARGET_PCT:.0f}% dari entry.")
+    except Exception as e:
+        log(f"WARN [CROWD] crowd_bounce_update error: {e}")
 
 
 def wk_htf_check(sym: str, now_ms: int) -> tuple:

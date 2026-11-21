@@ -187,6 +187,11 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
+### crowd-bounce-close (HASH, 21/11, Mas Budi: "(b1)")
+- Semua strategi: tiap jam (siklus T2 pertama di jam baru) hitung deal aktif yg harganya >=3% di bawah entry; kalau >=4 deal -> deal2 itu ditandai (crowd_flag)
+- Deal yg ditandai di-close begitu harga kembali >= +1% dari entry (gerbang AI close dilewati); tanda tetap sampai deal close. Telegram saat ada penandaan baru, log [CROWD] tiap jam
+- Dasar: simulasi dompet tahap 2 (1,5%, maks 20/strategi) 2022-2026: +23,0%/thn & turun terdalam -11,5% -> +20,9%/thn & -8,2%; terburuk -19,3% -> -17,2%; Train +87 -> +81%, Test +122 -> +102%; 5/5 tahun positif. Ide 1 (stop deal tren bila 2-3 deal minus) tidak berpengaruh -> tidak dipasang
+- Status: deploy 21/11
 ### wk-htf-size (0dc7792, 21/11, Mas Budi: "YA")
 - Wyckoff-Spring-4h: sebelum open long cek candle 1D KOIN yg sudah tutup: close >=10% di bawah EMA20 1D -> modal x2 ($6 -> $12, add fund ikut $12); tidak lolos -> modal biasa
 - Tag CSV entry_mode htf_lolos / htf_tidak; Telegram OPEN tampilkan hasil cek; Performance +2 baris (lolos / tidak lolos)
