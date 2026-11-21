@@ -187,7 +187,7 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
-### pb4h-htf-size (PENDING_HASH, 21/11, Mas Budi: "YA")
+### pb4h-htf-size (df5c9a0, 21/11, Mas Budi: "YA")
 - PantulanPanik-4h: sebelum open long cek kondisi 1D KOIN (candle 1D tutup): turun >=40% dlm 30 hari ATAU close >=20% di bawah EMA50 1D
 - Lolos -> modal x2 ($6 -> $12); tidak lolos -> tetap open, modal biasa ($6). Tag CSV entry_mode = htf_lolos / htf_tidak; Telegram OPEN tampilkan hasil cek
 - Performance: 2 baris tambahan "PantulanPanik-4h (lolos cek HTF 1D, modal x2)" & "(tidak lolos HTF, modal biasa)"
