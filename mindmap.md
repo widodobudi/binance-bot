@@ -187,7 +187,7 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
-### wk-htf-size (PENDING_HASH, 21/11, Mas Budi: "YA")
+### wk-htf-size (0dc7792, 21/11, Mas Budi: "YA")
 - Wyckoff-Spring-4h: sebelum open long cek candle 1D KOIN yg sudah tutup: close >=10% di bawah EMA20 1D -> modal x2 ($6 -> $12, add fund ikut $12); tidak lolos -> modal biasa
 - Tag CSV entry_mode htf_lolos / htf_tidak; Telegram OPEN tampilkan hasil cek; Performance +2 baris (lolos / tidak lolos)
 - Dasar: backtest 1m 2022-2026, 325 deal: $ +53 -> +99, per $ modal 1,81% -> 1,99%, Train/Test & 5/5 tahun lebih baik. Syarat PantulanPanik (OR) tidak membantu Wyckoff
