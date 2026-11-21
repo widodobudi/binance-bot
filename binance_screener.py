@@ -4160,9 +4160,9 @@ def kb12h_perf_rules_now() -> dict:
     return out
 
 
-def pb4h_perf_htf(mode: str) -> dict:
-    """21/11/2026 'pb4h-htf-size': PantulanPanik-4h closed deals tagged entry_mode == mode ('htf_lolos' / 'htf_tidak'),
-    same fields as kb12h_perf_rules_now() for the Performance panel."""
+def pb4h_perf_htf(mode: str, strategy: str = 'panic_bounce_4h') -> dict:
+    """21/11/2026 'pb4h-htf-size' / 'wk-htf-size': closed deals of `strategy` tagged entry_mode == mode ('htf_lolos' /
+    'htf_tidak'), same fields as kb12h_perf_rules_now() for the Performance panel."""
     out = {'n': 0, 'win': 0, 'loss': 0, 'total_pct': 0.0, 'rate': 0.0, 'rate_unit': None, 'interval_days': None,
            'last_win_close_wib': None, 'last_win_symbol': None}
     try:
@@ -4174,7 +4174,7 @@ def pb4h_perf_htf(mode: str) -> dict:
         return out
     now = now_wib(); counts = {w: 0 for w, _, _ in STRATEGY_CLOSE_FREQ_TIERS}; last = None
     for r in rows:
-        if r.get('status') != 'CLOSED' or r.get('strategy') != 'panic_bounce_4h' or (r.get('entry_mode') or '') != mode:
+        if r.get('status') != 'CLOSED' or r.get('strategy') != strategy or (r.get('entry_mode') or '') != mode:
             continue
         try:
             p = float(r.get('profit_pct', '') or 0)
@@ -10229,6 +10229,9 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
     elif strategy == 'wyckoff_spring_4h':   # 18/11/2026 Wyckoff-Spring-4h: flat base_usd ($6); add fund via wk_addfund_check()
         target  = float(_cfg_base if _cfg_base else 6.0)
         add_usd = 0
+        if size_mult and size_mult != 1.0:   # 21/11/2026 'wk-htf-size': coin >= 10% below EMA20 1D -> base x2
+            target = round(target * size_mult, 2)
+            log(f"[SIZING] {symbol} Wyckoff-Spring-4h lolos cek HTF 1D -> modal ${target:.2f} (x{size_mult:g}, patch wk-htf-size)")
     elif strategy == 'trend_confirm_4h' and TC4H_V2_ENABLED:   # 10/11/2026 tc4h-v2: flat $8, no add-fund
         target  = float(_cfg_base if _cfg_base else 8.0)
         add_usd = 0
@@ -27657,6 +27660,34 @@ WK_ARM_MULT = 6.0
 WK_MAX_HOLD_CANDLES = 15
 WK_ADD_ABOVE_PCT = 2.0
 WK_ADD_WINDOW_H = 24
+# 21/11/2026 'wk-htf-size' (Mas Budi: "YA"): before opening, check the coin's closed 1D candles: close >= 10% below
+# EMA20 1D -> base x2 ($6 -> $12, the add fund follows the deal's base); otherwise opens at the normal base. Tagged in
+# CSV entry_mode ('htf_lolos' / 'htf_tidak'), 2 extra Performance rows. 1-minute test 2022-2026, 325 deals (scratchpad
+# newstrat/wyck_htf2.py): lolos 228 deals +1.21%/deal (TRAIN +0.88 / TEST +1.59); $6 flat +$53 (1.81% per $) ->
+# $12/$6 +$99 (1.99% per $), TRAIN +$45 / TEST +$54, every year above flat (+9/+4/+54/+9/+21 vs +2/+3/+31/+5/+13).
+# The PantulanPanik-4h check (30d <= -40% OR EMA50 <= -20%) did not help Wyckoff (same 1.81% per $) -- not used here.
+WK_HTF_SIZE_ENABLED = True
+WK_HTF_EMA20_MAX_PCT = -10.0
+WK_HTF_SIZE_MULT = 2.0
+
+
+def wk_htf_check(sym: str, now_ms: int) -> tuple:
+    """Return (lolos, ema20_pct) from the coin's CLOSED 1D candles. Data missing -> (False, None)."""
+    try:
+        df = get_ohlcv(sym, interval='1d', limit=200)
+        if df is None or len(df) < 25:
+            return False, None
+        if int(df['ct'].iloc[-1]) >= now_ms:
+            df = df.iloc[:-1]
+        c = df['close'].astype(float)
+        ema = ta.ema(c, length=20)
+        if ema is None or pd.isna(ema.iloc[-1]):
+            return False, None
+        e20 = float((c.iloc[-1] / ema.iloc[-1] - 1) * 100)
+        return e20 <= WK_HTF_EMA20_MAX_PCT, e20
+    except Exception as e:
+        log(f"  [T_WK] cek HTF {sym} gagal: {e}")
+        return False, None
 _wk_last_candle = [(int(time.time()) // STRAT4H_SECONDS) * STRAT4H_SECONDS * 1000]
 
 
@@ -27782,7 +27813,11 @@ def thread_wyckoff_scan(dry_run: bool = False) -> None:
             break
         with active_deals_lock:
             if sym in active_deals: continue
-        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='wyckoff_spring_4h', atr_pct=atrp)
+        wk_ok, wk_e20 = wk_htf_check(sym, now_ms) if WK_HTF_SIZE_ENABLED else (False, None)
+        wk_htf_txt = (f"HTF 1D: vs EMA20 {'-' if wk_e20 is None else f'{wk_e20:+.1f}%'} -> "
+                      f"{'LOLOS (modal x' + format(WK_HTF_SIZE_MULT, 'g') + ')' if wk_ok else 'tidak lolos (modal biasa)'}")
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='wyckoff_spring_4h', atr_pct=atrp,
+                                                        size_mult=WK_HTF_SIZE_MULT if wk_ok else 1.0)
         if not ok: continue
         try:
             entry_price = get_price_now(sym)
@@ -27795,12 +27830,13 @@ def thread_wyckoff_scan(dry_run: bool = False) -> None:
             "atr_pct": atrp, "score": 1, "opened_ts": time.time(), "opened_candle_ts": int(candle_open_ms),
             "trailing_armed": False, "opened_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "target_usd": target_usd,
             "add_usd": 0, "tf": "4h", "wk_entry0": entry_price, "wk_support": ev['support'],
-            "wk_spring_low": ev['spring_low'], "wk_resistance": ev['resistance'],
+            "wk_spring_low": ev['spring_low'], "wk_resistance": ev['resistance'], "htf_lolos": bool(wk_ok),
         })
         send_telegram(
             f"Wyckoff-Spring-4h | OPEN LONG\n{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
             f"Pair  : {to_display_pair(sym)}\nHarga entry: {_fmt_price(entry_price)} (sinyal 4h {_fmt_price(signal_price)}, slip {slip:+.2f}%)\n"
             f"Kotak 10 hari: support {_fmt_price(ev['support'])} / resistance {_fmt_price(ev['resistance'])}, low spring {_fmt_price(ev['spring_low'])}\n"
+            f"{wk_htf_txt}\n"
             f"ATR%  : {atrp:.2f} - {hard_stop_pct(atrp, 'wyckoff_spring_4h')[0]}\n"
             f"Modal: ${target_usd:.0f} | add fund ${target_usd:.0f} kalau candle 4h hijau tutup >= {WK_ADD_ABOVE_PCT:g}% di atas entry dlm {WK_ADD_WINDOW_H} jam\n"
             f"Exit: trailing aktif di {get_arm_pct(atrp, 'wyckoff_spring_4h'):.1f}%, tahan maks {WK_MAX_HOLD_CANDLES} candle 4h (60 jam)\n"
@@ -27811,10 +27847,12 @@ def thread_wyckoff_scan(dry_run: bool = False) -> None:
             'signal_price': f"{_fmt_price(signal_price)}", 'entry_price': f"{_fmt_price(entry_price)}",
             'slip_pct': f"{slip:+.2f}", 'atr_pct': f"{atrp:.2f}", 'trail_dist_pct': f"{trailing_dist(atrp)}",
             'base_usd': target_usd, 'score': 1, 'strategy': 'wyckoff_spring_4h',
+            'entry_mode': 'htf_lolos' if wk_ok else 'htf_tidak',
         })
         log_oac('OPEN', sym, 'Wyckoff-Spring-4h', {'entry_price': _fmt_price(entry_price), 'support': _fmt_price(ev['support']),
                                                    'spring_low': _fmt_price(ev['spring_low']), 'atr_pct': f"{atrp:.2f}%"})
-        log(f"[T_WK] OPEN {sym} @ {entry_price:.8g} (support {ev['support']:.8g}, low spring {ev['spring_low']:.8g}, ATR {atrp:.2f})")
+        log(f"[T_WK] OPEN {sym} @ {entry_price:.8g} (support {ev['support']:.8g}, low spring {ev['spring_low']:.8g}, ATR {atrp:.2f}) "
+            f"modal ${target_usd:.2f} | {wk_htf_txt}")
 
 
 def wk_addfund_check() -> None:
@@ -35126,10 +35164,11 @@ def run_web_dashboard():
                              "last_win_close_wib": r["last_win_close_wib"],
                              "last_win_symbol": r.get("last_win_symbol"),
                              "phases": [] if key == "brkX2_12h_closed" else phases.get(key, [])})
-                if key == "panic_bounce_4h" and PB4H_HTF_SIZE_ENABLED:   # 21/11/2026 'pb4h-htf-size'
+                if (key == "panic_bounce_4h" and PB4H_HTF_SIZE_ENABLED) or (key == "wyckoff_spring_4h" and WK_HTF_SIZE_ENABLED):
+                    # 21/11/2026 'pb4h-htf-size' / 'wk-htf-size'
                     for mode, sub in (("htf_lolos", "lolos cek HTF 1D, modal x2"), ("htf_tidak", "tidak lolos HTF, modal biasa")):
-                        q = pb4h_perf_htf(mode)
-                        rows.append({"key": f"panic_bounce_4h_{mode}", "label": f"PantulanPanik-4h ({sub})", "n": q["n"],
+                        q = pb4h_perf_htf(mode, key)
+                        rows.append({"key": f"{key}_{mode}", "label": f"{label} ({sub})", "n": q["n"],
                                      "win": q["win"], "loss": q["loss"], "total_pct": round(q["total_pct"], 2),
                                      "close_rate": q["rate"], "close_rate_unit": q["rate_unit"],
                                      "close_interval_days": q["interval_days"], "last_win_close_wib": q["last_win_close_wib"],
