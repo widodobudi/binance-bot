@@ -15031,6 +15031,7 @@ def thread2_monitor():
         btc_dump_exit_triggered=False
         _be_forced_close=False   # 06/10/2026: penutupan impas brkX2-4h (lewati gerbang AI close)
         _crowd_forced_close=False   # 21/11/2026 crowd-bounce-close (lewati gerbang AI close)
+        _ema20_forced_close=False   # 23/11/2026 pb4h-ema20-exit (lewati gerbang AI close)
         # TP custom: tutup otomatis begitu U/PnL bersih (net -0.2% fee) sudah >= target $ per deal
         # (default $1.00 kalau belum diisi manual). Pakai estimate_deal_total_usd()
         # (qty_coin * entry_price aktual) supaya modal yang dipakai cek TP sama persis dengan
@@ -15490,6 +15491,12 @@ def thread2_monitor():
             do_close = True; _crowd_forced_close = True
             reason = (f"Rem banyak-deal-minus: harga kembali +{(price / entry - 1) * 100:.2f}% dari entry "
                       f"(ditandai saat >= {CROWD_BOUNCE_MIN_DEALS} deal minus >= {CROWD_BOUNCE_DOWN_PCT:.0f}% bersamaan)")
+        # 23/11/2026 pb4h-ema20-exit: PantulanPanik-4h close begitu candle 4h yg sudah tutup (setelah deal dibuka) tutup di atas EMA20 4h DAN di atas harga entry
+        if not do_close and strat == 'panic_bounce_4h' and PB4H_EMA20_EXIT_ENABLED and opened_ts > 0 and entry > 0:
+            _ema_reason = pb4h_ema20_exit_check(sym, d, entry, opened_ts)
+            if _ema_reason:
+                do_close = True; _ema20_forced_close = True
+                reason = _ema_reason
         # simpan peak/armed/last_price
         with active_deals_lock:
             if sym in active_deals:
@@ -15530,7 +15537,7 @@ def thread2_monitor():
             # notifikasi Telegram + boros API call AI utk keputusan yg pada dasarnya sama
             # berulang-ulang. Generik lintas SEMUA strategi (bukan cuma trend_confirm_4h),
             # krn ini bug pemborosan, bukan pilihan desain per-strategi.
-            if not _ai_override_bypassed and not _tier_forced_close and not _be_forced_close and not _crowd_forced_close and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
+            if not _ai_override_bypassed and not _tier_forced_close and not _be_forced_close and not _crowd_forced_close and not _ema20_forced_close and get_deal_override(sym, 'ai_call', is_ai_call_close_enabled(strat)):
                 _close_ai_hold_until = float(d.get('close_ai_hold_until', 0) or 0)
                 if time.time() < _close_ai_hold_until:
                     log(f"[T2] {sym} CLOSE di-hold (cooldown AI {(_close_ai_hold_until - time.time())/60:.1f} menit lagi, reason: {reason})")
@@ -27731,6 +27738,54 @@ def crowd_bounce_update():
                           f"Deal yang ditandai akan di-close begitu harganya kembali >= +{CROWD_BOUNCE_TARGET_PCT:.0f}% dari entry.")
     except Exception as e:
         log(f"WARN [CROWD] crowd_bounce_update error: {e}")
+
+
+# 23/11/2026 'pb4h-ema20-exit' (Mas Budi: "Mau, bot dipasang aturan ini juga"): PantulanPanik-4h deals now ALSO close when a
+# CLOSED 4h candle (one that closed after the deal opened) has close > EMA20(4h) AND close > the entry price. Hard stop,
+# trailing and the 15 x 4h timeout are unchanged. Idea: once price is back above EMA20 the bounce has done its job; if price
+# keeps rising, another strategy can open a new deal. 1-minute test 2022-2026, 553 deals (scratchpad newstrat/pb4h_emaexit.py):
+# live exit +3.95%/deal WR 72% -> +4.06% WR 74%; 24% of deals exit this way; hold 37.4h -> 34.7h; worst -10.1% unchanged;
+# TRAIN +3.59 -> +3.62, TEST +4.35 -> +4.56. The gain is small (~+0.11 pts); the main effect is capital freed ~3h earlier.
+PB4H_EMA20_EXIT_ENABLED = True
+PB4H_EMA20_LEN = 20
+PB4H_EMA20_RETRY_SEC = 45
+
+
+def pb4h_ema20_exit_check(sym: str, d: dict, entry: float, opened_ts: float):
+    """Return a close reason when the last CLOSED 4h candle (closed after the deal opened) is above EMA20 and above entry,
+    else None. One successful evaluation per 4h candle per deal; a failed data read is retried after PB4H_EMA20_RETRY_SEC."""
+    try:
+        now = time.time()
+        now_ms = int(now * 1000)
+        ms4h = STRAT4H_SECONDS * 1000
+        candle_close_ms = (now_ms // ms4h) * ms4h          # closing time of the last closed 4h candle
+        if candle_close_ms <= int(opened_ts * 1000):
+            return None                                     # that candle closed before the deal opened
+        if d.get('pb4h_ema_done') == candle_close_ms:
+            return None
+        if now - float(d.get('pb4h_ema_try', 0) or 0) < PB4H_EMA20_RETRY_SEC:
+            return None
+        with active_deals_lock:
+            if sym in active_deals:
+                active_deals[sym]['pb4h_ema_try'] = now
+        df = _closed_4h(sym, now_ms)
+        if df is None or int(df['ts'].iloc[-1]) != candle_close_ms - ms4h:
+            return None                                     # data of the newest closed candle not ready yet -> retry
+        c = df['close'].astype(float)
+        ema = ta.ema(c, length=PB4H_EMA20_LEN)
+        if ema is None or pd.isna(ema.iloc[-1]):
+            return None
+        with active_deals_lock:
+            if sym in active_deals:
+                active_deals[sym]['pb4h_ema_done'] = candle_close_ms
+        close_px, ema_px = float(c.iloc[-1]), float(ema.iloc[-1])
+        if close_px > ema_px and close_px > entry:
+            return (f"EMA20 4h: candle 4h tutup {close_px:.8g} di atas EMA20 {ema_px:.8g} dan di atas entry "
+                    f"(+{(close_px / entry - 1) * 100:.2f}%) -- PantulanPanik-4h selesai, kenaikan lanjutan diserahkan ke strategi lain")
+        return None
+    except Exception as e:
+        log(f"WARN [PB4H-EMA20] {sym}: {e}")
+        return None
 
 
 def wk_htf_check(sym: str, now_ms: int) -> tuple:
