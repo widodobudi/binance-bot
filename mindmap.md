@@ -187,6 +187,12 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
+### ws-gap-repair (4fb8948, 23/11, Mas Budi: "Mau, cek juga pada jam-jam lain")
+- Bug: restart yg backfill REST-nya melintasi penutupan candle (23/11: backfill 4h 22:55:42-23:00:10, WS tersambung 23:00:13) melewatkan pesan penutup candle 19:00 -> cache 737 koin kehilangan candle tertutup terakhir -> scan 4h 23:00 dilewati (log "data 4h BTC tidak lengkap sampai 20 menit"), Kandidat Terdekat kosong; penutupan berikutnya menambah candle dgn lubang di tengah (indikator meleset sampai restart). Cache 8h ikut terkena (selesai 23:01:09, batas 8h 23:00)
+- Perbaikan: tiap WS tersambung/tersambung ulang (on_open) jalan _ws_repair_gap utk cache 4h (BX4H) & 8h (WS8H): koin yg candle tertutup terakhirnya lebih tua dari seharusnya diisi ulang via REST + digabung; 0 panggilan REST bila tidak ada yg tertinggal
+- Cek riwayat 14-23/11 (semua "Backfill selesai"): hanya restart 23/11 22:54 yg melintasi batas candle 4h/8h; 14/11 15:00 (PB4H dilewati, dulu dikira HTTP 500) kemungkinan serupa (restart ~15:00), belum terbukti
+- Belum dilindungi: cache 12h (KB12H, batas 07/19 WIB) dan 1h (MB1H, tiap jam) -- pola sama, backfill-nya lebih singkat; risiko lebih kecil
+- Status: deploy 23/11
 ### wk-arm-5.5x (7a024c4, 23/11, Mas Budi: "addjust jadi 5,50x")
 - Wyckoff-Spring-4h: ambang aktif trailing 6x -> 5,5x ATR tier (Aktif: 12% -> 11%); berlaku juga untuk deal PENDLE yg sedang terbuka (dihitung ulang tiap siklus)
 - Uji 1 menit 325 deal, kelipatan 0,25 dari 2x-8x: 6x $0,164/deal, 5,5x $0,150, puncak 6,75-7x $0,182; ambang <4x jelas lebih buruk. Dipilih 5,5x agar wick PENDLE 1,398 (+11,3%) sempat mengaktifkan trailing; harga: ~-$0,014/deal vs 6x
