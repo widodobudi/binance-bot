@@ -191,7 +191,7 @@
 - PantulanPanik-4h: deal ikut di-close begitu candle 4h yg sudah tutup (setelah deal dibuka) tutup di atas EMA20 4h DAN di atas harga entry; gerbang AI close dilewati. Hard stop, trailing, batas 15 candle 4h tidak berubah
 - Alasan: kalau harga masih naik, kenaikan lanjutan diserahkan ke strategi lain yg membuka deal baru. Dicek sekali per candle 4h per deal (jeda ulang 45 detik kalau data candle belum siap); log "[PB4H-EMA20]" hanya saat error, alasan close tampil di riwayat deal
 - Dasar: uji 1 menit 2022-2026, 553 deal: exit lama +3,95%/deal menang 72% -> +4,06% menang 74%; 24% deal keluar lewat aturan ini; lama tahan 37,4 -> 34,7 jam; terburuk tetap -10,1%; Train +3,59 -> +3,62, Test +4,35 -> +4,56. Tambahan kecil (~+0,11 poin), manfaat utama modal kembali ~3 jam lebih cepat
-- Indikator TradingView Panic Bounce 4h Signals v1.6 memakai aturan yg sama (opsi emaExit)
+- Indikator TradingView Panic Bounce 4h Signals: v1.6 sempat memakai aturan yg sama (opsi emaExit), lalu 23/11 DIKEMBALIKAN ke perilaku v1.5 atas permintaan Mas Budi (TradingView tidak bisa menerbitkan ulang nomor lama; versi baru diberi label "v1.5 restored"). Hanya bot yg memakai aturan EMA20
 - Status: deploy 23/11
 ### crowd-bounce-close (56cfb2d, 21/11, Mas Budi: "(b1)")
 - Semua strategi: tiap jam (siklus T2 pertama di jam baru) hitung deal aktif yg harganya >=3% di bawah entry; kalau >=4 deal -> deal2 itu ditandai (crowd_flag)
