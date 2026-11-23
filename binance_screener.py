@@ -10625,7 +10625,11 @@ def _ws_repair_gap(tag, symbols, interval_ms, closed_d, forming_d, lock, ts_col,
             with lock:
                 cur = closed_d.get(sym)
                 last = int(cur.iloc[-1][ts_col]) if cur is not None and len(cur) else 0
-            if last >= expected:
+                f0 = forming_d.get(sym)
+                f_ts = int(f0[ts_col]) if f0 else 0
+            # skip symbols that are simply inactive (no trades -> no recent candle, forming row also old): a refetch
+            # would return the same old candle (first deploy refilled 236 such symbols for nothing)
+            if last >= expected or f_ts < expected:
                 continue
             df = fetch(sym, limit)
             if df is None or len(df) < 2:
