@@ -10610,6 +10610,45 @@ def get_ohlcv_8h_ws(symbol: str, limit: int = 120):
             return full.tail(limit).reset_index(drop=True)
     return get_ohlcv(symbol, interval="8h", limit=limit)
 
+# 23/11/2026 'ws-gap-repair' (Mas Budi: "Mau"): a restart whose REST backfill straddles a candle close (23/11: 4h backfill
+# 22:55:42 -> 23:00:10, WS connected 23:00:13) misses that candle's closing message, so EVERY symbol's cache lacks the last
+# closed candle (scan 23:00 skipped; later closes then append with a hole in the middle). on_open (every connect AND
+# reconnect) now starts this repair: for symbols whose newest closed candle is older than the expected one, refetch by
+# REST and merge (WS-delivered newer rows kept). Zero REST calls when nothing is missing.
+def _ws_repair_gap(tag, symbols, interval_ms, closed_d, forming_d, lock, ts_col, fetch, limit, stagger):
+    try:
+        time.sleep(8)    # let the first WS messages land
+        now_ms = int(time.time() * 1000)
+        expected = (now_ms // interval_ms) * interval_ms - interval_ms     # open time of the newest CLOSED candle
+        fixed = 0
+        for sym in symbols:
+            with lock:
+                cur = closed_d.get(sym)
+                last = int(cur.iloc[-1][ts_col]) if cur is not None and len(cur) else 0
+            if last >= expected:
+                continue
+            df = fetch(sym, limit)
+            if df is None or len(df) < 2:
+                continue
+            closed = df[df["ct"] < int(time.time() * 1000)].reset_index(drop=True)
+            if len(closed) == 0:
+                continue
+            last_rest = int(closed.iloc[-1][ts_col])
+            with lock:
+                cur = closed_d.get(sym)
+                newer = cur[cur[ts_col] > last_rest] if cur is not None and len(cur) else None
+                merged = pd.concat([closed, newer], ignore_index=True) if newer is not None and len(newer) else closed
+                closed_d[sym] = merged.tail(limit).reset_index(drop=True)
+                f = forming_d.get(sym)
+                if f and int(f[ts_col]) <= last_rest:
+                    forming_d.pop(sym, None)
+            fixed += 1
+            time.sleep(stagger)
+        log(f"[{tag}] ws-gap-repair: {fixed} simbol diisi ulang (candle tertutup seharusnya buka {expected})")
+    except Exception as e:
+        log(f"WARN [{tag}] ws-gap-repair error: {e}")
+
+
 def run_thread_ws8h_klines_ws() -> None:
     """Thread T-WS8H-WS: backfill histori 8h (REST, SEKALI saat startup, delay
     WS8H_BACKFILL_START_DELAY_SEC) lalu pegang 1 koneksi WebSocket kline_8h terus-menerus
@@ -10658,6 +10697,9 @@ def run_thread_ws8h_klines_ws() -> None:
                 log(f"WARN [T-WS8H-WS] subscribe batch {i}: {e}")
             time.sleep(0.3)
         log(f"[T-WS8H-WS] Connected & subscribe {len(symbols)} simbol kline_8h.")
+        threading.Thread(target=_ws_repair_gap, daemon=True, args=(
+            "T-WS8H-WS", list(symbols), 8 * 3600_000, WS8H_CLOSED, WS8H_FORMING, ws8h_lock, "ot",
+            lambda s, n: get_ohlcv(s, interval="8h", limit=n), WS8H_BACKFILL_LIMIT, WS8H_BACKFILL_STAGGER_SEC)).start()
 
     def on_message(ws, message):
         try:
@@ -12591,6 +12633,9 @@ def run_thread_bx4h_klines_ws() -> None:
                 log(f"WARN [T-BX4H-WS] subscribe batch {i}: {e}")
             time.sleep(0.3)
         log(f"[T-BX4H-WS] Connected & subscribe {len(symbols)} simbol kline_4h.")
+        threading.Thread(target=_ws_repair_gap, daemon=True, args=(
+            "T-BX4H-WS", list(symbols), STRAT4H_SECONDS * 1000, BX4H_WS_CLOSED, BX4H_WS_FORMING, bx4h_ws_lock, "ts",
+            lambda s, n: get_ohlcv_4h(s, limit=n), BX4H_WS_BACKFILL_LIMIT, BX4H_WS_BACKFILL_STAGGER_SEC)).start()
 
     def on_message(ws, message):
         try:
