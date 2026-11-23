@@ -187,6 +187,12 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
+### pb4h-ema20-exit (fdb87c0, 23/11, Mas Budi: "Mau, bot dipasang aturan ini juga")
+- PantulanPanik-4h: deal ikut di-close begitu candle 4h yg sudah tutup (setelah deal dibuka) tutup di atas EMA20 4h DAN di atas harga entry; gerbang AI close dilewati. Hard stop, trailing, batas 15 candle 4h tidak berubah
+- Alasan: kalau harga masih naik, kenaikan lanjutan diserahkan ke strategi lain yg membuka deal baru. Dicek sekali per candle 4h per deal (jeda ulang 45 detik kalau data candle belum siap); log "[PB4H-EMA20]" hanya saat error, alasan close tampil di riwayat deal
+- Dasar: uji 1 menit 2022-2026, 553 deal: exit lama +3,95%/deal menang 72% -> +4,06% menang 74%; 24% deal keluar lewat aturan ini; lama tahan 37,4 -> 34,7 jam; terburuk tetap -10,1%; Train +3,59 -> +3,62, Test +4,35 -> +4,56. Tambahan kecil (~+0,11 poin), manfaat utama modal kembali ~3 jam lebih cepat
+- Indikator TradingView Panic Bounce 4h Signals v1.6 memakai aturan yg sama (opsi emaExit)
+- Status: deploy 23/11
 ### crowd-bounce-close (56cfb2d, 21/11, Mas Budi: "(b1)")
 - Semua strategi: tiap jam (siklus T2 pertama di jam baru) hitung deal aktif yg harganya >=3% di bawah entry; kalau >=4 deal -> deal2 itu ditandai (crowd_flag)
 - Deal yg ditandai di-close begitu harga kembali >= +1% dari entry (gerbang AI close dilewati); tanda tetap sampai deal close. Telegram saat ada penandaan baru, log [CROWD] tiap jam
