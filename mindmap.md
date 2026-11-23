@@ -187,6 +187,11 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
+### wk-arm-5.5x (7a024c4, 23/11, Mas Budi: "addjust jadi 5,50x")
+- Wyckoff-Spring-4h: ambang aktif trailing 6x -> 5,5x ATR tier (Aktif: 12% -> 11%); berlaku juga untuk deal PENDLE yg sedang terbuka (dihitung ulang tiap siklus)
+- Uji 1 menit 325 deal, kelipatan 0,25 dari 2x-8x: 6x $0,164/deal, 5,5x $0,150, puncak 6,75-7x $0,182; ambang <4x jelas lebih buruk. Dipilih 5,5x agar wick PENDLE 1,398 (+11,3%) sempat mengaktifkan trailing; harga: ~-$0,014/deal vs 6x
+- Exit EMA20 untuk Wyckoff TIDAK dipasang (uji dompet: 23,0% -> 21,2%/thn)
+- Status: deploy 23/11
 ### pb4h-ema20-exit (fdb87c0, 23/11, Mas Budi: "Mau, bot dipasang aturan ini juga")
 - PantulanPanik-4h: deal ikut di-close begitu candle 4h yg sudah tutup (setelah deal dibuka) tutup di atas EMA20 4h DAN di atas harga entry; gerbang AI close dilewati. Hard stop, trailing, batas 15 candle 4h tidak berubah
 - Alasan: kalau harga masih naik, kenaikan lanjutan diserahkan ke strategi lain yg membuka deal baru. Dicek sekali per candle 4h per deal (jeda ulang 45 detik kalau data candle belum siap); log "[PB4H-EMA20]" hanya saat error, alasan close tampil di riwayat deal
