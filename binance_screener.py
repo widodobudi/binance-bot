@@ -58,6 +58,13 @@ def _cci_fixed(high, low, close, length=14):
 sys.stdout.reconfigure(line_buffering=True)   # tiap baris langsung flush ke Railway log
 from datetime import datetime, timedelta, timezone
 import requests as _requests_mod
+# 25/11/2026 'ind-rules' (Mas Budi): indicator rules for Auto Sell Asset + Active Deals TP (file ind_rules.py, same folder).
+# A failed import must never stop the bot -- the rule features simply stay off.
+try:
+    import ind_rules as _IR
+except Exception as _ir_err:
+    _IR = None
+    print(f"WARN [IND-RULES] ind_rules.py gagal dimuat, fitur aturan indikator mati: {_ir_err}")
 # Google Drive sync (opsional — aktif hanya kalau GDRIVE_SERVICE_ACCOUNT di-set di env)
 try:
     from google.oauth2 import service_account as _sa
@@ -5348,7 +5355,7 @@ def save_active_deals():
         log(f"WARN gagal simpan active_deals.json: {e}")
 
 TP_OVERRIDE_KEYS_RESET_ON_OPEN = ('tp1_target_mode', 'tp1_target_pct', 'tp1_target_price',
-                                   'tp1_target_usd', 'tp1usd', 'tp_tiers')
+                                   'tp1_target_usd', 'tp1usd', 'tp_tiers', 'tp1_rule_text')
 
 def add_to_active_deals(symbol: str, data: dict):
     # Patch "tp-net-profit-gate" (18/10/2026, root cause dari kasus HBAR/USDT MomentumBreak-1h
@@ -6221,8 +6228,10 @@ def save_auto_sell_config(config: dict) -> None:
 def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg_price: float = None,
                             convert_leftover_bnb: bool = None, hold_minutes: float = None,
                             sell_pct: float = None, trailing_enabled: bool = None,
-                            trailing_pct: float = None) -> dict:
+                            trailing_pct: float = None, rule_text: str = None) -> dict:
     """Tambah/update 1 entry asset di auto-sell config, tanpa ganggu asset lain.
+    rule_text (25/11/2026 'ind-rules'): aturan indikator, mis. "HARGA > EMA(20,4h)". None = pertahankan, "" = hapus
+    (kembali ke harga tetap threshold_usdt). Isinya HARUS sudah divalidasi pemanggil (ind_rule_parse).
     avg_price/convert_leftover_bnb/hold_minutes/sell_pct/trailing_enabled/trailing_pct=None
     -> pertahankan nilai yang sudah ada (kalau ada). sell_pct (08/09/2026, permintaan Mas
     Budi): persentase saldo yang dijual begitu crossing kena, default 95 (sama persis
@@ -6251,7 +6260,15 @@ def upsert_auto_sell_asset(asset: str, enabled: bool, threshold_usdt: float, avg
     if float(existing.get("threshold_usdt", 0) or 0) != float(threshold_usdt):
         _auto_sell_armed_since.pop(asset + "USDT", None)
         _auto_sell_trail_peak.pop(asset + "USDT", None)
+    if rule_text is None:
+        rule_text = existing.get("rule_text", "")
+    rule_text = str(rule_text or "").strip()
+    if rule_text != str(existing.get("rule_text", "") or "").strip():
+        _auto_sell_armed_since.pop(asset + "USDT", None)
+        _auto_sell_trail_peak.pop(asset + "USDT", None)
+        ind_rule_reset(f"as:{asset}")      # saving a rule (new or changed) always starts from "wait for a new crossing"
     config["assets"][asset] = {
+        "rule_text": rule_text,
         "enabled": bool(enabled), "threshold_usdt": float(threshold_usdt),
         "avg_price": float(avg_price or 0), "convert_leftover_bnb": bool(convert_leftover_bnb),
         "hold_minutes": max(0.0, float(hold_minutes or 0)),
@@ -6766,6 +6783,7 @@ def remove_auto_sell_asset(asset: str) -> dict:
     config["assets"].pop(asset, None)
     save_auto_sell_config(config)
     _auto_sell_armed_since.pop(asset + "USDT", None)
+    ind_rule_reset(f"as:{asset}")
     return config
 
 
@@ -7738,9 +7756,76 @@ def compute_suggested_trailing_pct(asset: str) -> float:
         return AUTO_SELL_TRAILING_FALLBACK_PCT
 
 
+# ── 25/11/2026 'ind-rules' (Mas Budi: "tambah aturan INDIKATOR ... juga untuk Active Deals") ─────────────────────────
+# Rule text such as "HARGA > EMA(20,4h)" replaces the single fixed price for Auto Sell Asset (config key "rule_text")
+# and becomes TP mode "Indikator" for Active Deals (override key tp1_rule_text). Live (running) candle, and it only
+# fires on a NEW crossing -- see ind_rules.py. Candles are fetched at most once per (coin, timeframe) per 45 s.
+IND_KLINES_TTL_SEC = 45
+IND_KLINES_STALE_OK_SEC = 300
+_ind_bad_rule_logged: set = set()     # symbols whose invalid TP rule was already logged (avoid log spam)
+_tp_gate_log_ts: dict = {}            # symbol -> last time the tp-net-profit-gate message was logged
+_ind_klines_cache: dict = {}          # (symbol, tf) -> (fetched_at, DataFrame)
+_ind_klines_lock = threading.Lock()
+
+
+def _ind_get_df(symbol: str, tf: str):
+    now = time.time()
+    key = (symbol, tf)
+    with _ind_klines_lock:
+        hit = _ind_klines_cache.get(key)
+    if hit and now - hit[0] < IND_KLINES_TTL_SEC:
+        return hit[1]
+    try:
+        r = _binance_get("/api/v3/klines", params={'symbol': symbol, 'interval': tf, 'limit': 300}, timeout=15)
+        if r is None:
+            raise RuntimeError("fetch gagal/sedang ban")
+        d = r.json()
+        if not isinstance(d, list) or len(d) < 3:
+            raise RuntimeError("data candle kosong")
+        df = pd.DataFrame(d, columns=['ot', 'open', 'high', 'low', 'close', 'vol', 'ct', 'qav', 'nt', 'tbbav', 'tbqav', 'ig'])
+        for c in ('open', 'high', 'low', 'close', 'vol'):
+            df[c] = df[c].astype(float)
+        with _ind_klines_lock:
+            _ind_klines_cache[key] = (now, df)
+        return df
+    except Exception as e:
+        if hit and now - hit[0] < IND_KLINES_STALE_OK_SEC:
+            return hit[1]                      # short Binance hiccup: use the last candles we have
+        log(f"WARN [IND-RULES] candle {symbol} {tf}: {e}")
+        return None
+
+
+def ind_rule_parse(text: str):
+    """(rule, error). Never raises."""
+    if _IR is None:
+        return None, "modul aturan indikator tidak termuat"
+    try:
+        return _IR.parse_rule(text)
+    except Exception as e:
+        return None, f"aturan tidak bisa dibaca: {e}"
+
+
+def ind_rule_check(key: str, symbol: str, rule: dict, price: float) -> dict:
+    """Evaluate + advance the new-crossing state for `key`. On any failure returns armed=False (never sells)."""
+    try:
+        return _IR.check_armed(key, rule, price, lambda tf: _ind_get_df(symbol, tf))
+    except Exception as e:
+        log(f"WARN [IND-RULES] {key}: {e}")
+        return {"ok": False, "met": False, "armed": False, "left": None, "right": None, "err": str(e), "text": ""}
+
+
+def ind_rule_reset(key: str) -> None:
+    if _IR is not None:
+        try:
+            _IR.reset_state(key)
+        except Exception:
+            pass
+
+
 def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: bool = False,
                           hold_minutes: float = 0, sell_pct: float = 95.0,
-                          trailing_enabled: bool = False, trailing_pct: float = 0.0) -> None:
+                          trailing_enabled: bool = False, trailing_pct: float = 0.0,
+                          rule: dict = None) -> None:
     """Cek 1 asset: begitu harga >= threshold, mulai hitung masa tunggu konfirmasi
     (hold_minutes, default 0 = eksekusi instan seperti sebelumnya). Kalau harga
     BERTAHAN >= threshold sepanjang durasi itu, baru jual sell_pct% saldo bebasnya.
@@ -7763,14 +7848,27 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
     entry TIDAK lagi otomatis dihapus setelah eksekusi, tetap aktif menunggu crossing
     berikutnya untuk sisa saldo (hapus manual lewat tombol Hapus kalau tidak mau lanjut)."""
     symbol = asset + "USDT"
-    if threshold <= 0:
+    if threshold <= 0 and not rule:
         return
     price = get_price_now(symbol)
     if price <= 0:
         return
+    # 25/11/2026 'ind-rules': with an indicator rule the "target reached" test is the rule's NEW CROSSING (ind_rules.py)
+    # instead of price >= threshold. Everything below (hold minutes, trailing, sell %, BNB) works the same.
+    cond_desc = ""
+    if rule:
+        _chk = ind_rule_check(f"as:{asset}", symbol, rule, price)
+        if not _chk.get("ok"):
+            return                                  # candles unreadable this cycle: skip, keep timers/state
+        cond_met = bool(_chk.get("armed"))
+        cond_desc = _IR.describe(_chk)
+        tgt_txt = f"Aturan terpenuhi: {cond_desc}"
+    else:
+        cond_met = price >= threshold
+        tgt_txt = f"Harga {_fmt_price(price)} sudah >= target {_fmt_price(threshold)}."
     if trailing_enabled and trailing_pct > 0:
         # ── mode trailing (02/11/2026) -- lihat REMARK lengkap di atas ──────────────
-        if price < threshold:
+        if not cond_met:
             if _auto_sell_trail_peak.pop(symbol, None) is not None:
                 log(f"[AUTO-SELL] {symbol} turun ke {price} di bawah threshold {threshold} sebelum trailing armed -- dibatalkan")
             return
@@ -7780,7 +7878,7 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
             log(f"[AUTO-SELL] {symbol} TRAILING ARMED @ {price} (threshold {threshold}, trail {trailing_pct:g}%)")
             send_telegram(
                 f"AUTO SELL {asset}/USDT — TRAILING ARMED\n"
-                f"Harga {_fmt_price(price)} sudah >= target {_fmt_price(threshold)}.\n"
+                f"{tgt_txt}\n"
                 f"Menunggu turun {trailing_pct:g}% dari puncak sebelum dijual (tidak ada batas waktu -- "
                 f"terus mencatat puncak baru selama harga masih naik)."
             )
@@ -7793,9 +7891,9 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
         # harga sudah turun >= trailing_pct% dari puncak -> lanjut ke eksekusi jual di bawah
     else:
         # ── mode lama: instan / tahan konfirmasi (hold_minutes) -- TIDAK diubah ─────
-        if price < threshold:
+        if not cond_met:
             if _auto_sell_armed_since.pop(symbol, None) is not None:
-                log(f"[AUTO-SELL] {symbol} turun ke {price} di bawah threshold {threshold} sebelum konfirmasi selesai -- timer dibatalkan")
+                log(f"[AUTO-SELL] {symbol} syarat tidak terpenuhi lagi (harga {price}, threshold {threshold}) sebelum konfirmasi selesai -- timer dibatalkan")
             _auto_sell_dust_fail_count.pop(symbol, None)
             return
         armed_since = _auto_sell_armed_since.get(symbol)
@@ -7805,7 +7903,7 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
                 log(f"[AUTO-SELL] {symbol} ARMED @ {price} (threshold {threshold}), menunggu konfirmasi {hold_minutes:.0f} menit")
                 send_telegram(
                     f"AUTO SELL {asset}/USDT — ARMED\n"
-                    f"Harga {_fmt_price(price)} sudah >= target {_fmt_price(threshold)}.\n"
+                    f"{tgt_txt}\n"
                     f"Menunggu konfirmasi {hold_minutes:.0f} menit (batal otomatis kalau harga turun lagi di bawah target sebelum itu)."
                 )
         if hold_minutes > 0 and (time.time() - armed_since) < hold_minutes * 60:
@@ -7900,10 +7998,12 @@ def _check_auto_sell_one(asset: str, threshold: float, convert_leftover_bnb: boo
     _auto_sell_armed_since.pop(symbol, None)
     _auto_sell_dust_fail_count.pop(symbol, None)
     _auto_sell_trail_peak.pop(symbol, None)
+    if rule:
+        ind_rule_reset(f"as:{asset}")     # remaining balance must wait for a NEW crossing, not re-sell every cycle
     msg = (
         f"AUTO SELL {asset}/USDT\n"
         f"Harga crossing: {_fmt_price(price)} USDT\n"
-        f"Threshold: {_fmt_price(threshold)} USDT\n"
+        + (f"Aturan: {cond_desc}\n" if rule else f"Threshold: {_fmt_price(threshold)} USDT\n") +
         f"Saldo bebas: {quantity}\n"
         f"Qty dijual ({sell_pct:.0f}%): {sell_quantity}\n"
         f"Hasil: {result.get('proceeds_usdt', 0):.2f} USDT\n"
@@ -7926,12 +8026,19 @@ def check_auto_sell_crossing() -> None:
         if not cfg.get("enabled"):
             continue
         try:
+            _rule = None
+            _rt = str(cfg.get("rule_text", "") or "").strip()
+            if _rt:
+                _rule, _rerr = ind_rule_parse(_rt)
+                if _rule is None:
+                    log(f"WARN [AUTO-SELL] {asset}: aturan indikator tidak valid ({_rerr}) -- aset ini dilewati")
+                    continue
             _check_auto_sell_one(str(asset).upper(), float(cfg.get("threshold_usdt", 0) or 0),
                                   bool(cfg.get("convert_leftover_bnb", False)),
                                   float(cfg.get("hold_minutes", 0) or 0),
                                   float(cfg.get("sell_pct", 95) or 95),
                                   bool(cfg.get("trailing_enabled", False)),
-                                  float(cfg.get("trailing_pct", 0) or 0))
+                                  float(cfg.get("trailing_pct", 0) or 0), rule=_rule)
         except Exception as error:
             log(f"WARN [AUTO-SELL] {asset}: {error}")
 
@@ -15105,6 +15212,23 @@ def thread2_monitor():
             if get_deal_override(sym, 'tp1usd', False) and prof_from_entry >= _tp_target_pct:
                 _tp_condition_met = True
                 _tp_reason = f"TP {_tp_target_pct:.2f}%: profit bersih {prof_from_entry:.2f}% (modal ${_total_usd_now:.0f})"
+        elif _tp_mode == 'rule':
+            # 25/11/2026 'ind-rules' (Mas Budi): TP by indicator rule, e.g. "HARGA > BBU(20,2,4h)". Fires on a NEW crossing and
+            # stays armed while the condition holds; the tp-net-profit-gate right below still applies (no sale at a net
+            # loss): if the crossing happens while the deal is under water, it sells as soon as net profit > $0 while the
+            # condition is still true. Reset/never-sell-on-restart rules live in ind_rules.py.
+            _tp_rule_txt = str(get_deal_override(sym, 'tp1_rule_text', '') or '').strip()
+            if get_deal_override(sym, 'tp1usd', False) and _tp_rule_txt:
+                _tp_rule, _tp_rule_err = ind_rule_parse(_tp_rule_txt)
+                if _tp_rule is None:
+                    if sym not in _ind_bad_rule_logged:
+                        _ind_bad_rule_logged.add(sym)
+                        log(f"WARN [T2-TP] {sym} aturan indikator tidak valid ({_tp_rule_err}) -- TP aturan tidak dijalankan")
+                else:
+                    _tp_ck = ind_rule_check(f"deal:{sym}", sym, _tp_rule, price)
+                    if _tp_ck.get('armed'):
+                        _tp_condition_met = True
+                        _tp_reason = f"TP aturan indikator: {_IR.describe(_tp_ck)} (profit bersih ${_upnl_usd_now:.2f}, modal ${_total_usd_now:.0f})"
         elif _tp_mode == 'price':
             # Target HARGA koin (USDT), bukan target profit -- close begitu harga pasar >= target,
             # berapapun itu representasi profit %/$-nya.
@@ -15132,8 +15256,11 @@ def thread2_monitor():
         # dipotong FEE_ROUND_TRIP_PCT) ternyata <= $0 -- jaga2 kalau root cause #1 kelewatan
         # atau ada kasus lain yg belum ketahuan sekarang.
         if _tp_condition_met and _upnl_usd_now <= 0:
-            log(f"[T2-TP] {sym} syarat TP mode '{_tp_mode}' terpenuhi TAPI profit bersih "
-                f"${_upnl_usd_now:.2f} <= $0 -- DIBATALKAN, bukan TP beneran (lihat REMARK tp-net-profit-gate)")
+            # 25/11/2026: log at most once per 10 min per coin (an armed indicator rule stays "met" for a long time)
+            if time.time() - _tp_gate_log_ts.get(sym, 0) > 600:
+                _tp_gate_log_ts[sym] = time.time()
+                log(f"[T2-TP] {sym} syarat TP mode '{_tp_mode}' terpenuhi TAPI profit bersih "
+                    f"${_upnl_usd_now:.2f} <= $0 -- DIBATALKAN, bukan TP beneran (lihat REMARK tp-net-profit-gate)")
             _tp_condition_met = False
             _tp_reason = ""
         _tp_tiers_cfg = get_deal_override(sym, 'tp_tiers', []) or []
@@ -20916,14 +21043,18 @@ refreshRuleWatchAi();
           <div style="font-size:9px;color:var(--muted);margin-bottom:2px">Target tercapai:</div>
           <form method="POST" action="/set_tp_target" style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:4px">
             <input type="hidden" name="sym" value="{{ sym }}">
-            <select name="mode" onchange="var i=this.closest('form').querySelector('input[name=value]'); i.value = this.value==='pct' ? i.dataset.pct : (this.value==='price' ? i.dataset.price : i.dataset.usd);" style="background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 3px;font-size:10px;font-family:var(--font)">
+            <select name="mode" onchange="var f=this.closest('form'); var i=f.querySelector('input[name=value]'); var r=f.querySelector('input[name=rule]'); var isr=(this.value==='rule'); i.style.display=isr?'none':''; r.style.display=isr?'':'none'; if(!isr){ i.value = this.value==='pct' ? i.dataset.pct : (this.value==='price' ? i.dataset.price : i.dataset.usd); }" style="background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 3px;font-size:10px;font-family:var(--font)">
               <option value="usd" {{ "selected" if _tpmode=="usd" else "" }}>$</option>
               <option value="pct" {{ "selected" if _tpmode=="pct" else "" }}>%</option>
               <option value="price" {{ "selected" if _tpmode=="price" else "" }}>Harga</option>
+              <option value="rule" {{ "selected" if _tpmode=="rule" else "" }}>Indikator</option>
             </select>
+            <input type="text" name="rule" id="tprule-{{ sym }}" value="{{ overrides.get(sym,{}).get('tp1_rule_text','') }}" placeholder="HARGA > BBU(20,2,4h)" title="Aturan indikator, mis. HARGA > EMA(20,4h) | HARGA > BBU(20,2,4h) | RSI(14,1h) > 70. Candle yang sedang berjalan; jual HANYA saat aturan MENYILANG baru (tidak jual kalau sudah terpenuhi saat disimpan atau setelah restart). Tetap tunduk pada pengaman profit bersih: tidak jual kalau deal masih rugi bersih." style="display:{{ '' if _tpmode=='rule' else 'none' }};width:150px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:10px;font-family:var(--font)">
+            <button type="button" onclick="previewIndRule('tprule-{{ sym }}','tprulecheck-{{ sym }}','{{ sym }}')" title="Cek aturan: tampilkan nilai kiri dan kanan sekarang (tidak menjual apa pun)" style="background:#2962ff;color:#fff;border:none;border-radius:4px;padding:3px 6px;font-size:9px;cursor:pointer">Cek</button>
             <input type="text" inputmode="decimal" name="value" data-usd="{{ overrides.get(sym,{}).get("tp1_target_usd",1.0) }}" data-pct="{{ overrides.get(sym,{}).get("tp1_target_pct",1.0) }}" data-price="{{ overrides.get(sym,{}).get("tp1_target_price", d.get("entry_price",0)) }}" oninput="this.value = this.value.replace(/,/g,'.').replace(/[^0-9.]/g,'').replace(/(\\.[^.]*)\\./g, '$1');" style="width:74px;background:#0f1117;color:#e2e8f0;border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:var(--font)" value="{{ overrides.get(sym,{}).get('tp1_target_price', d.get('entry_price',0)) if _tpmode=='price' else (overrides.get(sym,{}).get('tp1_target_pct',1.0) if _tpmode=='pct' else overrides.get(sym,{}).get('tp1_target_usd',1.0)) }}">
             <button type="submit" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">Save</button>
           </form>
+          <div id="tprulecheck-{{ sym }}" {% if _tpmode=='rule' %}data-indrule-sym="{{ sym }}" data-indrule-in="tprule-{{ sym }}" data-indrule-out="tprulecheck-{{ sym }}"{% endif %} style="font-size:9px;color:var(--muted);margin-bottom:3px"></div>
           <div style="font-size:9px;color:var(--muted);margin-bottom:2px">Tahan (menit):</div>
           <form method="POST" action="/set_tp_hold" style="display:flex;gap:4px;align-items:center" title="Begitu syarat TP Target terpenuhi, tunggu dulu sekian menit SELAMA syaratnya tetap terpenuhi sebelum benar-benar close. 0 = close instan begitu tercapai, seperti sebelumnya. Kalau syaratnya sempat tidak terpenuhi lagi di tengah jalan, batal total (harus tercapai lagi dari nol). Cuma berlaku utk Auto TP/TP Target -- hard-stop, trailing, timeout tetap seperti biasa.">
             <input type="hidden" name="sym" value="{{ sym }}">
@@ -22136,7 +22267,11 @@ function renderAutoSellTable(assets) {
             '<td style="padding:5px 6px"><input type="number" min="0" step="0.00000001" value="' + (cfg.avg_price || '') + '" placeholder="belum diketahui" id="auto-sell-avg-' + asset + '" style="width:100px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"><div id="auto-sell-avgsrc-' + asset + '" style="color:var(--muted);font-size:9px"></div></td>' +
             '<td style="padding:5px 6px" id="auto-sell-price-' + asset + '">memuat...</td>' +
             '<td style="padding:5px 6px" id="auto-sell-avggap-' + asset + '">-</td>' +
-            '<td style="padding:5px 6px"><input type="number" min="0" step="0.00000001" value="' + cfg.threshold_usdt + '" id="auto-sell-thr-' + asset + '" style="width:100px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"><div id="auto-sell-breakeven-' + asset + '" style="color:var(--muted);font-size:9px"></div></td>' +
+            '<td style="padding:5px 6px"><input type="number" min="0" step="0.00000001" value="' + cfg.threshold_usdt + '" id="auto-sell-thr-' + asset + '" style="width:100px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"><div id="auto-sell-breakeven-' + asset + '" style="color:var(--muted);font-size:9px"></div>' +
+                '<div style="margin-top:4px;white-space:nowrap" title="Aturan indikator (menggantikan harga tetap di atas kalau diisi). Contoh: HARGA > EMA(20,4h) | HARGA > BBU(20,2,4h) | RSI(14,1h) > 70. Memakai candle yang sedang berjalan dan HANYA jual saat aturan MENYILANG baru (tidak jual kalau sudah terpenuhi saat disimpan atau setelah restart). Kosongkan untuk kembali ke harga tetap."><input type="text" id="auto-sell-rule-' + asset + '" value="' + (cfg.rule_text || '') + '" placeholder="atau aturan: HARGA > EMA(20,4h)" style="width:150px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:10px"> ' +
+                    '<button type="button" onclick="previewIndRule(\\'auto-sell-rule-' + asset + '\\', \\'auto-sell-rulecheck-' + asset + '\\', \\'' + asset + '\\')" style="background:#2962ff;color:#fff;border:none;border-radius:3px;padding:2px 6px;font-size:9px;cursor:pointer">Cek</button></div>' +
+                '<div id="auto-sell-rulecheck-' + asset + '" style="color:var(--muted);font-size:9px"></div>' +
+                '<div id="auto-sell-rulest-' + asset + '" style="color:var(--accent);font-size:9px"></div></td>' +
             '<td style="padding:5px 6px"><input type="number" min="1" max="100" step="1" value="' + (cfg.sell_pct || 95) + '" id="auto-sell-sellpct-' + asset + '" oninput="updateBnbCheckboxState(\\'' + asset + '\\')" style="width:60px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px"></td>' +
             '<td style="padding:5px 6px">' +
                 '<input type="number" min="0" step="1" value="' + (cfg.hold_minutes || 0) + '" id="auto-sell-hold-' + asset + '" style="width:70px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px">' +
@@ -22205,9 +22340,12 @@ function refreshAutoSellRowPrice(asset) {
         var statusEl = document.getElementById('auto-sell-status-' + asset);
         if (!d.ok) { if (priceEl) priceEl.textContent = 'tidak tersedia'; return; }
         if (priceEl) priceEl.textContent = d.price + ' USDT';
+        var ruleStEl = document.getElementById('auto-sell-rulest-' + asset);
+        if (ruleStEl) ruleStEl.textContent = d.rule_text ? ('Aturan: ' + d.rule_text + ' | ' + (d.rule_status || '')) : '';
         if (statusEl) {
             if (!d.enabled) statusEl.textContent = 'Nonaktif';
             else if (d.hold_status) statusEl.innerHTML = 'Aktif: <span style="color:var(--accent)">' + d.hold_status + '</span>';
+            else if (d.rule_text) statusEl.textContent = 'Aktif: menunggu aturan indikator menyilang';
             else statusEl.textContent = 'Aktif: menunggu crossing naik';
         }
         if (gapEl) gapEl.innerHTML = d.gap_pct + '%' + (d.est_profit_usd ? '<br><span style="color:var(--muted);font-size:9px">≈ ' + d.est_profit_usd + ' USDT kalau target kena</span>' : '');
@@ -22270,10 +22408,12 @@ function saveAutoSellRow(asset) {
     var avgPrice = avgEl && avgEl.value !== '' ? parseFloat(avgEl.value) : null;
     var trailingEnabled = trailChkEl ? trailChkEl.checked : false;
     var trailingPct = Math.max(0, parseFloat(trailPctEl ? trailPctEl.value : 0) || 0);
-    if (enabled && threshold <= 0) { alert('Isi threshold harga yang valid.'); return; }
+    var ruleEl = document.getElementById('auto-sell-rule-' + asset);
+    var ruleText = ruleEl ? ruleEl.value.trim() : '';
+    if (enabled && threshold <= 0 && !ruleText) { alert('Isi threshold harga yang valid (atau aturan indikator).'); return; }
     if (enabled && trailingEnabled && trailingPct <= 0) { alert('Trailing dicentang tapi Trailing Deviation masih 0 -- isi dulu (atau centang ulang supaya dihitung otomatis).'); return; }
     var body = {asset:asset, enabled:enabled, threshold_usdt:threshold, convert_leftover_bnb: bnbEl ? bnbEl.checked : false,
-                hold_minutes: holdMinutes, sell_pct: sellPct, trailing_enabled: trailingEnabled, trailing_pct: trailingPct};
+                hold_minutes: holdMinutes, sell_pct: sellPct, trailing_enabled: trailingEnabled, trailing_pct: trailingPct, rule_text: ruleText};
     if (avgPrice !== null) body.avg_price = avgPrice;
     fetch('/api/auto_sell_config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
         .then(function(r){ return r.json(); }).then(function(d){
@@ -22281,6 +22421,31 @@ function saveAutoSellRow(asset) {
             renderAutoSellTable(d.assets || {});
         });
 }
+
+// 25/11/2026 'ind-rules': "Cek" button -- shows the parsed rule and the current value of both sides (read-only, no trading).
+function previewIndRule(inputId, outId, sym) {
+    var inEl = document.getElementById(inputId);
+    var outEl = document.getElementById(outId);
+    if (!inEl || !outEl) return;
+    var rule = inEl.value.trim();
+    if (!rule) { outEl.textContent = 'Isi aturan dulu, mis. HARGA > EMA(20,4h)'; return; }
+    outEl.textContent = 'memeriksa...';
+    fetch('/api/ind_rule_preview?symbol=' + encodeURIComponent(sym) + '&rule=' + encodeURIComponent(rule))
+        .then(function(r){ return r.json(); }).then(function(d){
+            if (!d.ok) { outEl.style.color = 'var(--red)'; outEl.textContent = 'Aturan: ' + d.error; return; }
+            outEl.style.color = 'var(--green, #3ddc84)';
+            outEl.textContent = d.text + '  ->  kiri ' + Number(d.left).toPrecision(7) + ' ' + d.op + ' kanan ' + Number(d.right).toPrecision(7) + ' : ' + (d.met ? 'SUDAH terpenuhi sekarang' : 'belum terpenuhi sekarang');
+        }).catch(function(){ outEl.textContent = 'gagal memeriksa'; });
+}
+
+// Deals whose TP mode is "Indikator" show the live values by themselves (every 30 s, candles are cached server-side)
+function refreshIndRuleAuto() {
+    document.querySelectorAll('[data-indrule-sym]').forEach(function(e) {
+        previewIndRule(e.getAttribute('data-indrule-in'), e.getAttribute('data-indrule-out'), e.getAttribute('data-indrule-sym'));
+    });
+}
+setInterval(refreshIndRuleAuto, 30000);
+setTimeout(refreshIndRuleAuto, 4000);
 
 function removeAutoSellRow(asset) {
     if (!confirm('Hapus auto-sell untuk ' + asset + '?')) return;
@@ -32764,8 +32929,24 @@ def run_web_dashboard():
         def set_tp_target():
             sym = request.form.get("sym", "")
             mode = request.form.get("mode", "usd")
-            if mode not in ("usd", "pct", "price"):
+            if mode not in ("usd", "pct", "price", "rule"):
                 mode = "usd"
+            if mode == "rule":
+                # 25/11/2026 'ind-rules': TP by indicator rule. Validate first; an invalid rule changes nothing.
+                _rl, _rerr = ind_rule_parse(request.form.get("rule", ""))
+                if _rl is None:
+                    return (f"Aturan indikator tidak valid: {_rerr}", 400, {"Content-Type": "text/plain; charset=utf-8"})
+                if sym:
+                    overrides = load_deal_overrides()
+                    if sym not in overrides:
+                        overrides[sym] = {}
+                    overrides[sym]['tp1_target_mode'] = 'rule'
+                    overrides[sym]['tp1_rule_text'] = _IR.rule_text(_rl)
+                    save_deal_overrides(overrides)
+                    _tp_hold_armed_since.pop(sym, None)
+                    ind_rule_reset(f"deal:{sym}")      # new rule -> must see a NEW crossing first
+                    _ind_bad_rule_logged.discard(sym)
+                return redirect("/")
             try:
                 val = float(request.form.get("value", "1"))
             except (TypeError, ValueError):
@@ -34782,6 +34963,30 @@ def run_web_dashboard():
                         remaining_min = hold_minutes - (time.time() - armed_since) / 60.0
                         hold_status = (f"menunggu konfirmasi, tersisa {max(0, remaining_min):.1f} menit"
                                        if remaining_min > 0 else "konfirmasi terpenuhi, menunggu eksekusi")
+                # 25/11/2026 'ind-rules': live values of the indicator rule (read-only, does not advance the crossing state)
+                rule_info = {"rule_text": "", "rule_status": ""}
+                _rt = str(asset_cfg.get("rule_text", "") or "").strip()
+                if _rt:
+                    _rl, _rerr = ind_rule_parse(_rt)
+                    rule_info["rule_text"] = _rt
+                    if _rl is None:
+                        rule_info["rule_status"] = f"aturan tidak valid: {_rerr}"
+                    else:
+                        _ev = _IR.evaluate(_rl, price, lambda tf: _ind_get_df(symbol, tf))
+                        _stt = _IR.state_info(f"as:{asset}")
+                        if not _ev["ok"]:
+                            rule_info["rule_status"] = f"belum bisa dihitung: {_ev['err']}"
+                        else:
+                            _fv = lambda x: f"{x:.8g}"
+                            _s = f"kiri {_fv(_ev['left'])} {_rl['op']} kanan {_fv(_ev['right'])} -> " + ("TERPENUHI" if _ev["met"] else "belum")
+                            if asset_cfg.get("enabled", False):
+                                if _stt.get("armed"):
+                                    _s += " | sudah menyilang, siap jual"
+                                elif _stt and _ev["met"]:
+                                    _s += " | menunggu persilangan baru (sudah terpenuhi saat disimpan)"
+                                elif _stt:
+                                    _s += " | menunggu persilangan"
+                            rule_info["rule_status"] = _s
                 avg_info = get_hold_no_sell_price(asset)
                 avg_price = get_effective_avg_price(asset)
                 cfg_manual = float(config.get("assets", {}).get(asset, {}).get("avg_price", 0) or 0)
@@ -34822,9 +35027,33 @@ def run_web_dashboard():
                                 "breakeven_warning": sugg["warning"] or "",
                                 "htf_trend": sugg["htf_trend"] or "",
                                 "est_profit_usd": f"{est_profit_usd:+.2f}" if est_profit_usd is not None else "",
-                                "hold_minutes": hold_minutes, "hold_status": hold_status,
+                                "hold_minutes": hold_minutes, "hold_status": hold_status, **rule_info,
                                 "enabled": bool(asset_cfg.get("enabled", False)),
                                 "sell_qty": sell_qty, "avg_price_raw": avg_price})
+            except Exception as error:
+                return jsonify({"ok": False, "error": str(error)}), 500
+
+        @app.route("/api/ind_rule_preview")
+        def api_ind_rule_preview():
+            """25/11/2026 'ind-rules': check a rule text before saving -- parsed form + live values of both sides.
+            Read-only: does not touch any crossing state and never trades."""
+            try:
+                symbol = str(request.args.get("symbol", "")).upper().strip()
+                if not symbol.endswith("USDT"):
+                    symbol = symbol + "USDT"
+                if not symbol[:-4].isalnum():
+                    return jsonify({"ok": False, "error": "Simbol tidak valid"}), 400
+                rl, err = ind_rule_parse(request.args.get("rule", ""))
+                if rl is None:
+                    return jsonify({"ok": False, "error": err})
+                price = get_price_now(symbol)
+                if price <= 0:
+                    return jsonify({"ok": False, "error": "Harga tidak tersedia"})
+                ev = _IR.evaluate(rl, price, lambda tf: _ind_get_df(symbol, tf))
+                if not ev["ok"]:
+                    return jsonify({"ok": False, "error": ev["err"], "text": _IR.rule_text(rl)})
+                return jsonify({"ok": True, "text": _IR.rule_text(rl), "left": float(ev["left"]), "right": float(ev["right"]),
+                                "met": bool(ev["met"]), "op": rl["op"], "price": price})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
 
@@ -34843,7 +35072,17 @@ def run_web_dashboard():
                     else:
                         enabled   = bool(payload.get("enabled", False))
                         threshold = float(payload.get("threshold_usdt", 0) or 0)
-                        if enabled and threshold <= 0:
+                        # 25/11/2026 'ind-rules': optional indicator rule text ("" clears it, absent keeps it)
+                        rule_text = payload.get("rule_text", None)
+                        if rule_text is not None:
+                            rule_text = str(rule_text).strip()
+                            if rule_text:
+                                _rl, _rerr = ind_rule_parse(rule_text)
+                                if _rl is None:
+                                    return jsonify({"ok": False, "error": f"Aturan indikator: {_rerr}"}), 400
+                                rule_text = _IR.rule_text(_rl)      # store the canonical form
+                        _eff_rule = rule_text if rule_text is not None else load_auto_sell_config().get("assets", {}).get(asset, {}).get("rule_text", "")
+                        if enabled and threshold <= 0 and not _eff_rule:
                             return jsonify({"ok": False, "error": "Threshold wajib diisi"}), 400
                         avg_price = payload.get("avg_price", None)
                         avg_price = float(avg_price) if avg_price not in (None, "") else None
@@ -34858,7 +35097,7 @@ def run_web_dashboard():
                         trailing_pct = payload.get("trailing_pct", None)
                         trailing_pct = float(trailing_pct) if trailing_pct not in (None, "") else None
                         upsert_auto_sell_asset(asset, enabled, threshold, avg_price, convert_bnb, hold_minutes,
-                                                sell_pct, trailing_enabled, trailing_pct)
+                                                sell_pct, trailing_enabled, trailing_pct, rule_text)
                 return jsonify({"ok": True, **load_auto_sell_config()})
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
