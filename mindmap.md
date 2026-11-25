@@ -187,12 +187,13 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
-### wk-breakeven-lock (HASH, 25/11, Mas Budi: "MAU" patch kunci impas) -- BELUM DEPLOY
+### wk-breakeven-lock (8c2625f, 25/11, Mas Budi: "MAU" patch kunci impas, "boleh" deploy)
 - Wyckoff-Spring-4h saja: setelah puncak harga >= +5% di atas entry (rata-rata), batas jual naik ke entry +0,5% menggantikan hard stop 7,7%; trailing (arm 5,5x) tetap jalan di atasnya. Memakai mekanisme impas yg sudah ada (BE_TRIGGER_BY_STRATEGY / BE_EXIT_BUFFER_PCT_BY_STRATEGY), AI close dilewati
 - Dasar: uji 1 menit 325 deal 2022-2026: rata-rata +0,818% -> +0,932%/deal, deal rugi 48% -> 43%, Train +0,657 -> +0,739, Test +0,996 -> +1,146; hanya 9% deal keluar lewat impas (rata2 +0,25%), 1 dari 29 berakhir rugi bersih -0,86% (di live: dialihkan jadi cancel, koin tetap di wallet, sesuai aturan lama "impas rugi = cancel")
 - TIDAK dipasang di PantulanPanik-4h: uji yang sama menurunkan hasilnya (+3,947% -> +3,774% pada +5%; netral hanya di >= +7%)
 - Pemicu +4% juga positif (+0,916%), +3% negatif (-0,135), +6% kecil (+0,872)
 - Pemicu SAHARA: puncak +9,7% jam 11:55 WIB tanpa trailing arm (ATR live melonjak ke tier Volatil -> ambang arm 15,1%, bukan 11%); dampak ATR live pada ambang arm diukur kecil rata2 (-0,064 poin Wyckoff, -0,038 PantulanPanik), tidak dipatch
+- Status: deploy 25/11 10:30 WIB (SUCCESS, 23 thread aktif, tanpa galat)
 ### ws-gap-repair (4fb8948, 23/11, Mas Budi: "Mau, cek juga pada jam-jam lain")
 - Bug: restart yg backfill REST-nya melintasi penutupan candle (23/11: backfill 4h 22:55:42-23:00:10, WS tersambung 23:00:13) melewatkan pesan penutup candle 19:00 -> cache 737 koin kehilangan candle tertutup terakhir -> scan 4h 23:00 dilewati (log "data 4h BTC tidak lengkap sampai 20 menit"), Kandidat Terdekat kosong; penutupan berikutnya menambah candle dgn lubang di tengah (indikator meleset sampai restart). Cache 8h ikut terkena (selesai 23:01:09, batas 8h 23:00)
 - Perbaikan: tiap WS tersambung/tersambung ulang (on_open) jalan _ws_repair_gap utk cache 4h (BX4H) & 8h (WS8H): koin yg candle tertutup terakhirnya lebih tua dari seharusnya diisi ulang via REST + digabung; 0 panggilan REST bila tidak ada yg tertinggal
