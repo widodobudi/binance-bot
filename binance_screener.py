@@ -293,8 +293,16 @@ TC4H_BE_TRIGGER_PCT = 0
 # dipakai backtest-nya) -- ditulis eksplisit di sini supaya live PERSIS cocok dgn backtest
 # (tanpa entry eksplisit, defaultnya BE_TRIGGER_BY_STRATEGY.get(strat,0)=0 -- BE mati total).
 BBSNAP_BE_TRIGGER_PCT = 1.0
+# 25/11/2026 patch 'wk-breakeven-lock' (Mas Budi: "patch kunci impas", after the SAHARA loss): Wyckoff-Spring-4h only.
+# Once the peak reached +5% above the (average) entry, the exit moves to entry +0.5% instead of the -7.7% hard stop; the
+# normal trailing (arm 5.5x) still works above it. 1-minute test, 325 deals 2022-2026 (scratchpad newstrat/be_lock_test.py):
+# +0.818% -> +0.932%/deal, losing deals 48% -> 43%, TRAIN +0.657 -> +0.739, TEST +0.996 -> +1.146; only 9% of deals exit
+# this way (avg +0.25%). NOT applied to PantulanPanik-4h: the same test lowers it (+3.947% -> +3.774% at +5%).
+WK_BE_TRIGGER_PCT = 5.0
+WK_BE_BUFFER_PCT = 0.5
 BE_TRIGGER_BY_STRATEGY = {'brkX2_4h': BRKX2_4H_BE_TRIGGER_PCT, 'trend_confirm_4h': TC4H_BE_TRIGGER_PCT,
-                          'bbsnap_4h': BBSNAP_BE_TRIGGER_PCT, 'bbsnap_8h': BBSNAP_BE_TRIGGER_PCT}
+                          'bbsnap_4h': BBSNAP_BE_TRIGGER_PCT, 'bbsnap_8h': BBSNAP_BE_TRIGGER_PCT,
+                          'wyckoff_spring_4h': WK_BE_TRIGGER_PCT}
 # 11/10/2026 (permintaan Mas Budi): batas jual mekanisme impas ("entry +0.1%") SEBELUMNYA hardcode
 # `entry * 1.001` di thread2_monitor() -- ketahuan dari laporan Mas Budi, 9 deal TrenKonfirmasi-4h
 # yang "impas" SEMUA hasil akhirnya negatif (-0,10% s/d -0,66%), karena fee round-trip (0.2%,
@@ -331,7 +339,8 @@ BE_TRIGGER_BY_STRATEGY = {'brkX2_4h': BRKX2_4H_BE_TRIGGER_PCT, 'trend_confirm_4h
 # BBSnap baru 5 hari jalan (16/10), belum cukup data live/backtest sendiri utk sweep serupa,
 # jadi dipakai angka konservatif yg sudah terbukti aman dulu, bukan hasil optimasi penuh.
 BE_EXIT_BUFFER_PCT_BY_STRATEGY = {'brkX2_4h': 0.1, 'trend_confirm_4h': 0.99,
-                                   'bbsnap_4h': 0.5, 'bbsnap_8h': 0.5}
+                                   'bbsnap_4h': 0.5, 'bbsnap_8h': 0.5,
+                                   'wyckoff_spring_4h': WK_BE_BUFFER_PCT}
 # TrenKonfirmasi-4h K1.5 + cap 10.8% (permintaan Mas Budi, prioritas: hard-stop lebih jarang & untung terjaga):
 # hard-stop 18.2% -> 14.0% dari trade, rugi terburuk -12.3% -> -11.0%, avg +1.80% -> +1.85% (2025+: 20.6% -> 16.2%,
 # +1.52% -> +1.53%). Stop per tier ATR: <1% 6.0%, <2% 8.25%, <4% 10.5%, >=4% 10.8% (cap). REMARK nilai lama (rollback):
