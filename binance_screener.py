@@ -21649,7 +21649,7 @@ refreshRuleWatchAi();
 {% endif %}
 
 <div class="container dash-section-start" data-tab="strategies">
-  <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">Kandidat Terdekat per Strategi<button type="button" onclick="refreshFragment('/fragment/near_miss','near-miss-content')" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:10px;cursor:pointer;font-family:var(--font);text-transform:none;letter-spacing:normal">Refresh</button></div>
+  <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">Kandidat Terdekat per Strategi<button type="button" onclick="refreshNearMiss()" title="Refresh hanya strategi yang sedang dipilih" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 10px;font-size:10px;cursor:pointer;font-family:var(--font);text-transform:none;letter-spacing:normal">Refresh</button></div>
   <div id="near-miss-content">
   <!--FRAGMENT_NEAR_MISS_START-->
     <div class="strategy-tabs" role="tablist" aria-label="Kandidat strategi">
@@ -21694,6 +21694,9 @@ refreshRuleWatchAi();
   <!--FRAGMENT_NEAR_MISS_END-->
   </div>
     <script>
+    // 27/11/2026 patch 'nearmiss-tab-focus' (Mas Budi: "poin 1 dan 2"): (1) the chosen strategy tab is remembered (also across
+    // page reloads) instead of always falling back to the first tab; (2) the Refresh button reloads ONLY the focused
+    // strategy's card, not the whole Kandidat Terdekat block. Display only.
     function selectStrategyTab(tab) {
         document.querySelectorAll('.strategy-tab').forEach(function(button) {
             var active = button === tab;
@@ -21703,7 +21706,46 @@ refreshRuleWatchAi();
         document.querySelectorAll('.strategy-panel').forEach(function(panel) {
             panel.classList.toggle('active', panel.id === tab.getAttribute('data-strategy-tab'));
         });
+        try { localStorage.setItem('nm_active_strategy', tab.textContent.trim()); } catch (e) {}
     }
+    function nmRestoreTab() {
+        var saved = null;
+        try { saved = localStorage.getItem('nm_active_strategy'); } catch (e) {}
+        if (!saved) return;
+        var tabs = document.querySelectorAll('#near-miss-content .strategy-tab');
+        for (var i = 0; i < tabs.length; i++) {
+            if (tabs[i].textContent.trim() === saved) { selectStrategyTab(tabs[i]); return; }
+        }
+    }
+    function refreshNearMiss() {
+        var box = document.getElementById('near-miss-content');
+        if (!box) return;
+        var curTab = box.querySelector('.strategy-tab.active');
+        if (!curTab) { refreshFragment('/fragment/near_miss', 'near-miss-content'); setTimeout(nmRestoreTab, 50); return; }
+        var name = curTab.textContent.trim();
+        var curPanel = document.getElementById(curTab.getAttribute('data-strategy-tab'));
+        var oldOpacity = curPanel ? curPanel.style.opacity : '';
+        if (curPanel) curPanel.style.opacity = '0.5';
+        fetch('/fragment/near_miss').then(function(r) { return r.text(); }).then(function(html) {
+            var tmp = document.createElement('div');
+            tmp.innerHTML = html;
+            var newTab = null;
+            tmp.querySelectorAll('.strategy-tab').forEach(function(t) { if (t.textContent.trim() === name) newTab = t; });
+            var newPanel = newTab ? tmp.querySelector('#' + newTab.getAttribute('data-strategy-tab')) : null;
+            if (curPanel && newPanel) {
+                curPanel.innerHTML = newPanel.innerHTML;
+                curPanel.style.opacity = oldOpacity || '1';
+            } else {
+                // the strategy no longer exists in the list: swap the whole block once and go back to the saved/first tab
+                box.innerHTML = html;
+                nmRestoreTab();
+            }
+        }).catch(function(e) {
+            if (curPanel) curPanel.style.opacity = oldOpacity || '1';
+            alert('Gagal refresh: ' + e);
+        });
+    }
+    nmRestoreTab();
     </script>
 </div>
 
