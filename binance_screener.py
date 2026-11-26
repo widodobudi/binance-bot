@@ -13927,12 +13927,14 @@ def thread1_scan():
         log(f"[T1] {len(universe)} coin discan, tidak ada yg lolos syarat entry.")
         last_processed_candle_ts = newest_ts
         log_near_miss("KeltnerBreak-12h", near_miss, 9)
-        update_dashboard_near_miss("KeltnerBreak-12h", near_miss)
+        update_dashboard_near_miss("KeltnerBreak-12h", kb12h_panel_items(near_miss))
         return f"TIDAK ADA coin lolos 7 syarat inti + 2 tambahan (HTF 3D, Perf). ({len(universe)} coin discan)\n" + format_near_miss(near_miss, 9)
 
     # urutkan kandidat: ATR% terkecil (paling stabil) dulu
     candidates.sort(key=lambda x: x[2])
     log(f"[T1] {len(candidates)} kandidat lolos. Slot terpakai {active_deal_count()}/{total_max_deals_all_strategies()}")
+    update_dashboard_near_miss("KeltnerBreak-12h", kb12h_panel_items(
+        near_miss, [(c[0], "LOLOS 7/7 -- sedang diproses (AI / cooldown / slot)") for c in candidates]))
 
     # GATING CANDLE BARU: hanya buka deal kalau candle terbaru BELUM pernah diproses.
     # Cegah entry dari candle lama yg sdh tutup berjam2 lalu (sinyal basi -> slippage besar,
@@ -13982,7 +13984,8 @@ def thread1_scan():
         if not reentry_ok:
             log(f"[T1] Candle terbaru sudah diproses (ts={newest_ts}), tidak ada kandidat re-entry yang layak.")
             log_near_miss("KeltnerBreak-12h", near_miss, 9)
-            update_dashboard_near_miss("KeltnerBreak-12h", near_miss)
+            update_dashboard_near_miss("KeltnerBreak-12h", kb12h_panel_items(
+                near_miss, [(c[0], "LOLOS 7/7 tapi candle sudah diproses / tidak ada izin re-entry (tunggu candle 12h baru)") for c in candidates]))
             return (f"{len(candidates)} kandidat LOLOS 7/7 tapi candle sudah diproses "
                     f"(tunggu candle 12h baru): {lolos_syms}")
 
@@ -16279,6 +16282,7 @@ def thread1c_scan_intrabar():
         # avg+1,58%/trade vs intrabar apa adanya +0,89%.
         if float(r12['close']) > float(kc_level):
             log(f"  [T1c] {sym} lolos intrabar tapi DITOLAK freshness guard (candle sblmnya sudah close di atas band)")
+            kb12h_panel_seen(sym, "intrabar lolos tapi DITOLAK freshness guard (candle sebelumnya sudah tutup di atas band)")
             continue
         # HTF 3D filter
         if HTF_FILTER_ENABLED and not htf_filter_ok(sym):
@@ -16289,6 +16293,7 @@ def thread1c_scan_intrabar():
         score        = signal_score(r12)
         signal_price = float(r12['close'])
         log(f"[T1c] SINYAL INTRABAR: {sym} elapsed={elapsed_pct*100:.1f}% price={price_now:.6g} skor={score}")
+        kb12h_panel_seen(sym, f"SINYAL INTRABAR skor {score} (elapsed {elapsed_pct*100:.0f}%) -- menunggu AI/slot")
 
         _rsi_ai = r12.get('rsi') if 'rsi' in r12.index else None
         _rsi_ai_val = float(_rsi_ai) if _rsi_ai is not None and not pd.isna(_rsi_ai) else None
@@ -16297,6 +16302,7 @@ def thread1c_scan_intrabar():
             if _rsi_ai_val is not None: _ai_ind['rsi'] = f"{_rsi_ai_val:.1f}"
             if not ai_decision_open(sym, 'KeltnerBreak-12h', _ai_ind, active_deal_count(), notify=False):
                 log(f"[T1c] {sym} babak-1 di-skip oleh AI individual")
+                kb12h_panel_seen(sym, f"sinyal intrabar skor {score} DITOLAK keputusan AI")
                 continue
 
         _rvol_bx12c = float(r12['vol']) / vol_ma12 if vol_ma12 > 0 else 0.0
@@ -16512,6 +16518,7 @@ def thread1c_scan_intrabar_early():
         # B2 freshness guard -- lihat REMARK lengkap di thread1c_scan_intrabar().
         if float(r12['close']) > float(kc_level):
             log(f"  [T1c-E] {sym} lolos early tapi DITOLAK freshness guard (candle sblmnya sudah close di atas band)")
+            kb12h_panel_seen(sym, "early lolos tapi DITOLAK freshness guard (candle sebelumnya sudah tutup di atas band)")
             continue
 
         # HTF 3D filter
@@ -16524,11 +16531,13 @@ def thread1c_scan_intrabar_early():
         score        = signal_score(r12)
         signal_price = float(r12['close'])
         log(f"[T1c-E] SINYAL EARLY: {sym} elapsed={elapsed_pct*100:.1f}% price={price_now:.6g} skor={score}")
+        kb12h_panel_seen(sym, f"SINYAL EARLY skor {score} (elapsed {elapsed_pct*100:.0f}%) -- menunggu AI/slot")
 
         if is_ai_call_open_enabled('brkX2_12h_closed'):
             _ai_ind = {'atr_pct': f"{atrp:.2f}%", 'score': score, 'signal_price': _fmt_price(signal_price), 'rsi': f"{rsi_now:.1f}"}
             if not ai_decision_open(sym, 'KeltnerBreak-12h', _ai_ind, active_deal_count(), notify=False):
                 log(f"[T1c-E] {sym} babak-1 di-skip oleh AI individual")
+                kb12h_panel_seen(sym, f"sinyal early skor {score} DITOLAK keputusan AI")
                 continue
 
         _rvol_bx12e = float(r12['vol']) / vol_ma12 if vol_ma12 > 0 else 0.0
@@ -18143,6 +18152,13 @@ def thread_trendconfirm_scan_v2() -> None:
     btc_down = kb12h_ekstrem_st1d_down('BTCUSDT')
     if btc_down is not False:
         log(f"[T_TC4H_V2] BTC Supertrend 1D {'turun' if btc_down else 'tidak terbaca'} -- tidak buka deal candle ini")
+        # 27/11/2026 'nearmiss-panel-gaps': panel used to stay blank/stale here (KB1D/PB4H/WK already publish this state)
+        try:
+            update_dashboard_near_miss("TrenKonfirmasi-4h", [])
+            record_scan_blockers("TrenKonfirmasi-4h", 0, 0, {f"BTC Supertrend 1D {'turun' if btc_down else 'tidak terbaca'} (koin tidak dicek)": 1})
+            _scan_status_text['TrenKonfirmasi-4h'] = f"{now_wib().strftime('%d/%m %H:%M')} -- BTC Supertrend 1D {'turun' if btc_down else 'tidak terbaca'}, strategi diam"
+        except Exception as _e:
+            log(f"WARN [T_TC4H_V2] panel: {_e}")
         return
     n_active = deal_count_by_strategy('trend_confirm_4h')
     if n_active >= TRENDCONFIRM_MAX_DEALS:
@@ -19421,6 +19437,44 @@ _manual_filters_lock = threading.Lock()
 _manual_scan_result  = []   # list of dict per pair hasil scan terakhir
 _manual_scan_ts      = ""   # waktu scan terakhir
 _manual_scan_lock    = threading.Lock()
+
+
+# 27/11/2026 patch 'nearmiss-panel-gaps' (Mas Budi: "Mau"): DISPLAY ONLY, never touches an entry/exit decision.
+# KeltnerBreak-12h panel only listed coins that FAILED (>= 5/7), so a coin that passed everything but was held back
+# (candle already processed, AI said skip, freshness guard) was invisible ("1 kandidat lolos" in the log, empty panel),
+# and the intrabar paths (T1c / T1c-E) never reached the panel at all. They now leave a short note here and the next
+# T1 publish merges notes younger than KB12H_SEEN_TTL_SEC into the panel list.
+KB12H_SEEN_TTL_SEC = 2 * 3600
+_kb12h_seen: dict = {}      # sym -> (time, text)
+_kb12h_seen_lock = threading.Lock()
+
+
+def kb12h_panel_seen(sym: str, text: str) -> None:
+    try:
+        with _kb12h_seen_lock:
+            _kb12h_seen[sym] = (time.time(), text)
+    except Exception:
+        pass
+
+
+def kb12h_panel_items(near_miss: list, passed: list = None) -> list:
+    """near_miss (failed coins, as before) + coins that PASSED (list of (sym, note)) + recent intrabar notes."""
+    try:
+        have = {str(x[1]) for x in near_miss if len(x) > 1}
+        extra = []
+        for sym, note in (passed or []):
+            if sym not in have:
+                extra.append((9, sym, [note], 9)); have.add(sym)
+        now = time.time()
+        with _kb12h_seen_lock:
+            for sym, (ts, txt) in list(_kb12h_seen.items()):
+                if now - ts > KB12H_SEEN_TTL_SEC:
+                    _kb12h_seen.pop(sym, None); continue
+                if sym not in have:
+                    extra.append((9, sym, [txt], 9)); have.add(sym)
+        return list(extra) + list(near_miss)
+    except Exception:
+        return near_miss
 
 
 def update_dashboard_near_miss(strategi: str, items: list):

@@ -187,6 +187,10 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
+### nearmiss-panel-gaps (HASH, 27/11, Mas Budi: "Mau") -- hanya TAMPILAN panel Kandidat Terdekat, tidak menyentuh keputusan beli/jual
+- KeltnerBreak-12h: panel dulu hanya memuat koin yg GAGAL (>= 5/7); koin yg lolos 7/7 tapi tertahan (candle sudah diproses, AI skip, freshness guard) tidak tampil ("1 kandidat lolos" di log, panel kosong), dan jalur intrabar T1c/T1c-E tidak pernah menyentuh panel. Sekarang: kb12h_panel_seen() mencatat catatan dari T1c/T1c-E (TTL 2 jam) dan T1 menggabungkannya lewat kb12h_panel_items() + kandidat lolos T1 tampil dgn keterangan
+- TrenKonfirmasi-4h: saat BTC Supertrend 1D turun (T_TC4H_V2) fungsi keluar tanpa memperbarui panel; sekarang panel dikosongkan + status "BTC Supertrend 1D turun, strategi diam" seperti KB1D/PB4H/WK
+- Belum terbukti: brkX2-4h "Scan: -" (tidak ada log "[T1d] Scan 4h intrabar" 16 jam) -- diduga strategi dimatikan di Strategy Control, perlu dicek Mas Budi
 ### wk-breakeven-lock (8c2625f, 25/11, Mas Budi: "MAU" patch kunci impas, "boleh" deploy)
 - Wyckoff-Spring-4h saja: setelah puncak harga >= +5% di atas entry (rata-rata), batas jual naik ke entry +0,5% menggantikan hard stop 7,7%; trailing (arm 5,5x) tetap jalan di atasnya. Memakai mekanisme impas yg sudah ada (BE_TRIGGER_BY_STRATEGY / BE_EXIT_BUFFER_PCT_BY_STRATEGY), AI close dilewati
 - Dasar: uji 1 menit 325 deal 2022-2026: rata-rata +0,818% -> +0,932%/deal, deal rugi 48% -> 43%, Train +0,657 -> +0,739, Test +0,996 -> +1,146; hanya 9% deal keluar lewat impas (rata2 +0,25%), 1 dari 29 berakhir rugi bersih -0,86% (di live: dialihkan jadi cancel, koin tetap di wallet, sesuai aturan lama "impas rugi = cancel")
