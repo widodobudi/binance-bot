@@ -187,7 +187,7 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
-### nearmiss-tab-focus (HASH, 27/11, Mas Budi: "poin 1 dan 2") -- hanya TAMPILAN dashboard
+### nearmiss-tab-focus (7390e43, 27/11, Mas Budi: "poin 1 dan 2") -- hanya TAMPILAN dashboard
 - Kandidat Terdekat per Strategi: tab strategi yang dipilih diingat (localStorage nm_active_strategy, juga setelah reload halaman) dan tidak lagi selalu kembali ke KeltnerBreak-12h; tombol Refresh (refreshNearMiss) hanya memperbarui KARTU strategi yang sedang fokus (dicocokkan lewat NAMA tab, bukan nomor urut), kartu lain tidak disentuh; kalau strategi hilang dari daftar, blok diganti penuh sekali lalu kembali ke tab tersimpan/pertama
 - Server TIDAK berubah: endpoint /fragment/near_miss tetap merender dashboard utuh (index()) lalu dipotong; beban server per Refresh sama seperti sebelumnya. Versi yang benar2 lebih ringan butuh refactor index()
 - Uji: JS dicek node --check + simulasi DOM jsdom (9 skenario: default, pilih tab, Refresh mempertahankan fokus, hanya kartu fokus yg berubah, reload memulihkan tab, strategi hilang, pergeseran urutan tab, gagal fetch)
