@@ -193,12 +193,12 @@
 - Alasan: tinjauan 28/11 atas 8 penolakan AI (5 tepat, 2 salah INIT/HAEDAL, 1 ambigu PORTAL; simulasi rata2 -4,8%/koin kalau semua dibuka) terlalu kecil utk menilai AI; uji ciri "koin vs EMA50 1D" di 14.804 entri sejarah TIDAK menunjukkan keunggulan, jadi tidak ada patch pelonggaran AI
 - Belum dicatat: penolakan babak-2 (ai_decision_batch_rank) dan keputusan AI selain pembukaan
 - Uji: harness dgn kasus nyata MOVE (26/11 07:36) cocok dgn hitungan manual (stop -12,3%), dedupe, tick, file rusak
-### hammer-capitulation (28/11, Mas Budi: "BOLEH") -- STRATEGI BARU Hammer-Kapitulasi-4h (key hammer_cap_4h), uang asli $6, maks 3 deal
+### hammer-capitulation (f2003d8, 28/11, Mas Budi: "BOLEH") -- STRATEGI BARU Hammer-Kapitulasi-4h (key hammer_cap_4h), uang asli $6, maks 3 deal
 - Sinyal tiap candle 4h tutup (+2 menit), tanpa gerbang BTC: candle hijau, sumbu bawah > 1,5x badan, volume > 3x rata-rata 20 candle, RSI14 < 36, ATR < 9%, volume 24 jam >= $2 juta; BTCUSDT, koin pembungkus/stablecoin/EUR, bStocks dikecualikan
 - Exit B: stop tier x1.0, trailing aktif di 2x ambang tier, tahan maks 6 candle 4h (24 jam); tanpa add fund, tanpa AI, BB-Upper arm-early OFF
 - Backtest 1 menit 2022-2026 (394 sinyal, masuk 2 menit setelah tutup): +2,41%/deal, WR 78%, latih +2,07 / uji +2,81, 5/5 tahun positif, terburuk -11,2%; dgn slip +0,1% +2,26%. Strategi KEJADIAN (~1,5 sinyal/minggu), bukan pengisi hari sepi: pencarian hari sepi (8 keluarga 1 jam + peringkat harian) semuanya <= 0
 - Kode: konstanta HC_*, hc_eval(), thread_hammer_scan()/run_thread_hammer() (uji tanpa order saat restart), cabang sizing flat, daftar nama/dashboard/Kandidat Terdekat/Strategy Control. Uji: hc_eval mengenali 170/170 sinyal backtest, 0 di luar daftar; py_compile penuh lolos; template Jinja valid
-- Status: deploy 28/11 (commit hash menyusul)
+- Status: deploy 28/11 (commit f2003d8)
 ### nearmiss-tab-focus (7390e43, 27/11, Mas Budi: "poin 1 dan 2") -- hanya TAMPILAN dashboard
 - Kandidat Terdekat per Strategi: tab strategi yang dipilih diingat (localStorage nm_active_strategy, juga setelah reload halaman) dan tidak lagi selalu kembali ke KeltnerBreak-12h; tombol Refresh (refreshNearMiss) hanya memperbarui KARTU strategi yang sedang fokus (dicocokkan lewat NAMA tab, bukan nomor urut), kartu lain tidak disentuh; kalau strategi hilang dari daftar, blok diganti penuh sekali lalu kembali ke tab tersimpan/pertama
 - Server TIDAK berubah: endpoint /fragment/near_miss tetap merender dashboard utuh (index()) lalu dipotong; beban server per Refresh sama seperti sebelumnya. Versi yang benar2 lebih ringan butuh refactor index()
