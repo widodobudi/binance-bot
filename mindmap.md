@@ -187,6 +187,12 @@
 - Tiap bot restart: scan ASLI PantulanPanik-4h (candle 4h tutup terakhir) & KeltnerBreak-1D (candle 1D 07:00) dijalankan sekali dlm mode UJI
 - Mengisi Kandidat Terdekat/Scan Blockers + log "[T_PB4H] UJI ..." / "[T_KB1D] UJI ..."; berhenti SEBELUM order, candle tidak ditandai selesai
 - Status: deploy 14/11
+### ai-skip-outcome-log (HASH, 28/11, Mas Budi: "MAU, SETUJU") -- PENCATATAN MURNI, tidak mengubah keputusan buka/jual
+- Tiap keputusan AI untuk pembukaan deal (SKIP dan OPEN, semua strategi yg memakai ai_decision_open) dicatat sekali per (koin, strategi, keputusan) per 12 jam bersama harga saat itu -> file ai_skip_outcomes.json di volume data. 48 jam kemudian harga diukur dari candle 5 menit: harga +6/12/24/48 jam, tertinggi/terendah, dan untuk KeltnerBreak-12h simulasi exit bot (fungsi hard_stop_pct/get_arm_pct/trailing_dist_progressive milik bot sendiri, fee 0,2%)
+- Log: "[AI-SKIP-LOG] dicatat ..." saat dicatat, "[AI-SKIP-OUTCOME] ..." saat hasil selesai; endpoint baca-saja /api/ai_skip_outcomes (ringkasan SKIP vs OPEN + 200 catatan terbaru). Pelacak jalan dari thread2_monitor tiap 10 menit, maks 6 koin per putaran (1 panggilan klines per koin); catatan disimpan 90 hari
+- Alasan: tinjauan 28/11 atas 8 penolakan AI (5 tepat, 2 salah INIT/HAEDAL, 1 ambigu PORTAL; simulasi rata2 -4,8%/koin kalau semua dibuka) terlalu kecil utk menilai AI; uji ciri "koin vs EMA50 1D" di 14.804 entri sejarah TIDAK menunjukkan keunggulan, jadi tidak ada patch pelonggaran AI
+- Belum dicatat: penolakan babak-2 (ai_decision_batch_rank) dan keputusan AI selain pembukaan
+- Uji: harness dgn kasus nyata MOVE (26/11 07:36) cocok dgn hitungan manual (stop -12,3%), dedupe, tick, file rusak
 ### nearmiss-tab-focus (7390e43, 27/11, Mas Budi: "poin 1 dan 2") -- hanya TAMPILAN dashboard
 - Kandidat Terdekat per Strategi: tab strategi yang dipilih diingat (localStorage nm_active_strategy, juga setelah reload halaman) dan tidak lagi selalu kembali ke KeltnerBreak-12h; tombol Refresh (refreshNearMiss) hanya memperbarui KARTU strategi yang sedang fokus (dicocokkan lewat NAMA tab, bukan nomor urut), kartu lain tidak disentuh; kalau strategi hilang dari daftar, blok diganti penuh sekali lalu kembali ke tab tersimpan/pertama
 - Server TIDAK berubah: endpoint /fragment/near_miss tetap merender dashboard utuh (index()) lalu dipotong; beban server per Refresh sama seperti sebelumnya. Versi yang benar2 lebih ringan butuh refactor index()

@@ -14548,6 +14548,10 @@ def thread2_monitor():
         crowd_bounce_update()
     except Exception as error:
         log(f"WARN [CROWD] {error}")
+    try:
+        ai_skip_outcomes_tick()      # 28/11/2026 'ai-skip-outcome-log' (pure logging)
+    except Exception as error:
+        log(f"WARN [AI-SKIP-LOG] {error}")
     with active_deals_lock:
         syms = list(active_deals.keys())
     try:
@@ -35129,6 +35133,30 @@ def run_web_dashboard():
             except Exception as error:
                 return jsonify({"ok": False, "error": str(error)}), 500
 
+        @app.route("/api/ai_skip_outcomes")
+        def api_ai_skip_outcomes():
+            """28/11/2026 'ai-skip-outcome-log': read-only summary of AI open decisions and what the price did afterwards."""
+            try:
+                with _ai_skip_lock:
+                    recs = _ai_skip_load()
+                done = [r for r in recs if r.get("done") and r.get("res")]
+                def agg(dec):
+                    g = [r["res"] for r in done if r.get("dec") == dec]
+                    n = len(g)
+                    def avg(key):
+                        v = [x[key] for x in g if x.get(key) is not None]
+                        return round(sum(v) / len(v), 2) if v else None
+                    sims = [x["sim"] for x in g if "sim" in x]
+                    return {"n": n, "avg_p24": avg("p24"), "avg_p48": avg("p48"), "avg_max_up": avg("max_up"), "avg_max_dn": avg("max_dn"),
+                            "up_24h_pct": round(100 * sum(1 for x in g if (x.get("p24") or 0) > 0) / n, 1) if n else None,
+                            "sim_n": len(sims), "sim_avg": round(sum(sims) / len(sims), 2) if sims else None,
+                            "sim_win_pct": round(100 * sum(1 for s in sims if s > 0) / len(sims), 1) if sims else None}
+                return jsonify({"ok": True, "total": len(recs), "finished": len(done), "pending": len(recs) - len(done),
+                                "summary": {"SKIP": agg("SKIP"), "OPEN": agg("OPEN")},
+                                "records": sorted(recs, key=lambda r: -float(r.get("ts", 0)))[:200]})
+            except Exception as error:
+                return jsonify({"ok": False, "error": str(error)}), 500
+
         @app.route("/api/ind_rule_preview")
         def api_ind_rule_preview():
             """25/11/2026 'ind-rules': check a rule text before saving -- parsed form + live values of both sides.
@@ -37546,6 +37574,132 @@ def ai_decision_capacity_swap(candidate_symbol: str, candidate_strategy: str, ca
     return None
 
 
+# ── 28/11/2026 'ai-skip-outcome-log' (Mas Budi: "MAU, SETUJU") -- PURE LOGGING, never changes an open/close decision ──────────
+# Every AI open decision (SKIP and OPEN) is recorded once per (coin, strategy, decision) per 12 h together with the price at that
+# moment; 48 h later the price path is measured from 5-minute candles (price at +6/12/24/48 h, highest/lowest, and for
+# KeltnerBreak-12h a bot-style simulated exit with the bot's own stop/arm/trailing functions). Result: file ai_skip_outcomes.json on
+# the data volume, a log line "[AI-SKIP-OUTCOME]" per finished record, and a read-only /api/ai_skip_outcomes summary.
+# Reason: 28/11 review of 8 AI rejections (5 right, 2 wrong, 1 ambiguous) was too small to judge the AI -- this collects the evidence.
+AI_SKIP_OUTCOME_FILE = os.path.join(DATA_DIR, "ai_skip_outcomes.json")
+AI_SKIP_DEDUPE_SEC = 12 * 3600
+AI_SKIP_HORIZON_H = 48
+AI_SKIP_KEEP_DAYS = 90
+AI_SKIP_TICK_SEC = 600
+_ai_skip_lock = threading.Lock()
+_ai_skip_last_tick = [0.0]
+_AI_SKIP_STRAT_KEY = {'KeltnerBreak-12h': 'brkX2_12h_closed'}   # strategies that also get a bot-style simulated exit
+
+
+def _ai_skip_load() -> list:
+    try:
+        if os.path.exists(AI_SKIP_OUTCOME_FILE):
+            with open(AI_SKIP_OUTCOME_FILE, encoding="utf-8") as f:
+                d = json.load(f)
+            return d if isinstance(d, list) else []
+    except Exception as e:
+        log(f"WARN [AI-SKIP-LOG] baca file gagal: {e}")
+    return []
+
+
+def _ai_skip_save(recs: list) -> None:
+    try:
+        tmp = AI_SKIP_OUTCOME_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(recs, f, ensure_ascii=False)
+        os.replace(tmp, AI_SKIP_OUTCOME_FILE)
+    except Exception as e:
+        log(f"WARN [AI-SKIP-LOG] simpan file gagal: {e}")
+
+
+def ai_skip_record(symbol: str, strategy: str, indicators: dict, decision: str, provider) -> None:
+    """Record one AI open decision (decision = 'SKIP' or 'OPEN'). Deduped per (coin, strategy, decision) within AI_SKIP_DEDUPE_SEC."""
+    now = time.time()
+    with _ai_skip_lock:
+        for r in reversed(_ai_skip_load()):
+            if r.get("sym") == symbol and r.get("strat") == strategy and r.get("dec") == decision and now - float(r.get("ts", 0)) < AI_SKIP_DEDUPE_SEC:
+                return
+    price = get_price_now(symbol)
+    if not price or price <= 0:
+        return
+    rec = {"id": f"{symbol}-{int(now)}", "ts": now, "wib": now_wib().strftime("%d/%m %H:%M"), "sym": symbol, "strat": strategy,
+           "dec": decision, "price": float(price), "provider": str(provider or ""),
+           "ind": {str(k): str(v) for k, v in (indicators or {}).items()}, "done": False, "tries": 0}
+    with _ai_skip_lock:
+        recs = _ai_skip_load()
+        recs.append(rec)
+        _ai_skip_save(recs)
+    log(f"[AI-SKIP-LOG] dicatat {decision} {symbol} ({strategy}) @ {_fmt_price(price)} -- hasil harga dihitung otomatis 48 jam lagi")
+
+
+def _ai_skip_measure(rec: dict):
+    """Measure the 48 h price path after a recorded decision. Returns the result dict, or None if data is not ready/available."""
+    sym = rec["sym"]; t0 = int(float(rec["ts"]) * 1000)
+    resp = _binance_get("/api/v3/klines", params={"symbol": sym, "interval": "5m", "startTime": t0, "limit": 600}, timeout=20)
+    if resp is None:
+        return None
+    k = resp.json()
+    if not isinstance(k, list) or len(k) < int(AI_SKIP_HORIZON_H * 12 * 0.9):
+        return None                                   # not enough candles yet (or listing too young)
+    o = [float(x[1]) for x in k]; h = [float(x[2]) for x in k]; l = [float(x[3]) for x in k]; c = [float(x[4]) for x in k]
+    ep = float(rec["price"])
+    def at(hours):
+        j = int(hours * 12) - 1
+        return round((c[j] / ep - 1) * 100, 2) if 0 <= j < len(c) else None
+    res = {"p6": at(6), "p12": at(12), "p24": at(24), "p48": at(min(AI_SKIP_HORIZON_H, len(c) / 12)),
+           "max_up": round((max(h) / ep - 1) * 100, 2), "max_dn": round((min(l) / ep - 1) * 100, 2)}
+    skey = _AI_SKIP_STRAT_KEY.get(rec.get("strat"))
+    if skey:
+        try:
+            atr = float(str(rec.get("ind", {}).get("atr_pct", "")).replace("%", ""))
+            hsp = hard_stop_pct(atr, skey)[2]; arm = get_arm_pct(atr, skey)
+            peak = ep; armed = False; sim = None; how = "masih berjalan"
+            for i in range(len(c)):
+                lvl = ep * (1 - hsp / 100)
+                if armed:
+                    lvl = max(lvl, peak * (1 - trailing_dist_progressive(atr, (peak / ep - 1) * 100) / 100))
+                if l[i] <= lvl:
+                    sim = round((min(lvl, o[i]) / ep - 1) * 100 - FEE_ROUND_TRIP_PCT, 2); how = "trailing" if armed else "hard stop"; break
+                if h[i] > peak: peak = h[i]
+                if not armed and peak >= ep * (1 + arm / 100): armed = True
+            if sim is None:
+                sim = round((c[-1] / ep - 1) * 100 - FEE_ROUND_TRIP_PCT, 2)
+            res.update({"sim": sim, "sim_how": how})
+        except Exception as e:
+            res["sim_err"] = str(e)[:80]
+    return res
+
+
+def ai_skip_outcomes_tick() -> None:
+    """Called from thread2_monitor; every AI_SKIP_TICK_SEC it finishes records that are older than the horizon (one klines call each)."""
+    now = time.time()
+    if now - _ai_skip_last_tick[0] < AI_SKIP_TICK_SEC:
+        return
+    _ai_skip_last_tick[0] = now
+    with _ai_skip_lock:
+        recs = _ai_skip_load()
+    due = [r for r in recs if not r.get("done") and now - float(r.get("ts", 0)) >= AI_SKIP_HORIZON_H * 3600 and int(r.get("tries", 0)) < 6]
+    changed = False
+    for r in due[:6]:                                  # a few per tick keeps the API weight negligible
+        r["tries"] = int(r.get("tries", 0)) + 1; changed = True
+        res = None
+        try:
+            res = _ai_skip_measure(r)
+        except Exception as e:
+            log(f"WARN [AI-SKIP-LOG] ukur {r.get('sym')}: {e}")
+        if res:
+            r["res"] = res; r["done"] = True
+            sim_txt = f" | simulasi bot {res['sim']:+.2f}% ({res['sim_how']})" if "sim" in res else ""
+            log(f"[AI-SKIP-OUTCOME] {r['dec']} {r['sym']} ({r['strat']}) {r['wib']} @ {_fmt_price(r['price'])}: "
+                f"+6j {res['p6']}% +12j {res['p12']}% +24j {res['p24']}% +48j {res['p48']}% | tertinggi {res['max_up']:+.1f}% terendah {res['max_dn']:+.1f}%{sim_txt}")
+    if changed:
+        cutoff = now - AI_SKIP_KEEP_DAYS * 86400
+        with _ai_skip_lock:
+            latest = {x["id"]: x for x in _ai_skip_load()}
+            for r in recs:
+                if r["id"] in latest: latest[r["id"]].update({k: r[k] for k in ("tries", "done", "res") if k in r})
+            _ai_skip_save([x for x in latest.values() if float(x.get("ts", 0)) >= cutoff])
+
+
 def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int, notify: bool = True,
                       fail_closed: bool = False) -> bool:
     """
@@ -37702,6 +37856,10 @@ def ai_decision_open(symbol: str, strategy: str, indicators: dict, n_active: int
     # 05/10/2026 (permintaan Mas Budi, ukur kualitas keputusan per model): provider yg benar2
     # memutuskan dicatat di baris ini (anthropic / alibaba=Qwen / gemini), supaya bisa dipisah saat analisis.
     log(f"[AI] OPEN decision {symbol}: {first_line} → {'BUKA' if decision else 'SKIP'} | provider={AI_LAST_PROVIDER}")
+    try:   # 28/11/2026 'ai-skip-outcome-log': pure logging, failure here must never affect the decision
+        ai_skip_record(symbol, strategy, indicators, 'OPEN' if decision else 'SKIP', AI_LAST_PROVIDER)
+    except Exception as _e:
+        log(f"WARN [AI-SKIP-LOG] {_e}")
     # Riwayat lengkap semua keputusan (OPEN maupun SKIP) ke ai_decisions_log.txt (04/09/2026,
     # permintaan Mas Budi -- utk investigasi/penyelidikan nanti, terlepas dari notify Telegram).
     # 30/09/2026 (permintaan Mas Budi): sebelum ini, log_ai_decision() cuma menyimpan ind_str (dict
