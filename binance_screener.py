@@ -271,6 +271,7 @@ HARD_STOP_MULT_BY_STRATEGY = {
     # TIDAK perlu override di sini. bbsnap_8h: K=0.6 total profit +4.7% vs K=1.1, rugi terburuk
     # mengecil dari -12.3% ke -6.8%, WR nyaris sama (54.2% vs 54.8%).
     'bbsnap_8h': 0.6,
+    'hammer_cap_4h': 1.0,   # 28/11/2026 Hammer-Kapitulasi-4h exit B: stop = tier base x1.0 (see HC_* REMARK near thread_hammer_scan)
 }
 # 06/10/2026 (permintaan Mas Budi): brkX2-4h, setelah posisi pernah untung >= BRKX2_4H_BE_TRIGGER_PCT,
 # batas jual dipindah ke harga beli (entry +0.1%). Setelah biaya 0.2%, hasil keluar sekitar -0.1%,
@@ -431,7 +432,7 @@ def _candle_seconds_for_strategy(strat: str) -> float:
     if strat == 'reversal':
         return REVERSAL_SECONDS_PER_CANDLE
     if strat in ('brkX2_4h', 'brkX2_crossema', 'hunting_4h', 'akum_entry_a', 'akum_entry_b', 'trend_confirm_4h',
-                 'panic_bounce_4h', 'wyckoff_spring_4h'):   # 18/11/2026: PB4H was missing, Wyckoff-Spring-4h new
+                 'panic_bounce_4h', 'wyckoff_spring_4h', 'hammer_cap_4h'):   # 18/11/2026: PB4H was missing, Wyckoff-Spring-4h new; 28/11/2026 Hammer-Kapitulasi-4h
         return STRAT4H_SECONDS
     if strat == 'kb1d':
         return 86400   # 18/11/2026: KeltnerBreak-1D was missing (fell back to 12h)
@@ -1915,6 +1916,8 @@ STRATEGY_CONFIG_DEFAULTS = {
     "panic_bounce_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 6, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 3, "close_sell_pct": 100},
     # 18/11/2026 Wyckoff-Spring-4h (see WK_* REMARK near thread_wyckoff_scan): pure rules, no AI; add fund handled by wk_addfund_check().
     "wyckoff_spring_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 6, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 3, "close_sell_pct": 100},
+    # 28/11/2026 Hammer-Kapitulasi-4h (see HC_* REMARK near thread_hammer_scan): pure rules, no AI, no add fund, flat $6, max 3.
+    "hammer_cap_4h": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 6, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 3, "close_sell_pct": 100},
     "kb1d": {"strategy_enabled": True, "sizing_enabled": True, "base_usd": 6, "add_usd": 0, "cooldown_enabled": True, "ai_call_open": False, "ai_call_close": False, "max_deals": 3, "close_sell_pct": 100, "btc_gate_enabled": True},
 }
 # 26/09/2026 (permintaan Mas Budi, insiden JTO/USDT closing trailing terlalu dini): ai_call_close
@@ -10348,6 +10351,9 @@ def open_deal_with_sizing(symbol: str, score: int, strategy: str = 'brkX2',
         if size_mult and size_mult != 1.0:   # 21/11/2026 'wk-htf-size': coin >= 10% below EMA20 1D -> base x2
             target = round(target * size_mult, 2)
             log(f"[SIZING] {symbol} Wyckoff-Spring-4h lolos cek HTF 1D -> modal ${target:.2f} (x{size_mult:g}, patch wk-htf-size)")
+    elif strategy == 'hammer_cap_4h':   # 28/11/2026 Hammer-Kapitulasi-4h: flat base_usd ($6), no add-fund, no size multiplier
+        target  = float(_cfg_base if _cfg_base else 6.0)
+        add_usd = 0
     elif strategy == 'trend_confirm_4h' and TC4H_V2_ENABLED:   # 10/11/2026 tc4h-v2: flat $8, no add-fund
         target  = float(_cfg_base if _cfg_base else 8.0)
         add_usd = 0
@@ -11601,6 +11607,8 @@ PB4H_ARM_MULT = 4.0        # PantulanPanik-4h (see PB4H_* REMARK near thread_pb4
 PB4H_MAX_HOLD_CANDLES = 15 # x 4h
 WK_ARM_MULT_ = 5.5         # Wyckoff-Spring-4h (see WK_* REMARK near thread_wyckoff_scan); 23/11/2026 'wk-arm-5.5x' 6.0 -> 5.5 (Mas Budi). 1m test 325 deals: 6.0x $0.164/deal, 5.5x $0.150, 7.0x $0.182 -- chosen so PENDLE's 1.398 wick would have armed trailing
 WK_MAX_HOLD_CANDLES_ = 15  # x 4h (60 h)
+HC_ARM_MULT = 2.0          # Hammer-Kapitulasi-4h exit B (28/11/2026): trailing arms at 2x the tier threshold
+HC_MAX_HOLD_CANDLES = 6    # x 4h (24 h)
 KB1D_MAX_HOLD_DAYS = 5
 KB12H_AKTIF_ATR_RANGE = (2.0, 4.0)
 KB12H_AKTIF_BASE_MULT = 3.0
@@ -11812,6 +11820,8 @@ def get_arm_pct(atr_pct: float, strategy: str = None) -> float:
         return base * PB4H_ARM_MULT   # 14/11/2026 PantulanPanik-4h
     if strategy == 'wyckoff_spring_4h':
         return base * WK_ARM_MULT_    # 18/11/2026 Wyckoff-Spring-4h
+    if strategy == 'hammer_cap_4h':
+        return base * HC_ARM_MULT     # 28/11/2026 Hammer-Kapitulasi-4h
     if strategy == 'trend_confirm_4h' and globals().get('TC4H_V2_ENABLED'):
         return base * TC4H_V2_ARM_MULT   # 10/11/2026 tc4h-v2
     return base
@@ -11878,6 +11888,8 @@ def compute_deal_urgency(sym: str, d: dict):
         hold_limit_sec = PB4H_MAX_HOLD_CANDLES * STRAT4H_SECONDS
     elif strat == 'wyckoff_spring_4h':
         hold_limit_sec = WK_MAX_HOLD_CANDLES_ * STRAT4H_SECONDS
+    elif strat == 'hammer_cap_4h':
+        hold_limit_sec = HC_MAX_HOLD_CANDLES * STRAT4H_SECONDS
     else:
         hold_limit_sec = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
     hours_to_timeout = max(0.0, (hold_limit_sec - (now - opened_ts)) / 3600) if opened_ts > 0 else None
@@ -12470,7 +12482,8 @@ BB_UPPER_TF_BY_STRATEGY = {
     'topgainers_4h': '4h',  # 20/10/2026: ditambahkan sekalian saat celah get_live_atr_pct() ditutup
     'panic_bounce_4h': '4h',   # 14/11/2026 PantulanPanik-4h (BB arm-early OFF)
     'wyckoff_spring_4h': '4h', # 18/11/2026 Wyckoff-Spring-4h (BB arm-early OFF)
-    'kb1d': '1d',           # 09/11/2026 KeltnerBreak-1D (live ATR on the daily candle; BB arm-early is OFF for it)
+    'hammer_cap_4h': '4h',     # 28/11/2026 Hammer-Kapitulasi-4h (BB arm-early OFF)
+    'kb1d': '1d',          # 09/11/2026 KeltnerBreak-1D (live ATR on the daily candle; BB arm-early is OFF for it)
 }
 
 LIVE_BBUPPER_CACHE_SECONDS = 300  # 5 menit -- TTL pola sama dgn LIVE_ATR_CACHE_SECONDS
@@ -13210,7 +13223,7 @@ HB_STRAT_LABEL = {
     'brkX2_12h_closed': 'KeltnerBreak-12h', 'brkX2_4h': 'brkX2-4h', 'trend_confirm_4h': 'TrenKonfirmasi-4h',
     'reversal': 'Reversal-8h', 'brkX2_crossema': 'CrossEMA-4h', 'hunting_4h': 'Hunting-4h',
     'akum_entry_a': 'Akumulasi-4h A', 'akum_entry_b': 'Akumulasi-4h B', 'mombreak_1h': 'MomentumBreak-1h',
-    'decouple_4h': 'Decouple-4h', 'kb1d': 'KeltnerBreak-1D', 'panic_bounce_4h': 'PantulanPanik-4h', 'wyckoff_spring_4h': 'Wyckoff-Spring-4h', 'dipbuy_universe': 'Dip-Buy Universe',
+    'decouple_4h': 'Decouple-4h', 'kb1d': 'KeltnerBreak-1D', 'panic_bounce_4h': 'PantulanPanik-4h', 'wyckoff_spring_4h': 'Wyckoff-Spring-4h', 'hammer_cap_4h': 'Hammer-Kapitulasi-4h', 'dipbuy_universe': 'Dip-Buy Universe',
     'bbsnap_4h': 'BBSnap-4h', 'bbsnap_8h': 'BBSnap-8h', 'topgainers_4h': 'Top Gainers-4h',
 }
 _hb_daily_notes_date = [None]
@@ -13611,7 +13624,8 @@ def heartbeat_general_tick():
                            # 14/11/2026 'nearmiss-kb1d-pb4h': the 2 newer live strategies were missing here
                            (csv_progress('kb1d'), 'KeltnerBreak-1D', 'kb1d'),
                            (csv_progress('panic_bounce_4h'), 'PantulanPanik-4h', 'panic_bounce_4h'),
-                           (csv_progress('wyckoff_spring_4h'), 'Wyckoff-Spring-4h', 'wyckoff_spring_4h')):
+                           (csv_progress('wyckoff_spring_4h'), 'Wyckoff-Spring-4h', 'wyckoff_spring_4h'),
+                           (csv_progress('hammer_cap_4h'), 'Hammer-Kapitulasi-4h', 'hammer_cap_4h')):
         live_lines.append(f"• {label}  {_hb_detail(p['n'], p['win'], p['total_pct']) if p else _hb_detail(0, 0, 0.0)}")
         live_lines.append(_hb_speed_line(_hb_recent.get(skey)))
     msg_parts = [
@@ -13741,6 +13755,7 @@ SCAN_BLOCKERS_LIVE_KEYS = {
     "TrenKonfirmasi-4h", "MomentumBreak-1h",
     "KeltnerBreak-1D", "PantulanPanik-4h",   # 14/11/2026 'nearmiss-kb1d-pb4h'
     "Wyckoff-Spring-4h",                     # 18/11/2026
+    "Hammer-Kapitulasi-4h",                  # 28/11/2026
 }
 
 def get_scan_blockers() -> dict:
@@ -14978,7 +14993,7 @@ def thread2_monitor():
         _bbupper_min_cushion = BB_UPPER_MIN_ARM_PROFIT_BY_STRATEGY.get(strat, 0)
         # 08/11/2026 patch 'kb12h-exit-fix': BB-Upper arm-early/tighten OFF for KeltnerBreak-12h
         # (would arm far below the new 4x threshold -- see KB12H_ARM_MULT REMARK).
-        _bbupper_touched = (strat != 'hunting_4h' and strat not in KB12H_STRATS and strat not in ('kb1d', 'panic_bounce_4h', 'wyckoff_spring_4h')
+        _bbupper_touched = (strat != 'hunting_4h' and strat not in KB12H_STRATS and strat not in ('kb1d', 'panic_bounce_4h', 'wyckoff_spring_4h', 'hammer_cap_4h')
                              and not (strat == 'trend_confirm_4h' and TC4H_V2_ENABLED)
                              and live_bb_upper is not None and peak >= live_bb_upper
                              and prof_peak >= _bbupper_min_cushion)
@@ -15612,6 +15627,9 @@ def thread2_monitor():
         elif strat == 'wyckoff_spring_4h':
             hold_limit_sec = WK_MAX_HOLD_CANDLES_ * STRAT4H_SECONDS
             hold_label = f"batas {WK_MAX_HOLD_CANDLES_} candle 4h (Wyckoff-Spring-4h)"
+        elif strat == 'hammer_cap_4h':
+            hold_limit_sec = HC_MAX_HOLD_CANDLES * STRAT4H_SECONDS
+            hold_label = f"batas {HC_MAX_HOLD_CANDLES} candle 4h (Hammer-Kapitulasi-4h)"
         elif strat in KB12H_STRATS:
             # 08/11/2026 patch 'kb12h-aplus': 10 x 12h (120h) instead of MAX_HOLD_DAYS (5)
             hold_limit_sec = KB12H_MAX_HOLD_CANDLES * SECONDS_PER_CANDLE
@@ -15657,6 +15675,7 @@ def thread2_monitor():
                 else KB1D_MAX_HOLD_DAYS if d.get('strategy') == 'kb1d'
                 else PB4H_MAX_HOLD_CANDLES if d.get('strategy') == 'panic_bounce_4h'
                 else WK_MAX_HOLD_CANDLES_ if d.get('strategy') == 'wyckoff_spring_4h'
+                else HC_MAX_HOLD_CANDLES if d.get('strategy') == 'hammer_cap_4h'
                 else MAX_HOLD_DAYS
             )
             hold_candle_now = int(elapsed_sec / candle_sec)
@@ -15789,7 +15808,7 @@ def thread2_monitor():
                 'brkX2_crossema': 'CrossEMA-4h', 'hunting_4h': 'Hunting-4h',
                 'akum_entry_a': 'Akumulasi-4h Entry A', 'akum_entry_b': 'Akumulasi-4h Entry B',
                 'trend_confirm_4h': 'TrenKonfirmasi-4h', 'mombreak_1h': 'MomentumBreak-1h',
-                'decouple_4h': 'Decouple-4h', 'kb1d': 'KeltnerBreak-1D', 'panic_bounce_4h': 'PantulanPanik-4h', 'wyckoff_spring_4h': 'Wyckoff-Spring-4h',
+                'decouple_4h': 'Decouple-4h', 'kb1d': 'KeltnerBreak-1D', 'panic_bounce_4h': 'PantulanPanik-4h', 'wyckoff_spring_4h': 'Wyckoff-Spring-4h', 'hammer_cap_4h': 'Hammer-Kapitulasi-4h',
                 'rvolbreak_1h': 'RVOLBreak-1h', 'dipbuy_universe': 'Dip-Buy Universe',
                 'bbsnap_4h': 'BBSnap-4h', 'bbsnap_8h': 'BBSnap-8h', 'topgainers_4h': 'Top Gainers-4h',
             }
@@ -19066,6 +19085,7 @@ _dashboard_state = {
         "KeltnerBreak-1D": [],     # 14/11/2026 'nearmiss-kb1d-pb4h'
         "PantulanPanik-4h": [],    # 14/11/2026 'nearmiss-kb1d-pb4h'
         "Wyckoff-Spring-4h": [],   # 18/11/2026
+        "Hammer-Kapitulasi-4h": [],   # 28/11/2026
         "Decouple-4h": [],
         "Dip-Buy Universe": [],
         "MomentumBreak-1h": [],
@@ -20299,7 +20319,7 @@ def get_deal_override(sym: str, key: str, default: bool = True) -> bool:
     return load_deal_overrides().get(sym, {}).get(key, default)
 
 # ── Inline JS untuk dashboard (ASCII-only, served via /dash.js) ──────────────
-_DASH_JS = 'var _refreshTimer=null;\nvar _curStrat=\'KeltnerBreak-12h\';\n// 16/10/2026 (permintaan Mas Budi): auto-refresh 30 detik (reload seluruh halaman) DIHAPUS --\n// diganti tombol Refresh manual per-bagian (lihat refreshFragment() di bawah + refreshPerfChart/\n// loadStrategyConfig/loadAutoSellConfig yg sudah ada). startRefresh() sengaja dibiarkan ada TAPI\n// no-op (bukan dihapus total) krn pauseRefresh()/resumeRefresh() masih dipanggil di banyak tempat\n// lain (edit/close/addfund/scan dkk) sbg guard sebelum-sesudah AJAX -- dengan _refreshTimer selalu\n// null, keduanya otomatis jadi no-op aman, tidak perlu ubah satu-satu titik panggilnya.\nfunction startRefresh(){}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){return false;}\nvar _activeDealsAutoRefreshPaused=false;\nfunction pauseRefresh(){stopRefresh();_activeDealsAutoRefreshPaused=true;}\nfunction resumeRefresh(){_activeDealsAutoRefreshPaused=false;}\nfunction onPauseRefreshToggle(checked){}\nfunction togglePauseRefresh(checked){}\n// 03/11/2026 (permintaan Mas Budi): Active Deals auto-refresh TERBATAS -- beda dari full-page\n// 30-detik yg DIHAPUS 16/10/2026 (permintaan dia jg) krn ganggu -- ini cuma fragment tabel\n// Active Deals (reuse refreshFragment(), AJAX innerHTML, BUKAN reload halaman), interval 3\n// menit (dipilih Mas Budi sendiri, lebih longgar dari 30/60s yg saya tawarkan -- masih hati-\n// hati soal beban Binance, lihat REMARK \'polling dashboard jadi sumber TERBESAR 429\' dekat\n// PIVOT_RESISTANCE_CACHE_TTL_SEC). Skip siklus kalau _activeDealsAutoRefreshPaused true --\n// guard yg SAMA dipakai editEntry/rowAddFund/rowCloseDeal/dkk (pauseRefresh/resumeRefresh di\n// sekeliling AJAX masing2), jadi otomatis ikut lindungi timer ini juga tanpa ubah titik lain.\nsetInterval(function(){\n  if(_activeDealsAutoRefreshPaused)return;\n  if(!document.getElementById(\'active-deals-content\'))return;\n  refreshFragment(\'/fragment/active_deals\',\'active-deals-content\');\n}, 180000);\nfunction refreshFragment(url,domId){\n  var el=document.getElementById(domId);\n  if(!el)return;\n  var old=el.style.opacity;el.style.opacity=\'0.5\';\n  fetch(url).then(function(r){return r.text();}).then(function(html){\n    el.innerHTML=html;el.style.opacity=old||\'1\';\n  }).catch(function(e){el.style.opacity=old||\'1\';alert(\'Gagal refresh: \'+e);});\n}\n\nfunction refreshDealRow(sym){\n  var row=document.getElementById(\'row-\'+sym);\n  if(!row)return;\n  var btn=document.getElementById(\'rrbtn-\'+sym);\n  var oldText=btn?btn.textContent:null;\n  if(btn){btn.disabled=true;btn.textContent=\'...\';}\n  row.style.opacity=\'0.5\';\n  fetch(\'/fragment/active_deal_row?sym=\'+encodeURIComponent(sym)).then(function(r){return r.text();}).then(function(html){\n    var tmp=document.createElement(\'tbody\');\n    tmp.innerHTML=html;\n    var newRow=tmp.querySelector(\'tr\');\n    if(newRow){row.replaceWith(newRow);}else{row.style.opacity=\'1\';}\n  }).catch(function(e){\n    row.style.opacity=\'1\';\n    if(btn){btn.disabled=false;btn.textContent=oldText;}\n    alert(\'Gagal refresh deal: \'+e);\n  });\n}\n\n// Definisi secondary per strategi\nvar STRAT_SECONDARY={\n  \'KeltnerBreak-12h\':[],  // 25/10/2026 (patch \'manual-scan-keltner-sync\'): formula LAMA (7 checkbox) diganti 1 syarat tunggal (breakout Keltner) sejak 03/10/2026, tool ini kelewat -- sekarang kosong (sama pola \'MomentumBreak-1h\'), lihat primary-status\n  \'brkX2-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'rsi\',label:\'RSI<60\'},{key:\'stoch\',label:\'Stoch%K<80\'},\n    {key:\'htf\',label:\'12h candle bullish\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ]\n};\n\nfunction onStratSelect(strat){\n  _curStrat=strat;\n  // Update dropdown kandidat\n  var opts=document.querySelectorAll(\'.nm-opt\');\n  var count=0;\n  opts.forEach(function(o){\n    var show=o.getAttribute(\'data-strat\')===strat;\n    o.style.display=show?\'\':\'none\';\n    if(show)count++;\n  });\n  document.getElementById(\'nm-count\').textContent=\'(\'+count+\' kandidat dari scan terakhir)\';\n  // Reset pair select\n  var sel=document.getElementById(\'pair-select\');if(sel)sel.value=\'\';\n  // Reset panel\n  var panel=document.getElementById(\'pair-detail\');if(panel)panel.style.display=\'none\';\n  // Update secondary grid\n  renderSecondaryGrid(strat);\n  // Reset primary status\n  var ps=document.getElementById(\'primary-status\');\n  if(ps)ps.innerHTML=\'<span style="color:var(--muted)">-- pilih pair untuk lihat nilai aktual --</span>\';\n}\n\nfunction renderSecondaryGrid(strat){\n  var grid=document.getElementById(\'secondary-grid\');\n  if(!grid)return;\n  var defs=STRAT_SECONDARY[strat]||[];\n  grid.innerHTML=defs.map(function(d){\n    return \'<div class="sec-item" data-key="\'+d.key+\'"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px"><input type="checkbox" class="sec-cb" data-key="\'+d.key+\'" checked style="cursor:pointer"><span class="sec-label">\'+d.label+\'</span><span class="sec-actual" style="color:var(--muted)">--</span><span class="sec-status">--</span></label></div>\';\n  }).join(\'\');\n  // Re-attach event listeners\n  grid.querySelectorAll(\'.sec-cb\').forEach(function(cb){\n    cb.addEventListener(\'change\',function(){\n      fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});\n    });\n  });\n}\n\ndocument.addEventListener(\'DOMContentLoaded\',function(){\n  startRefresh();\n  onStratSelect(\'KeltnerBreak-12h\');\n  restoreActiveDealsSort();\n  loadBtcGateStatus();\n});\n\nfunction miniCandlesSvg(candles){\n  var w=54,h=20;\n  if(!candles||!candles.length)return \'\';\n  var lo=Math.min.apply(null,candles.map(function(c){return c.l;}));\n  var hi=Math.max.apply(null,candles.map(function(c){return c.h;}));\n  if(hi<=lo)hi=lo+1e-9;\n  var n=candles.length,cw=w/n;\n  function y(v){return h-(v-lo)/(hi-lo)*h;}\n  var bars=candles.map(function(c,i){\n    var x=i*cw+cw/2,up=c.c>=c.o,color=up?\'var(--green)\':\'var(--red)\';\n    var yTop=y(Math.max(c.o,c.c)),yBot=y(Math.min(c.o,c.c));\n    if(yBot-yTop<1)yBot=yTop+1;\n    var bw=Math.max(2,cw*0.6);\n    return \'<line x1="\'+x+\'" y1="\'+y(c.h)+\'" x2="\'+x+\'" y2="\'+y(c.l)+\'" stroke="\'+color+\'" stroke-width="1"/><rect x="\'+(x-bw/2)+\'" y="\'+yTop+\'" width="\'+bw+\'" height="\'+(yBot-yTop)+\'" fill="\'+color+\'"/>\';\n  }).join(\'\');\n  return \'<svg width="\'+w+\'" height="\'+h+\'" style="vertical-align:middle">\'+bars+\'</svg>\';\n}\n\nvar BTC_GATE_STATUS_ORDER=[\'brkX2\',\'brkX2_12h_closed\',\'brkX2_4h\',\'decouple_4h\',\'dipbuy_universe\',\'mombreak_1h\',\'trend_confirm_4h\',\'kb1d\',\'panic_bounce_4h\',\'wyckoff_spring_4h\'];\nfunction loadBtcGateStatus(){\n  var el=document.getElementById(\'btc-gate-status-badges\');\n  if(!el)return;\n  fetch(\'/api/btc_gate_status\').then(function(r){return r.json();}).then(function(d){\n    var html=BTC_GATE_STATUS_ORDER.filter(function(k){return d[k];}).map(function(k){\n      var s=d[k];\n      var color=s.status===\'ok\'?\'var(--green)\':(s.status===\'blocked\'?\'var(--red)\':\'var(--green)\');\n      var text=s.status===\'ok\'?\'LOLOS\':(s.status===\'blocked\'?\'TERBLOKIR\':\'TIDAK DIBERLAKUKAN\');\n      var tip=(s.syarat||\'\').replace(/"/g,\'&quot;\');\n      var detailLine=s.live_detail?(\'<div style="font-size:9px;color:var(--muted);margin-top:1px">\'+s.live_detail+\'</div>\'):\'\';\n      var chartsLine=\'\';\n      if(s.candles){\n        chartsLine=\'<div style="display:flex;gap:10px;align-items:center;margin-top:2px">\'+Object.keys(s.candles).map(function(tfKey){\n          return \'<span style="font-size:8px;color:var(--muted);display:inline-flex;align-items:center;gap:2px">\'+tfKey+\' \'+miniCandlesSvg(s.candles[tfKey])+\'</span>\';\n        }).join(\'\')+\'</div>\';\n      }\n      return \'<span style="margin-right:14px;white-space:nowrap;display:inline-block;vertical-align:top" title="\'+tip+\'"><b>\'+s.label+\':</b> <span style="color:\'+color+\'">\'+text+\'</span>\'+detailLine+chartsLine+\'</span>\';\n    }).join(\'\');\n    el.innerHTML=html;\n  }).catch(function(e){el.textContent=\'Error: \'+e;});\n}\n\nfunction onPairSelect(sym){\n  var panel=document.getElementById(\'pair-detail\');\n  if(!sym){panel.style.display=\'none\';return;}\n  panel.style.display=\'block\';\n  panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';\n  pauseRefresh();\n  fetch(\'/api/strategy_detail?sym=\'+encodeURIComponent(sym)+\'&strat=\'+encodeURIComponent(_curStrat))\n    .then(function(r){return r.json();})\n    .then(function(d){\n      resumeRefresh();\n      if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}\n      // Update primary\n      var ps=document.getElementById(\'primary-status\');\n      ps.innerHTML=d.primary.map(function(p){return badge(p.ok,p.label+\' (\'+p.actual+\')\');}).join(\' \');\n      // Update secondary\n      d.secondary.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n      // Panel ringkasan\n      var allP=d.primary_ok;\n      panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | \'+\n        d.primary.map(function(p){return (p.ok?\'<span style="color:var(--green)">\':\'<span style="color:var(--red)">\') + p.label+\': \'+p.actual+\'</span>\';}).join(\' | \')+\n        \' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');\n    })\n    .catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});\n}\n\nfunction updateSec(key,actual,ok){\n  document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){\n    var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');\n    if(a)a.textContent=\'(skrg \'+actual+\')\';\n    if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';\n  });\n}\n\nfunction doManualScan(){\n  var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');\n  btn.disabled=true;btn.textContent=\'Scanning...\';\n  st.textContent=\'Sedang scan semua pair... (30-60 detik)\';\n  pauseRefresh();\n  fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){\n    btn.disabled=false;btn.textContent=\'Scan Sekarang\';\n    st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';\n    renderResults(data.pairs);resumeRefresh();\n  }).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});\n}\n\nfunction promptOpenLong(){\n  var sel=document.getElementById(\'pair-select\');\n  var sym=sel?sel.value:\'\';\n  if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}\n  var ss=document.getElementById(\'strat-select\');var strat=ss?ss.value:\'KeltnerBreak-12h\';\n  if(!confirm(\'Open Long [\'+strat+\']: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;\n  execOpenLong(sym,strat);\n}\n\nfunction execOpenLong(sym,strat){\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'strat\',strat||\"KeltnerBreak-12h\");\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Membuka deal \'+sym+\'...\';\n  pauseRefresh();\n  fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){\n    resumeRefresh();\n    var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);\n    if(st)st.textContent=msg;alert(msg);\n  }).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction renderResults(pairs){\n  var el=document.getElementById(\'scan-results\');\n  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];\n  if(sample){\n    document.getElementById(\'primary-status\').innerHTML=\n      sample.secondaries?sample.secondaries.map(function(s){return badge(s.ok,s.key+\':\'+s.actual);}).join(\' \'):\'\';\n    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n  }\n  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);\n  if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos syarat primary.</div>\';return;}\n  var rows=cands.map(function(p){\n    var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');\n    var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';\n    var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';\n    return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';\n  }).join(\'\');\n  el.innerHTML=\'<table><thead><tr><th>Pair</th><th>isArmed</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';\n}\n\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){\n  if(v===undefined||v===null)return \'?\';\n  if(v>=1000)return v.toFixed(0);\n  if(v>=1)return v.toFixed(4);\n  if(v>=0.01)return v.toFixed(6);\n  if(v>=0.0001)return v.toFixed(8);\n  // harga sangat kecil seperti SHIB: pakai fixed decimal\n  var s=v.toFixed(10);\n  // hapus trailing zeros berlebihan tapi sisakan min 2 significant digits\n  return parseFloat(s).toPrecision(4);\n}\nfunction doOpenLong(sym){execOpenLong(sym);}\n\nfunction _setCookie(k,v){document.cookie=k+\'=\'+v+\';path=/;max-age=2592000\';}\n\nfunction _getCookie(k){var m=document.cookie.match(\'(^|;) ?\'+k+\'=([^;]*)(;|$)\');return m?m[2]:null;}\n\nfunction toggleCard(header){var card=header.parentElement;var name=\'c_\'+(card.querySelector(\'h2\').textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));card.classList.toggle(\'collapsed\');var collapsed=card.classList.contains(\'collapsed\');_setCookie(name,collapsed?\'1\':\'0\');}\n\nfunction restoreCards(){document.querySelectorAll(\'.card\').forEach(function(card){var h=card.querySelector(\'h2\');if(!h)return;var name=\'c_\'+(h.textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));if(_getCookie(name)===\'1\')card.classList.add(\'collapsed\');});}\n\nfunction editEntry(sym,curVal){\n  var v=prompt(\'Edit entry price untuk \'+sym.replace(\'USDT\',\'/USDT\')+\':\\n(harga aktual dari 3Commas)\',curVal);\n  if(v===null)return;\n  v=parseFloat(v);\n  if(isNaN(v)||v<=0){alert(\'Nilai tidak valid\');return;}\n  if(!confirm(\'Set entry \'+sym.replace(\'USDT\',\'/USDT\')+\' = \'+v+\'?\'))return;\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'field\',\'entry_price\');fd.append(\'value\',v);\n  pauseRefresh();\n  fetch(\'/edit_deal\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var el=document.getElementById(\'ep-\'+sym);\n        if(el)el.textContent=v;\n        alert(\'Entry \'+sym.replace(\'USDT\',\'/USDT\')+\' diupdate ke \'+v);\n      } else {\n        alert(\'Gagal: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction confirmCancelDeal(form, sym) {\n  var input = form.querySelector(\'input[name="pct"]\');\n  var pct = (input && input.value) ? parseFloat(input.value) : 100;\n  if (isNaN(pct) || pct <= 0 || pct > 100) { alert(\'Persentase cancel harus 1-100.\'); return false; }\n  var pair = sym.replace(\'USDT\',\'/USDT\');\n  var msg = pct >= 100\n    ? (\'Cancel deal \' + pair + \' SELURUHNYA?\\n\\nBot berhenti kelola pair ini (auto add fund/TP/close berhenti). Koin yang sudah dibeli TETAP di wallet, TIDAK dijual.\')\n    : (\'Cancel \' + pct + \'% dari deal \' + pair + \'?\\n\\nSisa \' + (100 - pct) + \'% TETAP jadi deal aktif (TP/trailing/close jalan normal). Bagian yang di-cancel berhenti dikelola bot, koin TETAP di wallet, TIDAK dijual.\');\n  return confirm(msg);\n}\n\nfunction rowCloseDeal(sym){\n  if(!confirm(\'CLOSE DEAL \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan jual posisi ini sekarang juga di Binance.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_close\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Close \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! Price=\'+data.price+\' Profit=\'+data.profit_pct+\'%\');\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Close GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction rowAddFund(sym){\n  var amtEl=document.getElementById(\'addfund-amt-\'+sym);\n  var amount=amtEl?amtEl.value.trim():\'\';\n  if(!confirm(\'ADD FUND untuk \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nNominal: \'+(amount||\'otomatis sesuai sizing saat open\')+\'\\nAverage price akan diupdate otomatis.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);if(amount)fd.append(\'amount\',amount);\n  fetch(\'/manual_addfund\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! +$\'+data.add_usd+\' @ \'+data.price+\' | Avg=\'+data.avg_price);\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\n\nfunction openAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  if(!modal||!body)return;\n  modal.style.display=\'flex\';\n  body.innerHTML=\'Memuat...\';\n  pauseRefresh();\n  var targets=[];\n  document.querySelectorAll(\'#active-deals-body tr\').forEach(function(tr){\n    var symTd=tr.querySelector(\'td.sym\');\n    if(!symTd)return;\n    var sym=symTd.textContent.replace(\'/USDT\',\'USDT\').trim();\n    var tds=tr.querySelectorAll(\'td\');\n    var strat=tds[1]?tds[1].textContent.trim():\'\';\n    targets.push({sym:sym, label:symTd.textContent.trim()+\' (\'+strat+\')\'});\n  });\n  fetch(\'/api/addfund_source_assets\').then(function(r){return r.json();}).then(function(d){\n    if(!d.ok){body.innerHTML=\'<div style="color:var(--red)">Error: \'+(d.error||\'gagal memuat aset\')+\'</div>\';return;}\n    if(targets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada Active Deal untuk ditambah fund.</div>\';return;}\n    if(d.assets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada aset nganggur senilai >= $5 yang bisa dijual (semua aset di wallet sudah jadi Active Deal, atau nilainya di bawah $5).</div>\';return;}\n    var targetOpts=targets.map(function(t){return \'<option value="\'+t.sym+\'">\'+t.label+\'</option>\';}).join(\'\');\n    var sourceOpts=d.assets.map(function(a){return \'<option value="\'+a.asset+\'" data-free="\'+a.free+\'" data-value="\'+a.value_usdt+\'">\'+a.asset+\' (\'+a.free+\', \\u2248$\'+a.value_usdt.toFixed(2)+\')</option>\';}).join(\'\');\n    body.innerHTML=\n      \'<label style="display:block;margin-bottom:8px">Add fund ke deal:<br>\'+\n      \'<select id="afa-target" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+targetOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:8px">Sumber aset (dijual buat dapat USDT):<br>\'+\n      \'<select id="afa-source" onchange="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+sourceOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:10px">Jual berapa % dari saldo (default 100%):<br>\'+\n      \'<input type="number" id="afa-pct" min="1" max="100" value="100" oninput="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)"></label>\'+\n      \'<div style="margin:4px 0 10px;padding:8px;border:1px solid var(--border);border-radius:6px">\'+\n      \'<div style="font-weight:600;color:var(--text);margin-bottom:6px">SYARAT (opsional)</div>\'+\n      \'<label style="display:block;margin-bottom:4px;cursor:pointer"><input type="checkbox" class="afa-cond" value="macd_hist_4h_turn"> MACD Histogram (4h) merah -&gt; merah muda, atau merah muda -&gt; hijau</label>\'+\n      \'<label style="display:block;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="afa-cond" value="stoch_4h_k_above_d"> Stoch (4h) %K &gt; %D</label>\'+\n      \'<div style="font-size:10px;color:var(--muted)">Kalau ada yang dicentang: TIDAK langsung jalan. Bot cek tiap akhir 30 menit; eksekusi setelah SEMUA syarat benar 5x berturut-turut (hitungan ulang dari 0 tiap candle 4h baru). Batal sendiri kalau deal tutup, aset habis, atau lewat 7 hari.</div>\'+\n      \'</div>\'+\n      \'<div id="afa-estimate" style="margin-bottom:12px;color:var(--accent)"></div>\'+\n      \'<button type="button" onclick="submitAddFundFromAsset()" style="background:#7c5cff;color:#fff;border:none;border-radius:4px;padding:6px 14px;font-size:11px;cursor:pointer;font-weight:600;font-family:var(--font)">Eksekusi</button>\'+\n      \'<div id="afa-cond-list" style="margin-top:12px"></div>\';\n    updateAddFundAssetEstimate();\n    loadAddFundCondList();\n  }).catch(function(e){resumeRefresh();body.innerHTML=\'<div style="color:var(--red)">Error: \'+e+\'</div>\';});\n}\n\nfunction updateAddFundAssetEstimate(){\n  var sel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  var est=document.getElementById(\'afa-estimate\');\n  if(!sel||!pctEl||!est||!sel.options.length)return;\n  var opt=sel.options[sel.selectedIndex];\n  var value=parseFloat(opt.dataset.value)||0;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  var estimate=value*(pct/100);\n  est.textContent=\'\\u2248 jual \'+pct+\'% \'+opt.value+\' \\u2248 $\'+estimate.toFixed(2)+\' akan ditambahkan ke deal target\';\n}\n\nfunction submitAddFundFromAsset(){\n  var targetSel=document.getElementById(\'afa-target\');\n  var sourceSel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  if(!targetSel||!sourceSel||!pctEl)return;\n  var target=targetSel.value;\n  var source=sourceSel.value;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  var conds=[];\n  document.querySelectorAll(\'.afa-cond:checked\').forEach(function(cb){conds.push(cb.value);});\n  if(conds.length){\n    if(!confirm(\'Simpan sebagai ANTREAN BERSYARAT?\\n\\nJual \'+pct+\'% \'+source+\' lalu add fund ke \'+target.replace(\'USDT\',\'/USDT\')+\' HANYA setelah semua syarat yang dicentang benar 5x berturut-turut (dicek tiap akhir 30 menit).\'))return;\n    fetch(\'/api/addfund_conditional\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({source_asset:source,target_symbol:target,pct:pct,conditions:conds})})\n      .then(function(r){return r.json();})\n      .then(function(d){if(d.ok){alert(\'Antrean bersyarat DISIMPAN. Bot akan eksekusi otomatis begitu syarat terpenuhi.\');loadAddFundCondList();}else{alert(\'GAGAL: \'+d.error);}})\n      .catch(function(e){alert(\'Error: \'+e);});\n    return;\n  }\n  if(!confirm(\'Jual \'+pct+\'% saldo \'+source+\' lalu tambahkan hasilnya (USDT) ke deal \'+target.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan eksekusi order JUAL market sungguhan di Binance, lalu BELI tambahan ke \'+target.replace(\'USDT\',\'/USDT\')+\'.\'))return;\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  body.innerHTML=\'Memproses...\';\n  pauseRefresh();\n  fetch(\'/api/addfund_from_asset\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({source_asset:source,target_symbol:target,pct:pct})})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'BERHASIL! Jual \'+data.sold_qty+\' \'+source+\' -> $\'+data.proceeds_usdt.toFixed(2)+\' ditambahkan ke \'+data.target_symbol.replace(\'USDT\',\'/USDT\')+\' (avg baru \'+data.avg_price+\')\');\n        closeAddFundAssetModal();\n        setTimeout(function(){window.location.reload();},1000);\n      } else {\n        alert(\'GAGAL: \'+data.error);\n        body.innerHTML=\'<div style="color:var(--red)">Gagal: \'+data.error+\'</div><button type="button" onclick="openAddFundAssetModal()" style="margin-top:10px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 10px;font-size:11px;cursor:pointer;font-family:var(--font)">Coba lagi</button>\';\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction _afcEsc(s){return String(s==null?\'\':s).replace(/&/g,\'&amp;\').replace(/</g,\'&lt;\').replace(/>/g,\'&gt;\');}\n\nfunction loadAddFundCondList(){\n  var box=document.getElementById(\'afa-cond-list\');\n  if(!box)return;\n  fetch(\'/api/addfund_conditional\').then(function(r){return r.json();}).then(function(d){\n    if(!d.ok||!d.pending.length){box.innerHTML=\'\';return;}\n    box.innerHTML=\'<div style="font-weight:600;color:var(--text);margin-bottom:4px">Antrean bersyarat aktif</div>\'+d.pending.map(function(o){\n      var ex=(o.explain||[]).map(function(t){return \'<div style="font-size:10px;margin-top:2px;color:var(--text)">\'+_afcEsc(t)+\'</div>\';}).join(\'\');\n      return \'<div style="border:1px solid var(--border);border-radius:4px;padding:6px;margin-bottom:6px">\'+\'<div style="font-weight:600">\'+o.pct+\'% \'+_afcEsc(o.source_asset)+\' -&gt; \'+_afcEsc(o.target_symbol.replace(\'USDT\',\'/USDT\'))+\' &middot; dibuat \'+_afcEsc(o.created_at)+\'</div>\'+ex+\'<div style="margin-top:6px;text-align:right"><button type="button" data-id="\'+o.id+\'" onclick="cancelAddFundCond(this.dataset.id)" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:var(--font)">Batal</button></div></div>\';\n    }).join(\'\');\n  }).catch(function(){box.innerHTML=\'\';});\n}\n\nfunction cancelAddFundCond(id){\n  if(!confirm(\'Batalkan antrean bersyarat ini?\'))return;\n  fetch(\'/api/addfund_conditional/cancel\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({id:id})})\n    .then(function(r){return r.json();})\n    .then(function(d){if(!d.ok)alert(\'GAGAL: \'+d.error);loadAddFundCondList();});\n}\n\nfunction closeAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  if(modal)modal.style.display=\'none\';\n  resumeRefresh();\n}\n\nfunction sortActiveDeals(mode){\n  _setCookie(\'active_deals_sort\',mode);\n  applyActiveDealsSort(mode);\n}\nfunction applyActiveDealsSort(mode){\n  var tbody=document.getElementById(\'active-deals-body\');\n  if(!tbody)return;\n  var rows=Array.prototype.slice.call(tbody.querySelectorAll(\'tr\'));\n  if(mode===\'performance\'){\n    rows.sort(function(a,b){return parseFloat(b.getAttribute(\'data-performance\'))-parseFloat(a.getAttribute(\'data-performance\'));});\n  } else if(mode===\'urgency\'){\n    rows.sort(function(a,b){return parseFloat(a.getAttribute(\'data-urgency\'))-parseFloat(b.getAttribute(\'data-urgency\'));});\n  } else {\n    return;\n  }\n  rows.forEach(function(row){tbody.appendChild(row);});\n}\nfunction restoreActiveDealsSort(){\n  var saved=_getCookie(\'active_deals_sort\')||\'default\';\n  var sel=document.getElementById(\'active-deals-sort\');\n  if(sel)sel.value=saved;\n  applyActiveDealsSort(saved);\n}\n'
+_DASH_JS = 'var _refreshTimer=null;\nvar _curStrat=\'KeltnerBreak-12h\';\n// 16/10/2026 (permintaan Mas Budi): auto-refresh 30 detik (reload seluruh halaman) DIHAPUS --\n// diganti tombol Refresh manual per-bagian (lihat refreshFragment() di bawah + refreshPerfChart/\n// loadStrategyConfig/loadAutoSellConfig yg sudah ada). startRefresh() sengaja dibiarkan ada TAPI\n// no-op (bukan dihapus total) krn pauseRefresh()/resumeRefresh() masih dipanggil di banyak tempat\n// lain (edit/close/addfund/scan dkk) sbg guard sebelum-sesudah AJAX -- dengan _refreshTimer selalu\n// null, keduanya otomatis jadi no-op aman, tidak perlu ubah satu-satu titik panggilnya.\nfunction startRefresh(){}\nfunction stopRefresh(){if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}}\nfunction isPauseChecked(){return false;}\nvar _activeDealsAutoRefreshPaused=false;\nfunction pauseRefresh(){stopRefresh();_activeDealsAutoRefreshPaused=true;}\nfunction resumeRefresh(){_activeDealsAutoRefreshPaused=false;}\nfunction onPauseRefreshToggle(checked){}\nfunction togglePauseRefresh(checked){}\n// 03/11/2026 (permintaan Mas Budi): Active Deals auto-refresh TERBATAS -- beda dari full-page\n// 30-detik yg DIHAPUS 16/10/2026 (permintaan dia jg) krn ganggu -- ini cuma fragment tabel\n// Active Deals (reuse refreshFragment(), AJAX innerHTML, BUKAN reload halaman), interval 3\n// menit (dipilih Mas Budi sendiri, lebih longgar dari 30/60s yg saya tawarkan -- masih hati-\n// hati soal beban Binance, lihat REMARK \'polling dashboard jadi sumber TERBESAR 429\' dekat\n// PIVOT_RESISTANCE_CACHE_TTL_SEC). Skip siklus kalau _activeDealsAutoRefreshPaused true --\n// guard yg SAMA dipakai editEntry/rowAddFund/rowCloseDeal/dkk (pauseRefresh/resumeRefresh di\n// sekeliling AJAX masing2), jadi otomatis ikut lindungi timer ini juga tanpa ubah titik lain.\nsetInterval(function(){\n  if(_activeDealsAutoRefreshPaused)return;\n  if(!document.getElementById(\'active-deals-content\'))return;\n  refreshFragment(\'/fragment/active_deals\',\'active-deals-content\');\n}, 180000);\nfunction refreshFragment(url,domId){\n  var el=document.getElementById(domId);\n  if(!el)return;\n  var old=el.style.opacity;el.style.opacity=\'0.5\';\n  fetch(url).then(function(r){return r.text();}).then(function(html){\n    el.innerHTML=html;el.style.opacity=old||\'1\';\n  }).catch(function(e){el.style.opacity=old||\'1\';alert(\'Gagal refresh: \'+e);});\n}\n\nfunction refreshDealRow(sym){\n  var row=document.getElementById(\'row-\'+sym);\n  if(!row)return;\n  var btn=document.getElementById(\'rrbtn-\'+sym);\n  var oldText=btn?btn.textContent:null;\n  if(btn){btn.disabled=true;btn.textContent=\'...\';}\n  row.style.opacity=\'0.5\';\n  fetch(\'/fragment/active_deal_row?sym=\'+encodeURIComponent(sym)).then(function(r){return r.text();}).then(function(html){\n    var tmp=document.createElement(\'tbody\');\n    tmp.innerHTML=html;\n    var newRow=tmp.querySelector(\'tr\');\n    if(newRow){row.replaceWith(newRow);}else{row.style.opacity=\'1\';}\n  }).catch(function(e){\n    row.style.opacity=\'1\';\n    if(btn){btn.disabled=false;btn.textContent=oldText;}\n    alert(\'Gagal refresh deal: \'+e);\n  });\n}\n\n// Definisi secondary per strategi\nvar STRAT_SECONDARY={\n  \'KeltnerBreak-12h\':[],  // 25/10/2026 (patch \'manual-scan-keltner-sync\'): formula LAMA (7 checkbox) diganti 1 syarat tunggal (breakout Keltner) sejak 03/10/2026, tool ini kelewat -- sekarang kosong (sama pola \'MomentumBreak-1h\'), lihat primary-status\n  \'brkX2-4h\':[\n    {key:\'vol\',label:\'Vol>=0.25xMA\'},{key:\'rsi\',label:\'RSI<60\'},{key:\'stoch\',label:\'Stoch%K<80\'},\n    {key:\'htf\',label:\'12h candle bullish\'},{key:\'perf\',label:\'Perf>=0.5\'}\n  ]\n};\n\nfunction onStratSelect(strat){\n  _curStrat=strat;\n  // Update dropdown kandidat\n  var opts=document.querySelectorAll(\'.nm-opt\');\n  var count=0;\n  opts.forEach(function(o){\n    var show=o.getAttribute(\'data-strat\')===strat;\n    o.style.display=show?\'\':\'none\';\n    if(show)count++;\n  });\n  document.getElementById(\'nm-count\').textContent=\'(\'+count+\' kandidat dari scan terakhir)\';\n  // Reset pair select\n  var sel=document.getElementById(\'pair-select\');if(sel)sel.value=\'\';\n  // Reset panel\n  var panel=document.getElementById(\'pair-detail\');if(panel)panel.style.display=\'none\';\n  // Update secondary grid\n  renderSecondaryGrid(strat);\n  // Reset primary status\n  var ps=document.getElementById(\'primary-status\');\n  if(ps)ps.innerHTML=\'<span style="color:var(--muted)">-- pilih pair untuk lihat nilai aktual --</span>\';\n}\n\nfunction renderSecondaryGrid(strat){\n  var grid=document.getElementById(\'secondary-grid\');\n  if(!grid)return;\n  var defs=STRAT_SECONDARY[strat]||[];\n  grid.innerHTML=defs.map(function(d){\n    return \'<div class="sec-item" data-key="\'+d.key+\'"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px"><input type="checkbox" class="sec-cb" data-key="\'+d.key+\'" checked style="cursor:pointer"><span class="sec-label">\'+d.label+\'</span><span class="sec-actual" style="color:var(--muted)">--</span><span class="sec-status">--</span></label></div>\';\n  }).join(\'\');\n  // Re-attach event listeners\n  grid.querySelectorAll(\'.sec-cb\').forEach(function(cb){\n    cb.addEventListener(\'change\',function(){\n      fetch(\'/manual_filter\',{method:\'POST\',headers:{\'Content-Type\':\'application/x-www-form-urlencoded\'},body:\'key=\'+this.dataset.key+\'&value=\'+this.checked});\n    });\n  });\n}\n\ndocument.addEventListener(\'DOMContentLoaded\',function(){\n  startRefresh();\n  onStratSelect(\'KeltnerBreak-12h\');\n  restoreActiveDealsSort();\n  loadBtcGateStatus();\n});\n\nfunction miniCandlesSvg(candles){\n  var w=54,h=20;\n  if(!candles||!candles.length)return \'\';\n  var lo=Math.min.apply(null,candles.map(function(c){return c.l;}));\n  var hi=Math.max.apply(null,candles.map(function(c){return c.h;}));\n  if(hi<=lo)hi=lo+1e-9;\n  var n=candles.length,cw=w/n;\n  function y(v){return h-(v-lo)/(hi-lo)*h;}\n  var bars=candles.map(function(c,i){\n    var x=i*cw+cw/2,up=c.c>=c.o,color=up?\'var(--green)\':\'var(--red)\';\n    var yTop=y(Math.max(c.o,c.c)),yBot=y(Math.min(c.o,c.c));\n    if(yBot-yTop<1)yBot=yTop+1;\n    var bw=Math.max(2,cw*0.6);\n    return \'<line x1="\'+x+\'" y1="\'+y(c.h)+\'" x2="\'+x+\'" y2="\'+y(c.l)+\'" stroke="\'+color+\'" stroke-width="1"/><rect x="\'+(x-bw/2)+\'" y="\'+yTop+\'" width="\'+bw+\'" height="\'+(yBot-yTop)+\'" fill="\'+color+\'"/>\';\n  }).join(\'\');\n  return \'<svg width="\'+w+\'" height="\'+h+\'" style="vertical-align:middle">\'+bars+\'</svg>\';\n}\n\nvar BTC_GATE_STATUS_ORDER=[\'brkX2\',\'brkX2_12h_closed\',\'brkX2_4h\',\'decouple_4h\',\'dipbuy_universe\',\'mombreak_1h\',\'trend_confirm_4h\',\'kb1d\',\'panic_bounce_4h\',\'wyckoff_spring_4h\',\'hammer_cap_4h\'];\nfunction loadBtcGateStatus(){\n  var el=document.getElementById(\'btc-gate-status-badges\');\n  if(!el)return;\n  fetch(\'/api/btc_gate_status\').then(function(r){return r.json();}).then(function(d){\n    var html=BTC_GATE_STATUS_ORDER.filter(function(k){return d[k];}).map(function(k){\n      var s=d[k];\n      var color=s.status===\'ok\'?\'var(--green)\':(s.status===\'blocked\'?\'var(--red)\':\'var(--green)\');\n      var text=s.status===\'ok\'?\'LOLOS\':(s.status===\'blocked\'?\'TERBLOKIR\':\'TIDAK DIBERLAKUKAN\');\n      var tip=(s.syarat||\'\').replace(/"/g,\'&quot;\');\n      var detailLine=s.live_detail?(\'<div style="font-size:9px;color:var(--muted);margin-top:1px">\'+s.live_detail+\'</div>\'):\'\';\n      var chartsLine=\'\';\n      if(s.candles){\n        chartsLine=\'<div style="display:flex;gap:10px;align-items:center;margin-top:2px">\'+Object.keys(s.candles).map(function(tfKey){\n          return \'<span style="font-size:8px;color:var(--muted);display:inline-flex;align-items:center;gap:2px">\'+tfKey+\' \'+miniCandlesSvg(s.candles[tfKey])+\'</span>\';\n        }).join(\'\')+\'</div>\';\n      }\n      return \'<span style="margin-right:14px;white-space:nowrap;display:inline-block;vertical-align:top" title="\'+tip+\'"><b>\'+s.label+\':</b> <span style="color:\'+color+\'">\'+text+\'</span>\'+detailLine+chartsLine+\'</span>\';\n    }).join(\'\');\n    el.innerHTML=html;\n  }).catch(function(e){el.textContent=\'Error: \'+e;});\n}\n\nfunction onPairSelect(sym){\n  var panel=document.getElementById(\'pair-detail\');\n  if(!sym){panel.style.display=\'none\';return;}\n  panel.style.display=\'block\';\n  panel.innerHTML=\'Mengambil data \'+sym.replace(\'USDT\',\'/USDT\')+\'...\';\n  pauseRefresh();\n  fetch(\'/api/strategy_detail?sym=\'+encodeURIComponent(sym)+\'&strat=\'+encodeURIComponent(_curStrat))\n    .then(function(r){return r.json();})\n    .then(function(d){\n      resumeRefresh();\n      if(d.error){panel.innerHTML=\'Error: \'+d.error;return;}\n      // Update primary\n      var ps=document.getElementById(\'primary-status\');\n      ps.innerHTML=d.primary.map(function(p){return badge(p.ok,p.label+\' (\'+p.actual+\')\');}).join(\' \');\n      // Update secondary\n      d.secondary.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n      // Panel ringkasan\n      var allP=d.primary_ok;\n      panel.innerHTML=\'<b style="color:\'+(allP?\'var(--green)\':\'var(--red)\')+\'">\'+sym.replace(\'USDT\',\'/USDT\')+\'</b> | \'+\n        d.primary.map(function(p){return (p.ok?\'<span style="color:var(--green)">\':\'<span style="color:var(--red)">\') + p.label+\': \'+p.actual+\'</span>\';}).join(\' | \')+\n        \' | \'+(allP?\'<span style="color:var(--green)">Primary OK</span>\':\'<span style="color:var(--red)">Primary GAGAL</span>\');\n    })\n    .catch(function(e){resumeRefresh();panel.innerHTML=\'Error: \'+e;});\n}\n\nfunction updateSec(key,actual,ok){\n  document.querySelectorAll(\'.sec-item[data-key="\'+key+\'"]\').forEach(function(item){\n    var a=item.querySelector(\'.sec-actual\'),s=item.querySelector(\'.sec-status\');\n    if(a)a.textContent=\'(skrg \'+actual+\')\';\n    if(s)s.innerHTML=ok?\'<span style="color:var(--green)">OK</span>\':\'<span style="color:var(--red)">X</span>\';\n  });\n}\n\nfunction doManualScan(){\n  var btn=document.getElementById(\'btn-scan\'),st=document.getElementById(\'scan-status\');\n  btn.disabled=true;btn.textContent=\'Scanning...\';\n  st.textContent=\'Sedang scan semua pair... (30-60 detik)\';\n  pauseRefresh();\n  fetch(\'/manual_scan\',{method:\'POST\'}).then(function(r){return r.json();}).then(function(data){\n    btn.disabled=false;btn.textContent=\'Scan Sekarang\';\n    st.textContent=\'Selesai \'+data.ts+\' -- \'+data.pairs.length+\' pair dievaluasi\';\n    renderResults(data.pairs);resumeRefresh();\n  }).catch(function(e){btn.disabled=false;btn.textContent=\'Scan Sekarang\';st.textContent=\'Error: \'+e;resumeRefresh();});\n}\n\nfunction promptOpenLong(){\n  var sel=document.getElementById(\'pair-select\');\n  var sym=sel?sel.value:\'\';\n  if(!sym){alert(\'Pilih pair dari dropdown dulu.\');return;}\n  var ss=document.getElementById(\'strat-select\');var strat=ss?ss.value:\'KeltnerBreak-12h\';\n  if(!confirm(\'Open Long [\'+strat+\']: \'+sym.replace(\'USDT\',\'/USDT\')+\'?\'))return;\n  execOpenLong(sym,strat);\n}\n\nfunction execOpenLong(sym,strat){\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'strat\',strat||\"KeltnerBreak-12h\");\n  var st=document.getElementById(\'scan-status\');\n  if(st)st.textContent=\'Membuka deal \'+sym+\'...\';\n  pauseRefresh();\n  fetch(\'/manual_open\',{method:\'POST\',body:fd}).then(function(r){return r.json();}).then(function(data){\n    resumeRefresh();\n    var msg=data.ok?(\'BERHASIL: \'+sym+\' Score=\'+data.score+\' Target=$\'+data.target_usd):(\'GAGAL: \'+data.error);\n    if(st)st.textContent=msg;alert(msg);\n  }).catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction renderResults(pairs){\n  var el=document.getElementById(\'scan-results\');\n  var sample=pairs.find(function(p){return p.primary_ok;})||pairs[0];\n  if(sample){\n    document.getElementById(\'primary-status\').innerHTML=\n      sample.secondaries?sample.secondaries.map(function(s){return badge(s.ok,s.key+\':\'+s.actual);}).join(\' \'):\'\';\n    if(sample.secondaries)sample.secondaries.forEach(function(s){updateSec(s.key,s.actual,s.ok);});\n  }\n  var cands=pairs.filter(function(p){return p.primary_ok;}).slice(0,20);\n  if(cands.length===0){el.innerHTML=\'<div class="empty">Tidak ada pair lolos syarat primary.</div>\';return;}\n  var rows=cands.map(function(p){\n    var sb=p.secondaries.map(function(s){return \'<span style="color:\'+(s.ok?\'var(--green)\':\'var(--red)\')+\';font-size:10px">\'+s.key+\':\'+s.actual+\'</span>\';}).join(\' \');\n    var ab=p.all_ok?\'<span style="color:var(--green);font-weight:600">LOLOS</span>\':\'<span style="color:var(--yellow)">primary OK</span>\';\n    var ob=\'<button onclick="execOpenLong(this.dataset.sym)" data-sym="\'+p.sym+\'" style="background:\'+(p.all_ok?\'var(--green)\':\'var(--yellow)\')+\';color:#000;border:none;border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer">\'+(p.all_ok?\'Open Sekarang\':\'Open & Bypass\')+\'</button>\';\n    return \'<tr><td class="sym">\'+p.sym.replace(\'USDT\',\'/USDT\')+\'</td><td>\'+ab+\'</td><td style="font-size:10px">\'+sb+\'</td><td>\'+ob+\'</td></tr>\';\n  }).join(\'\');\n  el.innerHTML=\'<table><thead><tr><th>Pair</th><th>isArmed</th><th>Secondary</th><th>Aksi</th></tr></thead><tbody>\'+rows+\'</tbody></table>\';\n}\n\nfunction badge(ok,label){return \'<span style="color:\'+(ok?\'var(--green)\':\'var(--red)\')+\';font-size:11px">[\'+(ok?\'OK\':\'X\')+\'] \'+label+\'</span>\';}\nfunction fmt(v){\n  if(v===undefined||v===null)return \'?\';\n  if(v>=1000)return v.toFixed(0);\n  if(v>=1)return v.toFixed(4);\n  if(v>=0.01)return v.toFixed(6);\n  if(v>=0.0001)return v.toFixed(8);\n  // harga sangat kecil seperti SHIB: pakai fixed decimal\n  var s=v.toFixed(10);\n  // hapus trailing zeros berlebihan tapi sisakan min 2 significant digits\n  return parseFloat(s).toPrecision(4);\n}\nfunction doOpenLong(sym){execOpenLong(sym);}\n\nfunction _setCookie(k,v){document.cookie=k+\'=\'+v+\';path=/;max-age=2592000\';}\n\nfunction _getCookie(k){var m=document.cookie.match(\'(^|;) ?\'+k+\'=([^;]*)(;|$)\');return m?m[2]:null;}\n\nfunction toggleCard(header){var card=header.parentElement;var name=\'c_\'+(card.querySelector(\'h2\').textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));card.classList.toggle(\'collapsed\');var collapsed=card.classList.contains(\'collapsed\');_setCookie(name,collapsed?\'1\':\'0\');}\n\nfunction restoreCards(){document.querySelectorAll(\'.card\').forEach(function(card){var h=card.querySelector(\'h2\');if(!h)return;var name=\'c_\'+(h.textContent.trim().replace(/[^a-zA-Z0-9]/g,\'_\').substring(0,20));if(_getCookie(name)===\'1\')card.classList.add(\'collapsed\');});}\n\nfunction editEntry(sym,curVal){\n  var v=prompt(\'Edit entry price untuk \'+sym.replace(\'USDT\',\'/USDT\')+\':\\n(harga aktual dari 3Commas)\',curVal);\n  if(v===null)return;\n  v=parseFloat(v);\n  if(isNaN(v)||v<=0){alert(\'Nilai tidak valid\');return;}\n  if(!confirm(\'Set entry \'+sym.replace(\'USDT\',\'/USDT\')+\' = \'+v+\'?\'))return;\n  var fd=new FormData();fd.append(\'sym\',sym);fd.append(\'field\',\'entry_price\');fd.append(\'value\',v);\n  pauseRefresh();\n  fetch(\'/edit_deal\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        var el=document.getElementById(\'ep-\'+sym);\n        if(el)el.textContent=v;\n        alert(\'Entry \'+sym.replace(\'USDT\',\'/USDT\')+\' diupdate ke \'+v);\n      } else {\n        alert(\'Gagal: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction confirmCancelDeal(form, sym) {\n  var input = form.querySelector(\'input[name="pct"]\');\n  var pct = (input && input.value) ? parseFloat(input.value) : 100;\n  if (isNaN(pct) || pct <= 0 || pct > 100) { alert(\'Persentase cancel harus 1-100.\'); return false; }\n  var pair = sym.replace(\'USDT\',\'/USDT\');\n  var msg = pct >= 100\n    ? (\'Cancel deal \' + pair + \' SELURUHNYA?\\n\\nBot berhenti kelola pair ini (auto add fund/TP/close berhenti). Koin yang sudah dibeli TETAP di wallet, TIDAK dijual.\')\n    : (\'Cancel \' + pct + \'% dari deal \' + pair + \'?\\n\\nSisa \' + (100 - pct) + \'% TETAP jadi deal aktif (TP/trailing/close jalan normal). Bagian yang di-cancel berhenti dikelola bot, koin TETAP di wallet, TIDAK dijual.\');\n  return confirm(msg);\n}\n\nfunction rowCloseDeal(sym){\n  if(!confirm(\'CLOSE DEAL \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan jual posisi ini sekarang juga di Binance.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);\n  fetch(\'/manual_close\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Close \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! Price=\'+data.price+\' Profit=\'+data.profit_pct+\'%\');\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Close GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction rowAddFund(sym){\n  var amtEl=document.getElementById(\'addfund-amt-\'+sym);\n  var amount=amtEl?amtEl.value.trim():\'\';\n  if(!confirm(\'ADD FUND untuk \'+sym.replace(\'USDT\',\'/USDT\')+\'?\\n\\nNominal: \'+(amount||\'otomatis sesuai sizing saat open\')+\'\\nAverage price akan diupdate otomatis.\'))return;\n  pauseRefresh();\n  var fd=new FormData();fd.append(\'sym\',sym);if(amount)fd.append(\'amount\',amount);\n  fetch(\'/manual_addfund\',{method:\'POST\',body:fd})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' BERHASIL! +$\'+data.add_usd+\' @ \'+data.price+\' | Avg=\'+data.avg_price);\n        setTimeout(function(){window.location.reload();},1500);\n      } else {\n        alert(\'Add Fund \'+sym.replace(\'USDT\',\'/USDT\')+\' GAGAL: \'+data.error);\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\n\nfunction openAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  if(!modal||!body)return;\n  modal.style.display=\'flex\';\n  body.innerHTML=\'Memuat...\';\n  pauseRefresh();\n  var targets=[];\n  document.querySelectorAll(\'#active-deals-body tr\').forEach(function(tr){\n    var symTd=tr.querySelector(\'td.sym\');\n    if(!symTd)return;\n    var sym=symTd.textContent.replace(\'/USDT\',\'USDT\').trim();\n    var tds=tr.querySelectorAll(\'td\');\n    var strat=tds[1]?tds[1].textContent.trim():\'\';\n    targets.push({sym:sym, label:symTd.textContent.trim()+\' (\'+strat+\')\'});\n  });\n  fetch(\'/api/addfund_source_assets\').then(function(r){return r.json();}).then(function(d){\n    if(!d.ok){body.innerHTML=\'<div style="color:var(--red)">Error: \'+(d.error||\'gagal memuat aset\')+\'</div>\';return;}\n    if(targets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada Active Deal untuk ditambah fund.</div>\';return;}\n    if(d.assets.length===0){body.innerHTML=\'<div style="color:var(--red)">Tidak ada aset nganggur senilai >= $5 yang bisa dijual (semua aset di wallet sudah jadi Active Deal, atau nilainya di bawah $5).</div>\';return;}\n    var targetOpts=targets.map(function(t){return \'<option value="\'+t.sym+\'">\'+t.label+\'</option>\';}).join(\'\');\n    var sourceOpts=d.assets.map(function(a){return \'<option value="\'+a.asset+\'" data-free="\'+a.free+\'" data-value="\'+a.value_usdt+\'">\'+a.asset+\' (\'+a.free+\', \\u2248$\'+a.value_usdt.toFixed(2)+\')</option>\';}).join(\'\');\n    body.innerHTML=\n      \'<label style="display:block;margin-bottom:8px">Add fund ke deal:<br>\'+\n      \'<select id="afa-target" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+targetOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:8px">Sumber aset (dijual buat dapat USDT):<br>\'+\n      \'<select id="afa-source" onchange="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)">\'+sourceOpts+\'</select></label>\'+\n      \'<label style="display:block;margin-bottom:10px">Jual berapa % dari saldo (default 100%):<br>\'+\n      \'<input type="number" id="afa-pct" min="1" max="100" value="100" oninput="updateAddFundAssetEstimate()" style="width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px;margin-top:3px;font-family:var(--font)"></label>\'+\n      \'<div style="margin:4px 0 10px;padding:8px;border:1px solid var(--border);border-radius:6px">\'+\n      \'<div style="font-weight:600;color:var(--text);margin-bottom:6px">SYARAT (opsional)</div>\'+\n      \'<label style="display:block;margin-bottom:4px;cursor:pointer"><input type="checkbox" class="afa-cond" value="macd_hist_4h_turn"> MACD Histogram (4h) merah -&gt; merah muda, atau merah muda -&gt; hijau</label>\'+\n      \'<label style="display:block;margin-bottom:6px;cursor:pointer"><input type="checkbox" class="afa-cond" value="stoch_4h_k_above_d"> Stoch (4h) %K &gt; %D</label>\'+\n      \'<div style="font-size:10px;color:var(--muted)">Kalau ada yang dicentang: TIDAK langsung jalan. Bot cek tiap akhir 30 menit; eksekusi setelah SEMUA syarat benar 5x berturut-turut (hitungan ulang dari 0 tiap candle 4h baru). Batal sendiri kalau deal tutup, aset habis, atau lewat 7 hari.</div>\'+\n      \'</div>\'+\n      \'<div id="afa-estimate" style="margin-bottom:12px;color:var(--accent)"></div>\'+\n      \'<button type="button" onclick="submitAddFundFromAsset()" style="background:#7c5cff;color:#fff;border:none;border-radius:4px;padding:6px 14px;font-size:11px;cursor:pointer;font-weight:600;font-family:var(--font)">Eksekusi</button>\'+\n      \'<div id="afa-cond-list" style="margin-top:12px"></div>\';\n    updateAddFundAssetEstimate();\n    loadAddFundCondList();\n  }).catch(function(e){resumeRefresh();body.innerHTML=\'<div style="color:var(--red)">Error: \'+e+\'</div>\';});\n}\n\nfunction updateAddFundAssetEstimate(){\n  var sel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  var est=document.getElementById(\'afa-estimate\');\n  if(!sel||!pctEl||!est||!sel.options.length)return;\n  var opt=sel.options[sel.selectedIndex];\n  var value=parseFloat(opt.dataset.value)||0;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  var estimate=value*(pct/100);\n  est.textContent=\'\\u2248 jual \'+pct+\'% \'+opt.value+\' \\u2248 $\'+estimate.toFixed(2)+\' akan ditambahkan ke deal target\';\n}\n\nfunction submitAddFundFromAsset(){\n  var targetSel=document.getElementById(\'afa-target\');\n  var sourceSel=document.getElementById(\'afa-source\');\n  var pctEl=document.getElementById(\'afa-pct\');\n  if(!targetSel||!sourceSel||!pctEl)return;\n  var target=targetSel.value;\n  var source=sourceSel.value;\n  var pct=Math.min(100,Math.max(1,parseFloat(pctEl.value)||100));\n  var conds=[];\n  document.querySelectorAll(\'.afa-cond:checked\').forEach(function(cb){conds.push(cb.value);});\n  if(conds.length){\n    if(!confirm(\'Simpan sebagai ANTREAN BERSYARAT?\\n\\nJual \'+pct+\'% \'+source+\' lalu add fund ke \'+target.replace(\'USDT\',\'/USDT\')+\' HANYA setelah semua syarat yang dicentang benar 5x berturut-turut (dicek tiap akhir 30 menit).\'))return;\n    fetch(\'/api/addfund_conditional\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({source_asset:source,target_symbol:target,pct:pct,conditions:conds})})\n      .then(function(r){return r.json();})\n      .then(function(d){if(d.ok){alert(\'Antrean bersyarat DISIMPAN. Bot akan eksekusi otomatis begitu syarat terpenuhi.\');loadAddFundCondList();}else{alert(\'GAGAL: \'+d.error);}})\n      .catch(function(e){alert(\'Error: \'+e);});\n    return;\n  }\n  if(!confirm(\'Jual \'+pct+\'% saldo \'+source+\' lalu tambahkan hasilnya (USDT) ke deal \'+target.replace(\'USDT\',\'/USDT\')+\'?\\n\\nIni akan eksekusi order JUAL market sungguhan di Binance, lalu BELI tambahan ke \'+target.replace(\'USDT\',\'/USDT\')+\'.\'))return;\n  var body=document.getElementById(\'addfundasset-modal-body\');\n  body.innerHTML=\'Memproses...\';\n  pauseRefresh();\n  fetch(\'/api/addfund_from_asset\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({source_asset:source,target_symbol:target,pct:pct})})\n    .then(function(r){return r.json();})\n    .then(function(data){\n      resumeRefresh();\n      if(data.ok){\n        alert(\'BERHASIL! Jual \'+data.sold_qty+\' \'+source+\' -> $\'+data.proceeds_usdt.toFixed(2)+\' ditambahkan ke \'+data.target_symbol.replace(\'USDT\',\'/USDT\')+\' (avg baru \'+data.avg_price+\')\');\n        closeAddFundAssetModal();\n        setTimeout(function(){window.location.reload();},1000);\n      } else {\n        alert(\'GAGAL: \'+data.error);\n        body.innerHTML=\'<div style="color:var(--red)">Gagal: \'+data.error+\'</div><button type="button" onclick="openAddFundAssetModal()" style="margin-top:10px;background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 10px;font-size:11px;cursor:pointer;font-family:var(--font)">Coba lagi</button>\';\n      }\n    })\n    .catch(function(e){resumeRefresh();alert(\'Error: \'+e);});\n}\n\nfunction _afcEsc(s){return String(s==null?\'\':s).replace(/&/g,\'&amp;\').replace(/</g,\'&lt;\').replace(/>/g,\'&gt;\');}\n\nfunction loadAddFundCondList(){\n  var box=document.getElementById(\'afa-cond-list\');\n  if(!box)return;\n  fetch(\'/api/addfund_conditional\').then(function(r){return r.json();}).then(function(d){\n    if(!d.ok||!d.pending.length){box.innerHTML=\'\';return;}\n    box.innerHTML=\'<div style="font-weight:600;color:var(--text);margin-bottom:4px">Antrean bersyarat aktif</div>\'+d.pending.map(function(o){\n      var ex=(o.explain||[]).map(function(t){return \'<div style="font-size:10px;margin-top:2px;color:var(--text)">\'+_afcEsc(t)+\'</div>\';}).join(\'\');\n      return \'<div style="border:1px solid var(--border);border-radius:4px;padding:6px;margin-bottom:6px">\'+\'<div style="font-weight:600">\'+o.pct+\'% \'+_afcEsc(o.source_asset)+\' -&gt; \'+_afcEsc(o.target_symbol.replace(\'USDT\',\'/USDT\'))+\' &middot; dibuat \'+_afcEsc(o.created_at)+\'</div>\'+ex+\'<div style="margin-top:6px;text-align:right"><button type="button" data-id="\'+o.id+\'" onclick="cancelAddFundCond(this.dataset.id)" style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:var(--font)">Batal</button></div></div>\';\n    }).join(\'\');\n  }).catch(function(){box.innerHTML=\'\';});\n}\n\nfunction cancelAddFundCond(id){\n  if(!confirm(\'Batalkan antrean bersyarat ini?\'))return;\n  fetch(\'/api/addfund_conditional/cancel\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({id:id})})\n    .then(function(r){return r.json();})\n    .then(function(d){if(!d.ok)alert(\'GAGAL: \'+d.error);loadAddFundCondList();});\n}\n\nfunction closeAddFundAssetModal(){\n  var modal=document.getElementById(\'addfundasset-modal\');\n  if(modal)modal.style.display=\'none\';\n  resumeRefresh();\n}\n\nfunction sortActiveDeals(mode){\n  _setCookie(\'active_deals_sort\',mode);\n  applyActiveDealsSort(mode);\n}\nfunction applyActiveDealsSort(mode){\n  var tbody=document.getElementById(\'active-deals-body\');\n  if(!tbody)return;\n  var rows=Array.prototype.slice.call(tbody.querySelectorAll(\'tr\'));\n  if(mode===\'performance\'){\n    rows.sort(function(a,b){return parseFloat(b.getAttribute(\'data-performance\'))-parseFloat(a.getAttribute(\'data-performance\'));});\n  } else if(mode===\'urgency\'){\n    rows.sort(function(a,b){return parseFloat(a.getAttribute(\'data-urgency\'))-parseFloat(b.getAttribute(\'data-urgency\'));});\n  } else {\n    return;\n  }\n  rows.forEach(function(row){tbody.appendChild(row);});\n}\nfunction restoreActiveDealsSort(){\n  var saved=_getCookie(\'active_deals_sort\')||\'default\';\n  var sel=document.getElementById(\'active-deals-sort\');\n  if(sel)sel.value=saved;\n  applyActiveDealsSort(saved);\n}\n'
 
 def _fmt_price(v):
     """Format harga agar tidak pakai notasi scientific (e-06 dll)."""
@@ -21020,7 +21040,7 @@ refreshRuleWatchAi();
       <tr id="row-{{ sym }}" data-performance="{{ d.get('performance_score', 0) }}" data-urgency="{{ d.get('urgency_sort', 3999) }}">
         <td class="sym {{ 'profit-pos' if d.get('upnl_usd',0) > 0 else 'profit-neg' }}">{{ sym.replace("USDT","/USDT") }}</td>
         <td style="white-space:nowrap">
-          {% set _sm = {"brkX2":"brkx2-12h","brkX2_closed":"KeltnerBreak-12h CC (arsip)","brkX2_intrabar":"KeltnerBreak-12h Intrabar (arsip)","brkX2_12h_closed":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h","decouple_4h":"Decouple-4h","dipbuy_universe":"Dip-Buy Universe","mombreak_1h":"MomentumBreak-1h","kb1d":"KeltnerBreak-1D","panic_bounce_4h":"PantulanPanik-4h","wyckoff_spring_4h":"Wyckoff-Spring-4h","rvolbreak_1h":"RVOLBreak-1h","hunting_4h":"Hunting-4h","akum_entry_a":"Akumulasi Entry A","akum_entry_b":"Akumulasi Entry B","bbsnap_4h":"BBSnap-4h","bbsnap_8h":"BBSnap-8h"} %}
+          {% set _sm = {"brkX2":"brkx2-12h","brkX2_closed":"KeltnerBreak-12h CC (arsip)","brkX2_intrabar":"KeltnerBreak-12h Intrabar (arsip)","brkX2_12h_closed":"KeltnerBreak-12h","brkX2_4h":"brkX2-4h","brkX2_crossema":"CrossEMA-4h","reversal":"Reversal-8h","trend_confirm_4h":"TrenKonfirmasi-4h","decouple_4h":"Decouple-4h","dipbuy_universe":"Dip-Buy Universe","mombreak_1h":"MomentumBreak-1h","kb1d":"KeltnerBreak-1D","panic_bounce_4h":"PantulanPanik-4h","wyckoff_spring_4h":"Wyckoff-Spring-4h","hammer_cap_4h":"Hammer-Kapitulasi-4h","rvolbreak_1h":"RVOLBreak-1h","hunting_4h":"Hunting-4h","akum_entry_a":"Akumulasi Entry A","akum_entry_b":"Akumulasi Entry B","bbsnap_4h":"BBSnap-4h","bbsnap_8h":"BBSnap-8h"} %}
           <div>{{ _sm.get(d.get("strategy",""),d.get("strategy","-")) }}</div>
           <div style="font-size:9px;color:var(--muted)">{{ d.get("opened_at","")[:16] if d.get("opened_at") else "-" }}</div>
         </td>
@@ -21338,6 +21358,7 @@ refreshRuleWatchAi();
           <option value="KeltnerBreak-1D">KeltnerBreak-1D</option>
           <option value="PantulanPanik-4h">PantulanPanik-4h</option>
           <option value="Wyckoff-Spring-4h">Wyckoff-Spring-4h</option>
+          <option value="Hammer-Kapitulasi-4h">Hammer-Kapitulasi-4h</option>
           <option value="Decouple-4h">Decouple-4h</option>
           <option value="Dip-Buy Universe">Dip-Buy Universe</option>
           <option value="BBSnap-4h">BBSnap-4h</option>
@@ -21355,6 +21376,7 @@ refreshRuleWatchAi();
         "KeltnerBreak-1D": near_miss.get("KeltnerBreak-1D", []),
         "PantulanPanik-4h": near_miss.get("PantulanPanik-4h", []),
         "Wyckoff-Spring-4h": near_miss.get("Wyckoff-Spring-4h", []),
+        "Hammer-Kapitulasi-4h": near_miss.get("Hammer-Kapitulasi-4h", []),
         "Decouple-4h": near_miss.get("Decouple-4h", []),
         "Dip-Buy Universe": near_miss.get("Dip-Buy Universe", []),
         "BBSnap-4h": near_miss.get("BBSnap-4h", []),
@@ -21859,7 +21881,7 @@ var SC_LABELS = {
     mombreak_1h: 'MomentumBreak-1h',
     decouple_4h: 'Decouple-4h',
     rvolbreak_1h: 'RVOLBreak-1h',
-    kb1d: 'KeltnerBreak-1D', panic_bounce_4h: 'PantulanPanik-4h', wyckoff_spring_4h: 'Wyckoff-Spring-4h',
+    kb1d: 'KeltnerBreak-1D', panic_bounce_4h: 'PantulanPanik-4h', wyckoff_spring_4h: 'Wyckoff-Spring-4h', hammer_cap_4h: 'Hammer-Kapitulasi-4h',
     dipbuy_universe: 'Dip-Buy Universe',
     bbsnap_4h: 'BBSnap-4h',
     bbsnap_8h: 'BBSnap-8h',
@@ -22741,6 +22763,7 @@ setInterval(function(){ autoSellCurrentAssets.forEach(refreshAutoSellRowPrice); 
 <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="kb1d" onchange="onCtStratCheckChange()">KeltnerBreak-1D</label>
 <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="panic_bounce_4h" onchange="onCtStratCheckChange()">PantulanPanik-4h</label>
 <label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="wyckoff_spring_4h" onchange="onCtStratCheckChange()">Wyckoff-Spring-4h</label>
+<label style="display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:11px;cursor:pointer"><input type="checkbox" class="ct-strat-check" value="hammer_cap_4h" onchange="onCtStratCheckChange()">Hammer-Kapitulasi-4h</label>
         <label style="display:flex;align-items:center;gap:6px;padding:4px 2px 2px;font-size:11px;cursor:pointer;margin-top:4px;border-top:1px solid var(--border)"><input type="checkbox" id="ct-strat-exclude-hardstop" onchange="onCtStratCheckChange()" style="margin-top:4px">Exclude hardstop volatilitas</label>
       </div>
     </div>
@@ -22877,7 +22900,7 @@ function ctShortDt(t) {
 
 function renderClosedTradesRows() {
     var rows = closedTradesRows.slice();
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',wyckoff_spring_4h:'Wyckoff-Spring-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',wyckoff_spring_4h:'Wyckoff-Spring-4h',hammer_cap_4h:'Hammer-Kapitulasi-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var searchBox = document.getElementById('ct-filter-search');
     var searchTerm = searchBox ? searchBox.value.trim().toUpperCase() : '';
     if (searchTerm) {
@@ -23024,7 +23047,7 @@ function renderDealCandleSVG(candles, openMs, closeMs, basePrice, avgPrice, exit
 function openDealChartModal(i) {
     var r = (window._ctFilteredRows || [])[i];
     if (!r || !r.symbol) return;
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',wyckoff_spring_4h:'Wyckoff-Spring-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',wyckoff_spring_4h:'Wyckoff-Spring-4h',hammer_cap_4h:'Hammer-Kapitulasi-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var modal = document.getElementById('deal-chart-modal');
     var titleEl = document.getElementById('deal-chart-title');
     var legendEl = document.getElementById('deal-chart-legend');
@@ -23098,7 +23121,7 @@ function renderCtSummary(rows) {
     var el = document.getElementById('ct-summary');
     if (!el) return;
     if (!rows.length) { el.innerHTML = ''; return; }
-    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',wyckoff_spring_4h:'Wyckoff-Spring-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2_12h_closed:'KeltnerBreak-12h',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',wyckoff_spring_4h:'Wyckoff-Spring-4h',hammer_cap_4h:'Hammer-Kapitulasi-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     // 10/10/2026 (permintaan Mas Budi): KeltnerBreak-12h digabung BALIK jadi SATU kartu lagi (balik
     // seperti sebelum 09/10/2026) -- raw strategy value 'brkX2' (legacy, sebelum split 1-hari),
     // 'brkX2_closed'/'brkX2_intrabar' (era split), DAN 'brkX2_12h_closed' (key baru skrg) SEMUA
@@ -23159,7 +23182,7 @@ function renderCtEquityCurve(rows) {
 }
 
 // ── Size-Cut per Strategi (20/10/2026, permintaan Mas Budi) ──────────────────────
-var SC_STRAT_MAP = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',wyckoff_spring_4h:'Wyckoff-Spring-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+var SC_STRAT_MAP = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',wyckoff_spring_4h:'Wyckoff-Spring-4h',hammer_cap_4h:'Hammer-Kapitulasi-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
 var SC_CAT_COLOR = {volatil:'#2a78d6', ekstrem:'#1baf7a', st_turun:'#eb6834', lainnya:'#898781'};
 // Klasifikasi Profit (20/10/2026, permintaan Mas Budi): skala diverging rugi->impas->untung,
 // dipetakan dari token --red/--green dashboard yg sudah ada (bukan palet kategori baru) --
@@ -23381,7 +23404,7 @@ function renderSizecutCards(byStrategy) {
 function exportCtCsv() {
     var rows = window._ctFilteredRows || [];
     if (!rows.length) { alert('Tidak ada data untuk di-export.'); return; }
-    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',wyckoff_spring_4h:'Wyckoff-Spring-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
+    var strat_map = {brkX2:'brkx2-12h',brkX2_12h_closed:'KeltnerBreak-12h',brkX2_closed:'KeltnerBreak-12h CC (arsip)',brkX2_intrabar:'KeltnerBreak-12h Intrabar (arsip)',brkX2_4h:'brkX2-4h',reversal:'Reversal-8h',hunting_4h:'Hunting-4h',brkX2_crossema:'CrossEMA-4h',akum_entry_a:'Akumulasi Entry A',akum_entry_b:'Akumulasi Entry B',trend_confirm_4h:'TrenKonfirmasi-4h',decouple_4h:'Decouple-4h',rvolbreak_1h:'RVOLBreak-1h',kb1d:'KeltnerBreak-1D',panic_bounce_4h:'PantulanPanik-4h',wyckoff_spring_4h:'Wyckoff-Spring-4h',hammer_cap_4h:'Hammer-Kapitulasi-4h',dipbuy_universe:'Dip-Buy Universe',mombreak_1h:'MomentumBreak-1h',bbsnap_4h:'BBSnap-4h',bbsnap_8h:'BBSnap-8h',topgainers_4h:'Top Gainers-4h'};
     var headers = ['Pair','Strategi','Opened','Entry','Closed','Exit','RSI@Open','ATR%@Open','ATR Tier','Profit%','Profit$','Modal','Durasi','Alasan'];
     var csvEsc = function(v) {
         v = String(v === undefined || v === null ? '' : v);
@@ -23465,7 +23488,7 @@ var CT_STRAT_LABELS = {
   trend_confirm_4h: 'TrenKonfirmasi-4h', mombreak_1h: 'MomentumBreak-1h', decouple_4h: 'Decouple-4h',
   rvolbreak_1h: 'RVOLBreak-1h', dipbuy_universe: 'Dip-Buy Universe',
   bbsnap_4h: 'BBSnap-4h', bbsnap_8h: 'BBSnap-8h', topgainers_4h: 'Top Gainers-4h',
-  kb1d: 'KeltnerBreak-1D', panic_bounce_4h: 'PantulanPanik-4h', wyckoff_spring_4h: 'Wyckoff-Spring-4h'
+  kb1d: 'KeltnerBreak-1D', panic_bounce_4h: 'PantulanPanik-4h', wyckoff_spring_4h: 'Wyckoff-Spring-4h', hammer_cap_4h: 'Hammer-Kapitulasi-4h'
 };
 function toggleCtStratMenu() {
   var m = document.getElementById('ct-filter-strat-menu');
@@ -28340,6 +28363,185 @@ def wk_addfund_check() -> None:
             send_telegram(f"Wyckoff-Spring-4h | ADD FUND GAGAL\n{to_display_pair(sym)}: {res.get('error')}", parse_mode=None)
 
 
+# ── Hammer-Kapitulasi-4h (strategy key 'hammer_cap_4h') -- 28/11/2026, Mas Budi: "BOLEH" (live $6, max 3) ──────────
+# Added because the other strategies leave long stretches with no deal at all. Event strategy (about 1.5 signals per week),
+# NOT an every-day filler: quiet BTC days have no signal that survives the 0.2% fee (8 hourly signal families and daily
+# cross-section picks were all <= 0 in the 28/11 search). Signal on each CLOSED 4h candle of a coin (no BTC gate): green
+# candle, lower wick > HC_WICK_BODY_MIN x body ("hammer"), volume > HC_RVOL_MIN x the 20-candle average (incl. this candle),
+# RSI14 < HC_RSI_MAX, ATR14% < HC_ATR_MAX_PCT, 24h quote volume (6 x 4h) >= $HC_MIN_QV_USD, not a wrapped/stable/EUR coin,
+# BTCUSDT and bStocks excluded. Exit "B": hard stop tier base x1.0, trailing arms at HC_ARM_MULT (2x) the tier threshold,
+# progressive trailing, timeout HC_MAX_HOLD_CANDLES x 4h (24 h). $6 flat (Strategy Control base_usd), max 3 deals, no add fund.
+# 1-minute test 2022-2026 (scratchpad newstrat/hammer_1m.py, 394 signals): entering 2 min after the close +2.41%/deal, WR 78%,
+# TRAIN +2.07 / TEST +2.81, 5/5 years positive, worst deal -11.2%; with +0.1% extra slippage +2.26%. Signal list from
+# long4h/s6_grid.pkl (rv>3, rsi<36, wick>1.5x, exit B).
+HC_ENABLED = True
+HC_RVOL_MIN = 3.0
+HC_RSI_MAX = 36.0
+HC_WICK_BODY_MIN = 1.5
+HC_ATR_MAX_PCT = 9.0
+HC_MIN_QV_USD = 2_000_000
+HC_MIN_BARS = 121
+HC_EXCLUDED_BASES = {'WBTC', 'WBETH', 'BETH', 'USDE', 'USDC', 'FDUSD', 'TUSD', 'USD1', 'XUSD', 'BFUSD', 'RLUSD', 'RWUSD', 'U',
+                     'PAXG', 'XAUT', 'EUR', 'AEUR', 'USDP', 'DAI', 'PYUSD', 'EURI', 'WBNB', 'USDT'}
+_hc_last_candle = [(int(time.time()) // STRAT4H_SECONDS) * STRAT4H_SECONDS * 1000]
+
+
+def hc_symbol_excluded(sym: str) -> bool:
+    return (not sym.endswith("USDT") or sym == 'BTCUSDT' or sym.endswith('BUSDT') or sym[:-4] in HC_EXCLUDED_BASES
+            or sym in SYMBOL_BLACKLIST or is_bstock_symbol(sym))
+
+
+def hc_eval(df) -> dict:
+    """Evaluate the hammer-capitulation rules on the LAST CLOSED 4h candle of df (oldest first).
+    Returns {'signal', 'fails', 'atr', 'rvol', 'rsi', 'wick_ratio', 'qv24'} (values None when not computable)."""
+    out = {'signal': False, 'fails': [], 'atr': None, 'rvol': None, 'rsi': None, 'wick_ratio': None, 'qv24': None}
+    if df is None or len(df) < HC_MIN_BARS:
+        out['fails'].append("data candle 4h kurang"); return out
+    o, h, l, c, v = (df[k].astype(float) for k in ('open', 'high', 'low', 'close', 'vol'))
+    body = abs(float(c.iloc[-1]) - float(o.iloc[-1]))
+    lower_wick = min(float(c.iloc[-1]), float(o.iloc[-1])) - float(l.iloc[-1])
+    vma = float(v.rolling(20).mean().iloc[-1])
+    rvol = float(v.iloc[-1]) / vma if vma > 0 else 0.0
+    rsi_s = ta.rsi(c, length=14)
+    rsi = float(rsi_s.iloc[-1]) if rsi_s is not None and not pd.isna(rsi_s.iloc[-1]) else 99.0
+    atr_s = ta.atr(h, l, c, length=14)
+    atrp = float((atr_s / c * 100).iloc[-1]) if atr_s is not None and not pd.isna(atr_s.iloc[-1]) else float('nan')
+    qv24 = float(df['qvol'].astype(float).tail(6).sum())
+    wick_ratio = (lower_wick / body) if body > 0 else (999.0 if lower_wick > 0 else 0.0)
+    out.update(atr=atrp, rvol=rvol, rsi=rsi, wick_ratio=wick_ratio, qv24=qv24)
+    f = out['fails']
+    if not float(c.iloc[-1]) > float(o.iloc[-1]):
+        f.append("candle 4h terakhir merah")
+    if not wick_ratio > HC_WICK_BODY_MIN:
+        f.append(f"sumbu bawah {wick_ratio:.1f}x badan (perlu > {HC_WICK_BODY_MIN:g}x)")
+    if not rvol > HC_RVOL_MIN:
+        f.append(f"volume {rvol:.1f}x rata-rata (perlu > {HC_RVOL_MIN:g}x)")
+    if not rsi < HC_RSI_MAX:
+        f.append(f"RSI {rsi:.1f} (perlu < {HC_RSI_MAX:g})")
+    if pd.isna(atrp) or not atrp < HC_ATR_MAX_PCT:
+        f.append(f"ATR {atrp:.2f}% (perlu < {HC_ATR_MAX_PCT:g}%)")
+    if not qv24 >= HC_MIN_QV_USD:
+        f.append(f"volume 24 jam ${qv24 / 1e6:.1f} juta (perlu >= ${HC_MIN_QV_USD / 1e6:g} juta)")
+    out['signal'] = not f
+    return out
+
+
+def thread_hammer_scan(dry_run: bool = False) -> None:
+    if not HC_ENABLED or not is_strategy_enabled('hammer_cap_4h'):
+        return
+    now_ms = int(time.time() * 1000)
+    sec4h_ms = STRAT4H_SECONDS * 1000
+    candle_open_ms = (now_ms // sec4h_ms) * sec4h_ms
+    if not dry_run and (_hc_last_candle[0] == candle_open_ms or now_ms - candle_open_ms < 120_000):
+        return
+    if is_daily_loss_limit_breached():
+        log("[T_HC] Scan di-skip -- batas rugi harian tersulut")
+        return
+    if not dry_run:
+        _hc_last_candle[0] = candle_open_ms
+    max_deals = int(load_strategy_config().get('hammer_cap_4h', {}).get('max_deals', 3) or 3)
+    if deal_count_by_strategy('hammer_cap_4h') >= max_deals and not dry_run:
+        log(f"[T_HC] slot penuh ({deal_count_by_strategy('hammer_cap_4h')}/{max_deals})")
+        return
+    ticker = get_ticker_24h()
+    if not ticker:
+        return
+    with active_deals_lock:
+        existing = set(active_deals.keys())
+    cands, near, blk, n_scan = [], [], {}, 0
+    for t in ticker:
+        sym = t.get("symbol", "")
+        if hc_symbol_excluded(sym) or sym in existing:
+            continue
+        try:
+            if float(t.get("quoteVolume", 0) or 0) < TRENDCONFIRM_MIN_VOL_USD:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if is_cooldown_enabled('hammer_cap_4h') and cooldown_remaining(sym) > 0: continue
+        if sizing_fail_remaining(sym) > 0: continue
+        try:
+            n_scan += 1
+            df = _closed_4h(sym, now_ms, limit=150)
+            if df is None or len(df) < HC_MIN_BARS or int(df['ts'].iloc[-1]) != candle_open_ms - sec4h_ms:
+                continue
+            ev = hc_eval(df)
+            fails = list(ev['fails'])
+            for f_ in fails:
+                count_blocker(blk, f_.split(' (')[0][:40], True)
+            if fails:
+                if len(fails) <= 2:
+                    near.append((6 - len(fails), sym, fails, 6))
+                continue
+            cands.append((sym, float(df['close'].iloc[-1]), float(ev['atr']), ev))
+        except Exception as e:
+            log(f"  [T_HC] error {sym}: {e}")
+    log(f"[T_HC] candle 4h {now_wib().strftime('%d/%m %H:%M')}: {len(cands)} hammer-kapitulasi lolos (scan {n_scan} koin)")
+    near.sort(key=lambda x: -x[0])
+    record_scan_blockers("Hammer-Kapitulasi-4h", n_scan, len(cands), blk)
+    update_dashboard_near_miss("Hammer-Kapitulasi-4h", [(6, x[0], [], 6) for x in cands] + near[:30])
+    _scan_status_text['Hammer-Kapitulasi-4h'] = (f"{now_wib().strftime('%d/%m %H:%M')} -- {len(cands)} hammer-kapitulasi lolos dari {n_scan} koin")
+    cands.sort(key=lambda x: -x[3]['rvol'])      # biggest volume spike first
+    if dry_run:
+        log(f"[T_HC] UJI selesai: {len(cands)} lolos ({', '.join(x[0] for x in cands) or '-'}), hampir lolos: "
+            f"{'; '.join(f'{x[1]} {x[0]}/6' for x in near[:5]) or '-'} -- TIDAK ada order (mode uji)")
+        _scan_status_text['Hammer-Kapitulasi-4h'] += " (uji tanpa order setelah restart)"
+        return
+    for sym, signal_price, atrp, ev in cands:
+        n_active = deal_count_by_strategy('hammer_cap_4h')
+        if n_active >= max_deals:
+            break
+        with active_deals_lock:
+            if sym in active_deals: continue
+        ok, target_usd, add_usd = open_deal_with_sizing(sym, 1, strategy='hammer_cap_4h', atr_pct=atrp)
+        if not ok: continue
+        try:
+            entry_price = get_price_now(sym)
+            if entry_price <= 0: entry_price = signal_price
+        except Exception:
+            entry_price = signal_price
+        slip = (entry_price / signal_price - 1) * 100 if signal_price > 0 else 0.0
+        add_to_active_deals(sym, {
+            "strategy": "hammer_cap_4h", "entry_price": entry_price, "peak": entry_price, "signal_price": signal_price,
+            "atr_pct": atrp, "score": 1, "opened_ts": time.time(), "opened_candle_ts": int(candle_open_ms),
+            "trailing_armed": False, "opened_at": now_wib().strftime('%Y-%m-%d %H:%M:%S'), "target_usd": target_usd,
+            "add_usd": 0, "tf": "4h", "hc_rvol": round(ev['rvol'], 2), "hc_rsi": round(ev['rsi'], 1),
+        })
+        send_telegram(
+            f"Hammer-Kapitulasi-4h | OPEN LONG\n{now_wib().strftime('%d/%m/%Y %H:%M')} WIB\n"
+            f"Pair  : {to_display_pair(sym)}\nHarga entry: {_fmt_price(entry_price)} (sinyal 4h {_fmt_price(signal_price)}, slip {slip:+.2f}%)\n"
+            f"Hammer: sumbu bawah {ev['wick_ratio']:.1f}x badan | volume {ev['rvol']:.1f}x rata-rata | RSI 4h {ev['rsi']:.1f}\n"
+            f"ATR%  : {atrp:.2f} - {hard_stop_pct(atrp, 'hammer_cap_4h')[0]}\n"
+            f"Modal: ${target_usd:.0f} | exit: stop {hard_stop_pct(atrp, 'hammer_cap_4h')[2]:.1f}%, trailing aktif di "
+            f"{get_arm_pct(atrp, 'hammer_cap_4h'):.1f}%, tahan maks {HC_MAX_HOLD_CANDLES} candle 4h (24 jam)\n"
+            f"Slot terpakai: {n_active + 1}/{max_deals}",
+            parse_mode=None)
+        csv_log_open({
+            'open_time_wib': now_wib().strftime('%Y-%m-%d %H:%M:%S'), 'symbol': to_display_pair(sym),
+            'signal_price': f"{_fmt_price(signal_price)}", 'entry_price': f"{_fmt_price(entry_price)}",
+            'slip_pct': f"{slip:+.2f}", 'atr_pct': f"{atrp:.2f}", 'trail_dist_pct': f"{trailing_dist(atrp)}",
+            'base_usd': target_usd, 'score': 1, 'strategy': 'hammer_cap_4h',
+        })
+        log_oac('OPEN', sym, 'Hammer-Kapitulasi-4h', {'entry_price': _fmt_price(entry_price), 'rvol': f"{ev['rvol']:.1f}x",
+                                                      'rsi': f"{ev['rsi']:.1f}", 'wick': f"{ev['wick_ratio']:.1f}x", 'atr_pct': f"{atrp:.2f}%"})
+        log(f"[T_HC] OPEN {sym} @ {entry_price:.8g} (sinyal {signal_price:.8g}, volume {ev['rvol']:.1f}x, RSI {ev['rsi']:.1f}, "
+            f"sumbu {ev['wick_ratio']:.1f}x, ATR {atrp:.2f}) modal ${target_usd:.2f}")
+
+
+def run_thread_hammer() -> None:
+    time.sleep(210)
+    try:
+        thread_hammer_scan(dry_run=True)   # 'scan-dryrun-on-start'
+    except Exception as e:
+        log(f"WARN T_HC UJI error: {e}")
+    while True:
+        try:
+            thread_hammer_scan()
+        except Exception as e:
+            log(f"WARN T_HC error: {e}")
+        time.sleep(60)
+
+
 def run_thread_wyckoff() -> None:
     time.sleep(150)
     try:
@@ -32375,6 +32577,8 @@ def run_web_dashboard():
                         _hold_limit_sec_d = PB4H_MAX_HOLD_CANDLES * STRAT4H_SECONDS
                     elif _strat_d == 'wyckoff_spring_4h':
                         _hold_limit_sec_d = WK_MAX_HOLD_CANDLES_ * STRAT4H_SECONDS
+                    elif _strat_d == 'hammer_cap_4h':
+                        _hold_limit_sec_d = HC_MAX_HOLD_CANDLES * STRAT4H_SECONDS
                     else:
                         _hold_limit_sec_d = MAX_HOLD_DAYS * SECONDS_PER_CANDLE
                     _candle_sec_d = _candle_seconds_for_strategy(_strat_d)
@@ -32515,6 +32719,13 @@ def run_web_dashboard():
                     f"Add fund 1x sekali kalau candle 4h hijau tutup >= {WK_ADD_ABOVE_PCT:g}% di atas entry dlm {WK_ADD_WINDOW_H} jam; "
                     f"tahan maks {WK_MAX_HOLD_CANDLES} candle 4h (60 jam). "
                     f"Scan terakhir: {_scan_status_text.get('Wyckoff-Spring-4h', 'belum ada sejak restart')}"
+                ),
+                "Hammer-Kapitulasi-4h": (
+                    f"Scan tiap candle 4h tutup (+2 menit), tanpa gerbang BTC. Syarat: candle hijau dengan sumbu bawah > {HC_WICK_BODY_MIN:g}x badan, "
+                    f"volume > {HC_RVOL_MIN:g}x rata-rata 20 candle, RSI14 < {HC_RSI_MAX:g}, ATR<{HC_ATR_MAX_PCT:g}%, volume 24 jam >= "
+                    f"${HC_MIN_QV_USD / 1e6:g} juta, bukan koin pembungkus/stablecoin. Exit: stop tier x1.0, trailing aktif di "
+                    f"{HC_ARM_MULT:g}x ambang tier, tahan maks {HC_MAX_HOLD_CANDLES} candle 4h (24 jam). "
+                    f"Scan terakhir: {_scan_status_text.get('Hammer-Kapitulasi-4h', 'belum ada sejak restart')}"
                 ),
                 "Decouple-4h": (
                     f"Scan sepanjang candle 4h, tidak dibatasi jendela waktu. Sinyal = selisih return "
@@ -33238,6 +33449,11 @@ def run_web_dashboard():
                     "status": "ok" if _btc_st1d_down is True else "blocked",
                     "syarat": "Sama arah PantulanPanik-4h: BTCUSDT Supertrend(10,3) 1D harus TURUN (spring Wyckoff hanya punya edge saat BTC turun)",
                     "candles": {"1D": _candles['1d']},
+                },
+                "hammer_cap_4h": {
+                    "label": "Hammer-Kapitulasi-4h",
+                    "status": "ok",
+                    "syarat": "Tidak ada gerbang BTC: sinyal murni dari candle koin itu sendiri (hammer + volume ledak + RSI rendah). Backtest 1 menit 2022-2026 positif di semua kondisi BTC.",
                 },
                 "bbsnap_4h": {
                     "label": "BBSnap-4h",
@@ -33977,6 +34193,29 @@ def run_web_dashboard():
                         ],
                         "secondary": [],
                         "primary_ok": all(p),
+                    }))
+
+                elif strat == "Hammer-Kapitulasi-4h":
+                    # 28/11/2026: same rules as thread_hammer_scan(), last CLOSED 4h candle
+                    df = _closed_4h(sym, int(time.time() * 1000), limit=150)
+                    if df is None or len(df) < 30:
+                        return jsonify(_s({"error": "Data kurang"}))
+                    ev = hc_eval(df)
+                    if ev['atr'] is None:
+                        return jsonify(_s({"error": "Data candle 4h kurang"}))
+                    p = [bool(df['close'].iloc[-1] > df['open'].iloc[-1]), ev['wick_ratio'] > HC_WICK_BODY_MIN, ev['rvol'] > HC_RVOL_MIN,
+                         ev['rsi'] < HC_RSI_MAX, bool(ev['atr'] < HC_ATR_MAX_PCT), ev['qv24'] >= HC_MIN_QV_USD]
+                    return jsonify(_s({"strat": strat, "sym": sym,
+                        "primary": [
+                            {"label":"Candle 4h terakhir hijau","ok":p[0],"actual":"hijau" if p[0] else "merah"},
+                            {"label":f"Sumbu bawah > {HC_WICK_BODY_MIN:g}x badan","ok":p[1],"actual":f"{ev['wick_ratio']:.1f}x"},
+                            {"label":f"Volume > {HC_RVOL_MIN:g}x rata-rata 20 candle","ok":p[2],"actual":f"{ev['rvol']:.1f}x"},
+                            {"label":f"RSI14 < {HC_RSI_MAX:g}","ok":p[3],"actual":f"{ev['rsi']:.1f}"},
+                            {"label":f"ATR < {HC_ATR_MAX_PCT:g}%","ok":p[4],"actual":f"{ev['atr']:.2f}%"},
+                            {"label":f"Volume 24 jam >= ${HC_MIN_QV_USD / 1e6:g} juta","ok":p[5],"actual":f"${ev['qv24'] / 1e6:.1f} juta"},
+                        ],
+                        "secondary": [],
+                        "primary_ok": all(p) and not hc_symbol_excluded(sym),
                     }))
 
                 elif strat == "Top Gainers-4h":
@@ -35672,6 +35911,7 @@ def run_web_dashboard():
                 ("kb1d", "KeltnerBreak-1D"),               # 14/11/2026: was missing since 09/11
                 ("panic_bounce_4h", "PantulanPanik-4h"),   # 14/11/2026 new strategy
                 ("wyckoff_spring_4h", "Wyckoff-Spring-4h"),   # 18/11/2026 new strategy
+                ("hammer_cap_4h", "Hammer-Kapitulasi-4h"),    # 28/11/2026 new strategy
             ]
             # 26/09/2026 (permintaan Mas Budi): "kecepatan closing" PROFIT POSITIF -- tier
             # adaptif hari/minggu/bulan (lihat strategy_recent_close_stats()) + interval rata2
@@ -39095,6 +39335,8 @@ if __name__ == '__main__':
         t_pb4h.start()
         if WK_ENABLED:
             threading.Thread(target=run_thread_wyckoff, daemon=True, name="T-WK").start()   # 18/11/2026 Wyckoff-Spring-4h
+        if HC_ENABLED:
+            threading.Thread(target=run_thread_hammer, daemon=True, name="T-HC").start()   # 28/11/2026 Hammer-Kapitulasi-4h
         threading.Thread(target=run_thread_idle_earn, daemon=True, name="T-IdleEarn").start()   # 14/11/2026 idle-usdt-earn
         threading.Thread(target=lambda: (time.sleep(120), sub_earn_readonly_test()), daemon=True,
                          name="T-SubEarnTest").start()   # 20/11/2026 read-only, once per restart
